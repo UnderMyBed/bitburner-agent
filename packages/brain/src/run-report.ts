@@ -683,9 +683,12 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     // The servers' fixed figures for the hacking ceilings, as of the window's start: the Agent sends them once (#196).
     const staticBefore = store.latestSnapshotBefore({ ...window, tier: "static", beforeMs: window.sinceMs });
     const weakenTimes = new WeakenTimes();
+    // w0r1d_d43m0n's requirement by then, for its readiness (#308).
+    const worldDaemon = new WorldDaemonFold();
     if (isObject(staticBefore?.data)) {
       hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
       weakenTimes.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
+      worldDaemon.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
     }
     // The newest static snapshot, for which servers are the game's: the hack loop's hosts (#194).
     let staticLast = isObject(staticBefore?.data) ? (staticBefore.data as StaticSnapshotData) : undefined;
@@ -695,6 +698,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       staticLast = data;
       hacking.addStatic(atMs, data);
       weakenTimes.addStatic(atMs, data);
+      worldDaemon.addStatic(atMs, data);
       backdoors.addStatic(atMs, data);
       for (const server of Array.isArray(data.servers) ? data.servers : []) {
         if (server?.purchasedByPlayer === true) playersServers.add(server.hostname);
@@ -755,7 +759,6 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const resets: Resets = { brainMs: cycles.resetsMs(), gameMs: [...resetsMs] };
     const inference = new HackTargetInference(playersServers, resets);
     const cloudServerChanges = new CloudServerChanges(cloudServers);
-    const worldDaemon = new WorldDaemonFold(staticLast);
     const mediumTimes: SnapshotTime[] = [];
     const thinned = { fast: 0, medium: 0, lastMs: null as number | null };
     for (const { atMs, gameTimeMs, data } of ofTier<MediumSnapshotData>("medium")) {
@@ -767,7 +770,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
         thinned.lastMs = Math.max(thinned.lastMs ?? atMs, atMs);
         continue;
       }
-      worldDaemon.addMedium(atMs, data);
+      worldDaemon.addMedium(atMs, data, cycles.bitNodeIndexAt(atMs));
       weakenTimes.addMedium(atMs, data);
       mediumFirst ??= data;
       mediumLast = data;
@@ -970,21 +973,22 @@ export function runReport(
  * The run's end, when the brain stopped itself at the BitNode's end in the window and no brain started after it
  * (#308): its last record, the stop's (stopping alone, it shuts down a second on), or its close's `gameClosed` (or the
  * close not confirmed), and whatever the shutdown stored after, so the window doesn't run on to when the report is
- * made. Null without such a stop, or with the run's last record at the window's end already. Either end, whatever the
- * stop's reason.
+ * made. Null without such a stop, or with the run's last record at the window's end already. For a stop of either
+ * reason, "destroyed" or "nothingMoreToGain".
  */
 function stopEndingWindow(store: TelemetryStore, window: RunWindow): { stopAtMs: number; endMs: number } | null {
   const events = store.eventsInWindow(window).filter((event) => !STORE_THINNING_EVENT_KINDS.includes(event.kind));
   const stops = events.filter((event) => event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND);
   if (stops.length === 0) return null;
-  const stopAtMs = Math.max(...stops.map(({ atMs }) => atMs));
+  const latest = (times: number[]) => times.reduce((most, time) => Math.max(most, time), Number.NEGATIVE_INFINITY);
+  const stopAtMs = latest(stops.map(({ atMs }) => atMs));
   if (events.some((event) => event.kind === BRAIN_STARTED_EVENT_KIND && event.atMs > stopAtMs)) return null;
   const times = events.map(({ atMs }) => atMs);
   for (const tier of ["fast", "medium", "slow", "static"]) {
-    const latest = store.latestSnapshotBefore({ environment: window.environment, tier, beforeMs: window.untilMs + 1 });
-    if (latest !== null && latest.receivedAtMs >= window.sinceMs) times.push(latest.receivedAtMs);
+    const last = store.latestSnapshotBefore({ environment: window.environment, tier, beforeMs: window.untilMs + 1 });
+    if (last !== null && last.receivedAtMs >= window.sinceMs) times.push(last.receivedAtMs);
   }
-  const endMs = Math.max(...times);
+  const endMs = latest(times);
   return endMs < window.untilMs && endMs > window.sinceMs ? { stopAtMs, endMs } : null;
 }
 
@@ -1491,10 +1495,9 @@ function intentEpisodes(facts: RunFacts): IntentEpisode[] {
     episode.doneAtMs = seenMs;
     episode.resetFollowed = true;
   }
-  // The game's close confirmed (#308): its worker closes the window before it reports, so `closeGame` is never seen
-  // done; it and whatever else was queued at the Agent's last look before the drop were still in its list then.
-  const closed = facts.events.findLast((event) => event.kind === GAME_CLOSED_EVENT_KIND);
-  if (closed !== undefined) {
+  // Each close confirmed (#308): its worker closes the window before it reports, so `closeGame` is never seen done;
+  // it and whatever else was queued at the Agent's last look before that close's drop were still in its list then.
+  for (const closed of facts.events.filter((event) => event.kind === GAME_CLOSED_EVENT_KIND)) {
     const droppedMs = droppedAtMs(closed);
     const lastLookMs = facts.fast.findLast((point) => point.atMs <= droppedMs)?.atMs;
     for (const episode of episodes) {
@@ -1544,7 +1547,9 @@ function describeIntent(outcome: IntentOutcome): string {
 
 /**
  * An intent episode's line: "    travel(Aevum): done after 2 tries (ui); done by …", or for one its reset followed
- * (#286) "    destroyBitNode(1): done: the reset followed, 1 try (ui); the reset seen by …".
+ * (#286) "    destroyBitNode(1): done: the reset followed, 1 try (ui); the reset seen by …", or for `closeGame` at a
+ * confirmed close (#308) "    closeGame(): done: the game closed, 0 tries; the window gone at …", and one left
+ * queued at it "…; left queued at the game's close".
  */
 function describeEpisode({
   id,
@@ -2087,7 +2092,14 @@ function healthSection(
       formatTime: formatIsoTime,
     }),
   );
-  lines.push(...facts.worldDaemon.healthLines(facts.events, failures, formatIsoTime, warnings));
+  lines.push(
+    ...facts.worldDaemon.healthLines(facts.events, {
+      failures,
+      warnings,
+      formatTime: formatIsoTime,
+      bitNodeAt: (atMs) => facts.cycles.bitNodeIndexAt(atMs),
+    }),
+  );
 
   // Done, but not as asked (#194): a server bought under another name.
   lines.push("  cloud server purchases done with a problem:");

@@ -3201,7 +3201,7 @@ describe("the stop at the BitNode's end (#303)", () => {
     );
   });
 
-  test("the nextBitNode stall the stop answered (nothing more to gain, within a minute): expected, not a failure", () => {
+  test("the nextBitNode stall the stop answered (nothing more to gain): expected, not a failure", () => {
     cleanRun();
     refused(RUN_MS);
     event(RUN_MS, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
@@ -3233,11 +3233,11 @@ describe("the stop at the BitNode's end (#303)", () => {
     refused(10 * MINUTE);
     event(11 * MINUTE, "brainStoppedAtBitNodeEnd", DESTROYED);
     const { text, failures, warnings } = report();
-    // No w0r1d_d43m0n in the snapshots: never ready, so a line, not yet a prompt, and never a failure.
+    // No static snapshot gives w0r1d_d43m0n's requirement: readiness can't be told, so a line saying so (#308 review).
     expect([failures, warnings]).toEqual([[], []]);
     expect(text).toContain(
-      `from ${at(10 * MINUTE)} to at least ${at(10 * MINUTE)} (yours once w0r1d_d43m0n is ready, the stop at the ` +
-        "BitNode's end off: not ready 5 min in the window)",
+      `from ${at(10 * MINUTE)} to at least ${at(10 * MINUTE)} (no stop followed (the switch off, or the stop didn't fire); whether w0r1d_d43m0n was ready can't be ` +
+        "told: no static snapshot gives its hacking requirement)",
     );
   });
 
@@ -3598,8 +3598,8 @@ describe("the stop at the BitNode's end (#303)", () => {
       const prompt =
         `owner prompt: world daemon stalled: the BitNode not destroyed: ${MAXED}: the next BitNode is yours (turn ` +
         `the switch off and queue destroyBitNode), from ${at(2 * MINUTE)} to at least ${at(2 * MINUTE)}; ` +
-        `w0r1d_d43m0n ready from ${at(RUN_MS - 5 * MINUTE)} to at least ${at(RUN_MS)}, the stop at the BitNode's end ` +
-        "off, so the brain waits on you";
+        `w0r1d_d43m0n ready from ${at(RUN_MS - 5 * MINUTE)} to at least ${at(RUN_MS)}, and no stop followed (the switch off, or the stop didn't fire), ` +
+        "so the brain waits on you";
       expect(warnings).toEqual([prompt]);
       expect(text).toContain(`    ${prompt}\n`);
       expect(text.split("\n").at(-2)).toBe("Verdict: WARN");
@@ -3608,7 +3608,9 @@ describe("the stop at the BitNode's end (#303)", () => {
     test("…ready under 5 min: a line, no warning", () => {
       const { text, failures, warnings } = waitingOnOwner(RUN_MS - 5 * MINUTE + 10 * SECOND);
       expect([failures, warnings]).toEqual([[], []]);
-      expect(text).toContain("(yours once w0r1d_d43m0n is ready, the stop at the BitNode's end off: not ready 5 min");
+      expect(text).toContain(
+        "(no stop followed (the switch off, or the stop didn't fire): yours once w0r1d_d43m0n is ready; not ready 5 min by its BitNode's last medium snapshot)",
+      );
     });
 
     test("…at its level all along, rooted only under 5 min: a line, no warning", () => {
@@ -3622,6 +3624,82 @@ describe("the stop at the BitNode's end (#303)", () => {
     test("…ready 10 min, then not at the last snapshot (its level lost, say): a line, no warning", () => {
       expect(waitingOnOwner(5 * MINUTE, RUN_MS - 10 * SECOND).warnings).toEqual([]);
     });
+
+    /** Where the second BitNode starts: a destroy's `lastNodeReset`, seen on the slow snapshot 30 s on. */
+    const NEXT_NODE_MS = 10 * MINUTE;
+    /**
+     * Two BitNodes (#308 review): w0r1d_d43m0n (hacking 3000) ready from 1 minute to the first's end, never in the
+     * second; the switch off. The `nextBitNode` stall at each `stallsAt`.
+     */
+    function acrossTwoBitNodes(stallsAt: number[]) {
+      event(0, "brainStarted", { release: "r" });
+      for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+      snapshot("static", 10 * SECOND, { servers: [{ ...staticServer("w0r1d_d43m0n"), requiredHackingSkill: 3000 }] });
+      snapshot("slow", 10 * SECOND, slowData([], { "The Red Pill": 1 }, { 1: 3 }));
+      const next = slowData([], {}, { 1: 3 });
+      next.resetInfo.lastAugReset = T0 + NEXT_NODE_MS;
+      next.resetInfo.lastNodeReset = T0 + NEXT_NODE_MS;
+      snapshot("slow", NEXT_NODE_MS + 30 * SECOND, next);
+      for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+        const ready = offsetMs >= MINUTE && offsetMs < NEXT_NODE_MS;
+        const medium = mediumData({ money: 1e9, hacking: ready ? 3000 : 1 });
+        const daemon = { ...medium.servers[0], hostname: "w0r1d_d43m0n", maxRam: 0, hasAdminRights: ready };
+        snapshot("medium", offsetMs, { ...medium, servers: [...medium.servers, daemon] });
+      }
+      for (const atMs of stallsAt) refused(atMs);
+    }
+
+    test("each stall judged by its own BitNode's readiness: the first's a prompt, the second's a line", () => {
+      acrossTwoBitNodes([2 * MINUTE, 12 * MINUTE]);
+      const { text, failures, warnings } = report();
+      expect(failures).toEqual([]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(
+        `from ${at(2 * MINUTE)} to at least ${at(2 * MINUTE)}; w0r1d_d43m0n ready from ${at(MINUTE)} to at least ` +
+          at(NEXT_NODE_MS - 10 * SECOND),
+      );
+      expect(text).toContain(
+        `from ${at(12 * MINUTE)} to at least ${at(12 * MINUTE)} (no stop followed (the switch off, or the stop didn't fire): yours once w0r1d_d43m0n is ready; not ` +
+          "ready 5 min by its BitNode's last medium snapshot)",
+      );
+    });
+
+    test("a stop in a later BitNode doesn't answer an earlier BitNode's stall; one in its own does", () => {
+      acrossTwoBitNodes([2 * MINUTE, 12 * MINUTE]);
+      event(13 * MINUTE, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
+      const { text, warnings } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * MINUTE });
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(`owner prompt: world daemon stalled: `);
+      expect(warnings[0]).toContain(`from ${at(2 * MINUTE)} to at least ${at(2 * MINUTE)};`);
+      expect(text).toContain(
+        `from ${at(12 * MINUTE)} to at least ${at(12 * MINUTE)} (expected: the brain stopped itself at the ` +
+          `BitNode's end at ${at(13 * MINUTE)}, the switch on)`,
+      );
+    });
+  });
+
+  test("two closing runs in one window: each closeGame done by its own close (#308 review)", () => {
+    const CLOSE = "closeGame()";
+    const SECOND_RUN_MS = 10 * MINUTE;
+    event(0, "brainStarted", { release: "r" });
+    event(SECOND_RUN_MS, "brainStarted", { release: "r" });
+    for (const offsetMs of fastOffsets()) {
+      const first = offsetMs < SECOND_RUN_MS;
+      const endMs = first ? 9 * MINUTE : RUN_MS;
+      if (first && offsetMs > endMs) continue;
+      const queued = offsetMs >= endMs - MINUTE ? [intent(CLOSE, { tries: 0, backend: null })] : [];
+      snapshot("fast", offsetMs, fastData({ intents: queued }), 0, first ? "session-1" : "session-2");
+    }
+    for (const [stopMs, endMs] of [
+      [8 * MINUTE, 9 * MINUTE],
+      [RUN_MS - 2 * MINUTE, RUN_MS],
+    ] as const) {
+      event(stopMs, "brainStoppedAtBitNodeEnd", { ...NOTHING_MORE, closeGame: true });
+      event(endMs + 15_400, "gameClosed", { closeSentAtMs: T0 + endMs, afterMs: 400 });
+    }
+    const { text } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * MINUTE }, { verbose: true });
+    expect(text).toContain(`    ${CLOSE}: done: the game closed, 0 tries; the window gone at ${at(9 * MINUTE + 400)}`);
+    expect(text).toContain(`    ${CLOSE}: done: the game closed, 0 tries; the window gone at ${at(RUN_MS + 400)}`);
   });
 });
 

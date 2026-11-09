@@ -7,12 +7,13 @@
 //   is left open: a close never goes without its save.
 // - The close: `window.close()`, the page's only way out (the preload exposes only the save and export channels). On
 //   Steam (run live on BN1.4, #308): Chromium's own close of the window, which skipped BrowserWindow's `close` handler
-//   (`electron/main.js:43-78`; no "Destroying the window", no save-folder write at the close), while the last window
-//   closed still quit the app (`:16-20`). The game's own save, in its IndexedDB before the toast shows
+//   (`electron/main.js:43-78`; no "Destroying the window", its log at debug, no save-folder write at the close), while
+//   the last window closed still quit the app (`:16-20`). The game's own save, in its IndexedDB before the toast shows
 //   (`db.ts:122-125`), was fresh, and the relaunch kept it over the older copy (`electron/storage.js:481-496`). The
 //   save-folder copy is stale whatever the page does: its debounce (`:151-163`, 5 minutes, leading and trailing, no
 //   `maxWait`) writes the session's first save at once, then only once saves pause, and the game saves every 60 s
-//   (`Settings/Settings.ts:17`, `engine.tsx:233`).
+//   (`Settings/Settings.ts:17`, `engine.tsx:233`). Steam Cloud's own (`:135-149`, 15 minutes) leaves its copy stale
+//   too.
 //   The page's "Your work will be lost" prompt is off on `file://` (`index.tsx:53-57`), Steam's case. A browser
 //   closes only a window its scripts opened (or with one history entry), so in one (E2) the window stays, and the
 //   worker says so.
