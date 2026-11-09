@@ -1082,6 +1082,46 @@ npm run campaign -- [--data-dir <dir>] [--environment E0]
 - **Another release only at the start** (`STARTER_ALLOWANCE_MS`, 5 minutes; owner decision 61): a release that played a BitNode only before the one that went on first did, with no install and at most 5 minutes online, leaves the other a clear of its own, its share printed ("a clear of its own (v0.2.0-53-g7c741cc's first 2 min 3 s)", in the Compared entry too). A brain upgraded just after a destroy is the case: the real store's BN1.3 (2 min 3 s of the release before, then 614978a's 12 h 34 min). Any more, and the BitNode is "played with … too".
 - **Tests:** `test/campaign-report.test.ts` builds a campaign: BN1.1 begun two days before the store, across a brain restart onto another deployment and a 2-hour offline gap, with an install from your queue; BN1.2 played by two releases, the owner upgrading as an install reloads; BN1.3 and BN1.4 cleared by one; BN1.4 again by another (compared), each destroy at SF1's cap known by its `bitNodeDestroySent`; a third BN1.4 with a save loaded and a destroy sent; and the same campaign thinned (no fast snapshots, a medium one a minute), and the full store thinned by #283's own `thinStore` (its stubs), each of whose reports must be the same text. Then: a fresh save's BitNode from its start; an older BitNode's save loaded; saves within one BitNode and across BitNodes, back to an older one and then to the newer; a release changed mid-cycle; b1t_flum3 (with a destroy sent below the cap), a new game, a BitNode with no Source-File before it, BitNodes unseen (SF1 from none to 3, another Source-File rising), a destroy at the cap sent too early and none after, and BN12's uncapped Source-File; Source-File overrides on another Source-File and on the BitNode's own (with and without a destroy sent); a save loaded in a BitNode stopping a clear; another release at a BitNode's start, within and over the 5 minutes; the brain away across a destroy; installs by hand; a slow snapshot with no `resetInfo`; a BitNode begun before the store; and the command's exit codes and its read-only open.
 
+## The brain against the fork
+
+M4 phase B's exit criterion is the agent at least as far along as the legacy fork at each baseline checkpoint ([architecture §13](../../docs/architecture.md#13-milestones), [ADR 0011](../../docs/decisions/0011-checkpointed-simulator-comparisons.md)). [Owner decision 65](../../docs/decisions/owner-decisions.md) says what that means (Q10, [#83](https://github.com/UnderMyBed/bitburner-agent/issues/83)). `test/brain-at-checkpoints-simulation.test.ts` ([#319](https://github.com/UnderMyBed/bitburner-agent/issues/319)) measures the brain there:
+- **The start:** exactly the baseline's, `baselineScenario()`'s fixture from `@bitburner-agent/legacy`: BN1 with SF1.1 and SF4.3, which the game makes BN1.2, home at 32 GB, on the same seeds and epoch.
+- **The play:** the brain plays with its rules as on Steam (`useFreshStarts`, `withDesiredState`), but through the simulator's own effectors, not the Singularity workers SF4.3 would give it on Steam.
+- **The runner** (`test/helpers/checkpoints.ts`, `runToCheckpoints`) reads the simulator's summary, the same one the baseline's checkpoints record, at 4, 8 and 12 virtual hours (`CHECKPOINTS_MS`). It uses the same clock: virtual time since the simulation started.
+  - It polls every virtual minute, and a checkpoint takes the first poll at or past it, within one driver step (200 ms).
+  - Each checkpoint also keeps the highest hacking level of every poll so far, its peak, for decision 65's gate.
+  - Checkpoints that aren't in ascending order fail loudly, and so does a cap before the last checkpoint or a game that doesn't move on.
+- **The end:** the first destroy, which is the first poll whose BitNode or Source-Files differ from the start's (the World Daemon rule destroys into BN1, so BN1.2 becomes BN1.3 with SF1.2). Otherwise it ends at a cap, 16 virtual hours by default.
+  - A checkpoint at or after the destroy's poll is recorded as destroyed, and counts as ahead.
+  - The destroy's time is that poll's, up to a minute after the game left the BitVerse.
+  - A destroy that changes neither the BitNode nor the Source-Files isn't seen: one at the Source-File's cap into the same BitNode, or b1t_flum3 into the same BitNode. Neither can happen from BN1.2 with SF1.1.
+- **The output:**
+  - rows in [baselines.md](../../docs/sim/baselines.md#the-brain-against-the-fork)'s columns;
+  - then each seed against the fork's same seed under decision 65's gate (`compareWithFork`), with `FORK_AT_CHECKPOINTS`: the 5238ab6 baseline run's per-seed values on v26.13.0, from its JSON;
+  - then each seed's destroy.
+
+  The heap isn't measured, because the game runs in a child process. A seed whose run was stopped (`partial`) counts at the checkpoints it reached and is named at those it didn't, marked "stopped" in the comparison; speed and real time are over the runs that ended.
+- **CI** runs, in about 40 s:
+  - the runner's logic on a fake game: a destroy on a checkpoint's own poll, and an install's dip on a checkpoint, whose peak is kept;
+  - the rows, the comparison and the knobs;
+  - seed 1 from the baseline's start to 1 virtual hour, read at 20, 40 and 60 minutes. Each checkpoint must be the game's own summary, in BN1.2 with SF1.1 and SF4.3, with its peak as every poll's highest.
+- **Decision 65's seeds:** seeds 1–2, while the lead is a multiple; more only if a gated measure comes within 25% of the fork's. #319 ran 1–2 to their destroys; 3 and 4 were stopped part-way when the owner stopped the long simulator runs, and their 4 h and 8 h readings are kept.
+- **The full run** is a knobbed test rather than a CLI, because the harness is built on Vitest's hooks. It's heavy: on the reference rig, seeds 1 and 2 each took about 1 h 45 min of real time to their destroys (two at once, beside a third run). Most of that went on the hours when the cloud servers hold petabytes.
+  - Run one seed a run, each under an external real-time kill. #319's ran under a 3-hour process-tree kill; Vitest's own 48 h test timeout kills nothing.
+  - POSIX:
+    ```
+    BRAIN_CHECKPOINTS=1 BRAIN_CHECKPOINTS_SEEDS=1 BRAIN_CHECKPOINTS_OUT=<folder> npx vitest run packages/brain/test/brain-at-checkpoints-simulation.test.ts -t "the run, seed" --maxWorkers=1
+    ```
+  - PowerShell: set `$env:BRAIN_CHECKPOINTS = "1"`, `$env:BRAIN_CHECKPOINTS_SEEDS = "1"` and `$env:BRAIN_CHECKPOINTS_OUT = "<folder>"`, then run the same `npx vitest run …` line. They stay set for the session, so `Remove-Item Env:BRAIN_CHECKPOINTS*` afterwards.
+  - `BRAIN_CHECKPOINTS_SEEDS` takes seeds as the baseline's `--seeds` does (`a..b` or `a,b,c`, distinct). `BRAIN_CHECKPOINTS_HOURS` sets the cap, 12 to 48 virtual hours. `BRAIN_CHECKPOINTS` set to anything but `1` runs nothing, and says so.
+  - The folder is made if need be.
+    - Each seed writes its progress lines to `seed-<n>.log` there.
+    - Its result goes to `seed-<n>.json`, with the run's date, commit, rig and Node. The result is rewritten at each checkpoint and every 10 virtual minutes, marked `partial` until the run ends, so a run that's stopped keeps what it reached.
+  - At the end, it prints the rows, the comparison and the destroys over every result in the folder, and writes them to `table.md` there.
+  - `BRAIN_CHECKPOINTS_TABLE=<folder>` prints them again without running anything.
+    - A result from before the peak was kept (#319's seeds 1–4) takes its peaks from its `seed-<n>.log` (`peaksFromLog`: the 10-minute progress lines and the checkpoint's own reading, a lower bound).
+    - A result from before the run's metadata was kept takes today's date, commit, rig and Node, and the print names those seeds.
+
 ## The lockstep driver
 
 `SimulatedGame` (`src/simulated-game.ts`) runs a brain against a simulation ([ADR 0012](../../docs/decisions/0012-simulator-network-in-lockstep.md)). Every brain-plus-simulator test uses it; the live brain never loads it.
@@ -1237,4 +1277,5 @@ The `ui` backend's destroy (the terminal, the BitVerse page, the restart) is E2'
 | `test/install-restart.test.ts` | The [install suite](#the-install-suite) (#164) |
 | `test/destroy-restart.test.ts` | The [destroy suite](#the-destroy-suite) (#175) |
 | `test/helpers/fresh-start.ts` | A game in the simulator with the brain and the built Agent in it, and the owner's setup before the Agent starts: the start of the suites above. `reload()` reloads it, from a save taken then or one given (#164) |
+| `test/brain-at-checkpoints-simulation.test.ts`, `test/helpers/checkpoints.ts` | [The brain against the fork](#the-brain-against-the-fork): the brain from the baseline's start, read at its checkpoints, and each seed against the fork's (#319) |
 | `test/helpers/brain-in-simulation.ts` | The brain wired like `main.ts`, on the lockstep driver; the desired-state controller only when a test asks (`withDesiredState`), so the M2 suites see the observe-only skeleton they test; `stop()`, the brain gone (#160) |

@@ -38,6 +38,8 @@ npm run baseline -w @bitburner-agent/legacy [-- --seeds a..b | a,b,c] [--workers
 
 It prints the scenario table ([scenarios](../../docs/sim/scenarios.md)), each seed's heap (at the start and each checkpoint), and the run's rows for the baselines page, one per checkpoint. `--json` paths are relative to where you ran npm. The CLI is `src/cli.ts` (`baselineCli`), which `scripts/baseline.ts` calls with the real dependencies. It exits 0 if every seed reached 12 hours, 1 if any didn't, and 2 if it couldn't run. A seed takes a few real minutes: 12 virtual hours come before the fork runs tens of thousands of scripts, which is where the cost is ([baselines](../../docs/sim/baselines.md#why-checkpoints-and-why-12-hours)). By default it runs one seed at a time, kills a seed after 60 minutes of real time (`--wall-limit`, in minutes), caps each simulation's heap at 2 GB (`--max-heap`, in MB), and prints a progress line per seed per checkpoint on stderr.
 
+The brain is measured from the same start, at the same checkpoints, by the brain's checkpoint suite ([brain README](../brain/README.md#the-brain-against-the-fork), #319), which imports `baselineScenario()` and `CHECKPOINTS_MS` from here.
+
 ## Checks
 
 `test/baseline.test.ts`, the baseline's CI smoke tests:
