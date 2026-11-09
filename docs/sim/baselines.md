@@ -101,7 +101,7 @@ Speed and real time aren't comparable with the fork's: the brain's game runs on 
 
 The peak is lenient toward the brain: an install drops its level to 1, while the fork's level is the one read at the checkpoint, dip or not. Seeds 1–4 ran before the runner kept the peak, so theirs come from their 10-minute progress lines and the checkpoint's own reading. That's a lower bound, and for every one of them it's the checkpoint's own reading.
 
-**The first run (seeds 1–4: 1–3 at e077960, 4 at 1a46031), against the fork's 5238ab6 rows on the same Node.** The brain's game is the same at both commits; between them only the test file and docs changed. Seed 3's run printed `e077960-dirty` (docs only), recorded as `e077960`.
+**The first run (seeds 1–4: 1–3 at e077960, 4 at 1a46031), against the fork's 5238ab6 rows on the same Node.** The brain's game is the same at both commits; between them only the test file and docs changed. Seed 3's run printed `e077960-dirty` (docs only), recorded as `e077960`. These four runs predate the runner writing its own metadata: each `seed-<n>.json`'s `meta` (date, commit, rig, Node) was added afterwards from the run's log and the commit times.
 
 | Date | Commit | Rig | Node | Seeds | At | Reached | Money | Hacking | Augs | Home RAM | Heap | Speed | Real time per seed |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|

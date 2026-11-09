@@ -380,7 +380,8 @@ describe("the rows and the comparison", () => {
       [341, 11, 128],
       [493, 15, 2048],
     ]);
-    // Their ranges too, which a medians-only check would miss for a value moved between seeds.
+    // Their ranges too: they catch a value that changed, not one moved between seeds (min and max don't move then).
+    // Which seed holds which value was checked by hand against the run's JSON (FORK_AT_CHECKPOINTS' docstring).
     const range = (index: number, measure: keyof ForkReading) => {
       const values = Object.values(FORK_AT_CHECKPOINTS.seeds).map((seed) => (seed[index] as ForkReading)[measure]);
       return [Math.min(...values), Math.max(...values)];
