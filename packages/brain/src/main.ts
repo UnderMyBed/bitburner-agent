@@ -28,7 +28,7 @@ import {
   resolveDataDirectory,
   STORE_FILE_NAME,
 } from "./config.ts";
-import { startDashboardServer } from "./dashboard/server.ts";
+import { SLOW_DASHBOARD_STATUS_MS, startDashboardServer } from "./dashboard/server.ts";
 import { BRAIN_STARTED_EVENT_KIND, buildDashboardStatus } from "./dashboard/status.ts";
 import { CampaignTimeline } from "./dashboard/timeline.ts";
 import { backupBeforeThinning, DataBackups, dataBackupStoreId, describeDataBackup } from "./data-backup.ts";
@@ -248,6 +248,7 @@ try {
     onError: (error) =>
       log(`dashboard timeline: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
   });
+  const slowStatuses = { count: 0, loggedAtMs: Number.NEGATIVE_INFINITY };
   const dashboardServer = await startDashboardServer({
     port: config.dashboardPort,
     status: () =>
@@ -346,6 +347,19 @@ try {
       return set;
     },
     onError: (error) => log(`dashboard: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
+    // A slow status holds every snapshot arriving meanwhile (#309): logged, at most once a minute, with the count.
+    onSlowStatus: (tookMs) => {
+      slowStatuses.count++;
+      const nowMs = systemClock.now();
+      if (nowMs - slowStatuses.loggedAtMs < 60_000) return;
+      const over = `${slowStatuses.count} over ${SLOW_DASHBOARD_STATUS_MS} ms since the last line`;
+      log(
+        `dashboard: status built in ${Math.round(tookMs)} ms (${over}): the brain's event loop is held meanwhile, ` +
+          "every snapshot arriving late (#309)",
+      );
+      slowStatuses.count = 0;
+      slowStatuses.loggedAtMs = nowMs;
+    },
   });
   log(`${release}, environment ${config.environment}, data in ${dataDirectory}`);
   log(`deploys ${deployer.deploymentId}`);

@@ -314,7 +314,7 @@ describe("the run report's section", () => {
     // Out of step: a failure, from the snapshot that first showed it.
     expect(failures).toEqual([
       "batcher out of step: 1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost on n00dles, the first seen " +
-        "at 2026-01-01T01:10:00.000Z; no page stall before it",
+        "at 2026-01-01T01:10:00.000Z; no page stall or delivery lag before it",
     ]);
     expect(lines).toContain(`  ${failures[0]}`);
     expect(lines).toContain("    from 2026-01-01T01:10:00.000Z: no RAM to prepare n00dles");
@@ -1075,7 +1075,7 @@ describe("the run report's section, out of step (#206)", () => {
     // When the first was seen, not the last.
     expect(failures).toEqual([
       "batcher out of step: 0 desyncs (0 out of order, 0 out of bounds), 1 late, 2 lost on n00dles, the first seen " +
-        "at 1970-01-01T00:01:00.000Z; no page stall before it",
+        "at 1970-01-01T00:01:00.000Z; no page stall or delivery lag before it",
     ]);
   });
 });
@@ -1146,8 +1146,8 @@ describe("the run report's section, out of step after a clock step or page stall
     const stepped = section(monotonic(run()), [STEP]);
     expect(stepped.warnings).toEqual([]);
     expect(stepped.failures).toEqual([
-      `batcher out of step: ${COUNTS}, ${FIRST}; no page stall before it (a clock step can't put a batcher on the ` +
-        "page's monotonic clock out of step, #251)",
+      `batcher out of step: ${COUNTS}, ${FIRST}; no page stall or delivery lag before it (a clock step can't put a ` +
+        "batcher on the page's monotonic clock out of step, #251)",
     ]);
     // A page stall within a weaken before it, the step beside it: the stall's.
     const stall = { ...STALL, fromMs: at(600_000), toMs: at(605_000) };
@@ -1176,17 +1176,51 @@ describe("the run report's section, out of step after a clock step or page stall
     ]);
   });
 
+  test("a delivery lag (#309) the same, as a page stall, for a batcher on the monotonic clock too; not one the page wasn't behind", () => {
+    const monotonic = (points: Point[]) =>
+      points.map((point) => ({ ...point, health: { ...(point.health as object), clock: "monotonic" } }));
+    // 2026-11-08's: the desyncs on clarkinc began inside a backlog; an older Agent's, so whose is unknown.
+    const lag: ClockIncident = {
+      kind: "deliveryLag",
+      fromMs: at(700_000),
+      toMs: at(800_000),
+      sizeMs: 632,
+      detail: "…",
+      pageLagMs: null,
+    };
+    const within =
+      `after a delivery lag of up to 0.6 s from ${iso(700_000)} to ${iso(800_000)} (within a weaken there, ` +
+      "7 min 57 s)";
+    expect(section(monotonic(run()), [lag]).warnings).toEqual([
+      `batcher out of step after a delivery lag: ${COUNTS}, ${FIRST}, ${within}; ${RECOVERED}, and nothing out of ` +
+        "step in the 10 min after",
+    ]);
+    expect(section(monotonic(run()), [{ ...lag, pageLagMs: 600 }]).warnings).toHaveLength(1);
+    // The Agent sent on time (its share 1 ms): the socket's or the brain's lag, which can't hold the page's batcher.
+    const brains = { ...lag, pageLagMs: 1 };
+    const notPage =
+      ` (a delivery lag of up to 0.6 s from ${iso(700_000)} to ${iso(800_000)} was the socket's or the brain's, the ` +
+      "page sending on time: no excuse, #309)";
+    expect(section(monotonic(run()), [brains])).toMatchObject({
+      warnings: [],
+      failures: [`batcher out of step: ${COUNTS}, ${FIRST}; no page stall or delivery lag before it${notPage}`],
+    });
+    expect(section(run(), [brains]).failures).toEqual([
+      `batcher out of step: ${COUNTS}, ${FIRST}; no clock step, page stall or delivery lag before it${notPage}`,
+    ]);
+  });
+
   test("no incident, none within a weaken before the first desync, or one after it: a failure, as before", () => {
     expect(section(run(), []).failures).toEqual([
-      `batcher out of step: ${COUNTS}, ${FIRST}; no clock step or page stall before it`,
+      `batcher out of step: ${COUNTS}, ${FIRST}; no clock step, page stall or delivery lag before it`,
     ]);
     expect(section(run(), [STEP], 1_000).failures).toEqual([
-      `batcher out of step: ${COUNTS}, ${FIRST}; no clock step or page stall within a weaken there (1 s) before it ` +
-        `(the last, a clock step of +2.7 s from ${iso(707_800)} to ${iso(732_478)})`,
+      `batcher out of step: ${COUNTS}, ${FIRST}; no clock step, page stall or delivery lag within a weaken there ` +
+        `(1 s) before it (the last, a clock step of +2.7 s from ${iso(707_800)} to ${iso(732_478)})`,
     ]);
     const later = { ...STEP, fromMs: at(734_479), toMs: at(740_000) };
     expect(section(run(), [later]).failures).toEqual([
-      `batcher out of step: ${COUNTS}, ${FIRST}; no clock step or page stall before it`,
+      `batcher out of step: ${COUNTS}, ${FIRST}; no clock step, page stall or delivery lag before it`,
     ]);
   });
 
@@ -1252,7 +1286,8 @@ describe("the run report's section, out of step after a clock step or page stall
     expect(later.warnings).toHaveLength(1);
     expect(later.failures).toEqual([
       "batcher out of step: 1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost on the-hub, the first seen at " +
-        `${iso(1_429_479)}; no clock step or page stall within a weaken there (7 min 57 s) before it (the last, a ` +
+        `${iso(1_429_479)}; no clock step, page stall or delivery lag within a weaken there (7 min 57 s) before ` +
+        `it (the last, a ` +
         `clock step of +2.7 s from ${iso(707_800)} to ${iso(732_478)})`,
     ]);
   });
@@ -1422,14 +1457,14 @@ describe("the run report's section, out of step after a clock step or page stall
     const { lines, failures } = section(points, []);
     const failure =
       "batcher out of step: 3 desyncs (0 out of order, 3 out of bounds), 0 late, 0 lost in 2 stretches on n00dles, " +
-      `the first seen at ${iso(60_000)}; the first: no clock step or page stall before it`;
+      `the first seen at ${iso(60_000)}; the first: no clock step, page stall or delivery lag before it`;
     expect(failures).toEqual([failure]);
     const at0 = lines.indexOf(`  ${failure}`);
     expect(lines.slice(at0 + 1, at0 + 3)).toEqual([
       "    1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost on n00dles, the first seen at " +
-        `${iso(60_000)}; no clock step or page stall before it`,
+        `${iso(60_000)}; no clock step, page stall or delivery lag before it`,
       "    2 desyncs (0 out of order, 2 out of bounds), 0 late, 0 lost on n00dles, the first seen at " +
-        `${iso(1_000_000)}; no clock step or page stall before it`,
+        `${iso(1_000_000)}; no clock step, page stall or delivery lag before it`,
     ]);
   });
 
@@ -1444,7 +1479,8 @@ describe("the run report's section, out of step after a clock step or page stall
     expect(warnings).toHaveLength(1);
     expect(failures).toEqual([
       "batcher out of step: 1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost on n00dles, the first seen at " +
-        `${iso(2_400_000)}; no clock step or page stall within a weaken there (7 min 57 s) before it (the last, a ` +
+        `${iso(2_400_000)}; no clock step, page stall or delivery lag within a weaken there (7 min 57 s) before ` +
+        `it (the last, a ` +
         `clock step of +2.7 s from ${iso(707_800)} to ${iso(732_478)})`,
     ]);
   });

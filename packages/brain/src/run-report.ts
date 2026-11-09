@@ -35,8 +35,10 @@ import {
 } from "./bitnode-end.ts";
 import {
   type ClockIncident,
+  type DeliveryLag,
   type FastSnapshotTime,
   findClockIncidents,
+  findDeliveryLags,
   incidentLines,
   type SnapshotTime,
   WeakenTimes,
@@ -788,12 +790,12 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const batcherTargets = new BatcherTargets(resets);
     for (const { atMs, gameTimeMs, agentSessionId, data } of ofTier<Partial<FastSnapshotData>>("fast")) {
       snapshotCount++;
-      const { degradedTiers, pageHeapUsedBytes } = data;
+      const { degradedTiers, pageHeapUsedBytes, sentAtMs } = data;
       const stubbed = isThinnedReading(data);
       const resetIntents = stubbed
         ? namesOf((data as { resetIntents?: unknown }).resetIntents)
         : resetIntentIds(Array.isArray(data.intents) ? data.intents : []);
-      fastTimes.push({ atMs, gameTimeMs, degradedTiers, pageHeapUsedBytes, resetIntents });
+      fastTimes.push({ atMs, gameTimeMs, degradedTiers, sentAtMs, pageHeapUsedBytes, resetIntents });
       if (stubbed) {
         thinned.fast++;
         thinned.lastMs = Math.max(thinned.lastMs ?? atMs, atMs);
@@ -907,11 +909,14 @@ export function runReport(
     );
   }
   // Clock steps and page stalls (#241): section 4 lists them, section 6 puts the batcher's desyncs down to them.
-  const incidents = findClockIncidents({
+  const clocks = {
     medium: facts.mediumTimes,
     fast: facts.fastTimes,
     restartsMs: facts.events.filter((event) => RESTART_EVENT_KINDS.includes(event.kind)).map(({ atMs }) => atMs),
-  });
+  };
+  const incidents = findClockIncidents(clocks);
+  // The brief delivery lags (#309), counted apart from the incidents (the backlogs).
+  const briefLags = findDeliveryLags(clocks).filter((lag) => !lag.backlog);
   const lines = [
     `Run report (${window.environment}) from ${formatIsoTime(window.sinceMs)} to ${formatIsoTime(window.untilMs)} ` +
       `(${formatDuration(window.untilMs - window.sinceMs)})`,
@@ -931,7 +936,7 @@ export function runReport(
     "",
     ...actionsSection(facts, verbose),
     "",
-    ...healthSection(facts, gapThresholdMs, failures, incidents),
+    ...healthSection(facts, gapThresholdMs, failures, incidents, briefLags),
     "",
     ...withWhoHacked(
       facts.hacking.section(failures, (fromMs, toMs) => facts.cycles.heldBackBetween(fromMs, toMs)),
@@ -1972,13 +1977,14 @@ function healthSection(
   gapThresholdMs: number,
   failures: string[],
   incidents: readonly ClockIncident[],
+  briefLags: readonly DeliveryLag[],
 ): string[] {
   const lines = ["4. Health"];
   const heartbeat = heartbeatLines(facts, gapThresholdMs, failures);
   lines.push(...heartbeat.lines);
   lines.push(`  ${describePageHeap(facts.fastTimes.map((point) => point.pageHeapUsedBytes).filter(isNumber))}`);
-  // Clock steps and page stalls (#241): each, and 3 or more in an hour a failure.
-  lines.push(...incidentLines(incidents, failures));
+  // Clock steps, page stalls (#241) and delivery lags (#309): each, and 3 or more in an hour a failure.
+  lines.push(...incidentLines(incidents, failures, briefLags));
   lines.push(...stallLines(facts, heartbeat.gaps, failures));
 
   lines.push(`  stuck intents (${INTENT_STUCK_AFTER_TRIES} tries or more, not done at the last look):`);

@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { TelemetryStore } from "../src/telemetry-store.ts";
+import { NEWEST_OF_TIER_SQL, TelemetryStore } from "../src/telemetry-store.ts";
 
 let directory: string;
 let store: TelemetryStore;
@@ -291,6 +292,39 @@ test("the latest snapshot of a tier, in the order stored (a clock set back can't
     data: { n: 1 },
   });
   expect(store.latestSnapshot({ environment: "E1", tier: "slow" })).toBeNull();
+});
+
+/** How SQLite would run the newest-of-a-tier read (#309) on the store's file: its plan's lines. */
+function newestOfTierPlan(filePath: string): string[] {
+  const database = new DatabaseSync(filePath, { readOnly: true });
+  try {
+    const rows = database.prepare(`EXPLAIN QUERY PLAN ${NEWEST_OF_TIER_SQL}`).all("E0", "fast", 1);
+    return rows.map((row) => String(row.detail));
+  } finally {
+    database.close();
+  }
+}
+
+test("the newest snapshots of a tier are read off an index, sorting nothing (#309), on an older store too", () => {
+  // Sorted, the read held every row of the tier in a temporary B-tree: 0.65 s for the dashboard's status on the live
+  // run's 440 MB store, every 2 s, and every snapshot arriving meanwhile waited (#309's delivery lag).
+  expect(newestOfTierPlan(path.join(directory, "telemetry.sqlite"))).toEqual([
+    expect.stringMatching(/^SEARCH snapshots USING INDEX snapshots_by_tier_and_id \(environment=\? AND tier=\?\)$/),
+  ]);
+  // A store from before the index: the brain makes it as it opens the store.
+  const older = path.join(directory, "older.sqlite");
+  const database = new DatabaseSync(older);
+  database.exec(
+    `CREATE TABLE snapshots (id INTEGER PRIMARY KEY, environment TEXT NOT NULL, release TEXT NOT NULL,
+      agent_session_id TEXT NOT NULL, tier TEXT NOT NULL, sequence_number INTEGER NOT NULL,
+      game_time_ms INTEGER NOT NULL, received_at_ms INTEGER NOT NULL, missed_before INTEGER NOT NULL,
+      data TEXT NOT NULL);
+    CREATE INDEX snapshots_by_tier_and_time ON snapshots (environment, tier, received_at_ms);`,
+  );
+  database.close();
+  expect(newestOfTierPlan(older)).toContain("USE TEMP B-TREE FOR ORDER BY");
+  TelemetryStore.open(older).close();
+  expect(newestOfTierPlan(older)).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 });
 
 test("the newest snapshot of a tier received before a time (#196), in an environment", () => {

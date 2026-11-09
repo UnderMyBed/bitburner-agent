@@ -131,6 +131,8 @@ function expectEveryTierInNumber(rows: StoredRows, session: string, spanMs: numb
     const fast = row.data as FastSnapshotData;
     expect(fast.game, `fast #${row.sequenceNumber}`).not.toBeNull();
     expect(fast.degradedTiers, `fast #${row.sequenceNumber}`).toEqual([]);
+    // Sent after its worker reported, both on the page's clock (#309): the Agent's share of any delivery lag.
+    expect(fast.sentAtMs, `fast #${row.sequenceNumber}`).toBeGreaterThanOrEqual(row.gameTimeMs as number);
   }
 }
 

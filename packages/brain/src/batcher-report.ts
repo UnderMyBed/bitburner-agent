@@ -6,8 +6,10 @@
 // (#224). Out of step is judged a stretch at a time (#241): one a clock step or page stall explains, which the batcher
 // recovered from by itself, is a warning (owner decision 55, ./clock-incidents.ts). Since #251 the batcher times its
 // batches on the page's monotonic clock (its health's `clock`), which a clock step doesn't move: only a page stall
-// explains its stretches, and a clock step only an older batcher's. A batcher stuck on poor targets (#275, the best
-// rooted one 100× more on the hosts' RAM) is a warning for an hour, and a failure for 2 hours in a cycle.
+// explains its stretches, and a clock step only an older batcher's. A delivery lag (#309) counts as a page stall,
+// unless the Agent's send stamps show the page sent on time: the socket's or the brain's lag can't hold the page's
+// batcher. A batcher stuck on poor targets (#275, the best rooted one 100× more on the hosts' RAM) is a warning for an
+// hour, and a failure for 2 hours in a cycle.
 import {
   BATCH_RAM_WAIT_MS,
   type BatcherHealth,
@@ -21,6 +23,7 @@ import {
   batcherSpanOf,
   type ClockIncident,
   describeIncident,
+  holdsThePage,
   INCIDENT_ATTRIBUTION_WEAKENS,
 } from "./clock-incidents.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, formatDuration, formatIsoTime } from "./gap-report.ts";
@@ -657,7 +660,8 @@ const countsText = (counts: OutOfStepCounts) =>
 const addCounts = (counts: OutOfStepCounts, rose: OutOfStepCounts) => {
   for (const count of OUT_OF_STEP_COUNTS) counts[count] += rose[count];
 };
-const kindName = ({ kind }: ClockIncident) => (kind === "clockStep" ? "clock step" : "page stall");
+const kindName = ({ kind }: ClockIncident) =>
+  kind === "clockStep" ? "clock step" : kind === "deliveryLag" ? "delivery lag" : "page stall";
 
 /**
  * The incident a stretch is put down to (#241), its first look out of step being at `firstMs`: the latest incident
@@ -674,15 +678,25 @@ function attributionOf(
   attributed: Set<ClockIncident>,
 ): Attribution | { why: string } {
   const before = (incident: ClockIncident) => batcherSpanOf(incident).fromMs <= firstMs;
-  const explaining = monotonic ? context.incidents.filter(({ kind }) => kind === "pageStall") : context.incidents;
+  const explaining = context.incidents.filter(
+    (incident) =>
+      (!monotonic || incident.kind !== "clockStep") && (incident.kind !== "deliveryLag" || holdsThePage(incident)),
+  );
   const incidentsBefore = explaining.filter(before);
   const lastIncident = incidentsBefore.at(-1);
-  const kinds = monotonic ? "page stall" : "clock step or page stall";
-  // Said, so a step that came before reads as no excuse, not as missed.
+  const kinds = monotonic ? "page stall or delivery lag" : "clock step, page stall or delivery lag";
+  // Said, so a step, or a lag the page wasn't behind, that came before reads as no excuse, not as missed.
+  const lastNotPage = context.incidents
+    .filter((incident) => incident.kind === "deliveryLag" && !holdsThePage(incident) && before(incident))
+    .at(-1);
   const stepNote =
-    monotonic && context.incidents.some((incident) => incident.kind === "clockStep" && before(incident))
+    (monotonic && context.incidents.some((incident) => incident.kind === "clockStep" && before(incident))
       ? " (a clock step can't put a batcher on the page's monotonic clock out of step, #251)"
-      : "";
+      : "") +
+    (lastNotPage === undefined
+      ? ""
+      : ` (${describeIncident(lastNotPage)} was the socket's or the brain's, the page sending on time: no ` +
+        "excuse, #309)");
   if (lastIncident === undefined) return { why: `no ${kinds} before it${stepNote}` };
   const weakenMs = context.weakenMs(target, batcherSpanOf(lastIncident).fromMs);
   if (weakenMs === null) {

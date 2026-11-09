@@ -3487,7 +3487,9 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
    * 12:14.478 (16 late, 24 lost), the batcher recovering, then preparing, and batching again at 13:49.478, 95 s later,
    * in step to the end at 30 min. `noStep` leaves the clocks alone; `stallsAfter` makes each of those rounds 5 s long
    * on both clocks (a page stall); `mediumRetriedAt` fails the medium tier at that round and the next, the fast
-   * snapshots after each saying so, and sends it the round after.
+   * snapshots after each saying so, and sends it the round after. `laggedRounds` (#309): those rounds' snapshots
+   * received 600 ms after their stamps, 2026-11-08's delivery lag, a fast one sent `sentAfterMs` after its stamp if
+   * given (the Agent's send stamp, absent from an older Agent).
    */
   const END_MS = 30 * MINUTE;
   /** Run #3's batcher was before #251, on the wall clock (no `clock`); `monotonic`, one since. */
@@ -3496,12 +3498,14 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     stallsAfter = [] as number[],
     mediumRetriedAt = null as number | null,
     monotonic = false,
+    laggedRounds = [] as number[],
+    sentAfterMs = null as number | null,
   } = {}) {
     const rounds: { round: number; receivedMs: number; gameMs: number }[] = [];
     let trueMs = 1_800;
     for (let round = 0; trueMs <= END_MS; round++) {
       const gameMs = trueMs + (!noStep && round >= 354 ? 2_678 : 0);
-      const receivedMs = trueMs + (!noStep && round >= 364 ? 2_678 : 0);
+      const receivedMs = trueMs + (!noStep && round >= 364 ? 2_678 : 0) + (laggedRounds.includes(round) ? 600 : 0);
       rounds.push({ round, receivedMs, gameMs });
       trueMs += stallsAfter.includes(round) ? 5_000 : round === 380 ? 3_000 : 2_000;
     }
@@ -3530,7 +3534,8 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     for (const { round, receivedMs, gameMs } of rounds) {
       const retried = mediumRetriedAt !== null && round > mediumRetriedAt && round <= mediumRetriedAt + 2;
       const degradedTiers: FastSnapshotData["degradedTiers"] = retried ? ["medium"] : [];
-      snapshot("fast", receivedMs, fastData({ batcher: health(round), degradedTiers }), T0 + gameMs);
+      const sent = sentAfterMs === null ? {} : { sentAtMs: T0 + gameMs + sentAfterMs };
+      snapshot("fast", receivedMs, fastData({ batcher: health(round), degradedTiers, ...sent }), T0 + gameMs);
       const sendsMedium =
         mediumRetriedAt === null
           ? round % 5 === 0
@@ -3571,7 +3576,7 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     expect(warnings).toEqual([]);
     expect(failures).toEqual([
       "batcher out of step: 1615 desyncs (1615 out of order, 0 out of bounds), 16 late, 24 lost on the-hub, the " +
-        `first seen at ${at(731_800)}; no clock step or page stall before it`,
+        `first seen at ${at(731_800)}; no clock step, page stall or delivery lag before it`,
     ]);
     expect(text).toMatch(/3 or more within an hour fail\):\n {4}none\n/);
   });
@@ -3583,8 +3588,36 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     expect(warnings).toEqual([]);
     expect(failures).toEqual([
       "batcher out of step: 1615 desyncs (1615 out of order, 0 out of bounds), 16 late, 24 lost on the-hub, the " +
-        `first seen at ${at(734_478)}; no page stall before it (a clock step can't put a batcher on the page's ` +
-        "monotonic clock out of step, #251)",
+        `first seen at ${at(734_478)}; no page stall or delivery lag before it (a clock step can't put a batcher on ` +
+        "the page's monotonic clock out of step, #251)",
+    ]);
+  });
+
+  /** Rounds 360 to 370 (12:01.8 to 12:21.8) received 0.6 s late; the desyncs first seen at round 365, inside. */
+  const laggedRounds = Array.from({ length: 11 }, (_, index) => 360 + index);
+
+  test("a delivery lag (#309) the desyncs began in: in section 4, not a clock step; the desyncs put down to it", () => {
+    incidentRun({ noStep: true, monotonic: true, laggedRounds });
+    const lagged = runReport(store, incidentWindow);
+    const LAG_LINE =
+      `    delivery lag up to 0.6 s from ${at(721_800 + 600)} to ${at(743_800)} (not a clock step): 14 snapshots ` +
+      "received late, drained in 21 s; whose, unknown (no send stamps: an Agent before #309)";
+    expect(lagged.text).toContain(`within an hour fail):\n${LAG_LINE}\n  income stalls`);
+    expect(lagged.failures).toEqual([]);
+    expect(lagged.warnings).toEqual([
+      expect.stringMatching(
+        /^batcher out of step after a delivery lag: .*, after a delivery lag of up to 0\.6 s from /,
+      ),
+    ]);
+  });
+
+  test("the same, the Agent's send stamps saying it sent on time: the socket's or the brain's, no excuse: FAIL", () => {
+    incidentRun({ noStep: true, monotonic: true, laggedRounds, sentAfterMs: 2 });
+    const brains = runReport(store, incidentWindow);
+    expect(brains.text).toContain("14 snapshots received late, drained in 21 s; the Agent's share at most 0.0 s");
+    expect(brains.warnings).toEqual([]);
+    expect(brains.failures).toEqual([
+      expect.stringMatching(/ was the socket's or the brain's, the page sending on time: no excuse, #309\)$/),
     ]);
   });
 
@@ -3595,7 +3628,7 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
     const { text, failures, warnings } = runReport(store, incidentWindow);
     expect(warnings).toEqual([]);
     expect(text).not.toContain(STEP_LINE);
-    expect(failures).toEqual([expect.stringMatching(/; no clock step or page stall before it$/)]);
+    expect(failures).toEqual([expect.stringMatching(/; no clock step, page stall or delivery lag before it$/)]);
   });
 
   test("a medium snapshot retried twice (14 s apart on both clocks, fast snapshots saying so) is no stall", () => {
@@ -3612,8 +3645,8 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
         "apart on both clocks (2 s due); the medium snapshots 13.0 s apart on both clocks (10 s due)\n",
     );
     const tooMany =
-      `clock steps or page stalls: 3 from ${at(707_800)} to ${at(1_513_478)}, 3 or more within an hour (1 clock ` +
-      "step, 2 page stalls)";
+      `clock steps, page stalls or delivery lags: 3 from ${at(707_800)} to ${at(1_513_478)}, 3 or more within an ` +
+      "hour (1 clock step, 2 page stalls)";
     expect(failures).toEqual([tooMany]);
     expect(warnings).toEqual([WARNING]);
     expect(text.split("\n").slice(-3)).toEqual(["Verdict: FAIL", `  ${tooMany}`, `  warning: ${WARNING}`]);

@@ -121,6 +121,12 @@ export interface FastSnapshotData {
   degradedTiers: SnapshotTier[];
   /** The page's JS heap (`performance.memory.usedJSHeapSize`); null where the browser has none. */
   pageHeapUsedBytes: number | null;
+  /**
+   * The page's `Date.now()` as the Agent sent this snapshot (#309), absent from an older Agent: with the snapshot's
+   * `gameTimeMs` (its worker's report) and the brain's receipt, it tells whose a delivery lag was, the page's or the
+   * socket's and the brain's.
+   */
+  sentAtMs?: number;
   /** The fast worker's data; null when it couldn't run. */
   game: FastWorkerData | null;
   /** Every intent the Agent holds, in order, and how it went (#141). */

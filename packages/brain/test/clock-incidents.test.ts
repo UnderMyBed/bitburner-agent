@@ -8,7 +8,13 @@ import {
   CLOCK_STEP_PAIR_WITHIN_MS,
   CLOCK_STEP_STEADY_MS,
   type ClockIncident,
+  DELIVERY_LAG_MIN_MS,
+  DELIVERY_LAG_SAME_WITHIN_MS,
+  type DeliveryLag,
+  describeIncident,
   findClockIncidents,
+  findDeliveryLags,
+  holdsThePage,
   incidentLines,
   PAGE_STALL_FAST_INTERVAL_MS,
   PAGE_STALL_MEDIUM_MARGIN_MS,
@@ -167,9 +173,16 @@ describe("clock steps", () => {
     expect(findClockIncidents(run3({ stepMs: 501 }))).toHaveLength(1);
   });
 
-  test("moves of different sizes (beyond 250 ms apart) are two steps, not one", () => {
-    expect(findClockIncidents(run3({ brainMoves: [[364, 2_678 + 250]] }))).toHaveLength(1);
-    expect(findClockIncidents(run3({ brainMoves: [[364, 2_678 + 251]] }))).toHaveLength(2);
+  test("moves of different sizes (beyond 250 ms apart) aren't one step: the brain's alone, on, is a delivery lag", () => {
+    // Within 250 ms, one step, and the 250 ms the brain's clock is left ahead is the step's, not a lag (#309).
+    expect(findClockIncidents(run3({ brainMoves: [[364, 2_678 + 250]] }))).toEqual([
+      expect.objectContaining({ kind: "clockStep" }),
+    ]);
+    expect(findDeliveryLags(run3({ brainMoves: [[364, 2_678 + 250]] }))).toEqual([]);
+    // Beyond, the game's alone; the brain's, alone and on, leaves every snapshot received 251 ms after its stamp, on
+    // one PC's clock: a delivery lag (#309).
+    const kinds = findClockIncidents(run3({ brainMoves: [[364, 2_678 + 251]] })).map(({ kind }) => kind);
+    expect(kinds).toEqual(["clockStep", "deliveryLag"]);
   });
 
   test("back as well as on: the clock stepped back 1 s", () => {
@@ -202,13 +215,15 @@ describe("clock steps", () => {
   });
 
   test("a clock must be long once and never short: a snapshot received late, or a burst from a busy brain, isn't", () => {
+    const steps = (input: Parameters<typeof findClockIncidents>[0]) =>
+      findClockIncidents(input).filter(({ kind }) => kind !== "deliveryLag");
     expect(CLOCK_STEP_STEADY_MS).toBe(250);
     // One received 1.5 s late, the next on time; or 2 s late.
     const late = [point(0), point(2_000), point(5_500, 4_000), point(6_000), point(8_000), point(10_000)];
     expect(findClockIncidents({ ...none, fast: late })).toEqual([]);
     const lateByARound = [point(0), point(2_000), point(6_000, 4_000), point(6_000), point(8_000), point(10_000)];
     expect(findClockIncidents({ ...none, fast: lateByARound })).toEqual([]);
-    // Three taken 2 s apart, received together after a 5 s wait.
+    // Three taken 2 s apart, received together after a 5 s wait: no step, a delivery lag over 3 rounds (#309).
     const burst = [
       point(0),
       point(2_000),
@@ -217,7 +232,10 @@ describe("clock steps", () => {
       point(9_000, 8_000),
       point(10_000),
     ];
-    expect(findClockIncidents({ ...none, fast: burst })).toEqual([]);
+    expect(steps({ ...none, fast: burst })).toEqual([]);
+    expect(findClockIncidents({ ...none, fast: burst })).toEqual([
+      expect.objectContaining({ kind: "deliveryLag", fromMs: T0 + 9_000, toMs: T0 + 10_000, sizeMs: 5_000 }),
+    ]);
     // The game's clock 300 ms short after: not held, not a step.
     const wobbly = [point(0), point(2_000), point(4_000, 6_000), point(6_000, 7_700), point(8_000, 9_700)];
     expect(findClockIncidents({ ...none, fast: wobbly })).toEqual([]);
@@ -348,6 +366,155 @@ describe("page stalls", () => {
   });
 });
 
+/**
+ * #309's live shape (2026-11-08, E0, on this file's clock): the Agent's rounds 2,005 ms apart (each a few ms over its
+ * 2 s), each snapshot reaching the brain 20 ms after its worker's stamp, the medium 28 ms after the fast every 5th
+ * round; the brain held `busyMs` of every 2,000 (the dashboard's status, polled every 2 s), anything arriving
+ * meanwhile received as the hold ends. Round 15's medium snapshot is caught alone, at the hold's start (670 ms late);
+ * round 20's medium too, its fast one just missing it, and from round 21 each fast one is caught 5 ms further in,
+ * 668 ms late then 5 ms less a round, on time (198 ms) at round 115. `sentAfterMs`: the Agent's send stamp, so long
+ * after its worker's (an older Agent's has none).
+ */
+function heldEveryPoll({ busyMs = 650, sentAfterMs = null as number | null } = {}) {
+  const receivedAt = (arrivalMs: number) => {
+    const intoHoldMs = arrivalMs % 2_000;
+    return intoHoldMs < busyMs ? arrivalMs - intoHoldMs + busyMs : arrivalMs;
+  };
+  const fast = [];
+  const medium = [];
+  for (let round = 0; round < 130; round++) {
+    const fastGameMs = 1_877 + 2_005 * round;
+    const sent = sentAfterMs === null ? {} : { sentAtMs: T0 + fastGameMs + sentAfterMs };
+    fast.push({ ...point(receivedAt(fastGameMs + 20), fastGameMs), ...sent });
+    if (round % 5 === 0) medium.push(point(receivedAt(fastGameMs + 48), fastGameMs + 28));
+  }
+  return { fast, medium, restartsMs: [] };
+}
+
+describe("delivery lags (#309)", () => {
+  const BACKLOG: DeliveryLag = {
+    fromMs: T0 + 32_650,
+    toMs: T0 + 232_650,
+    drainedAtMs: T0 + 232_650,
+    cutByRestart: false,
+    lateCount: 113,
+    lateMs: 670,
+    backlog: true,
+    pageLagMs: null,
+  };
+
+  test("the live run's shape: the brain held 0.65 s every 2 s is a backlog drained in 3 min 20 s, no clock step", () => {
+    expect(DELIVERY_LAG_MIN_MS).toBe(200);
+    // From round 15's medium snapshot: late again 8.7 s after its round's fast one drained it, the same lag.
+    expect(findClockIncidents(heldEveryPoll())).toEqual([
+      {
+        kind: "deliveryLag",
+        fromMs: T0 + 32_650,
+        toMs: T0 + 232_650,
+        sizeMs: 670,
+        detail:
+          "113 snapshots received late, drained in 3 min 20 s; whose, unknown (no send stamps: an Agent before #309)",
+        pageLagMs: null,
+      },
+    ]);
+    expect(findDeliveryLags(heldEveryPoll())).toEqual([BACKLOG]);
+  });
+
+  test("late again within 10 s of a drain is the same lag; later, another", () => {
+    expect(DELIVERY_LAG_SAME_WITHIN_MS).toBe(10_000);
+    const onTime = [4_000, 6_000, 8_000, 10_000, 12_000].map((offsetMs) => point(offsetMs));
+    const lateAgainAt = (offsetMs: number) => [
+      point(0),
+      point(2_300, 2_000),
+      ...onTime,
+      point(offsetMs, offsetMs - 300),
+      point(16_000),
+    ];
+    expect(findDeliveryLags({ ...none, fast: lateAgainAt(14_000) })).toEqual([
+      expect.objectContaining({ fromMs: T0 + 2_300, drainedAtMs: T0 + 16_000, lateCount: 2, backlog: true }),
+    ]);
+    expect(findDeliveryLags({ ...none, fast: lateAgainAt(14_001) })).toEqual([
+      expect.objectContaining({ fromMs: T0 + 2_300, drainedAtMs: T0 + 4_000, lateCount: 1, backlog: false }),
+      expect.objectContaining({ fromMs: T0 + 14_001, drainedAtMs: T0 + 16_000, lateCount: 1, backlog: false }),
+    ]);
+  });
+
+  test("held for under the threshold, nothing; a medium snapshot on time first doesn't drain a backlog", () => {
+    expect(findDeliveryLags(heldEveryPoll({ busyMs: 180 }))).toEqual([]);
+    // Held 400 ms: round 60's medium snapshot is on time (195 ms late) while the fast ones are still late, to 64.
+    const lags = findDeliveryLags(heldEveryPoll({ busyMs: 400 }));
+    expect(lags.map(({ lateMs, drainedAtMs }) => [lateMs, drainedAtMs])).toEqual([
+      [420, T0 + 1_877 + 2_005 * 65 + 198],
+    ]);
+  });
+
+  test("over 200 ms late is late, 200 isn't; late in two rounds is a backlog, in one (a round's two) brief", () => {
+    const fast = (lateMs: number) => [point(0), point(2_000 + lateMs, 2_000), point(4_000), point(6_000)];
+    expect(findDeliveryLags({ ...none, fast: fast(200) })).toEqual([]);
+    expect(findDeliveryLags({ ...none, fast: fast(201) })).toEqual([
+      expect.objectContaining({ fromMs: T0 + 2_201, drainedAtMs: T0 + 4_000, lateCount: 1, backlog: false }),
+    ]);
+    const twoRounds = [point(0), point(2_300, 2_000), point(4_300, 4_000), point(6_000)];
+    expect(findClockIncidents({ ...none, fast: twoRounds })).toEqual([
+      expect.objectContaining({ kind: "deliveryLag", fromMs: T0 + 2_300, toMs: T0 + 6_000, sizeMs: 300 }),
+    ]);
+    // A round's medium snapshot late alone, then with its fast one: brief.
+    const mediumAlone = { fast: fast(0), medium: [point(2_330, 2_030)], restartsMs: [] };
+    expect(findDeliveryLags(mediumAlone)).toEqual([expect.objectContaining({ lateCount: 1, backlog: false })]);
+    const both = { fast: fast(300), medium: [point(2_330, 2_030)], restartsMs: [] };
+    expect(findDeliveryLags(both)).toEqual([expect.objectContaining({ lateCount: 2, backlog: false })]);
+    // The medium snapshot on time after its round's late fast one doesn't drain it: the next fast one does.
+    const mediumOnTime = { fast: fast(300), medium: [point(2_350, 2_200)], restartsMs: [] };
+    expect(findDeliveryLags(mediumOnTime)).toEqual([expect.objectContaining({ drainedAtMs: T0 + 4_000 })]);
+  });
+
+  test("cut by a restart, or not drained by the window's end: said so, its end the last late one's", () => {
+    const late = [point(0), point(2_300, 2_000), point(4_300, 4_000), point(6_300, 6_000), point(8_000)];
+    const [cut] = findClockIncidents({ medium: [], fast: late, restartsMs: [T0 + 5_000] });
+    expect(cut).toMatchObject({ kind: "deliveryLag", fromMs: T0 + 2_300, toMs: T0 + 4_300 });
+    expect(cut?.detail).toMatch(/^2 snapshots received late, cut by a restart before it drained; /);
+    const [undrained] = findClockIncidents({ ...none, fast: late.slice(0, 4) });
+    expect(undrained).toMatchObject({ kind: "deliveryLag", fromMs: T0 + 2_300, toMs: T0 + 6_300 });
+    expect(undrained?.detail).toMatch(/^3 snapshots received late, not drained by the window's end; /);
+  });
+
+  test("a clock step with the brain's clock first is the step's, not a lag; the game's first leaves none either", () => {
+    const brainFirst = run3({ gameMoves: [[364, 2_678]], brainMoves: [[354, 2_678]] });
+    expect(findDeliveryLags(brainFirst)).toEqual([]);
+    expect(findClockIncidents(brainFirst).map(({ kind }) => kind)).toEqual(["clockStep"]);
+    expect(findDeliveryLags(run3())).toEqual([]);
+  });
+
+  test("the Agent's send stamps say whose: its share, and whether it could hold the page's batcher", () => {
+    // Sent 1 ms after its worker's stamp: the socket's or the brain's lag, the page on time.
+    const [brains] = findClockIncidents(heldEveryPoll({ sentAfterMs: 1 }));
+    expect(brains).toMatchObject({ kind: "deliveryLag", pageLagMs: 1 });
+    expect(brains?.detail).toBe(
+      "113 snapshots received late, drained in 3 min 20 s; the Agent's share at most 0.0 s (its worker's report to " +
+        "its send), the rest the socket's and the brain's",
+    );
+    expect(holdsThePage(brains as ClockIncident)).toBe(false);
+    // The page late in sending them: its own, the page held.
+    const pageLate = [0, 1, 2, 3].map((round) => ({
+      ...point(2_000 * round + 620, 2_000 * round),
+      sentAtMs: T0 + 2_000 * round + 600,
+    }));
+    const [pages] = findClockIncidents({ ...none, fast: [point(-2_000), ...pageLate] });
+    expect(pages).toMatchObject({ kind: "deliveryLag", pageLagMs: 600 });
+    expect(holdsThePage(pages as ClockIncident)).toBe(true);
+    // Unknown (an older Agent): counted as the page's, as a page stall is.
+    expect(holdsThePage(findClockIncidents(heldEveryPoll())[0] as ClockIncident)).toBe(true);
+    expect(holdsThePage({ kind: "pageStall", fromMs: 0, toMs: 1, sizeMs: 1, detail: "" })).toBe(true);
+    expect(holdsThePage(findClockIncidents(run3())[0] as ClockIncident)).toBe(false);
+  });
+
+  test("described for the batcher's lines", () => {
+    expect(describeIncident(findClockIncidents(heldEveryPoll())[0] as ClockIncident)).toBe(
+      `a delivery lag of up to 0.7 s from ${at(32_650)} to ${at(232_650)}`,
+    );
+  });
+});
+
 describe("section 4's lines, and too many in an hour", () => {
   const stall = (offsetMs: number): ClockIncident => ({
     kind: "pageStall",
@@ -361,9 +528,10 @@ describe("section 4's lines, and too many in an hour", () => {
   test("each incident, what it is and when; none says so; two in an hour aren't a failure", () => {
     const failures: string[] = [];
     expect(incidentLines([step, stall(40 * MINUTE)], failures)).toEqual([
-      "  clock steps and page stalls (#241: one clock's interval between snapshots off the other's by more than " +
-        "0.5 s, long that once; or the snapshots later than due on both clocks, the medium by more than 2.0 s, the " +
-        "fast more than 4.0 s apart; 3 or more within an hour fail):",
+      "  clock steps, page stalls and delivery lags (#241: one clock's interval between snapshots off the other's by " +
+        "more than 0.5 s, long that once; or the snapshots later than due on both clocks, the medium by more than " +
+        "2.0 s, the fast more than 4.0 s apart; #309: or snapshots received over 0.2 s after the page stamped them, " +
+        "one PC's clock, in more than one round; 3 or more within an hour fail):",
       `    clock step +2.7 s from ${at(707_800)} to ${at(732_478)}: the game's clock +2.7 s between snapshots at ` +
         `${at(707_800)} and ${at(709_800)}, the brain's +2.7 s between ${at(727_800)} and ${at(732_478)}`,
       `    page stalled ~3.0 s from ${at(40 * MINUTE)} to ${at(40 * MINUTE + 5_000)} (cause unknown): the fast ` +
@@ -373,19 +541,47 @@ describe("section 4's lines, and too many in an hour", () => {
     expect(incidentLines([], failures).at(-1)).toBe("    none");
   });
 
+  test("a delivery lag (#309), not a clock step; the brief ones counted on a line of their own, the worst named", () => {
+    const failures: string[] = [];
+    const [backlog] = findClockIncidents(heldEveryPoll());
+    // The brain held 0.6 s once a minute (the dashboard's poll in a hidden tab), a fast snapshot caught each time.
+    const minutely = [0, 1, 2].map((minute) => [
+      point(minute * MINUTE),
+      point(minute * MINUTE + 2_000 + 650 - 100 * minute, minute * MINUTE + 2_000),
+      point(minute * MINUTE + 4_000),
+    ]);
+    const brief = findDeliveryLags({ ...none, fast: minutely.flat() });
+    expect(brief.map(({ backlog }) => backlog)).toEqual([false, false, false]);
+    expect(incidentLines([backlog as ClockIncident], failures, brief).slice(1)).toEqual([
+      `    delivery lag up to 0.7 s from ${at(32_650)} to ${at(232_650)} (not a clock step): 113 snapshots received ` +
+        "late, drained in 3 min 20 s; whose, unknown (no send stamps: an Agent before #309)",
+      `    brief delivery lags (a round's snapshots late once, not counted): 3, the worst 0.7 s at ${at(2_650)}`,
+    ]);
+    expect(incidentLines([], failures, brief).slice(1)).toEqual([
+      "    none",
+      `    brief delivery lags (a round's snapshots late once, not counted): 3, the worst 0.7 s at ${at(2_650)}`,
+    ]);
+    expect(failures).toEqual([]);
+  });
+
   test("3 within an hour fail, once a stretch; the third an hour after the first doesn't count", () => {
     expect(TOO_MANY_INCIDENTS).toBe(3);
     expect(TOO_MANY_INCIDENTS_WITHIN_MS).toBe(60 * MINUTE);
     const failures: string[] = [];
     const lines = incidentLines([step, stall(30 * MINUTE), stall(60 * MINUTE - 1), stall(70 * MINUTE)], failures);
     const failure =
-      `clock steps or page stalls: 4 from ${at(707_800)} to ${at(70 * MINUTE + 5_000)}, 3 or more within an hour (1 ` +
-      "clock step, 3 page stalls)";
+      `clock steps, page stalls or delivery lags: 4 from ${at(707_800)} to ${at(70 * MINUTE + 5_000)}, 3 or more ` +
+      "within an hour (1 clock step, 3 page stalls)";
     expect(failures).toEqual([failure]);
     expect(lines.at(-1)).toBe(`    ${failure}`);
     const boundary: string[] = [];
     incidentLines([stall(0), stall(30 * MINUTE), stall(60 * MINUTE)], boundary);
     expect(boundary).toEqual([]);
+    // Delivery lags count (#309), named.
+    const lagged: string[] = [];
+    const [backlog] = findClockIncidents(heldEveryPoll());
+    incidentLines([stall(0), backlog as ClockIncident, stall(10 * MINUTE)], lagged);
+    expect(lagged).toEqual([expect.stringMatching(/ 3 or more within an hour \(2 page stalls, 1 delivery lag\)$/)]);
     const twice: string[] = [];
     const hour = (offsetMs: number) => [stall(offsetMs), stall(offsetMs + 1), stall(offsetMs + 2)];
     incidentLines([...hour(0), ...hour(3 * 60 * MINUTE)], twice);

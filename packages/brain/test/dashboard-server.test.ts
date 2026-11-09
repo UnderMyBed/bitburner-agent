@@ -2,7 +2,11 @@
 // checks that keep other pages (and DNS rebinding) out.
 import { request } from "node:http";
 import { afterEach, describe, expect, test } from "vitest";
-import { type RunningDashboardServer, startDashboardServer } from "../src/dashboard/server.ts";
+import {
+  type RunningDashboardServer,
+  SLOW_DASHBOARD_STATUS_MS,
+  startDashboardServer,
+} from "../src/dashboard/server.ts";
 
 let server: RunningDashboardServer | undefined;
 afterEach(async () => {
@@ -12,7 +16,13 @@ afterEach(async () => {
 
 const STATUS = { nowMs: 1, alerts: [] };
 
-async function start({ status = () => STATUS as never }: { status?: () => never } = {}) {
+async function start({
+  status = () => STATUS as never,
+  onSlowStatus,
+}: {
+  status?: () => never;
+  onSlowStatus?: (tookMs: number) => void;
+} = {}) {
   const pausedCalls: boolean[] = [];
   const hackLoopCalls: boolean[] = [];
   const batcherCalls: boolean[] = [];
@@ -65,6 +75,7 @@ async function start({ status = () => STATUS as never }: { status?: () => never 
         : { ok: false, reason: "work's faction isn't one of the game's" };
     },
     onError: (error) => errors.push(error),
+    ...(onSlowStatus === undefined ? {} : { onSlowStatus }),
   });
   return {
     port: server.port,
@@ -459,6 +470,28 @@ test("other paths are 404, other methods 405", async () => {
   expect((await send(port, { method: "GET", path: "/api/augmentations" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/intents" })).status).toBe(405);
   expect((await send(port, { method: "GET", path: "/api/intents/cancel" })).status).toBe(405);
+});
+
+test("a status built slower than 200 ms is reported (#309): the brain's event loop is held meanwhile", async () => {
+  expect(SLOW_DASHBOARD_STATUS_MS).toBe(200);
+  const slow: number[] = [];
+  let holdMs = 250;
+  const { port } = await start({
+    status: () => {
+      const until = performance.now() + holdMs;
+      while (performance.now() < until) {
+        // Held, as a sorting read on a large store held it (0.65 s on 2026-11-08's).
+      }
+      return STATUS as never;
+    },
+    onSlowStatus: (tookMs) => slow.push(tookMs),
+  });
+  expect((await send(port, { path: "/api/status" })).status).toBe(200);
+  expect(slow).toHaveLength(1);
+  expect(slow[0]).toBeGreaterThanOrEqual(250);
+  holdMs = 0;
+  expect((await send(port, { path: "/api/status" })).status).toBe(200);
+  expect(slow).toHaveLength(1);
 });
 
 test("a status that fails is a 500, reported, and the server carries on", async () => {

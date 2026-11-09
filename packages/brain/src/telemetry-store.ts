@@ -50,6 +50,9 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS snapshots_by_tier_and_time ON snapshots (environment, tier, received_at_ms);
   CREATE INDEX IF NOT EXISTS snapshots_by_session ON snapshots (environment, agent_session_id, tier, sequence_number);
+  -- The newest of a tier (NEWEST_OF_TIER_SQL, #309). Made on an older store as the brain opens it: a quarter of a
+  -- second for 108,000 snapshots.
+  CREATE INDEX IF NOT EXISTS snapshots_by_tier_and_id ON snapshots (environment, tier, id);
   CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
     environment TEXT NOT NULL,
@@ -114,6 +117,12 @@ export interface ThinnedTier {
 const SNAPSHOT_COLUMNS = `environment, release, agent_session_id, tier, sequence_number, game_time_ms, received_at_ms,
   missed_before, data`;
 const EVENT_COLUMNS = "environment, release, at_ms, kind, detail";
+/**
+ * The newest snapshots of a tier, newest first, in the order stored, at most `limit` (the third parameter). Read off
+ * `snapshots_by_tier_and_id`, as stored, with no sort (#309): the dashboard's status and the supervisor read it.
+ */
+export const NEWEST_OF_TIER_SQL = `SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ?
+  ORDER BY id DESC LIMIT ?`;
 
 function snapshotOfRow(row: Record<string, string | number>): RecordContext & StoredSnapshot {
   return {
@@ -243,9 +252,9 @@ export class TelemetryStore {
     environment: Environment;
     tier: string;
   }): (RecordContext & StoredSnapshot) | null {
-    const row = this.#database
-      .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ? ORDER BY id DESC LIMIT 1`)
-      .get(environment, tier) as Record<string, string | number> | undefined;
+    const row = this.#database.prepare(NEWEST_OF_TIER_SQL).get(environment, tier, 1) as
+      | Record<string, string | number>
+      | undefined;
     return row ? snapshotOfRow(row) : null;
   }
 
@@ -259,9 +268,10 @@ export class TelemetryStore {
     tier: string;
     limit: number;
   }): (RecordContext & StoredSnapshot)[] {
-    const rows = this.#database
-      .prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshots WHERE environment = ? AND tier = ? ORDER BY id DESC LIMIT ?`)
-      .all(environment, tier, limit) as Record<string, string | number>[];
+    const rows = this.#database.prepare(NEWEST_OF_TIER_SQL).all(environment, tier, limit) as Record<
+      string,
+      string | number
+    >[];
     return rows.map(snapshotOfRow);
   }
 
