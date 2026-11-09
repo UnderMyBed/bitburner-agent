@@ -43,6 +43,11 @@ export interface StaticSnapshotData {
      */
     moneyMax?: number;
     minDifficulty?: number;
+    /**
+     * Its starting security (#315's review), from which each operation thread's hacking exp comes (Hacking.ts:30-38).
+     * Absent from an older Agent's snapshot.
+     */
+    baseDifficulty?: number;
     requiredHackingSkill?: number;
     numOpenPortsRequired?: number;
     /** How fast its money grows back (#134): the hack loop's target rule weighs it. */

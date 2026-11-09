@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
   BATCH_GROW_RAM_GB,
@@ -29,16 +30,21 @@ import {
   GROW_MARGIN,
   GrowLandingWatch,
   growThreads,
+  hackingExpOfLevel,
+  hackingLevelOfExp,
   hackSharePerThread,
   hackThreadsAtLaunch,
   hackThreadsForShare,
   hackWaitsForItsBatch,
+  isBackInStep,
   isBatcherFile,
   isOutsideBounds,
   isTargetPrepared,
   LANDING_LOST_AFTER_MS,
   LandingWatch,
   type LaunchOrder,
+  LEVEL_FORECAST_BUCKET_MS,
+  LevelForecast,
   landingOffsetMs,
   largestBatchThatFits,
   launchLeadMs,
@@ -49,6 +55,7 @@ import {
   mayStillStart,
   mostRamHeldGb,
   newBatcherHealth,
+  operationExpPerThread,
   operationRamGb,
   operationScriptName,
   operationTimeMs,
@@ -59,12 +66,16 @@ import {
   preparationWave,
   type RamHold,
   type RamWait,
+  RECOVERY_SPARE_BATCHES,
+  RecoveryClock,
   ramHeldOf,
   recordGrowsNotLooked,
   recordHackLanded,
   recordMoneyLook,
   recordRamWait,
   recordShort,
+  recoveryInPlaceLeastMs,
+  recoveryInPlaceMs,
   threadsThatFit,
 } from "../src/batcher.ts";
 import { growthLogPerThread } from "../src/hack-loop.ts";
@@ -75,6 +86,10 @@ import {
   hackChance,
   hackTimeSeconds,
 } from "../src/hacking-ceiling.ts";
+
+/** A file of the game's pinned source (vendor/bitburner-src, v3.0.1), read-only. */
+const gameSource = (file: string) =>
+  readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
 
 const player = (hacking: number, overrides: Partial<HackingPlayer["mults"]> = {}): HackingPlayer => ({
   skills: { hacking, intelligence: 0 },
@@ -251,6 +266,14 @@ describe("batchBounds", () => {
     expect(isOutsideBounds(bounds, { money: 99.99, security: 10 })).toBe(true);
     expect(isOutsideBounds(bounds, { money: 1_000, security: 10.11 })).toBe(true);
   });
+
+  test("isBackInStep (#315): no hack still to land, the money at its maximum, the security within the ceiling", () => {
+    const full = { money: zer0.moneyMax, security: 10.12 };
+    expect(isBackInStep(zer0, full, 10.12, false)).toBe(true);
+    expect(isBackInStep(zer0, full, 10.12, true)).toBe(false);
+    expect(isBackInStep(zer0, { ...full, money: zer0.moneyMax - 1 }, 10.12, false)).toBe(false);
+    expect(isBackInStep(zer0, { ...full, security: 10.13 }, 10.12, false)).toBe(false);
+  });
 });
 
 describe("hackThreadsAtLaunch: a hack replanned when it goes out, as the hacking level rises", () => {
@@ -313,6 +336,267 @@ describe("hackThreadsAtLaunch: a hack replanned when it goes out, as the hacking
     expect(hackThreadsAtLaunch(10, 10 * hackSharePerThread(zer0, player(150)), zer0, player(150))).toBe(10);
     expect(hackThreadsAtLaunch(10, 1, zer0, player(150))).toBe(10);
     expect(hackThreadsAtLaunch(3, 1e-9, zer0, player(150))).toBe(1);
+  });
+});
+
+describe("the level at a landing (#315): the game's formulas", () => {
+  test("they are the game's: calculateSkill, calculateExp, calculateHackingExpGain, the minimum security", () => {
+    const skill = gameSource("PersonObjects/formulas/skill.ts");
+    expect(skill).toContain("Math.floor(mult * (32 * Math.log(exp + 534.6) - 200))");
+    expect(skill).toContain("Math.exp((skill / mult + 200) / 32) - 534.6");
+    const hacking = gameSource("Hacking.ts");
+    for (const line of [
+      "const baseExpGain = 3;",
+      "const diffFactor = 0.3;",
+      "expGain += baseDifficulty * diffFactor;",
+    ]) {
+      expect(hacking).toContain(line);
+    }
+    expect(hacking).toContain("return expGain * person.mults.hacking_exp * currentNodeMults.HackExpGain;");
+    const server = gameSource("Server/Server.ts");
+    expect(server).toContain("this.baseDifficulty = this.hackDifficulty;");
+    expect(server).toContain("this.minDifficulty = Math.min(Math.max(1, Math.round(realDifficulty / 3)), 100);");
+    // A hack's share at the level as it lands, after its time (NetscriptHelpers.tsx:561-568).
+    const helpers = gameSource("Netscript/NetscriptHelpers.tsx");
+    const delay = helpers.indexOf("return helpers.netscriptDelay(ctx, hackingTime * 1000).then(function () {");
+    expect(delay).toBeGreaterThan(0);
+    expect(helpers.indexOf("calculatePercentMoneyHacked(server, Player)", delay)).toBeGreaterThan(delay);
+  });
+
+  test("hackingLevelOfExp and hackingExpOfLevel: worked, and each the other's inverse", () => {
+    // A fresh save: no exp is hacking 1 (32 ln 534.6 - 200 = 1.01).
+    expect(hackingLevelOfExp(0, 1)).toBe(1);
+    expect(hackingLevelOfExp(1e9, 0)).toBe(1);
+    // Hacking 1 needs none (e^(201/32) - 534.6 is under 0, taken as 0 as the game does).
+    expect(hackingExpOfLevel(1, 1)).toBe(0);
+    expect(hackingExpOfLevel(100, 1)).toBeCloseTo(Math.exp(300 / 32) - 534.6, 6);
+    for (const mult of [1, 1.7, 3.44]) {
+      // From 50: below that, a multiplier over 1 starts a save above the level (3 at 3.44, at no exp).
+      for (let level = 50; level < 4_000; level += 37) {
+        const exp = hackingExpOfLevel(level, mult);
+        expect(hackingLevelOfExp(exp * (1 + 1e-9), mult)).toBe(level);
+        expect(hackingLevelOfExp(exp * (1 - 1e-9), mult)).toBe(level - 1);
+      }
+    }
+  });
+
+  test("operationExpPerThread: 3 + 0.3 x the most base difficulty a minimum allows, x hacking_exp", () => {
+    expect(operationExpPerThread(zer0, 1)).toBeCloseTo(3 + 0.3 * 31.5, 12);
+    expect(operationExpPerThread(zer0, 4.5)).toBeCloseTo((3 + 0.3 * 31.5) * 4.5, 12);
+    // Never less than the game gives, whatever the base difficulty behind the minimum (Server.ts:80-83).
+    for (let base = 1; base <= 100; base += 0.25) {
+      const minDifficulty = Math.min(Math.max(1, Math.round(base / 3)), 100);
+      expect(operationExpPerThread({ ...zer0, minDifficulty }, 1)).toBeGreaterThanOrEqual(3 + 0.3 * base);
+    }
+    // The static snapshot's base difficulty, when it has one (#315's review): Hacknet's Reduce Minimum Security can
+    // take the minimum below a third of it (BN9), where the bound would fall short.
+    expect(operationExpPerThread({ ...zer0, baseDifficulty: 30 }, 2)).toBeCloseTo((3 + 0.3 * 30) * 2, 12);
+    expect(operationExpPerThread({ ...zer0, minDifficulty: 1, baseDifficulty: 30 }, 1)).toBeCloseTo(12, 12);
+    for (const odd of [Number.NaN, -1]) {
+      expect(operationExpPerThread({ ...zer0, baseDifficulty: odd }, 1)).toBeCloseTo(3 + 0.3 * 31.5, 12);
+    }
+  });
+
+  describe("RecoveryClock (#315's re-review): the whole less the streak's time recovering, at least the least", () => {
+    const WHOLE = 100_000;
+    const LEAST = 28_000;
+
+    test("a first recovery has the whole; one in a fresh streak, a whole time in step after, the whole again", () => {
+      const clock = new RecoveryClock();
+      expect(clock.endsAt()).toBeNull();
+      expect(clock.begin(0, WHOLE, LEAST)).toBe(WHOLE);
+      expect(clock.endsAt()).toBe(WHOLE);
+      clock.end(60_000, WHOLE);
+      expect(clock.endsAt()).toBeNull();
+      // In step past a whole time: a fresh streak, the first's 60 s forgotten.
+      expect(clock.begin(60_000 + WHOLE + 1, WHOLE, LEAST)).toBe(60_000 + WHOLE + 1 + WHOLE);
+    });
+
+    test("within the streak: the whole less the time spent recovering, never the time in step between", () => {
+      const clock = new RecoveryClock();
+      clock.begin(0, WHOLE, LEAST);
+      clock.end(15_000, WHOLE);
+      // 40 s in step, then a desync: the whole less the 15 s spent, not less the 55 s since.
+      expect(clock.begin(55_000, WHOLE, LEAST)).toBe(55_000 + 85_000);
+      clock.end(105_000, WHOLE);
+      // 65 s spent: the whole less it, 35 s, above the least; then, 95 s spent, the least.
+      expect(clock.begin(110_000, WHOLE, LEAST)).toBe(110_000 + 35_000);
+      clock.end(140_000, WHOLE);
+      expect(clock.begin(150_000, WHOLE, LEAST)).toBe(150_000 + LEAST);
+    });
+
+    test("stop keeps the streak; reset forgets it", () => {
+      const clock = new RecoveryClock();
+      clock.begin(0, WHOLE, LEAST);
+      clock.end(50_000, WHOLE);
+      clock.begin(60_000, WHOLE, LEAST);
+      clock.stop();
+      expect(clock.endsAt()).toBeNull();
+      clock.end(70_000, WHOLE);
+      // 50 s and 10 s spent: 40 s left.
+      expect(clock.spentMs()).toBe(60_000);
+      expect(clock.begin(80_000, WHOLE, LEAST)).toBe(80_000 + 40_000);
+      clock.reset();
+      expect(clock.endsAt()).toBeNull();
+      expect(clock.spentMs()).toBe(0);
+      expect(clock.begin(90_000, WHOLE, LEAST)).toBe(90_000 + WHOLE);
+    });
+  });
+
+  test("recoveryInPlaceMs (#315's review): a weaken's time at the minimum, the lead, and 10 batches", () => {
+    expect(RECOVERY_SPARE_BATCHES).toBe(10);
+    expect(recoveryInPlaceMs(zer0, player(150), 80)).toBeCloseTo(
+      operationTimeMs("weaken1", zer0, player(150)) + BATCH_LAUNCH_LEAD_MS + 800,
+      9,
+    );
+    // The least any recovery gets, however much its streak spent (#315's re-review): a hack's time, the lead, 10
+    // batches.
+    expect(recoveryInPlaceLeastMs(zer0, player(150), 80)).toBeCloseTo(
+      operationTimeMs("hack", zer0, player(150)) + BATCH_LAUNCH_LEAD_MS + 800,
+      9,
+    );
+  });
+});
+
+describe("LevelForecast (#315)", () => {
+  test("the exp of the parts to come by a moment, a whole bucket at a time; each part once, until it ends", () => {
+    const forecast = new LevelForecast();
+    forecast.started("a", 1_050, 10);
+    forecast.started("b", 1_150, 20);
+    forecast.started("c", 5_000, 40);
+    // Started twice, counted once; nothing for none.
+    forecast.started("a", 1_050, 10);
+    forecast.started("none", 1_000, 0);
+    expect(forecast.size()).toBe(3);
+    expect(forecast.expBy(999)).toBe(0);
+    // 1,000 is a's bucket (1,000 to 1,099): counted whole, so never less than lands by then.
+    expect(LEVEL_FORECAST_BUCKET_MS).toBe(100);
+    expect(forecast.expBy(1_000)).toBe(10);
+    expect(forecast.expBy(1_199)).toBe(30);
+    expect(forecast.expBy(10_000)).toBe(70);
+    // Another in a's bucket: a's end takes off its own exp, and leaves the other's.
+    forecast.started("d", 1_060, 5);
+    forecast.ended("a");
+    forecast.ended("a");
+    forecast.ended("unknown");
+    expect(forecast.expBy(1_099)).toBe(5);
+    forecast.ended("d");
+    expect(forecast.expBy(10_000)).toBe(60);
+    forecast.ended("b");
+    forecast.ended("c");
+    expect(forecast.size()).toBe(0);
+    expect(forecast.expBy(10_000)).toBe(0);
+  });
+
+  test("levelAt: the level now with nothing to come; with exp to come, the game's level for it", () => {
+    const forecast = new LevelForecast();
+    expect(forecast.levelAt(60_000, 1_176, 3.4)).toBe(1_176);
+    // Exp to come by then, on top of the most the level now may have: just under the next level's.
+    const toCome = 2_000_000;
+    forecast.started("w", 30_000, toCome);
+    const expected = hackingLevelOfExp(hackingExpOfLevel(1_177, 3.4) + toCome, 3.4);
+    expect(expected).toBeGreaterThan(1_180);
+    expect(forecast.levelAt(60_000, 1_176, 3.4)).toBe(expected);
+    // Not counted before it lands.
+    expect(forecast.levelAt(29_000, 1_176, 3.4)).toBe(1_176);
+  });
+
+  /**
+   * Batches every 80 ms on a target needing hacking 1,041, the level 1,176 at first, raised only by the exp of the
+   * batches' own landings (the live run of 2026-11-08's shape, numbers synthetic): each operation thread gives (3 + 0.3
+   * x 51) x 4.5 exp as it lands, the base difficulty 51 behind its minimum 17. Each batch is planned a weaken's time
+   * before its hack lands, at the level then, for a share of 12%, and its hack sized as it goes out, a hack's time
+   * before it lands: at the level then (before #315), or for the level `LevelForecast` gives at its landing. The money
+   * is taken at the level as each hack lands (NetscriptHelpers.tsx:561-568), and grown back by the batch's grow.
+   */
+  function ownExpRise(forecasting: boolean): {
+    belowFull: number;
+    lowest: number;
+    underFloor: number;
+    rise: number;
+    trimmed: number;
+  } {
+    const target: HackingTarget = {
+      moneyMax: 500_000_000_000,
+      minDifficulty: 17,
+      requiredHackingSkill: 1_041,
+      serverGrowth: 63,
+    };
+    const mults = { hacking_chance: 3, hacking_speed: 2.9, hacking_money: 2.7, hacking_grow: 2.7 };
+    const levelMult = 3.4;
+    const expMult = 4.5;
+    const at = (hacking: number): HackingPlayer => ({ skills: { hacking, intelligence: 0 }, mults });
+    const spacingMs = 80;
+    const firstLandMs = 400_000;
+    const startExp = hackingExpOfLevel(1_176, levelMult);
+    const gainedPerThread = (3 + 0.3 * 51) * expMult;
+    const forecastPerThread = operationExpPerThread(target, expMult);
+    const growthLog = growthLogOf(target, at(1_176));
+    // The exp landed by batch i's hack, i.e. of every batch before it (their last landing, 3δ, before the next hack).
+    const landedBefore: number[] = [0];
+    const levelAt = (ms: number) => {
+      const landed = Math.floor((ms - firstLandMs - 60) / spacingMs) + 1;
+      const batchesLanded = Math.max(0, Math.min(landedBefore.length - 1, landed));
+      return hackingLevelOfExp(startExp + (landedBefore[batchesLanded] as number), levelMult);
+    };
+    const forecast = new LevelForecast();
+    const toEnd: { id: string; landAt: number }[] = [];
+    let money = target.moneyMax;
+    let belowFull = 0;
+    let lowest = 1;
+    let underFloor = 0;
+    let rise = 0;
+    let trimmed = 0;
+    for (let batch = 0; batch < 3_000; batch += 1) {
+      const landMs = firstLandMs + batch * spacingMs;
+      const hackMs = operationTimeMs("hack", target, at(levelAt(landMs - 60_000)));
+      const planned = at(levelAt(landMs - 4 * hackMs));
+      const threads = batchThreads(target, planned, hackThreadsForShare(0.12, target, planned));
+      const plannedShare = threads.hack * hackSharePerThread(target, planned);
+      const launchMs = landMs - hackMs;
+      const levelNow = levelAt(launchMs);
+      // Every part landed by now has its record: no longer to come.
+      while (toEnd.length > 0 && (toEnd[0] as { landAt: number }).landAt <= launchMs) {
+        forecast.ended((toEnd.shift() as { id: string }).id);
+      }
+      const forecastLevel = forecast.levelAt(landMs, levelNow, levelMult);
+      const sizedAt = forecasting ? forecastLevel : levelNow;
+      const hackCount = hackThreadsAtLaunch(threads.hack, plannedShare, target, at(sizedAt));
+      if (hackCount < hackThreadsAtLaunch(threads.hack, plannedShare, target, at(levelNow))) trimmed += 1;
+      const landing = at(levelAt(landMs));
+      rise = Math.max(rise, landing.skills.hacking - levelNow);
+      if (forecasting) expect(forecastLevel).toBeGreaterThanOrEqual(landing.skills.hacking);
+      money -= money * Math.min(1, hackCount * hackSharePerThread(target, landing));
+      if (money < batchBounds(target, landing, [threads]).moneyFloor) underFloor += 1;
+      money = Math.min(target.moneyMax, (money + threads.grow) * Math.exp(growthLog * threads.grow));
+      if (money < target.moneyMax) belowFull += 1;
+      lowest = Math.min(lowest, money / target.moneyMax);
+      const parts: [string, number, number][] = [
+        ["hack", hackCount, landMs],
+        ["weaken1", threads.weaken1, landMs + 20],
+        ["grow", threads.grow, landMs + 40],
+        ["weaken2", threads.weaken2, landMs + 60],
+      ];
+      for (const [operation, count, partLandAt] of parts) {
+        forecast.started(`${batch}.${operation}`, partLandAt, count * forecastPerThread);
+        toEnd.push({ id: `${batch}.${operation}`, landAt: partLandAt });
+      }
+      const threadsLanded = hackCount + threads.weaken1 + threads.grow + threads.weaken2;
+      landedBefore.push((landedBefore.at(-1) as number) + threadsLanded * gainedPerThread);
+    }
+    return { belowFull, lowest, underFloor, rise, trimmed };
+  }
+
+  test("the batches' own exp: sized at the level as they go out, grows fall short; forecast, none does", () => {
+    const before = ownExpRise(false);
+    // The live run's shape: dozens of levels in a hack's time, the money drifting down batch after batch.
+    expect(before.rise).toBeGreaterThan(30);
+    expect(before.belowFull).toBeGreaterThan(100);
+    expect(before.underFloor).toBeGreaterThan(0);
+    const after = ownExpRise(true);
+    console.log(`own exp, sized at the level now: ${JSON.stringify(before)}; forecast: ${JSON.stringify(after)}`);
+    expect(after).toMatchObject({ belowFull: 0, lowest: 1, underFloor: 0 });
+    expect(after.trimmed).toBeGreaterThan(100);
   });
 });
 
@@ -943,11 +1227,14 @@ describe("the money after each batch's grow (#234)", () => {
   });
 });
 
+/** A config's player multipliers: the formulas' four, and the level's and its exp's (#315). */
+const CONFIG_MULTS = { ...player(1).mults, hacking: 1, hacking_exp: 1 };
+
 describe("parseBatcherConfig", () => {
   const config = {
     target: "joesguns",
     figures: joesguns,
-    player: { intelligence: 0, mults: player(1).mults },
+    player: { intelligence: 0, mults: CONFIG_MULTS },
     hosts: ["foodnstuff", "sigma-cosmetics"],
     hackShare: 0.05,
     spacingMs: 5_000,
@@ -955,14 +1242,30 @@ describe("parseBatcherConfig", () => {
 
   test("a config, as given", () => {
     expect(parseBatcherConfig(config)).toEqual({ ok: true, config });
+    // An older brain's, without the level forecast's multipliers (#315): read, the batcher saying it can't forecast.
+    const older = { ...config, player: { intelligence: 0, mults: player(1).mults } };
+    expect(parseBatcherConfig(older)).toEqual({ ok: true, config: older });
+    // With the base difficulty (#315's review).
+    const based = { ...config, figures: { ...joesguns, baseDifficulty: 15 } };
+    expect(parseBatcherConfig(based)).toEqual({ ok: true, config: based });
   });
 
   test.each([
     [null, "isn't an object"],
     [{ ...config, target: "" }, "no target"],
     [{ ...config, figures: { ...joesguns, serverGrowth: undefined } }, "figures have no serverGrowth"],
-    [{ ...config, player: { mults: player(1).mults } }, "no intelligence"],
-    [{ ...config, player: { intelligence: 0, mults: { ...player(1).mults, hacking_speed: "1" } } }, "hacking_speed"],
+    [{ ...config, player: { mults: CONFIG_MULTS } }, "no intelligence"],
+    [{ ...config, player: { intelligence: 0, mults: { ...CONFIG_MULTS, hacking_speed: "1" } } }, "hacking_speed"],
+    // The level forecast's (#315): the level's multiplier and its exp's, when given, numbers of 0 or more.
+    [{ ...config, player: { intelligence: 0, mults: { ...CONFIG_MULTS, hacking: "2" } } }, "mults.hacking isn't"],
+    [{ ...config, player: { intelligence: 0, mults: { ...CONFIG_MULTS, hacking_exp: null } } }, "mults.hacking_exp"],
+    [{ ...config, player: { intelligence: 0, mults: { ...CONFIG_MULTS, hacking_exp: -1 } } }, "mults.hacking_exp"],
+    // The base difficulty (#315's review), when given, a number of 0 or more, the next's too.
+    [{ ...config, figures: { ...joesguns, baseDifficulty: -1 } }, "figures have no baseDifficulty of 0 or more"],
+    [
+      { ...config, next: { target: "n00dles", figures: { ...n00dles, baseDifficulty: "15" }, ramGb: 30 } },
+      "next figures have no baseDifficulty of 0 or more",
+    ],
     [{ ...config, hosts: [] }, "hosts"],
     [{ ...config, hosts: ["a", ""] }, "hosts"],
     [{ ...config, hackShare: 0 }, "hackShare"],
@@ -1038,7 +1341,7 @@ describe("the config's next target (#206)", () => {
   const config = {
     target: "joesguns",
     figures: joesguns,
-    player: { intelligence: 0, mults: player(1).mults },
+    player: { intelligence: 0, mults: CONFIG_MULTS },
     hosts: ["foodnstuff"],
     hackShare: 0.05,
     spacingMs: 5_000,

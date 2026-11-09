@@ -8,6 +8,7 @@
 import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
+  type BatcherPlayerMults,
   type BatcherState,
   batcherIncomePerGigabyteSecond,
   batchPlan,
@@ -56,12 +57,33 @@ export function hackingPlayerOf(player: unknown): HackingPlayer | null {
   };
 }
 
+/**
+ * The player's multipliers a batcher config carries (#315): the formulas' four, and the level's and its exp's, with
+ * which the batcher forecasts the level at each hack's landing; or null if any is missing from the medium snapshot.
+ */
+export function batcherMultsOf(player: unknown): BatcherPlayerMults | null {
+  const hackingPlayer = hackingPlayerOf(player);
+  const mults = (player as { mults?: Record<string, unknown> } | null)?.mults;
+  const hacking = mults?.hacking;
+  const hackingExp = mults?.hacking_exp;
+  if (hackingPlayer === null || !isNumber(hacking) || !isNumber(hackingExp)) return null;
+  return { ...hackingPlayer.mults, hacking, hacking_exp: hackingExp };
+}
+
 /** A target's figures from the static snapshot, or null if any is missing. */
 function figuresOf(staticData: StaticSnapshotData, target: string): HackingTarget | null {
   const server = staticData.servers.find((each) => each?.hostname === target);
   const { moneyMax, minDifficulty, requiredHackingSkill, serverGrowth } = server ?? {};
   if (![moneyMax, minDifficulty, requiredHackingSkill, serverGrowth].every(isNumber)) return null;
-  return { moneyMax, minDifficulty, requiredHackingSkill, serverGrowth } as HackingTarget;
+  const { baseDifficulty } = server ?? {};
+  // Its starting security, when the snapshot has it (#315's review): the batcher's level forecast.
+  return {
+    moneyMax,
+    minDifficulty,
+    requiredHackingSkill,
+    serverGrowth,
+    ...(isNumber(baseDifficulty) ? { baseDifficulty } : {}),
+  } as HackingTarget;
 }
 
 /**
@@ -113,7 +135,10 @@ export function planBatcher(
   | { batcher: BatcherState; incomePerSecond: number; ramGb: number; peakRamGb: number }
   | { batcher: null; why: string } {
   const player = hackingPlayerOf(mediumData.player);
-  if (player === null) return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
+  const mults = batcherMultsOf(mediumData.player);
+  if (player === null || mults === null) {
+    return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
+  }
   const figures = figuresOf(staticData, target);
   if (figures === null) return { batcher: null, why: `the static snapshot has no figures for ${target}` };
   const room = batcherRoomOf(mediumData, hosts, current);
@@ -131,7 +156,7 @@ export function planBatcher(
       config: {
         target,
         figures,
-        player: { intelligence: player.skills.intelligence, mults: player.mults },
+        player: { intelligence: player.skills.intelligence, mults },
         hosts: hostsRam.map(([host]) => host),
         hackShare: plan.hackShare,
         spacingMs: plan.spacingMs,
@@ -206,9 +231,10 @@ export interface BatcherTargetWorth {
  * plan's income over `BATCHER_TARGET_HORIZON_MS` less the time until it earns: preparing it (core's
  * `preparationTimeMs`, from its money and security in the medium snapshot), then a weaken's time for its first batch.
  * A target is prepared on the RAM the batches of the one batched now leave (#216's review), or all of it.
- * - **Never long without income (#184's lesson, #216's review):** the one batched now (`batching`, from the batcher's
- *   health) earns at once; with nothing batched (a fresh start, a handover, a restart), another is chosen only if it
- *   earns within `BATCHER_MOST_IDLE_MS`, or with none such, the soonest to earn.
+ * - **Never long without income (#184's lesson, #216's review):** the one batched now (`batching` from the batcher's
+ *   health, or since #315 `recovering`, which batches on in place) earns at once; with nothing batched (a fresh
+ *   start, a handover, a restart), another is chosen only if it earns within `BATCHER_MOST_IDLE_MS`, or with none
+ *   such, the soonest to earn.
  * - **Earning through a move (#236):** while one earns (batched), another is chosen only once it's prepared (at its
  *   minimum security and maximum money in the medium snapshot), so its first batch is a weaken away and the batches out
  *   land meanwhile: within `BATCHER_MOST_IDLE_MS` of their weaken (#237's review: a weaken of over 5 minutes doesn't

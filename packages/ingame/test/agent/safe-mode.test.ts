@@ -71,7 +71,10 @@ test("the batcher (#205) is kept and converged on with the hack loop, a game oth
     config: {
       target: "n00dles",
       figures: { moneyMax: 1_750_000, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 3_000 },
-      player: { intelligence: 0, mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 } },
+      player: {
+        intelligence: 0,
+        mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 },
+      },
       hosts: ["joesguns", "sigma-cosmetics"],
       hackShare: 0.1,
       spacingMs: 20_000,

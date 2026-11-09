@@ -646,7 +646,7 @@ describe("section 4's lines, and too many in an hour", () => {
 describe("a weaken's time, for the attribution", () => {
   const player = (hacking: number) => ({
     skills: { hacking, intelligence: 0 },
-    mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
+    mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 },
   });
   const theHub = { servers: [staticServer("the-hub", { requiredHackingSkill: 300, minDifficulty: 20 })] };
 

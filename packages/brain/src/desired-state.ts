@@ -1327,9 +1327,12 @@ export class DesiredStateController {
     }
     const hosts = batcherHostsOf(hackLoop);
     // Where it runs now, kept while it still fits (#211), so a larger host doesn't restart it; the target it batches,
-    // kept unless another is worth the move (#206).
+    // kept unless another is worth the move (#206). Recovering from a desync it batches on in place, its hacks back as
+    // soon as the target is (#315): still the one batched. Read as nothing batched, on 2026-11-08 a desync on
+    // clarkinc, its preparation then counted against the 5 minutes a start may idle, sent the batcher to
+    // rho-construction and back.
     const health = this.#batcherHealth();
-    const batching = health?.state === "batching" ? health.target : null;
+    const batching = health?.state === "batching" || health?.state === "recovering" ? health.target : null;
     const planned = chooseBatcher(this.#staticData, this.#mediumData, hosts, this.#desired?.batcher ?? null, batching);
     if (planned.batcher === null) {
       this.#batcherWhy = planned.why;

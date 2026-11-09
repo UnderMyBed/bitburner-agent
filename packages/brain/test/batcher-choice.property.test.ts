@@ -92,7 +92,14 @@ const anyShape: fc.Arbitrary<Shape> = fc
     fc.tuple(...Array.from({ length: count }, (_, index) => anyTarget(index, hacking))).map((targets) => ({
       player: {
         skills: { hacking, intelligence: 0 },
-        mults: { hacking_chance: 1.5, hacking_speed: speed, hacking_money: 2, hacking_grow: 1.5 },
+        mults: {
+          hacking_chance: 1.5,
+          hacking_speed: speed,
+          hacking_money: 2,
+          hacking_grow: 1.5,
+          hacking: 1.5,
+          hacking_exp: 2,
+        },
       },
       targets,
       hostsRam: hostExponents.map((exponent) => 2 ** exponent),

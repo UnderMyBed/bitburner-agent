@@ -102,12 +102,14 @@ export function mayStillStart(waitedMs: number, slackMs: number | null): boolean
   return waitedMs < BATCH_RAM_WAIT_MS && (slackMs === null || slackMs >= BATCH_START_SLACK_MS);
 }
 /**
- * Grow is sized for this many times the hack's planned share: the share rises with the hacking level between the
- * hack's start and its landing (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking). The hack's threads
- * are replanned when it starts (`hackThreadsAtLaunch`), so the margin covers a hack's time, a quarter of a weaken's.
- * Not tuned in the simulator, where n00dles (needing hacking 1) doesn't move the share: core's rising-level test checks
- * it holds where the share rises 1.25x over a weaken's time (harakiri-sushi at hacking 55, #208's review). Extra grow
- * costs RAM, never security: only the threads used add it (ServerHelpers.ts:202-212).
+ * Grow is sized for this many times the hack's planned share: the share rises with the hacking level between the plan
+ * and the hack's landing (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking), the game taking it at
+ * the level as the hack lands (NetscriptHelpers.tsx:561-568). The hack's threads are replanned when it starts, for the
+ * level forecast at its landing (`hackThreadsAtLaunch`, `LevelForecast`, #315), so the margin covers the forecast's
+ * error, exp from elsewhere and split grows (#234). Before #315 they were replanned at the level at the start, and the
+ * margin had to cover a hack's time of the rise: on the live run of 2026-11-08 clarkinc (needing 1,041) at hacking
+ * 1,176 rose 40 levels in a hack's 62 s once its own batches landed, each hack took up to 1.26x its share, and the
+ * grows fell short. Extra grow costs RAM, never security: only the threads used add it (ServerHelpers.ts:202-212).
  */
 export const GROW_MARGIN = 1.1;
 /** The largest share a batch takes: grow is sized for `GROW_MARGIN` times it, which must stay under all of it. */
@@ -295,10 +297,11 @@ export function isOutsideBounds(
 
 /**
  * A batch's hack threads when its hack goes out (#204): at most those planned when its first weaken went out, and no
- * more than take the share planned then, at the hacking level now. The share a thread takes rises with the level
- * (`percentMoneyHackedPerThread`'s (hacking - (required - 1))/hacking), so between the plan and the hack's landing it
- * could outrun the grow's `GROW_MARGIN`: replanned here, the margin need cover only a hack's time, a quarter of a
- * weaken's. At least 1.
+ * more than take the share planned then, for `player` at the hacking level the hack will land at (the batcher's
+ * `LevelForecast`, #315). The share a thread takes rises with the level (`percentMoneyHackedPerThread`'s
+ * (hacking - (required - 1))/hacking), taken as the hack lands (NetscriptHelpers.tsx:561-568), so between the plan and
+ * the landing it could outrun the grow's `GROW_MARGIN`: replanned here for the level at the landing, the margin need
+ * cover only the forecast's error, exp from elsewhere and split grows. At least 1.
  */
 export function hackThreadsAtLaunch(
   plannedHack: number,
@@ -308,6 +311,97 @@ export function hackThreadsAtLaunch(
 ): number {
   const now = hackThreadsForShare(plannedShare, target, player);
   return Math.max(1, Math.min(plannedHack, now > 0 ? now : plannedHack));
+}
+
+/**
+ * The hacking level at `exp` hacking exp, `mult` the player's hacking multiplier: the game's `calculateSkill`
+ * (PersonObjects/formulas/skill.ts:7-15; Person.ts:60 passes it `mults.hacking`), BitNode multipliers taken as 1: the
+ * snapshots don't carry them, and outside BN1 a `HackingLevelMultiplier` under 1 makes this err high, the safe side.
+ */
+export function hackingLevelOfExp(exp: number, mult: number): number {
+  if (mult === 0) return 1;
+  return Math.max(1, Math.floor(mult * (32 * Math.log(exp + 534.6) - 200)));
+}
+
+/** The least hacking exp at `level`: the game's `calculateExp` (skill.ts:17-34), the inverse of `hackingLevelOfExp`. */
+export function hackingExpOfLevel(level: number, mult: number): number {
+  return Math.max(0, Math.exp((level / mult + 200) / 32) - 534.6);
+}
+
+/**
+ * The hacking exp a thread of any operation on `target` gives as it lands (#315): the game's `calculateHackingExpGain`
+ * (Hacking.ts:30-38), 3 + 0.3 x the server's base difficulty, x the player's `hacking_exp` multiplier (BitNode
+ * multipliers, `HackExpGain` among them, taken as 1: the snapshots don't carry them, and exact in BN1), for a grow or
+ * a weaken (NetscriptFunctions.ts:295, :373) and a hack that succeeds (a quarter of it if not,
+ * NetscriptHelpers.tsx:564-565). The base difficulty is its starting security, the static snapshot's since #315's
+ * review; without it (an older snapshot), the most a minimum a third of it, rounded (Server.ts:80-83), allows:
+ * 3 x the minimum + 1.5, which holds unless Hacknet hashes lowered the minimum (BN9, HacknetHelpers.tsx:497).
+ */
+export function operationExpPerThread(target: HackingTarget, hackingExpMult: number): number {
+  const { baseDifficulty } = target;
+  const base =
+    typeof baseDifficulty === "number" && Number.isFinite(baseDifficulty) && baseDifficulty >= 0
+      ? baseDifficulty
+      : 3 * target.minDifficulty + 1.5;
+  return (3 + 0.3 * base) * hackingExpMult;
+}
+
+/** The ms each bucket of `LevelForecast`'s landings spans: one counts whole, so a forecast may run this far ahead. */
+export const LEVEL_FORECAST_BUCKET_MS = 100;
+
+/**
+ * The hacking level at a landing ahead (#315): the level now, its exp taken as just under the next level's (the most
+ * it may be), plus the exp of the operations started that land by then (`operationExpPerThread` a thread: every hack
+ * a success), as the game's `calculateSkill` gives it. A hack takes its share at the level as it lands
+ * (NetscriptHelpers.tsx:561-568), and the batcher's own landings raise it: once clarkinc's batches landed on the live
+ * run of 2026-11-08, about 2,300 threads a second at some 84 exp each took hacking from 1,176 to 1,218 within a hack's
+ * time. Each part started is counted until its record comes, it's lost, or it never ran (a late hack); in buckets of
+ * `LEVEL_FORECAST_BUCKET_MS`, so a forecast counts a whole bucket, never less than it should. Exp from elsewhere (work,
+ * classes) isn't counted: the grow's `GROW_MARGIN` covers that. Not `hack`, `grow` or `share` anywhere here: the
+ * batcher runs it, and the game would charge their RAM for the names (RamCalculations.ts:436).
+ */
+export class LevelForecast {
+  readonly #parts = new Map<string, { bucket: number; exp: number }>();
+  readonly #buckets = new Map<number, { exp: number; parts: number }>();
+
+  /** A part started, to land at `landAt`, giving `exp` hacking exp as it does. */
+  started(id: string, landAt: number, exp: number): void {
+    if (!(exp > 0) || this.#parts.has(id)) return;
+    const bucket = Math.floor(landAt / LEVEL_FORECAST_BUCKET_MS);
+    this.#parts.set(id, { bucket, exp });
+    const each = this.#buckets.get(bucket) ?? { exp: 0, parts: 0 };
+    this.#buckets.set(bucket, { exp: each.exp + exp, parts: each.parts + 1 });
+  }
+
+  /** A part recorded, lost, or that never ran: no longer to come. */
+  ended(id: string): void {
+    const part = this.#parts.get(id);
+    if (part === undefined) return;
+    this.#parts.delete(id);
+    const each = this.#buckets.get(part.bucket);
+    if (each === undefined) return;
+    if (each.parts <= 1) this.#buckets.delete(part.bucket);
+    else this.#buckets.set(part.bucket, { exp: each.exp - part.exp, parts: each.parts - 1 });
+  }
+
+  /** The exp of the parts to come that land by `atMs` (the whole of its bucket). */
+  expBy(atMs: number): number {
+    const last = Math.floor(atMs / LEVEL_FORECAST_BUCKET_MS);
+    let exp = 0;
+    for (const [bucket, each] of this.#buckets) if (bucket <= last) exp += each.exp;
+    return exp;
+  }
+
+  /** The hacking level at `atMs`, from `levelNow` and the player's hacking multiplier `mult`: never below it. */
+  levelAt(atMs: number, levelNow: number, mult: number): number {
+    const expNow = hackingExpOfLevel(levelNow + 1, mult) * (1 - 1e-12);
+    return Math.max(levelNow, hackingLevelOfExp(expNow + this.expBy(atMs), mult));
+  }
+
+  /** Parts to come: for its tests. */
+  size(): number {
+    return this.#parts.size;
+  }
 }
 
 /**
@@ -633,6 +727,96 @@ export function fitBatch<Batch extends { threads: BatchThreads; orders: LaunchOr
   return { batch, trimmed, trimmedBySharing: hackOf(unshared) > hackOf(batch) };
 }
 
+/**
+ * Whether a target out of step is back (#315), seen as a held hack would go out: no hack sent before it still to land
+ * there (`hacksLanding`), its money at the maximum and its security within the bounds' ceiling. The batches landing
+ * before that hack had theirs held, so their grows only add money and their weakens take off what the grows add: it
+ * lands on the target at its maximum and minimum, in step. Its batches' grows and weakens prepare it in place, with
+ * no wait for what's in flight and no preparation wave, the 8.5 minutes clarkinc sat idle on 2026-11-08.
+ */
+export function isBackInStep(
+  target: HackingTarget,
+  seen: { money: number; security: number },
+  securityCeiling: number,
+  hacksLanding: boolean,
+): boolean {
+  return !hacksLanding && seen.money >= target.moneyMax && seen.security <= securityCeiling;
+}
+
+/** The batches beyond a weaken's time a recovery in place may take (`recoveryInPlaceMs`). */
+export const RECOVERY_SPARE_BATCHES = 10;
+
+/**
+ * The longest a recovery in place may take (#315's review), ms: a weaken's time on the target at its minimum, the lead,
+ * and `RECOVERY_SPARE_BATCHES` batches. The hacks sent before a desync land within a hack's time, and then each held
+ * batch's grow refills the target, so a recovery takes a hack's time and a few batches; one that takes longer has
+ * something keeping the target down (another's script, the player), and the batcher prepares it again instead, as
+ * `preparing`, so the brain's move rules apply to it again.
+ */
+export function recoveryInPlaceMs(target: HackingTarget, player: HackingPlayer, spacingMs: number): number {
+  return operationTimeMs("weaken1", target, player) + BATCH_LAUNCH_LEAD_MS + RECOVERY_SPARE_BATCHES * spacingMs;
+}
+
+/**
+ * The least any recovery in place is given (#315's re-review), ms, however much of `recoveryInPlaceMs` its streak has
+ * spent: a hack's time (the hacks out before it land), the lead and `RECOVERY_SPARE_BATCHES` batches (the held ones'
+ * grows refill the target). So a run of short ordinary desyncs each recovers in place, never prepared again.
+ */
+export function recoveryInPlaceLeastMs(target: HackingTarget, player: HackingPlayer, spacingMs: number): number {
+  return operationTimeMs("hack", target, player) + BATCH_LAUNCH_LEAD_MS + RECOVERY_SPARE_BATCHES * spacingMs;
+}
+
+/**
+ * When a recovery in place gives up (#315's review and re-review). A recovery has its whole time
+ * (`recoveryInPlaceMs`) less what its streak has spent recovering: a desync within a whole time of the last recovery's
+ * end goes on with the time spent so far, never the time in step between, so a target kept down for a hack or two at
+ * a time still gives up; past that, a fresh whole. And never less than the least (`recoveryInPlaceLeastMs`), so a run
+ * of short ordinary desyncs each recovers in place. On the monotonic clock, ms.
+ */
+export class RecoveryClock {
+  #endsAt: number | null = null;
+  #streakUntil = Number.NEGATIVE_INFINITY;
+  #spentMs = 0;
+  #since = 0;
+
+  /** A recovery begins at `nowMs`, `wholeMs` and `leastMs` its times: when it gives up. */
+  begin(nowMs: number, wholeMs: number, leastMs: number): number {
+    if (nowMs > this.#streakUntil) this.#spentMs = 0;
+    this.#since = nowMs;
+    this.#endsAt = nowMs + Math.max(wholeMs - this.#spentMs, leastMs);
+    return this.#endsAt;
+  }
+
+  /** The recovery ended at `nowMs`, the target back: its time counts toward a desync's within `wholeMs`. */
+  end(nowMs: number, wholeMs: number): void {
+    this.#spentMs += nowMs - this.#since;
+    this.#streakUntil = nowMs + wholeMs;
+    this.#endsAt = null;
+  }
+
+  /** None under way, its streak kept: a move, or a fall back to preparing. */
+  stop(): void {
+    this.#endsAt = null;
+  }
+
+  /** Given up: the next recovery starts afresh. */
+  reset(): void {
+    this.#endsAt = null;
+    this.#streakUntil = Number.NEGATIVE_INFINITY;
+    this.#spentMs = 0;
+  }
+
+  /** When the recovery under way gives up, or null with none. */
+  endsAt(): number | null {
+    return this.#endsAt;
+  }
+
+  /** The time its streak's ended recoveries have spent recovering, ms: what a desync within the streak has less. */
+  spentMs(): number {
+    return this.#spentMs;
+  }
+}
+
 /** A target ready for batches: at its minimum security and maximum money. */
 export function isTargetPrepared(target: HackingTarget, now: { money: number; security: number }): boolean {
   return now.security <= target.minDifficulty + 1e-6 && now.money >= target.moneyMax;
@@ -833,7 +1017,8 @@ interface GrowLook {
  * and each part raises the security before the next grows (ServerHelpers.ts:211, called a part from
  * NetscriptFunctions.ts:292), so above a minimum security of about 8.57, where growth isn't capped (grow.ts:15-18),
  * its later parts grow less than the plan, which counts them all at the minimum. Its margin (`GROW_MARGIN`) covers
- * the batcher's own plans (#234's measurement), so a grow that leaves the target below its maximum is a drift to see.
+ * that on the batcher's own plans (#234's measurement), with the level forecast's error and exp from elsewhere (#315),
+ * so a grow that leaves the target below its maximum is a drift to see.
  * A grow is due once every part started has landed; its money is the grow's only while nothing has landed on its
  * target since but its own weaken2, δ after it (the next batch's hack lands 2δ after it at the least spacing). The
  * batcher drains its landing port as each record is written, so the records drained with a grow's last part are all
@@ -951,7 +1136,8 @@ export function recordHackLanded(
 
 /**
  * Grows not looked at (#235's review), in the health: something landed on their target before the look, or they
- * landed while the batcher recovered from a desync (the money then isn't a grow's doing).
+ * landed on a target out of step, a desync's until a held hack finds it back (#315; the money then isn't a grow's
+ * doing).
  */
 export function recordGrowsNotLooked(health: BatcherHealth, count: number): void {
   health.growsNotLooked = (health.growsNotLooked ?? 0) + count;
@@ -995,7 +1181,7 @@ export interface BatcherConfig {
   /** The target's figures, from the static snapshot, as the formulas read them. */
   figures: HackingTarget;
   /** The player's multipliers and intelligence; the batcher reads the hacking level live. */
-  player: { intelligence: number; mults: HackingPlayer["mults"] };
+  player: { intelligence: number; mults: BatcherPlayerMults };
   /** The hosts its operations run on. */
   hosts: string[];
   hackShare: number;
@@ -1013,6 +1199,13 @@ export interface BatcherConfig {
    */
   sharing?: SharingConfig;
 }
+
+/**
+ * The player's multipliers in a batcher config: the formulas' four, and since #315 the level's (`hacking`) and its
+ * exp's (`hacking_exp`), with which the batcher forecasts the level at each hack's landing (`LevelForecast`). Without
+ * them (an older brain's config, or safe mode's file from one) it sizes hacks at the level now, and says so.
+ */
+export type BatcherPlayerMults = HackingPlayer["mults"] & { hacking?: number; hacking_exp?: number };
 
 /** The config's `sharing` (#224). */
 export interface SharingConfig {
@@ -1042,8 +1235,11 @@ function figuresProblem(figures: unknown): string | null {
   for (const field of ["moneyMax", "minDifficulty", "requiredHackingSkill", "serverGrowth"]) {
     if (!isFiniteNumber(fields[field])) return field;
   }
-  return null;
+  return baseDifficultyProblem(fields.baseDifficulty) ? "baseDifficulty of 0 or more" : null;
 }
+
+/** Whether a figures' `baseDifficulty` (#315's review) is wrong: given, and not a number of 0 or more. */
+const baseDifficultyProblem = (value: unknown) => value !== undefined && !(isFiniteNumber(value) && value >= 0);
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
@@ -1058,11 +1254,21 @@ export function parseBatcherConfig(
   for (const field of ["moneyMax", "minDifficulty", "requiredHackingSkill", "serverGrowth"]) {
     if (!isFiniteNumber(targetFigures[field])) return { ok: false, reason: `the config's figures have no ${field}` };
   }
+  if (baseDifficultyProblem(targetFigures.baseDifficulty)) {
+    return { ok: false, reason: "the config's figures have no baseDifficulty of 0 or more" };
+  }
   const { intelligence, mults } = (player ?? {}) as Record<string, unknown>;
   if (!isFiniteNumber(intelligence)) return { ok: false, reason: "the config's player has no intelligence" };
   const playerMults = (mults ?? {}) as Record<string, unknown>;
   for (const field of ["hacking_chance", "hacking_speed", "hacking_money", "hacking_grow"]) {
     if (!isFiniteNumber(playerMults[field])) return { ok: false, reason: `the config's player has no mults.${field}` };
+  }
+  // The level forecast's (#315): absent from an older brain's config (or safe mode's file from one), never else.
+  for (const field of ["hacking", "hacking_exp"]) {
+    const value = playerMults[field];
+    if (value !== undefined && !(isFiniteNumber(value) && value >= 0)) {
+      return { ok: false, reason: `the config's player's mults.${field} isn't a number of 0 or more` };
+    }
   }
   if (!Array.isArray(hosts) || hosts.length === 0 || !hosts.every((host) => typeof host === "string" && host !== "")) {
     return { ok: false, reason: "the config's hosts aren't a list of hostnames" };
@@ -1092,7 +1298,7 @@ export function parseBatcherConfig(
     config: {
       target,
       figures: figures as HackingTarget,
-      player: { intelligence, mults: mults as HackingPlayer["mults"] },
+      player: { intelligence, mults: mults as BatcherPlayerMults },
       hosts: hosts as string[],
       hackShare,
       spacingMs,
@@ -1104,7 +1310,11 @@ export function parseBatcherConfig(
 
 /** The batcher's health (#204): on its health port and in its log; A7b sends it to the brain. */
 export interface BatcherHealth {
-  /** Preparing the target, batching, or letting what's in flight land before preparing again after a desync. */
+  /**
+   * Preparing the target, batching, or recovering from a desync: since #315 in place, batching on with every hack held
+   * until the target is back in step (the hacks out before it landed, at its maximum money and within the bounds'
+   * security), its batches' grows and weakens bringing it back meanwhile.
+   */
   state: "preparing" | "batching" | "recovering";
   target: string;
   /** Preparation waves started; batches started (their first operation out). */
@@ -1129,7 +1339,7 @@ export interface BatcherHealth {
    * found it below its maximum (a grow short of the hack before it: a split grow's later parts grow at the security the
    * earlier ones left, and the batches then drift down to the bounds' floor); the run's least money so far, a share of
    * the maximum (1 while none was below), and its target (null before one); and the grows not looked at (#235's
-   * review: something else landed on the target first, or they landed while it recovered from a desync). Absent from an
+   * review: something else landed on the target first, or they landed on a target out of step, #315). Absent from an
    * older batcher.
    */
   moneyLooks?: number;
@@ -1144,8 +1354,34 @@ export interface BatcherHealth {
   hacksLanded: number;
   hacksFailed: number;
   moneyHacked: number;
-  /** Hacks not started: their batch was short, or the target was outside the bounds. */
+  /**
+   * Hacks not started: their batch was short, the target was outside the bounds, or it was out of step and not yet
+   * back (#315: recovering in place).
+   */
   hacksSkipped: number;
+  /**
+   * The level forecast at the hacks' landings (#315, `LevelForecast`): hacks sent with fewer threads than the level at
+   * their start would give them, for the level forecast at their landing; and the most levels forecast between a
+   * hack's start and its landing (0 before one). Absent from an older batcher.
+   */
+  hacksTrimmedForLevel?: number;
+  mostLevelRise?: number;
+  /**
+   * Recoveries in place that took longer than `recoveryInPlaceMs` (#315's review): each then prepared its target again.
+   * Absent from an older batcher.
+   */
+  recoveriesTimedOut?: number;
+  /**
+   * The waves of the preparation under way (#315's second re-review), since it last batched or moved: past twice
+   * `MOST_PREPARATION_WAVES` its problem says it may be kept down. Absent from an older batcher.
+   */
+  preparationWaves?: number;
+  /**
+   * The time the latest streak of recoveries has spent recovering, ms (#315's re-review, core's `RecoveryClock`): a
+   * desync within a recovery's time of the last one's end has that much less of it; 0 after a move or one given up.
+   * Absent from an older batcher.
+   */
+  recoverySpentMs?: number;
   /** Landings out of order, operations started too late, records lost, and the target outside the bounds. */
   outOfOrder: number;
   late: number;
@@ -1383,6 +1619,11 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     hacksFailed: 0,
     moneyHacked: 0,
     hacksSkipped: 0,
+    hacksTrimmedForLevel: 0,
+    mostLevelRise: 0,
+    recoveriesTimedOut: 0,
+    preparationWaves: 0,
+    recoverySpentMs: 0,
     outOfOrder: 0,
     late: 0,
     lost: 0,
