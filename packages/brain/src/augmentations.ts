@@ -401,7 +401,7 @@ export interface AugmentationInputs {
   homeRamEnabled: boolean;
   /**
    * The BitNode's destroy wanted once The Red Pill is installed (#215 review): the World Daemon's switch on, with
-   * nothing left in the campaign's order to gain too, where the destroy is a replay (#311, #321). Then no ordinary
+   * nothing playable left in the order to gain too, where the destroy is a replay (#311, #321). Then no ordinary
    * install is chosen: it would reset the hacking level w0r1d_d43m0n needs.
    */
   destroyWanted: boolean;

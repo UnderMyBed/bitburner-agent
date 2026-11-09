@@ -604,9 +604,11 @@ function render(status) {
           ? "asked for, through the gate"
           : "on, once w0r1d_d43m0n is ready";
   // The BitNode it enters (#321): the campaign's order's, or your queued destroy's; none before a slow snapshot.
+  // The BitNodes the order skipped on the way to the brain's (#323): the ones it can't play yet, and why.
   const intoOf = (view) =>
     typeof view.nextBitNode === "number"
-      ? `into BitNode ${view.nextBitNode}`
+      ? `into BitNode ${view.nextBitNode}` +
+        (!view.ownersDestroy && typeof view.skipped === "string" ? `; ${view.skipped}` : "")
       : "into the next BitNode, once the Agent's slow snapshot shows this one";
   // Nothing left in the campaign's order to gain (#311, #321): the brain's destroy replays BitNode 1. Said while it's
   // the brain's to send.

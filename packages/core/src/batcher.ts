@@ -5,7 +5,7 @@
  * the in-game batcher (`entries/batcher.ts`) runs. Design and plan: #204; the Agent runs it in #205, the brain chooses
  * in #206. BitNode multipliers as in hacking-ceiling.ts: `ScriptHackMoney` and `HackExpGain` folded into the player's
  * `hacking_money` and `hacking_exp` by the brain (#321, core's `bitNodeHackingMultipliers`), the rest taken as 1: exact
- * in BN1 and BN4.
+ * in BN1, BN4 and BN5.
  */
 import { deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts";
 import { growthLogPerThread, percentMoneyHackedPerThread } from "./hack-loop.ts";

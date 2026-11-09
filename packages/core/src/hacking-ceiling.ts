@@ -4,7 +4,7 @@
  * earned, against these times the RAM. Shared by the brain (the dashboard, the run report) and, later, the batcher
  * (A7), which is scored on the batcher's.
  * The BitNode's `ScriptHackMoney` comes folded into the player's `hacking_money` (#321: the brain folds core's
- * `bitNodeHackingMultipliers` in where it reads the player), so the ceilings are exact in BN1 and BN4. Its other
+ * `bitNodeHackingMultipliers` in where it reads the player), so the ceilings are exact in BN1, BN4 and BN5. Its other
  * multipliers are taken as 1: elsewhere `ScriptHackMoneyGain`, `ServerGrowthRate` and `HackingSpeedMultiplier` are at
  * most 1 (BitNode.tsx), so this errs high, the safe side for a ceiling, but for BN11's `ServerWeakenRate` of 2
  * (BitNode.tsx:896), where it errs low.

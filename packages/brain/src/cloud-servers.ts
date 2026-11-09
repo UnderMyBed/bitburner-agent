@@ -28,7 +28,7 @@ export function readCloudServersEnabled(store: TelemetryStore): boolean {
 
 /** BN1's price of a GB of a cloud server's RAM, at every size (`Server/data/Constants.ts:4`, the multipliers 1). */
 export const CLOUD_SERVER_PRICE_PER_GB = 55_000;
-/** BN1's and BN4's limit on cloud servers: 25 × `CloudServerLimit` (1 in both) (`Server/ServerPurchases.ts:96-98`). */
+/** The limit on cloud servers in BN1, BN4 and BN5: 25 × `CloudServerLimit` (1 in each) (`ServerPurchases.ts:96-98`). */
 export const CLOUD_SERVER_LIMIT = 25;
 /**
  * The least RAM the brain buys a server with: 8 GB holds three of the loop's 2.4 GB threads, 90% of it used. A 4 GB
@@ -229,7 +229,7 @@ const formatMinutes = (ms: number) => `${Math.ceil(ms / 60_000).toLocaleString("
  *   payback limit can stop it short of what money allows.
  * - **`previous`**, the purchase last chosen, is kept while it's still to do and money and payback still allow it, so a
  *   purchase in flight keeps its id (and the Agent its count of tries) as money rises.
- * - **What it waits for:** the slow snapshot (the BitNode: the prices are known in BN1 and BN4 only so far, as home
+ * - **What it waits for:** the slow snapshot (the BitNode: the prices are known in BN1, BN4 and BN5 only, as home
  *   RAM's), the
  *   income over a full window, an income that pays back in time, or the money.
  * Snapshot data comes from the game, so nothing in it is taken on trust.
@@ -257,7 +257,7 @@ export function chooseCloudServerPurchase({
   });
   if (slowData === null) return plan("the Agent's slow snapshot (which BitNode)");
   const currentNode = (slowData.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined)?.currentNode;
-  // BN1's and BN4's (#321, core's `bitNodePriceMultipliers`); another's aren't known yet.
+  // BN1's, BN4's and BN5's (#321, #323, core's `bitNodePriceMultipliers`); another's aren't known yet.
   const multipliers = typeof currentNode === "number" ? bitNodePriceMultipliers(currentNode) : null;
   if (multipliers === null) return plan(`the cloud server prices in BitNode ${String(currentNode)} (not known yet)`);
   const priceOf = (ram: number) => cloudServerPriceIn(ram, multipliers);

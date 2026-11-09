@@ -287,7 +287,7 @@ export const HACK_REGROW_ROUNDS = 2;
  * multiplier, say, which the game can't produce). The BitNode's `ScriptHackMoney` is folded into `hacking_money`
  * (#321, `hacking`: core's `bitNodeHackingMultipliers`); its `ServerGrowthRate` is taken as 1 (core's
  * `growthLogPerThread`): in BN2, BN3 and BN11 that makes the counts up to 5x too generous, the unsafe side; to revisit
- * when those come to core. BN1 and BN4 are exact.
+ * when those come to core. BN1, BN4 and BN5 are exact.
  */
 function hackThreadsOf(
   target: StaticServer,

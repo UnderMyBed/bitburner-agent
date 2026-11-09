@@ -126,6 +126,7 @@ import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
   readWorldDaemonEnabled,
   replayOf,
+  skippedOf,
   type WorldDaemonEvent,
   WorldDaemonRule,
   type WorldDaemonStall,
@@ -644,7 +645,7 @@ export class DesiredStateController {
     const view = this.#worldDaemon.view();
     // The owner's queued destroy goes instead (#321): the dashboard names the BitNode it enters.
     return owners?.action === "destroyBitNode"
-      ? { ...view, ownersDestroy: true, nextBitNode: owners.args.nextBitNode, replay: null }
+      ? { ...view, ownersDestroy: true, nextBitNode: owners.args.nextBitNode, replay: null, skipped: null }
       : { ...view, ownersDestroy: false };
   }
 
@@ -1231,7 +1232,7 @@ export class DesiredStateController {
 
   /**
    * What the brain takes as BN1's in the BitNode the slow snapshot shows (#321, core's `bitNodeAssumptions`): a line
-   * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1 or BN4.
+   * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1, BN4 or BN5.
    */
   #logBitNodeAssumptions(): void {
     const currentNode = this.#slowData?.resetInfo?.currentNode;
@@ -1263,8 +1264,10 @@ export class DesiredStateController {
         atMs: this.#lastEventAtMs ?? 0,
         source: manual === undefined ? "brain" : "manual",
         nextBitNode,
-        // With nothing left in the campaign's order to gain, into BitNode 1 (#311, #321): said in the run report.
+        // With nothing playable left in the order to gain, into BitNode 1 (#311, #321): said in the run report.
         replay: replayOf(this.#slowData?.resetInfo, nextBitNode),
+        // The BitNodes the order skipped on the way to it (#323): said in the run report.
+        skipped: skippedOf(this.#slowData?.resetInfo, nextBitNode),
       });
     }
     // An install going out (#210): stored, so the run report can look for the reset after it.
