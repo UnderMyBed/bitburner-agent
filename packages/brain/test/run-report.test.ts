@@ -3215,16 +3215,30 @@ describe("the stop at the BitNode's end (#303)", () => {
     expect(text).toContain(`the run's end: the brain stopped itself at ${at(RUN_MS)}, at the BitNode's end`);
   });
 
-  test("unanswered, or answered over a minute on, or by another reason, the stall is still a failure", () => {
+  test("the stall a stop for nothing more to gain followed minutes on (#308: w0r1d_d43m0n shown, then ready): expected", () => {
     cleanRun();
     refused(MINUTE);
-    event(2 * MINUTE + SECOND, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
-    refused(5 * MINUTE);
-    event(5 * MINUTE, "brainStoppedAtBitNodeEnd", DESTROYED);
-    refused(10 * MINUTE);
+    event(MINUTE + 9 * MINUTE, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
+    const { text, failures, warnings } = report();
+    expect([failures, warnings]).toEqual([[], []]);
+    expect(text).toContain(
+      `from ${at(MINUTE)} to at least ${at(MINUTE)} (expected: the brain stopped itself at the BitNode's end at ` +
+        `${at(10 * MINUTE)}, the switch on)`,
+    );
+  });
+
+  test("a stall no stop for nothing more to gain followed (one before it, a destroyed one after): the owner's", () => {
+    cleanRun();
     event(10 * MINUTE - SECOND, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
-    const stalls = report().failures.filter((failure) => failure.startsWith("world daemon stalled"));
-    expect(stalls).toHaveLength(3);
+    refused(10 * MINUTE);
+    event(11 * MINUTE, "brainStoppedAtBitNodeEnd", DESTROYED);
+    const { text, failures, warnings } = report();
+    // No w0r1d_d43m0n in the snapshots: never ready, so a line, not yet a prompt, and never a failure.
+    expect([failures, warnings]).toEqual([[], []]);
+    expect(text).toContain(
+      `from ${at(10 * MINUTE)} to at least ${at(10 * MINUTE)} (yours once w0r1d_d43m0n is ready, the stop at the ` +
+        "BitNode's end off: not ready 5 min in the window)",
+    );
   });
 
   test("a window across the stop and a later start: the silence between is expected, the disconnect too", () => {
@@ -3427,6 +3441,187 @@ describe("the stop at the BitNode's end (#303)", () => {
       `Expected, not a failure: the game's close called off from the dashboard at ${at(RUN_MS - 30 * SECOND)}, so the ` +
         "game and its scripts went on without it",
     );
+  });
+
+  describe("the switch's own stop isn't a FAIL (#308)", () => {
+    const CLOSE = "closeGame()";
+    const JOIN = "joinFaction(BitRunners)";
+    /** The Agent's queue over the run's last minute: the close and a join after it, neither tried, as BN1.4's. */
+    const queuedAtEnd = (offsetMs: number) =>
+      fastData({
+        intents:
+          offsetMs >= RUN_MS - MINUTE
+            ? [intent(CLOSE, { tries: 0, backend: null }), intent(JOIN, { tries: 0, backend: null })]
+            : [],
+      });
+    /**
+     * The BN1.4 run's shape (2026-11-08): the `nextBitNode` stall as w0r1d_d43m0n shows, the stop for nothing more to
+     * gain minutes later (the game to close), the close out at the run's end, the drop 0.4 s on, and `gameClosed`
+     * (unless `closed` is false) stored 15 s after it. The report is made hours later.
+     */
+    function bn14Run({ closed = true }: { closed?: boolean } = {}) {
+      cleanRun({ fast: queuedAtEnd });
+      refused(12 * MINUTE);
+      event(RUN_MS - 2 * MINUTE, "brainStoppedAtBitNodeEnd", { ...NOTHING_MORE, closeGame: true });
+      event(RUN_MS, "gameCloseSent", {});
+      event(RUN_MS + 400, "agentDisconnected", { agentSessionId: "session-1" });
+      if (closed) event(RUN_MS + 15_400, "gameClosed", { closeSentAtMs: T0 + RUN_MS, afterMs: 400 });
+      return runReport(store, { ...window, untilMs: T0 + RUN_MS + 6 * 60 * MINUTE }, { verbose: true });
+    }
+
+    test("the BN1.4 run's shape: PASS, the stall expected, the close done, the join left, the window to gameClosed", () => {
+      const { text, failures, warnings } = bn14Run();
+      expect([failures, warnings]).toEqual([[], []]);
+      expect(text.split("\n").at(-1)).toBe("Verdict: PASS");
+      expect(text).toContain(
+        `from ${at(12 * MINUTE)} to at least ${at(12 * MINUTE)} (expected: the brain stopped itself at the ` +
+          `BitNode's end at ${at(RUN_MS - 2 * MINUTE)}, the switch on)`,
+      );
+      expect(text).toContain(`    ${CLOSE}: done: the game closed, 0 tries; the window gone at ${at(RUN_MS + 400)}`);
+      expect(text).toContain(
+        `    ${JOIN}: not done, 0 tries; first seen ${at(RUN_MS - MINUTE)}; left queued at the game's close`,
+      );
+      expect(text.split("\n", 2)).toEqual([
+        `Run report (E0) from ${at(0)} to ${at(RUN_MS + 15_400)} (20 min 15 s)`,
+        `(the window ends at the run's last record: the brain stopped itself at the BitNode's end at ` +
+          `${at(RUN_MS - 2 * MINUTE)}; asked to ${at(RUN_MS + 6 * 60 * MINUTE)}; #308)`,
+      ]);
+      expect(text).toContain(`after the run's last record (${at(RUN_MS + 15_400)}), 0 s to its end`);
+    });
+
+    test("summarised: the close counted done by the close, the join counted left, neither listed", () => {
+      cleanRun({ fast: queuedAtEnd });
+      event(RUN_MS - 2 * MINUTE, "brainStoppedAtBitNodeEnd", { ...NOTHING_MORE, closeGame: true });
+      event(RUN_MS + 15_400, "gameClosed", { closeSentAtMs: T0 + RUN_MS, afterMs: 400 });
+      const { text } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * MINUTE });
+      expect(text).toContain(
+        "    closeGame: 1 done (1 by the game's close, confirmed)\n" +
+          "    joinFaction: 1 not done (1 left queued at the game's close)\n" +
+          "  intents not done, done with a problem, or tried again for something besides their worker still at it:\n" +
+          "    none\n",
+      );
+    });
+
+    test("the close not confirmed: the close and the join are not done, and listed", () => {
+      const { text } = bn14Run({ closed: false });
+      expect(text).toContain(`    ${CLOSE}: not done, 0 tries; first seen ${at(RUN_MS - MINUTE)}\n`);
+      expect(text).toContain(`    ${JOIN}: not done, 0 tries; first seen ${at(RUN_MS - MINUTE)}\n`);
+    });
+
+    test("an intent gone from the queue before the Agent's last look isn't left by the close", () => {
+      cleanRun({
+        fast: (offsetMs) =>
+          fastData({ intents: offsetMs >= RUN_MS - MINUTE && offsetMs < RUN_MS ? [intent(JOIN, { tries: 0 })] : [] }),
+      });
+      event(RUN_MS - 2 * MINUTE, "brainStoppedAtBitNodeEnd", { ...NOTHING_MORE, closeGame: true });
+      event(RUN_MS + 15_400, "gameClosed", { closeSentAtMs: T0 + RUN_MS, afterMs: 400 });
+      const { text } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 60 * MINUTE });
+      expect(text).toContain("    joinFaction: 1 not done\n");
+    });
+
+    test("a close, then a brain started again: the later Agent's queue at its own last look isn't left by the close", () => {
+      cleanRun({ fast: queuedAtEnd });
+      event(RUN_MS - 2 * MINUTE, "brainStoppedAtBitNodeEnd", { ...NOTHING_MORE, closeGame: true });
+      event(RUN_MS + 15_400, "gameClosed", { closeSentAtMs: T0 + RUN_MS, afterMs: 400 });
+      const againMs = RUN_MS + 2 * 60 * MINUTE;
+      event(againMs, "brainStarted", { release: "r" });
+      event(againMs + SECOND, "agentConnected", { agentSessionId: "session-2", deploymentId: "dep-b", game: {} });
+      for (let offsetMs = againMs + 2 * SECOND; offsetMs <= againMs + MINUTE; offsetMs += 2 * SECOND) {
+        snapshot(
+          "fast",
+          offsetMs,
+          fastData({ intents: [intent("travel(Aevum)", { tries: 0, backend: null })] }),
+          0,
+          "session-2",
+        );
+      }
+      const { text } = runReport(store, { ...window, untilMs: T0 + againMs + 2 * MINUTE }, { verbose: true });
+      expect(text).toContain(`    ${CLOSE}: done: the game closed, 0 tries; the window gone at ${at(RUN_MS + 400)}`);
+      expect(text).toContain(
+        `    ${JOIN}: not done, 0 tries; first seen ${at(RUN_MS - MINUTE)}; left queued at the game's close`,
+      );
+      expect(text).toContain(`    travel(Aevum): not done, 0 tries; first seen ${at(againMs + 2 * SECOND)}\n`);
+    });
+
+    test("stopping alone: the window ends at the run's last record, a snapshot or the stop's event", () => {
+      cleanRun();
+      event(RUN_MS + SECOND, "brainStoppedAtBitNodeEnd", DESTROYED);
+      expect(runReport(store, { ...window, untilMs: T0 + RUN_MS + 3 * 60 * MINUTE }).text.split("\n", 1)[0]).toBe(
+        `Run report (E0) from ${at(0)} to ${at(RUN_MS + SECOND)} (20 min 1 s)`,
+      );
+      // A snapshot stored after the stop, as the brain shuts down, is the last record.
+      snapshot("medium", RUN_MS + 1_500, mediumData({ money: 1 }));
+      expect(runReport(store, { ...window, untilMs: T0 + RUN_MS + 3 * 60 * MINUTE }).text.split("\n", 1)[0]).toBe(
+        `Run report (E0) from ${at(0)} to ${at(RUN_MS + 1_500)} (20 min 2 s)`,
+      );
+    });
+
+    test("no stop, or a brain started again after it: the window as asked", () => {
+      cleanRun();
+      const untilMs = T0 + RUN_MS + 60 * MINUTE;
+      expect(runReport(store, { ...window, untilMs }).text.split("\n", 2)[1]).not.toContain("the window ends");
+      event(RUN_MS - MINUTE, "brainStoppedAtBitNodeEnd", DESTROYED);
+      event(RUN_MS + 30 * MINUTE, "brainStarted", { release: "r" });
+      expect(runReport(store, { ...window, untilMs }).text.split("\n", 1)[0]).toBe(
+        `Run report (E0) from ${at(0)} to ${at(RUN_MS + 60 * MINUTE)} (1 h 20 min)`,
+      );
+    });
+
+    /**
+     * The switch off, w0r1d_d43m0n (hacking 3000) rooted at the player's hacking from `readyFromMs`, the `nextBitNode`
+     * stall stored as it shows, at 2 minutes: the brain waits on the owner. `only` keeps the other half of ready on
+     * throughout: the level (rooted from `readyFromMs`), or root (at the level from `readyFromMs`).
+     */
+    function waitingOnOwner(
+      readyFromMs: number,
+      readyUntilMs = Number.POSITIVE_INFINITY,
+      only: "level" | "root" | null = null,
+    ) {
+      event(0, "brainStarted", { release: "r" });
+      for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+      snapshot("static", 10 * SECOND, { servers: [{ ...staticServer("w0r1d_d43m0n"), requiredHackingSkill: 3000 }] });
+      snapshot("slow", 10 * SECOND, slowData([], { "The Red Pill": 1 }, { 1: 3 }));
+      for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+        const ready = offsetMs >= readyFromMs && offsetMs <= readyUntilMs;
+        const medium = mediumData({ money: 1e9, hacking: ready || only === "level" ? 3000 : 2999 });
+        const rooted = ready || only === "root";
+        const daemon = { ...medium.servers[0], hostname: "w0r1d_d43m0n", maxRam: 0, hasAdminRights: rooted };
+        snapshot("medium", offsetMs, { ...medium, servers: [...medium.servers, daemon] });
+      }
+      refused(2 * MINUTE);
+      return report();
+    }
+
+    test("the switch off, w0r1d_d43m0n ready 5 min by the last snapshot: the owner's prompt, a warning (WARN)", () => {
+      const { text, failures, warnings } = waitingOnOwner(RUN_MS - 5 * MINUTE);
+      expect(failures).toEqual([]);
+      const prompt =
+        `owner prompt: world daemon stalled: the BitNode not destroyed: ${MAXED}: the next BitNode is yours (turn ` +
+        `the switch off and queue destroyBitNode), from ${at(2 * MINUTE)} to at least ${at(2 * MINUTE)}; ` +
+        `w0r1d_d43m0n ready from ${at(RUN_MS - 5 * MINUTE)} to at least ${at(RUN_MS)}, the stop at the BitNode's end ` +
+        "off, so the brain waits on you";
+      expect(warnings).toEqual([prompt]);
+      expect(text).toContain(`    ${prompt}\n`);
+      expect(text.split("\n").at(-2)).toBe("Verdict: WARN");
+    });
+
+    test("…ready under 5 min: a line, no warning", () => {
+      const { text, failures, warnings } = waitingOnOwner(RUN_MS - 5 * MINUTE + 10 * SECOND);
+      expect([failures, warnings]).toEqual([[], []]);
+      expect(text).toContain("(yours once w0r1d_d43m0n is ready, the stop at the BitNode's end off: not ready 5 min");
+    });
+
+    test("…at its level all along, rooted only under 5 min: a line, no warning", () => {
+      expect(waitingOnOwner(RUN_MS - 4 * MINUTE, Number.POSITIVE_INFINITY, "level").warnings).toEqual([]);
+    });
+
+    test("…rooted all along, at its level only under 5 min: a line, no warning", () => {
+      expect(waitingOnOwner(RUN_MS - 4 * MINUTE, Number.POSITIVE_INFINITY, "root").warnings).toEqual([]);
+    });
+
+    test("…ready 10 min, then not at the last snapshot (its level lost, say): a line, no warning", () => {
+      expect(waitingOnOwner(5 * MINUTE, RUN_MS - 10 * SECOND).warnings).toEqual([]);
+    });
   });
 });
 
