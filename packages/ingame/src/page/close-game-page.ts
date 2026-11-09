@@ -6,16 +6,14 @@
 //   the click, confirms it. A save that fails shows a dialog instead, and no toast. With no toast in time, the window
 //   is left open: a close never goes without its save.
 // - The close: `window.close()`, the page's only way out (the preload exposes only the save and export channels). On
-//   Steam, not yet run live: Chromium's own close of the window, which probably skips BrowserWindow's `close` handler
-//   (`electron/main.js:43-78`), while the last window closed still quits the app (`:16-20`). That handler flushes the
-//   save-folder and Steam Cloud copies, which are possibly stale, perhaps since the session began: their debounces
-//   (`:135-164`, leading and trailing, no `maxWait`) write the session's first save at once, then only once saves
-//   pause, and the game saves every 60 s
-//   (`Settings/Settings.ts:17`, `engine.tsx:233`). The game's own save, in its IndexedDB before the toast shows
-//   (`db.ts:122-125`), is fresh either way, and the next launch on this PC keeps it over an older copy
-//   (`electron/storage.js:481-496`). Electron's log tells whether the handler ran ("Destroying the window"; "Saving to
-//   Disk" comes with every debounced write too) only at its debug level (`log.debug`; the file log is at info by
-//   default, `electron/utils.js:136-138`).
+//   Steam (run live on BN1.4, #308): Chromium's own close of the window, which skipped BrowserWindow's `close` handler
+//   (`electron/main.js:43-78`; no "Destroying the window", its log at debug, no save-folder write at the close), while
+//   the last window closed still quit the app (`:16-20`). The game's own save, in its IndexedDB before the toast shows
+//   (`db.ts:122-125`), was fresh, and the relaunch kept it over the older copy (`electron/storage.js:481-496`). The
+//   save-folder copy is stale whatever the page does: its debounce (`:151-163`, 5 minutes, leading and trailing, no
+//   `maxWait`) writes the session's first save at once, then only once saves pause, and the game saves every 60 s
+//   (`Settings/Settings.ts:17`, `engine.tsx:233`). Steam Cloud's own (`:135-149`, 15 minutes) leaves its copy stale
+//   too.
 //   The page's "Your work will be lost" prompt is off on `file://` (`index.tsx:53-57`), Steam's case. A browser
 //   closes only a window its scripts opened (or with one history entry), so in one (E2) the window stays, and the
 //   worker says so.

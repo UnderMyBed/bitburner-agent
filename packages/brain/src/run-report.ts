@@ -27,6 +27,7 @@ import { batcherSection, whoHacked } from "./batcher-report.ts";
 import {
   BITNODE_END_EVENT_KINDS,
   BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND,
+  CLOSE_GAME_INTENT,
   GAME_CLOSE_CALLED_OFF_EVENT_KIND,
   GAME_CLOSE_NOT_CONFIRMED_EVENT_KIND,
   GAME_CLOSE_SENT_EVENT_KIND,
@@ -684,9 +685,12 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     // The servers' fixed figures for the hacking ceilings, as of the window's start: the Agent sends them once (#196).
     const staticBefore = store.latestSnapshotBefore({ ...window, tier: "static", beforeMs: window.sinceMs });
     const weakenTimes = new WeakenTimes();
+    // w0r1d_d43m0n's requirement by then, for its readiness (#308).
+    const worldDaemon = new WorldDaemonFold();
     if (isObject(staticBefore?.data)) {
       hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
       weakenTimes.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
+      worldDaemon.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
     }
     // The newest static snapshot, for which servers are the game's: the hack loop's hosts (#194).
     let staticLast = isObject(staticBefore?.data) ? (staticBefore.data as StaticSnapshotData) : undefined;
@@ -696,6 +700,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       staticLast = data;
       hacking.addStatic(atMs, data);
       weakenTimes.addStatic(atMs, data);
+      worldDaemon.addStatic(atMs, data);
       backdoors.addStatic(atMs, data);
       for (const server of Array.isArray(data.servers) ? data.servers : []) {
         if (server?.purchasedByPlayer === true) playersServers.add(server.hostname);
@@ -756,7 +761,6 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const resets: Resets = { brainMs: cycles.resetsMs(), gameMs: [...resetsMs] };
     const inference = new HackTargetInference(playersServers, resets);
     const cloudServerChanges = new CloudServerChanges(cloudServers);
-    const worldDaemon = new WorldDaemonFold();
     const mediumTimes: SnapshotTime[] = [];
     const thinned = { fast: 0, medium: 0, lastMs: null as number | null };
     for (const { atMs, gameTimeMs, data } of ofTier<MediumSnapshotData>("medium")) {
@@ -768,7 +772,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
         thinned.lastMs = Math.max(thinned.lastMs ?? atMs, atMs);
         continue;
       }
-      worldDaemon.addMedium(atMs, data);
+      worldDaemon.addMedium(atMs, data, cycles.bitNodeIndexAt(atMs));
       weakenTimes.addMedium(atMs, data);
       mediumFirst ??= data;
       mediumLast = data;
@@ -882,17 +886,21 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
 
 /**
  * The run report for a window of the store. Throws for a window that ends before it starts, or one with nothing in it:
- * it would check nothing, and must never pass. By default, section 3's busiest blocks (the intents, the cloud servers,
+ * it would check nothing, and must never pass. A window the brain's stop at the BitNode's end is in ends at the run's
+ * last record (#308, `stopEndingWindow`). By default, section 3's busiest blocks (the intents, the cloud servers,
  * the augmentations, the dialogs, the faction work) and section 2's hack loop target are summarised; `verbose` (the
  * command's --verbose) lists each line instead (#245: run #3's 12.4 h was 3,270 lines, most of them those). Either way
  * the checks (sections 4 to 6), the failures, the warnings and the verdict are the same.
  */
 export function runReport(
   store: TelemetryStore,
-  window: RunWindow,
+  asked: RunWindow,
   { gapThresholdMs = DEFAULT_GAP_THRESHOLD_MS, verbose = false }: { gapThresholdMs?: number; verbose?: boolean } = {},
 ): RunReport {
-  if (!(window.sinceMs < window.untilMs)) throw new RangeError("the window must end after it starts");
+  if (!(asked.sinceMs < asked.untilMs)) throw new RangeError("the window must end after it starts");
+  // Ended at the run's last record when the brain stopped itself at the BitNode's end (#308).
+  const stop = stopEndingWindow(store, asked);
+  const window = stop === null ? asked : { ...asked, untilMs: stop.endMs };
   const facts = readFacts(store, window);
   if (facts.events.length === 0 && facts.snapshotCount === 0) {
     throw new Error(
@@ -920,6 +928,12 @@ export function runReport(
   const lines = [
     `Run report (${window.environment}) from ${formatIsoTime(window.sinceMs)} to ${formatIsoTime(window.untilMs)} ` +
       `(${formatDuration(window.untilMs - window.sinceMs)})`,
+    ...(stop === null
+      ? []
+      : [
+          `(the window ends at the run's last record: the brain stopped itself at the BitNode's end at ` +
+            `${formatIsoTime(stop.stopAtMs)}; asked to ${formatIsoTime(asked.untilMs)}; #308)`,
+        ]),
     ...(verbose
       ? []
       : [
@@ -936,7 +950,7 @@ export function runReport(
     "",
     ...actionsSection(facts, verbose),
     "",
-    ...healthSection(facts, gapThresholdMs, failures, incidents, briefLags),
+    ...healthSection(facts, gapThresholdMs, failures, incidents, briefLags, warnings),
     "",
     ...withWhoHacked(
       facts.hacking.section(failures, (fromMs, toMs) => facts.cycles.heldBackBetween(fromMs, toMs)),
@@ -958,6 +972,29 @@ export function runReport(
     ...warnings.map((warning) => `  warning: ${warning}`),
   ];
   return { text: lines.join("\n"), failures, warnings };
+}
+
+/**
+ * The run's end, when the brain stopped itself at the BitNode's end in the window and no brain started after it
+ * (#308): its last record, the stop's (stopping alone, it shuts down a second on), or its close's `gameClosed` (or the
+ * close not confirmed), and whatever the shutdown stored after, so the window doesn't run on to when the report is
+ * made. Null without such a stop, or with the run's last record at the window's end already. For a stop of either
+ * reason, "destroyed" or "nothingMoreToGain".
+ */
+function stopEndingWindow(store: TelemetryStore, window: RunWindow): { stopAtMs: number; endMs: number } | null {
+  const events = store.eventsInWindow(window).filter((event) => !STORE_THINNING_EVENT_KINDS.includes(event.kind));
+  const stops = events.filter((event) => event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND);
+  if (stops.length === 0) return null;
+  const latest = (times: number[]) => times.reduce((most, time) => Math.max(most, time), Number.NEGATIVE_INFINITY);
+  const stopAtMs = latest(stops.map(({ atMs }) => atMs));
+  if (events.some((event) => event.kind === BRAIN_STARTED_EVENT_KIND && event.atMs > stopAtMs)) return null;
+  const times = events.map(({ atMs }) => atMs);
+  for (const tier of ["fast", "medium", "slow", "static"]) {
+    const last = store.latestSnapshotBefore({ environment: window.environment, tier, beforeMs: window.untilMs + 1 });
+    if (last !== null && last.receivedAtMs >= window.sinceMs) times.push(last.receivedAtMs);
+  }
+  const endMs = latest(times);
+  return endMs < window.untilMs && endMs > window.sinceMs ? { stopAtMs, endMs } : null;
 }
 
 /**
@@ -1350,6 +1387,10 @@ interface IntentEpisode {
    * be told (`resetKnownBefore`), as section 4 doesn't judge an install sent then (#286 re-review).
    */
   notJudged: boolean;
+  /** `closeGame`, not done at the Agent's last look before its close was confirmed (`gameClosed`): done (#308). */
+  gameClosed: boolean;
+  /** Any other not done at the Agent's last look before a confirmed close: left by the close, not a failure (#308). */
+  leftAtClose: boolean;
 }
 
 /**
@@ -1427,6 +1468,8 @@ function intentEpisodes(facts: RunFacts): IntentEpisode[] {
           problemsBeforeDone: [],
           resetFollowed: false,
           notJudged: false,
+          gameClosed: false,
+          leftAtClose: false,
         };
         episodes.push(episode);
         current.set(outcome.id, episode);
@@ -1456,6 +1499,22 @@ function intentEpisodes(facts: RunFacts): IntentEpisode[] {
     episode.outcome = { ...episode.outcome, done: true, problem: null };
     episode.doneAtMs = seenMs;
     episode.resetFollowed = true;
+  }
+  // Each close confirmed (#308): its worker closes the window before it reports, so `closeGame` is never seen done;
+  // it and whatever else was queued at the Agent's last look before that close's drop were still in its list then.
+  for (const closed of facts.events.filter((event) => event.kind === GAME_CLOSED_EVENT_KIND)) {
+    const droppedMs = droppedAtMs(closed);
+    const lastLookMs = facts.fast.findLast((point) => point.atMs <= droppedMs)?.atMs;
+    for (const episode of episodes) {
+      if (episode.outcome.done || episode.notJudged || episode.lastSeenMs !== lastLookMs) continue;
+      if (episode.id !== CLOSE_GAME_INTENT.id) {
+        episode.leftAtClose = true;
+        continue;
+      }
+      episode.outcome = { ...episode.outcome, done: true, problem: null };
+      episode.doneAtMs = droppedMs;
+      episode.gameClosed = true;
+    }
   }
   return episodes;
 }
@@ -1493,14 +1552,29 @@ function describeIntent(outcome: IntentOutcome): string {
 
 /**
  * An intent episode's line: "    travel(Aevum): done after 2 tries (ui); done by …", or for one its reset followed
- * (#286) "    destroyBitNode(1): done: the reset followed, 1 try (ui); the reset seen by …".
+ * (#286) "    destroyBitNode(1): done: the reset followed, 1 try (ui); the reset seen by …", or for `closeGame` at a
+ * confirmed close (#308) "    closeGame(): done: the game closed, 0 tries; the window gone at …", and one left
+ * queued at it "…; left queued at the game's close".
  */
-function describeEpisode({ id, outcome, firstSeenMs, doneAtMs, resetFollowed, notJudged }: IntentEpisode): string {
+function describeEpisode({
+  id,
+  outcome,
+  firstSeenMs,
+  doneAtMs,
+  resetFollowed,
+  notJudged,
+  gameClosed,
+  leftAtClose,
+}: IntentEpisode): string {
   if (resetFollowed && doneAtMs !== null) {
     return `    ${id}: done: the reset followed, ${describeTries(outcome)}; the reset seen by ${formatIsoTime(doneAtMs)}`;
   }
+  if (gameClosed && doneAtMs !== null) {
+    return `    ${id}: done: the game closed, ${describeTries(outcome)}; the window gone at ${formatIsoTime(doneAtMs)}`;
+  }
   const when = doneAtMs === null ? `first seen ${formatIsoTime(firstSeenMs)}` : `done by ${formatIsoTime(doneAtMs)}`;
-  return `    ${id}: ${describeIntent(outcome)}; ${when}${notJudged ? `; ${BEFORE_FIRST_SLOW}` : ""}`;
+  const note = notJudged ? `; ${BEFORE_FIRST_SLOW}` : leftAtClose ? "; left queued at the game's close" : "";
+  return `    ${id}: ${describeIntent(outcome)}; ${when}${note}`;
 }
 
 /** One action's intents (the id's name before its arguments), counted by outcome. */
@@ -1513,6 +1587,10 @@ interface ActionCounts {
   notDone: number;
   /** Not done, seen before the window's first slow snapshot: not judged (#286 re-review). */
   notJudged: number;
+  /** `closeGame` done by the game's close confirmed (#308). */
+  gameClosed: number;
+  /** Not done, left queued at a confirmed close (#308): counted, not listed. */
+  leftAtClose: number;
 }
 
 /**
@@ -1534,6 +1612,8 @@ function intentLines(facts: RunFacts, verbose: boolean): string[] {
       resetFollowed: 0,
       notDone: 0,
       notJudged: 0,
+      gameClosed: 0,
+      leftAtClose: 0,
     };
     byAction.set(action, counts);
     if (episode.outcome.done) counts.done += 1;
@@ -1542,6 +1622,8 @@ function intentLines(facts: RunFacts, verbose: boolean): string[] {
     if (triedAgainWhileAtIt(episode)) counts.triedAgainWhileAtIt += 1;
     if (episode.resetFollowed) counts.resetFollowed += 1;
     if (episode.notJudged) counts.notJudged += 1;
+    if (episode.gameClosed) counts.gameClosed += 1;
+    if (episode.leftAtClose) counts.leftAtClose += 1;
   }
   const total = ({ done, notDone }: ActionCounts) => done + notDone;
   const ranked = [...byAction].sort(
@@ -1554,20 +1636,26 @@ function intentLines(facts: RunFacts, verbose: boolean): string[] {
       ...(counts.doneWithProblem > 0 ? [`${counts.doneWithProblem} with a problem`] : []),
       ...(counts.triedAgainWhileAtIt > 0 ? [`${counts.triedAgainWhileAtIt} tried again while still at it`] : []),
       ...(counts.resetFollowed > 0 ? [`${counts.resetFollowed} by the reset that followed, with no done record`] : []),
+      ...(counts.gameClosed > 0 ? [`${counts.gameClosed} by the game's close, confirmed`] : []),
+    ];
+    const notDoneNotes = [
+      ...(counts.notJudged > 0 ? [`${counts.notJudged} ${BEFORE_FIRST_SLOW}`] : []),
+      ...(counts.leftAtClose > 0 ? [`${counts.leftAtClose} left queued at the game's close`] : []),
     ];
     const outcomes = [
       ...(counts.done > 0 ? [`${counts.done} done${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`] : []),
       ...(counts.notDone > 0
-        ? [`${counts.notDone} not done${counts.notJudged > 0 ? ` (${counts.notJudged} ${BEFORE_FIRST_SLOW})` : ""}`]
+        ? [`${counts.notDone} not done${notDoneNotes.length > 0 ? ` (${notDoneNotes.join("; ")})` : ""}`]
         : []),
     ];
     lines.push(`    ${action}: ${outcomes.join(", ")}`);
   }
   if (episodes.length === 0) lines.push("    none");
   lines.push("  intents not done, done with a problem, or tried again for something besides their worker still at it:");
+  // One left queued at a confirmed close is counted above, not listed (#308): the close left it, nothing failed.
   const notable = episodes.filter(
     (episode) =>
-      !episode.outcome.done ||
+      (!episode.outcome.done && !episode.leftAtClose) ||
       episode.outcome.problem !== null ||
       (episode.outcome.tries > 1 && !triedAgainWhileAtIt(episode)),
   );
@@ -1978,6 +2066,7 @@ function healthSection(
   failures: string[],
   incidents: readonly ClockIncident[],
   briefLags: readonly DeliveryLag[],
+  warnings: string[],
 ): string[] {
   const lines = ["4. Health"];
   const heartbeat = heartbeatLines(facts, gapThresholdMs, failures);
@@ -2009,7 +2098,14 @@ function healthSection(
       formatTime: formatIsoTime,
     }),
   );
-  lines.push(...facts.worldDaemon.healthLines(facts.events, failures, formatIsoTime));
+  lines.push(
+    ...facts.worldDaemon.healthLines(facts.events, {
+      failures,
+      warnings,
+      formatTime: formatIsoTime,
+      bitNodeAt: (atMs) => facts.cycles.bitNodeIndexAt(atMs),
+    }),
+  );
 
   // Done, but not as asked (#194): a server bought under another name.
   lines.push("  cloud server purchases done with a problem:");

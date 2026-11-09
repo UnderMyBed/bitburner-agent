@@ -10,8 +10,9 @@
 //   none either, so with no note those two can't be told apart: neither stops the brain.
 // - **Nothing more to gain:** the World Daemon's destroy on and ready (w0r1d_d43m0n rooted at its level), refused as
 //   it enters BitNode 1 and Source-File 1 is at its top level, so BitNode 1 gives nothing more (`nextBitNodeProblem`;
-//   in any BitNode), after that refusal's `nextBitNode` stall, in the same update. A brain started with the switch on
-//   in such a BitNode stops as soon as it sees it.
+//   in any BitNode). The refusal's `nextBitNode` stall comes first, as w0r1d_d43m0n shows; the stop once it's ready,
+//   minutes later, or in the same update for one ready as it shows (#308). A brain started with the switch on in such a
+//   BitNode stops as soon as it sees it.
 // - **Once:** the switch is set back to "play on" as the brain shuts down (logged; the event says so), so it stops
 //   this BitNode's end: a brain started again to look around plays on. Set it again for the next. While the close is
 //   awaited it stays set, so "Play on" calls the close off.
