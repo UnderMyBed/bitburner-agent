@@ -79,6 +79,49 @@ Every seed that didn't pass is explained here, per run: what stopped it, and whe
 
   The cost that remained, single-digit speed once the fork runs tens of thousands of scripts, isn't a defect: it's why the baseline stops at 12 hours ([ADR 0011](../decisions/0011-checkpointed-simulator-comparisons.md)).
 
+## The brain against the fork
+
+Our brain, measured where the fork is ([#319](https://github.com/UnderMyBed/bitburner-agent/issues/319), for Q10, [#83](https://github.com/UnderMyBed/bitburner-agent/issues/83)):
+- **The start:** the same as the baseline's, `baselineScenario()`'s fixture: BN1 with SF1.1 and SF4.3 (BN1.2, home at 32 GB), on the same seeds and epoch.
+- **The play:** the brain plays with its rules as on Steam, through the simulator's own effectors.
+- **The readings:** the same summary as the baseline's checkpoints, at the same virtual times, on Node 26.13.0, the pin these rows compare with. Each run goes on to a destroy, or to 16 virtual hours.
+
+How to run it: [the brain README](../../packages/brain/README.md#the-brain-against-the-fork). Each row's columns are as [above](#what-a-row-records), with two differences:
+- **The heap** isn't measured: the game runs in a child process.
+- **Reached** counts the seeds still in BN1.2 at the checkpoint, and names those destroyed before it. A destroyed seed is ahead on every measure.
+
+Speed and real time aren't comparable with the fork's: the brain's game runs on the lockstep driver ([ADR 0012](../decisions/0012-simulator-network-in-lockstep.md)), and these runs shared the machine with another, three at once.
+
+**The first run (e077960, seeds 1–2), against the fork's 5238ab6 rows on the same Node:**
+
+| Date | Commit | Rig | Node | Seeds | At | Reached | Money | Hacking | Augs | Home RAM | Heap | Speed | Real time per seed |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-08 | 5238ab6 (the fork) | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 1..8 | 4 h | 8/8 | $61.7m ($17.6m–$1.27b) | 238 (210–279) | 6 | 64 GB | 83 MB | 118x | 6 min |
+| 2026-11-08 | 5238ab6 (the fork) | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 1..8 | 8 h | 8/8 | $1.69b ($1.2m–$6.9b) | 341 (259–374) | 11 | 128 GB | 86 MB | 118x | 6 min |
+| 2026-11-08 | 5238ab6 (the fork) | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 1..8 | 12 h | 8/8 | $14.6b ($9.06m–$1.11t) | 493 (208–662) | 15 | 2048 GB | 90 MB | 118x | 6 min |
+| 2026-11-09 | e077960 (the brain) | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 1..2 | 4 h | 2/2 | $150t ($150t–$262t) | 1009 (1009–1010) | 10 | 1048576 GB | - | 6x | 103 min |
+| 2026-11-09 | e077960 (the brain) | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 1..2 | 8 h | 2/2 | $11q ($11q–$21.2q) | 1528 (1528–1544) | 21 | 16777216 GB | - | 6x | 103 min |
+| 2026-11-09 | e077960 (the brain) | amd-ryzen-7-9800x3d-16c-62g | v26.13.0 | 1..2 | 12 h | 0/2, 2 destroyed before it | - | - | - | - | - | 6x | 103 min |
+
+**Each seed against the fork's same seed:**
+
+| Seed | At | Brain | Fork | Verdict |
+|---|---|---|---|---|
+| 1 | 4 h | $262t, hacking 1009, 10 augs, 1048576 GB | $54.6m, hacking 238, 6 augs, 128 GB | ahead |
+| 1 | 8 h | $11q, hacking 1544, 21 augs, 16777216 GB | $105m, hacking 285, 11 augs, 128 GB | ahead |
+| 1 | 12 h | destroyed at 10 h 59 min | $27.9b, hacking 491, 14 augs, 2048 GB | destroyed |
+| 2 | 4 h | $150t, hacking 1010, 10 augs, 1048576 GB | $1.27b, hacking 279, 6 augs, 128 GB | ahead |
+| 2 | 8 h | $21.2q, hacking 1528, 21 augs, 16777216 GB | $6.9b, hacking 374, 11 augs, 128 GB | ahead |
+| 2 | 12 h | destroyed at 11 h 09 min | $1.11t, hacking 662, 16 augs, 32768 GB | destroyed |
+
+**Reading it:**
+- **The brain is ahead of the fork on every measure, at every checkpoint, on both seeds.**
+  - **At 4 h:** hacking about 4 times the fork's, and 10 augmentations installed against 6.
+  - **At 8 h:** hacking 4 to 5 times the fork's, and 21 augmentations against 10–11.
+  - **Home RAM:** 1 PB and 16 PB, against 64–128 GB.
+- **Both seeds destroyed BN1.2 before 12 h,** at 10 h 59 min and 11 h 09 min, into BN1.3 with SF1.2. That's the autonomous BN1→destroy in the simulator that [architecture §13](../architecture.md#13-milestones) asks for, run in full. Live, run #3 destroyed BN1.2 in 11 h 17 min. The fork doesn't destroy by 12 h on any seed.
+- **Where the comparison could flip** is the hacking level just after an install. An install resets it to 1, and the brain installs about every 1–4 hours (seed 1: at about 41, 100, 250, 500 and 640 minutes). It's back past the fork's 4 h median (238) within 10 to 20 minutes. So a checkpoint landing in those minutes could read "behind" on hacking while the brain is far ahead on everything else. None did on these seeds. Augmentations installed and home RAM only rise within a BitNode.
+
 ## Results
 
 The reference rig is the owner's machine. Rows are appended at the end of this file, so keep the results table last.

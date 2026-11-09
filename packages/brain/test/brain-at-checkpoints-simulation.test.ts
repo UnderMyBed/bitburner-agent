@@ -90,7 +90,7 @@ function fakeGame({
         homeRamUsed: 0,
         homeRamMax: 32,
         scripts: 0,
-        augsInstalled: Math.floor(virtualMs / HOUR),
+        augsInstalled: 3 + Math.floor(virtualMs / HOUR),
         augsQueued: 0,
       };
     },
@@ -122,7 +122,7 @@ describe("the runner", () => {
       virtualMs: 150_030,
       money: 1_500_300,
       hackingLevel: 2,
-      augsInstalled: 0,
+      augsInstalled: 3,
       homeRamMax: 32,
       bitNodeN: 1,
       bitNodeLevel: 2,
@@ -156,7 +156,8 @@ describe("the runner", () => {
     await expect(
       runToCheckpoints(fakeGame({}), { seed: 1, checkpointsMs: [4 * MINUTE], capMs: 3 * MINUTE }),
     ).rejects.toThrow(/the cap/);
-    const stuck: CheckpointGame = { ...fakeGame({}), run: async () => {} };
+    // A real game's run yields to timers, so a runner without the check would spin past the test's timeout, not hang.
+    const stuck: CheckpointGame = { ...fakeGame({}), run: () => new Promise((resolve) => setTimeout(resolve, 0)) };
     await expect(runToCheckpoints(stuck, { seed: 1, checkpointsMs: [MINUTE], capMs: MINUTE })).rejects.toThrow(
       /didn't run on/,
     );
