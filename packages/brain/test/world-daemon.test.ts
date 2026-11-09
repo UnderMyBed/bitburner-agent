@@ -675,7 +675,12 @@ describe("Daedalus count stuck (#228, #238)", () => {
       "installed NeuroFlux Governor only at 6 of 30 augmentations installed: nothing that counts within reach";
     const information = { atMs: 20 * MINUTE, kind: "daedalusCountNeuroFluxOnly", detail: { detail: said } };
     const fold = new WorldDaemonFold();
-    const health = fold.healthLines([stored, information] as never, failures, (ms) => `t${ms}`);
+    const health = fold.healthLines([stored, information] as never, {
+      failures,
+      warnings: [],
+      formatTime: (ms) => `t${ms}`,
+      bitNodeAt: () => 0,
+    });
     expect(health[1]).toBe(`    ${DETAIL}, seen at t${10 * MINUTE}`);
     expect(health).toHaveLength(2);
     expect(failures).toEqual([`${DETAIL}, seen at t${10 * MINUTE}`]);
