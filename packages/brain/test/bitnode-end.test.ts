@@ -1,6 +1,6 @@
 // Stopping at the BitNode's end (#303): the switch, kept in the store; the rule that tells the next BitNode after a
 // destroy from an install, a soft reset, a save loaded, b1t_flum3 and a restart; and the controller that asks the brain
-// to stop at the first of a destroy seen and a destroy that would gain nothing, through a real ControlChannel.
+// to stop on a destroy seen, the brain's replay at Source-File 1's cap among them (#311), through a real channel.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -381,71 +381,64 @@ describe("not on the wrong signals", () => {
   });
 });
 
-describe("nothing more to gain: w0r1d_d43m0n ready, its destroy refused (Source-File 1 at 3)", () => {
-  /** BN1.4 with The Red Pill installed: w0r1d_d43m0n at `hacking`, rooted unless said. */
-  function inBlockedBitNode({ hacking = 3000, rooted = true, ownedSF = { 1: 3 } } = {}) {
+describe("the brain's replay at Source-File 1's cap (#311): its destroy goes, and the stop is on the next BN1.4", () => {
+  const REPLAYED = "BN1.4 destroyed, BN1.4 seen again (a replay: no Source-File level gained)";
+
+  /** BN1.4 (Source-File 1 at 3) with The Red Pill installed, w0r1d_d43m0n rooted at its level: the brain's destroy. */
+  async function replaying() {
     const started = brain();
     started.send("static", network);
-    started.send("slow", slowSnapshot({ ownedSF, ownedAugs: { [RED_PILL]: 1 } }), 2_000);
-    started.send("medium", mediumData(hacking, { [WD]: rooted }));
+    started.send("slow", slowSnapshot({ ownedSF: { 1: 3 }, ownedAugs: { [RED_PILL]: 1 } }), 2_000);
+    // Through the gate: two medium snapshots of the preconditions, then a save backup.
+    for (let each = 0; each < 3; each += 1) started.send("medium", mediumData(3000, { [WD]: true }));
+    await started.settleBackup();
     return started;
   }
 
-  test("after the nextBitNode stall's line and event, in the same update: logged, stored, once", () => {
+  test("the destroy goes out, with no stall and no stop; the next BN1.4's first slow snapshot stops the brain", async () => {
     writeStopAtBitNodeEnd(store, "brain");
-    const { send, events, lines, stops } = inBlockedBitNode();
-    const detail =
-      "BN1.4's w0r1d_d43m0n is ready, but its destroy would enter BitNode 1, and Source-File 1 is at level 3, so " +
-      "BitNode 1 gives nothing more: the next BitNode is yours";
+    const { send, reconnect, events, lines, stops, sentIds } = await replaying();
+    expect(sentIds()).toContain("destroyBitNode(1)");
+    expect(events.filter((event) => event.type === "bitNodeDestroySent")).toMatchObject([
+      { source: "brain", nextBitNode: 1, replay: "Source-File 1 is at 3, nothing to gain but the run" },
+    ]);
+    expect(events.filter((event) => event.type === "worldDaemonStalled")).toEqual([]);
+    expect(stops()).toEqual([]);
+    // The reset kills the Agent; the next one's first slow snapshot: another lastNodeReset, Source-File 1 still at 3.
+    reconnect("session-2");
+    send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
     expect(stops()).toEqual([
       {
         type: "brainStoppedAtBitNodeEnd",
         atMs: expect.any(Number),
-        reason: "nothingMoreToGain",
+        reason: "destroyed",
         bitNode: "BN1.4",
-        nextBitNode: null,
+        nextBitNode: "BN1.4",
         closeGame: false,
         settingAfter: "off",
-        detail,
+        detail: REPLAYED,
       },
     ]);
-    const kinds = events.map((event) => event.type).filter((type) => /Stalled|Stopped/.test(type));
-    expect(kinds).toEqual(["worldDaemonStalled", "brainStoppedAtBitNodeEnd"]);
-    expect(events.find((event) => event.type === "worldDaemonStalled")).toMatchObject({ step: "nextBitNode" });
-    const stall = lines.findIndex((line) => line.startsWith("world daemon: STALLED 0 min: the BitNode not destroyed"));
-    const stop = lines.indexOf(`stopping at the BitNode's end (the switch is on): ${detail}`);
-    expect(stall).toBeGreaterThanOrEqual(0);
-    expect(stop).toBeGreaterThan(stall);
-    send("medium", mediumData(3000, { [WD]: true }));
-    expect(stops()).toHaveLength(1);
+    expect(lines).toContain(`stopping at the BitNode's end (the switch is on): ${REPLAYED}`);
   });
 
-  test("not before w0r1d_d43m0n is ready: short of its level, or not rooted", () => {
-    writeStopAtBitNodeEnd(store, "brain");
-    expect(inBlockedBitNode({ hacking: 2999 }).stops()).toEqual([]);
+  test("the switch off: the replay plays on into the next BN1.4, no stop", async () => {
+    const { send, reconnect, stops, sentIds } = await replaying();
+    expect(sentIds()).toContain("destroyBitNode(1)");
+    reconnect("session-2");
+    send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
+    expect(stops()).toEqual([]);
   });
 
-  test("not rooted: none", () => {
-    writeStopAtBitNodeEnd(store, "brain");
-    expect(inBlockedBitNode({ rooted: false }).stops()).toEqual([]);
-  });
-
-  test("below the cap the destroy goes, so the brain plays on to it", () => {
-    writeStopAtBitNodeEnd(store, "brain");
-    expect(inBlockedBitNode({ ownedSF: { 1: 2 } }).stops()).toEqual([]);
-  });
-
-  test("the World Daemon's switch off (your own destroy planned): none, the destroy awaited instead", () => {
+  test("the World Daemon's switch off (your own destroy planned): no destroy and no stop at the cap", () => {
     writeStopAtBitNodeEnd(store, "brain");
     writeWorldDaemonEnabled(store, false);
-    expect(inBlockedBitNode().stops()).toEqual([]);
-  });
-
-  test("the switch off: none; turned on mid-run, at once, without a restart", () => {
-    const { controller, stops } = inBlockedBitNode();
+    const { send, stops, events } = brain();
+    send("static", network);
+    send("slow", slowSnapshot({ ownedSF: { 1: 3 }, ownedAugs: { [RED_PILL]: 1 } }), 2_000);
+    send("medium", mediumData(3000, { [WD]: true }));
     expect(stops()).toEqual([]);
-    controller.setStopAtBitNodeEnd("brain");
-    expect(stops()).toMatchObject([{ reason: "nothingMoreToGain", bitNode: "BN1.4" }]);
+    expect(events.filter((event) => /Stalled|bitNodeDestroySent/.test(event.type))).toEqual([]);
   });
 });
 

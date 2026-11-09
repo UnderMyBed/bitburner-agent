@@ -1,10 +1,13 @@
 // The World Daemon in the run report (#215): the path as the window's last snapshots show it (Daedalus, The Red Pill,
 // w0r1d_d43m0n's hacking requirement and the ETA at the window's experience rate), the destroys sent, and each stall
 // the rule stored, a failure; an install while short of Daedalus's count that added none with nothing that counts
-// passed over (#238), information. The `nextBitNode` stall a stop at the BitNode's end for nothing more to gain
-// followed in its BitNode (#303, #308) is expected: the owner's switch asked for that end. One no stop followed (the
-// switch off, or the stop didn't fire) is the owner's prompt (#308): a warning once w0r1d_d43m0n has been ready (rooted
-// at its level) 5 minutes, unbroken to its BitNode's last medium snapshot, else a line.
+// passed over (#238), information. A destroy at Source-File 1's cap says it's a replay (#311).
+// Old stores only (#311): before it, the brain refused the destroy at the cap with a `nextBitNode` stall, and its stop
+// at the BitNode's end could fire for "nothing more to gain". It emits neither now, but the store is kept for good and
+// the reports read old windows, so those are still read as #308 did: the `nextBitNode` stall a stop for nothing more to
+// gain followed in its BitNode (#303, #308) is expected: the owner's switch asked for that end. One no stop followed
+// (the switch off, or the stop didn't fire) is the owner's prompt (#308): a warning once w0r1d_d43m0n has been ready
+// (rooted at its level) 5 minutes, unbroken to its BitNode's last medium snapshot, else a line.
 import {
   type MediumSnapshotData,
   type SlowSnapshotData,
@@ -124,7 +127,8 @@ export class WorldDaemonFold {
       const fields = fieldsOf(detail);
       lines.push(
         `    ${formatTime(atMs)}  destroy sent (${fields.source === "manual" ? "yours" : "the brain's"}), into ` +
-          `BitNode ${String(fields.nextBitNode)}`,
+          `BitNode ${String(fields.nextBitNode)}` +
+          (typeof fields.replay === "string" ? `, a replay (${fields.replay})` : ""),
       );
     }
     for (const { atMs, detail } of events.filter((event) => event.kind === DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND)) {
@@ -134,7 +138,8 @@ export class WorldDaemonFold {
   }
 
   /**
-   * Section 4's lines, each stall the rule stored a failure; but the `nextBitNode` stall (#308): expected when a stop
+   * Section 4's lines, each stall the rule stored a failure; but, in a store from before #311 only, the `nextBitNode`
+   * stall (#308; the brain no longer emits it, nor the stop for nothing more to gain): expected when a stop
    * at the BitNode's end for nothing more to gain followed it in its BitNode (the switch on: the stall comes as
    * w0r1d_d43m0n shows, the stop once it's ready), else the owner's prompt: no stop followed (the switch off, or the
    * stop didn't fire), so the brain waits on them. A warning once w0r1d_d43m0n has been ready
@@ -160,6 +165,7 @@ export class WorldDaemonFold {
         "short of Daedalus's count that added none to it, passing over one that counts, #228, #238):",
     ];
     const stalls = events.filter((event) => event.kind === WORLD_DAEMON_STALLED_EVENT_KIND);
+    // Old stores only (#311): the stops for nothing more to gain, which no brain since emits.
     const stops = events.filter(
       (event) =>
         event.kind === BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND && fieldsOf(event.detail).reason === "nothingMoreToGain",
@@ -172,6 +178,7 @@ export class WorldDaemonFold {
           ? `${String(fields.detail)}, seen at ${formatTime(atMs)}`
           : `world daemon stalled: ${String(fields.detail)}, from ${formatTime(Number(fields.sinceMs))} to at least ` +
             formatTime(atMs);
+      // Old stores only (#311): the refusal's stall, which no brain since emits.
       if (fields.step === "nextBitNode") {
         const bitNode = bitNodeAt(atMs);
         const answered = stops.find((stop) => stop.atMs >= atMs && bitNodeAt(stop.atMs) === bitNode);
