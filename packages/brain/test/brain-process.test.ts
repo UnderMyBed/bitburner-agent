@@ -849,3 +849,53 @@ test("started at Source-File 1's cap (#311): the start line says the brain's des
     ", destroying the BitNode on (it replays BitNode 1: Source-File 1 is at 3, nothing to gain but the run), ",
   );
 });
+
+test("main.ts watches the brain's holds (#309): a slow dashboard status and the loop held, logged as the brain stops", async () => {
+  // A store whose newest day of slow snapshots is slow to read: the status parses 1,440 of them, 8,000 small
+  // objects each, and its hacking row each of them again, all received in the last 9 minutes (about 1 s on this PC,
+  // against the 0.2 s logged), holding the brain's event loop meanwhile.
+  const filler = Array.from({ length: 8_000 }, (_, index) => ({ i: index }));
+  const firstMs = Date.now() - 9 * 60_000;
+  const prefilled = TelemetryStore.open(path.join(dataDirectory, STORE_FILE_NAME));
+  prefilled.writeTransaction(() => {
+    for (let index = 0; index < 1_440; index++) {
+      prefilled.recordSnapshot(
+        { environment: "E2", release: "r" },
+        {
+          agentSessionId: "session-0",
+          tier: "slow",
+          sequenceNumber: index + 1,
+          gameTimeMs: firstMs + index * 375,
+          receivedAtMs: firstMs + index * 375,
+          missedBefore: 0,
+          data: { ...bitNode1(0, 2), filler },
+        },
+      );
+    }
+  });
+  prefilled.close();
+  const { config, controlPort, dashboardPort, output } = await startBrain();
+  // Node's delay monitor samples every 20 ms from its start: a hold before its first sample isn't seen.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect((await askDashboard(dashboardPort, "GET", "/api/status")).status).toBe(200);
+  // Within the minute: the line comes from the stop alone, the count flushed, not lost.
+  expect(output()).not.toContain("held in the last");
+  // Stopped cleanly, as at the BitNode's end (#303): the switch set, then BN1.3 destroyed by hand and BN1.4 seen.
+  const exited = once(brain as ChildProcess, "exit");
+  await setStopAtBitNodeEnd(dashboardPort, "brain");
+  const { snapshot } = await standInAgent(config, controlPort);
+  snapshot("slow", bitNode1(0, 2), 100_000_000);
+  snapshot("slow", bitNode1(100_005_000, 3), 100_006_000);
+  const [code] = (await exited) as [number | null];
+  expect(code).toBe(0);
+  brain = undefined;
+  const held =
+    / brain: held in the last \d+ s: \d+ dashboard status(es)? built slower than 200 ms, the slowest in (\d+) ms; the event loop held up to (\d+) ms \(99% of its waits under \d+ ms\); every snapshot arriving meanwhile waited \(#309\)\n/.exec(
+      output(),
+    );
+  expect(held, output()).not.toBeNull();
+  expect(Number(held?.[2])).toBeGreaterThan(200);
+  expect(Number(held?.[3])).toBeGreaterThan(200);
+  // Logged before the store closes and the brain says it stopped.
+  expect(output().indexOf(" brain: held in the last ")).toBeLessThan(output().indexOf(" brain: stopped\n"));
+});
