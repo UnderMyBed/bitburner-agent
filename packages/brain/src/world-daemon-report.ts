@@ -1,8 +1,8 @@
 // The World Daemon in the run report (#215): the path as the window's last snapshots show it (Daedalus, The Red Pill,
 // w0r1d_d43m0n's hacking requirement and the ETA at the window's experience rate), the destroys sent, and each stall
 // the rule stored, a failure; an install while short of Daedalus's count that added none with nothing that counts
-// passed over (#238), information. Each destroy names the BitNode it enters, and a replay with nothing left in the
-// campaign's order to gain says it is one (#311, #321).
+// passed over (#238), information. Each destroy names the BitNode it enters and the ones the order skipped (#323), and
+// a replay with nothing playable left in the campaign's order to gain says it is one (#311, #321).
 // Old stores only (#311): before it, the brain refused the destroy at the cap with a `nextBitNode` stall, and its stop
 // at the BitNode's end could fire for "nothing more to gain". It emits neither now, but the store is kept for good and
 // the reports read old windows, so those are still read as #308 did: the `nextBitNode` stall a stop for nothing more to
@@ -129,6 +129,8 @@ export class WorldDaemonFold {
       lines.push(
         `    ${formatTime(atMs)}  destroy sent (${fields.source === "manual" ? "yours" : "the brain's"}), into ` +
           `BitNode ${String(fields.nextBitNode)}` +
+          // The BitNodes the order skipped on the way (#323): none in a store from before it.
+          (typeof fields.skipped === "string" ? ` (${fields.skipped})` : "") +
           (typeof fields.replay === "string" ? `, a replay (${fields.replay})` : ""),
       );
     }

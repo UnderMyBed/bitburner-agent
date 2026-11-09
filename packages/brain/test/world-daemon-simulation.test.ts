@@ -131,7 +131,7 @@ test.each(SEEDS)(
     // BN4, the campaign order's next (#321), with SF1.1; the next Agent back, the destroy off the queue.
     expect(slow()?.resetInfo).toMatchObject({ currentNode: 4, ownedSF: { 1: 1 }, ownedAugs: {} });
     expect(events(BITNODE_DESTROY_SENT_EVENT_KIND).map((event) => event.detail)).toEqual([
-      { source: "brain", nextBitNode: 4, replay: null },
+      { source: "brain", nextBitNode: 4, replay: null, skipped: null },
     ]);
     expect(brain.saveBackupEvents.length).toBeGreaterThan(backupsBefore);
     expect(brain.logLines).toContainEqual(

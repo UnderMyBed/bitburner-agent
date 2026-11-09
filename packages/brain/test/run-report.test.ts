@@ -523,14 +523,17 @@ describe("cloud servers (#194)", () => {
     );
   });
 
-  test("outside BN1 and BN4, the price is unknown; the BN1-only assumptions listed under the BitNode (#321)", () => {
+  test("outside BN1, BN4 and BN5, the price is unknown; the BN1-only assumptions listed under the BitNode (#321)", () => {
     withPurchases(2);
     const { text } = report({ verbose: true });
     expect(text).toContain(`    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, price unknown in BitNode 2`);
     expect(text).toContain("    in all: 1 bought, 1 upgraded\n");
-    expect(text).toContain("    the brain buys none in BitNode 2: cloud server prices are known only in BN1 and BN4\n");
     expect(text).toContain(
-      "\n    taken as BN1's in BitNode 2 (#321):\n      BitNode 2's multipliers: the brain knows BN1's and BN4's only",
+      "    the brain buys none in BitNode 2: cloud server prices are known only in BN1, BN4 and BN5\n",
+    );
+    expect(text).toContain(
+      "\n    taken as BN1's in BitNode 2 (#321):\n      BitNode 2's multipliers: the brain knows those of BN1, BN4 and " +
+        "BN5 only",
     );
     expect(report().text).toContain(
       `    BN2.1 1, ${at(5 * MINUTE)} to ${at(12 * MINUTE)}: 1 server, 8 GB → 2 servers, 72 GB ` +
@@ -3307,6 +3310,25 @@ describe("the stop at the BitNode's end (#303)", () => {
     expect(text).toContain(
       `  the run's end: the brain stopped itself at ${at(RUN_MS + SECOND)}, at the BitNode's end (the switch on): ` +
         `${detail}. Expected, not a failure`,
+    );
+  });
+
+  test("the BitNodes the order skipped (#323): said on the destroy sent, before a replay's reason", () => {
+    cleanRun();
+    const skipped = "BN2, BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet";
+    event(RUN_MS - 2 * MINUTE, "bitNodeDestroySent", { source: "brain", nextBitNode: 5, replay: null, skipped });
+    event(RUN_MS - MINUTE, "bitNodeDestroySent", {
+      source: "brain",
+      nextBitNode: 1,
+      replay: "nothing playable left",
+      skipped: "BN2 skipped: no prices yet",
+    });
+    const { text, failures } = report();
+    expect(failures).toEqual([]);
+    expect(text).toContain(`    ${at(RUN_MS - 2 * MINUTE)}  destroy sent (the brain's), into BitNode 5 (${skipped})\n`);
+    expect(text).toContain(
+      `    ${at(RUN_MS - MINUTE)}  destroy sent (the brain's), into BitNode 1 (BN2 skipped: no prices yet), a replay ` +
+        "(nothing playable left)\n",
     );
   });
 

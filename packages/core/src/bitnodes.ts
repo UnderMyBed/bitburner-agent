@@ -62,10 +62,14 @@ const DEFAULT_PRICE_MULTIPLIERS: BitNodePriceMultipliers = {
   CloudServerMaxRam: 1,
 };
 
-/** The BitNodes the brain plays (#321, the campaign's order): BN4 sets only the softcap (`BitNode.tsx:633-661`). */
+/**
+ * The BitNodes the brain plays (#321, #323: the campaign's order): BN4 and BN5 set only the softcap among the prices
+ * (`BitNode.tsx:633-661`, `:663-693`).
+ */
 const BITNODE_PRICE_MULTIPLIERS: Readonly<Record<number, BitNodePriceMultipliers>> = {
   1: DEFAULT_PRICE_MULTIPLIERS,
   4: { ...DEFAULT_PRICE_MULTIPLIERS, CloudServerSoftcap: 1.2 },
+  5: { ...DEFAULT_PRICE_MULTIPLIERS, CloudServerSoftcap: 1.2 },
 };
 
 /** `bitNode`'s price multipliers, or null for a BitNode the brain doesn't know them in yet: it buys neither there. */
@@ -87,13 +91,16 @@ export interface BitNodeHackingMultipliers {
 }
 
 /**
- * The BitNodes the brain plays (#321): BN1's the defaults (`BitNode/BitNodeMultipliers.ts`), BN4's its own
- * (`BitNode/BitNode.tsx:633-661`: `ScriptHackMoney` 0.2, `HackExpGain` 0.4). Its other multipliers on hacking
- * (`ServerGrowthRate`, `ServerWeakenRate`, `HackingSpeedMultiplier`, `HackingLevelMultiplier`) are 1 in both.
+ * The BitNodes the brain plays (#321, #323): BN1's the defaults (`BitNode/BitNodeMultipliers.ts`), BN4's and BN5's
+ * their own (`BitNode/BitNode.tsx:633-661`: `ScriptHackMoney` 0.2, `HackExpGain` 0.4; `:663-693`: 0.15 and 0.5). Their
+ * other multipliers on hacking (`ServerGrowthRate`, `ServerWeakenRate`, `HackingSpeedMultiplier`,
+ * `HackingLevelMultiplier`, `ScriptHackMoneyGain`) are 1 in all three. What they set on the servers (BN4's
+ * `ServerMaxMoney`, BN5's `ServerStartingSecurity` and `ServerStartingMoney`) the snapshots read.
  */
 const BITNODE_HACKING_MULTIPLIERS: Readonly<Record<number, BitNodeHackingMultipliers>> = {
   1: { ScriptHackMoney: 1, HackExpGain: 1 },
   4: { ScriptHackMoney: 0.2, HackExpGain: 0.4 },
+  5: { ScriptHackMoney: 0.15, HackExpGain: 0.5 },
 };
 
 /**
@@ -105,15 +112,41 @@ export function bitNodeHackingMultipliers(bitNode: number): BitNodeHackingMultip
   return multipliers === undefined ? null : { ...multipliers };
 }
 
+/** "BN1", "BN1 and BN4", "BN1, BN4 and BN5": BitNodes in words. */
+export function listedBitNodes(bitNodes: readonly number[]): string {
+  const names = bitNodes.map((bitNode) => `BN${bitNode}`);
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/** The BitNodes the brain plays (#323): those core has both the hacking multipliers and the prices of, in order. */
+export function playableBitNodes(): number[] {
+  return Object.keys(BITNODE_PRICE_MULTIPLIERS)
+    .map(Number)
+    .filter((bitNode) => bitNodeHackingMultipliers(bitNode) !== null)
+    .sort((a, b) => a - b);
+}
+
+/**
+ * Why the brain can't play `bitNode` yet (#323), short, from what core lacks of it, or null where it can: the
+ * campaign's order skips it, and says so.
+ */
+export function bitNodeUnplayableReason(bitNode: number): string | null {
+  const missing = [
+    ...(bitNodeHackingMultipliers(bitNode) === null ? ["hacking multipliers"] : []),
+    ...(bitNodePriceMultipliers(bitNode) === null ? ["prices"] : []),
+  ];
+  return missing.length === 0 ? null : `no ${missing.join(" or ")} yet`;
+}
+
 /**
  * What the brain takes as BN1's in `bitNode` though the game may have it otherwise (#321): worded, for the brain's log
- * line and the run report, a known risk each until a slice models it. None in BN1 or BN4, whose prices and hacking
- * multipliers core has (`bitNodePriceMultipliers`, `bitNodeHackingMultipliers`).
+ * line and the run report, a known risk each until a slice models it. None in the BitNodes it plays (BN1, BN4 and BN5,
+ * `playableBitNodes`), whose prices and hacking multipliers core has.
  */
 export function bitNodeAssumptions(bitNode: number): string[] {
-  if (bitNodePriceMultipliers(bitNode) !== null && bitNodeHackingMultipliers(bitNode) !== null) return [];
+  if (bitNodeUnplayableReason(bitNode) === null) return [];
   return [
-    `BitNode ${bitNode}'s multipliers: the brain knows BN1's and BN4's only, so it buys no home RAM or cloud servers ` +
-      "here, and its hacking takes BN1's (ScriptHackMoney and HackExpGain 1)",
+    `BitNode ${bitNode}'s multipliers: the brain knows those of ${listedBitNodes(playableBitNodes())} only, so it ` +
+      "buys no home RAM or cloud servers here, and its hacking takes BN1's (ScriptHackMoney and HackExpGain 1)",
   ];
 }

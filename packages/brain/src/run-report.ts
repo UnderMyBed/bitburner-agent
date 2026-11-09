@@ -11,7 +11,9 @@ import {
   HACKER_FACTION_SERVERS,
   type HandledDialog,
   type IntentOutcome,
+  listedBitNodes,
   type MediumSnapshotData,
+  playableBitNodes,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   type StaticSnapshotData,
@@ -2072,10 +2074,11 @@ function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
     const total = sumOf(facts.cloudServerChanges);
     lines.push(`    in all: ${bought} bought, ${upgraded} upgraded${total === null ? "" : `, ${formatMoney(total)}`}`);
   }
-  // The brain's rule waits outside BN1 and BN4 (cloud-servers.ts): said here, so a run with none bought isn't a
-  // mystery.
+  // The brain's rule waits outside the BitNodes it plays (cloud-servers.ts; core's `playableBitNodes`): said here, so
+  // a run with none bought isn't a mystery.
   if (isNumber(currentNode) && bitNodePriceMultipliers(currentNode) === null) {
-    lines.push(`    the brain buys none in BitNode ${currentNode}: cloud server prices are known only in BN1 and BN4`);
+    const known = listedBitNodes(playableBitNodes());
+    lines.push(`    the brain buys none in BitNode ${currentNode}: cloud server prices are known only in ${known}`);
   }
   return lines;
 }

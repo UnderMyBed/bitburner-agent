@@ -410,7 +410,7 @@ describe("chooseCloudServerPurchase: the largest that money allows and pays back
     expect(choose(medium(440_000), { slow: slowData(4) }).next).toMatchObject({ ram: 8, price: 440_000 });
   });
 
-  test("what it waits for first: the slow snapshot, BN1's and BN4's prices, the income, an income at all", () => {
+  test("what it waits for first: the slow snapshot, BN1's, BN4's and BN5's prices, the income, an income at all", () => {
     expect(choose(medium(1e9), { slow: null as never })).toMatchObject({
       next: null,
       waitingFor: "the Agent's slow snapshot (which BitNode)",
