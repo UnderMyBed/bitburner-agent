@@ -823,59 +823,31 @@ test("the stop at the BitNode's end (#303) under npm run brain's runner: set mid
   store.close();
 });
 
-test("set in a BitNode already at its end (#303): the dashboard answers, then the brain stops after the refusal", async () => {
-  const { config, controlPort, dashboardPort, output } = await startBrain();
+test("started at Source-File 1's cap (#311): the start line says the brain's destroy replays BitNode 1", async () => {
+  const { config, controlPort } = await startBrain();
   const { snapshot } = await standInAgent(config, controlPort);
-  // BN1.4: The Red Pill installed, w0r1d_d43m0n rooted at its level, Source-File 1 at 3.
-  snapshot("static", { servers: [{ hostname: "w0r1d_d43m0n", requiredHackingSkill: 3000 }] });
+  // BN1.4: Source-File 1 at 3. Stored, the brain stopped; started again, it reads the game from the store.
   snapshot("slow", bitNode1(0, 3, { "The Red Pill": 1 }));
-  snapshot("medium", {
-    player: { skills: { hacking: 3000 }, money: 0, city: "Sector-12", factions: [] },
-    hasTorRouter: true,
-    programs: [],
-    servers: [{ hostname: "w0r1d_d43m0n", maxRam: 0, cpuCores: 1, hasAdminRights: true }],
-  });
-  const exited = once(brain as ChildProcess, "exit");
-  await setStopAtBitNodeEnd(dashboardPort, "brain");
-  const [code] = (await exited) as [number | null];
-  expect(code).toBe(0);
-  expect(output()).toContain(
-    " brain: stopping at the BitNode's end (the switch is on): BN1.4's w0r1d_d43m0n is ready, but its destroy would " +
-      "enter BitNode 1, and Source-File 1 is at level 3, so BitNode 1 gives nothing more: the next BitNode is yours",
-  );
-  // Once (#303 review): set back to play on as it stopped, so a brain started again to look around plays on.
-  expect(output()).toContain(
-    " brain: the stop at the BitNode's end set back to play on: set it again for the next BitNode's end",
-  );
-  const store = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
-  const kinds = eventsSinceStart(store).map((event) => event.kind);
-  expect(kinds.filter((kind) => kind === "worldDaemonStalled" || kind === "brainStoppedAtBitNodeEnd")).toEqual([
-    "worldDaemonStalled",
-    "brainStoppedAtBitNodeEnd",
-  ]);
-  expect(readStopAtBitNodeEnd(store)).toBe("off");
-  store.close();
-  brain = undefined;
+  const slowStored = () => {
+    const store = TelemetryStore.openReadOnly(path.join(dataDirectory, STORE_FILE_NAME));
+    try {
+      return store.latestSnapshot({ environment: "E2", tier: "slow" }) !== null;
+    } finally {
+      store.close();
+    }
+  };
+  for (let attempt = 0; attempt < 100 && !slowStored(); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  expect(slowStored()).toBe(true);
+  await stopBrain();
   const again = await startBrain();
   for (let attempt = 0; attempt < 40 && !again.output().includes("(the dashboard's switches)"); attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  expect(again.output()).toContain(", at the BitNode's end: play on (the dashboard's switches)");
-  const next = await standInAgent(again.config, again.controlPort, "session-2");
-  next.snapshot("static", { servers: [{ hostname: "w0r1d_d43m0n", requiredHackingSkill: 3000 }] });
-  next.snapshot("slow", bitNode1(0, 3, { "The Red Pill": 1 }));
-  next.snapshot("medium", {
-    player: { skills: { hacking: 3000 }, money: 0, city: "Sector-12", factions: [] },
-    hasTorRouter: true,
-    programs: [],
-    servers: [{ hostname: "w0r1d_d43m0n", maxRam: 0, cpuCores: 1, hasAdminRights: true }],
-  });
-  for (let attempt = 0; attempt < 40 && !again.output().includes("world daemon: STALLED"); attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  expect(again.output()).toContain("world daemon: STALLED");
-  expect(again.output()).not.toContain("stopping at the BitNode's end");
-  expect((brain as ChildProcess | undefined)?.exitCode).toBeNull();
+  expect(again.output()).toContain(
+    ", destroying the BitNode on (it replays BitNode 1: Source-File 1 is at 3, nothing to gain but the run), ",
+  );
 });
 
 test("main.ts watches the brain's holds (#309): a slow dashboard status and the loop held, logged as the brain stops", async () => {

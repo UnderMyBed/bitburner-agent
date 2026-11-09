@@ -295,7 +295,11 @@ export function heldBackOf(data: SlowSnapshotData, player: PlayerFigures): HeldB
   }
 }
 
-/** "BN1.2": the BitNode and its level, one more than its Source-File's (the game's own count). */
+/**
+ * "BN1.2": the BitNode and its level, one more than its Source-File's. Our count, not the game's: the game caps the
+ * level at 3 (`BitNode/BitNodeUtils.ts:102-104`), so at Source-File 1.3 its portal reads "Enter BN1.3" where this says
+ * BN1.4.
+ */
 export function bitNodeLabel(currentNode: number, ownedSF: Readonly<Record<string, unknown>>): string {
   const level = ownedSF[String(currentNode)];
   return `BN${currentNode}.${(isFiniteNumber(level) ? level : 0) + 1}`;
@@ -305,6 +309,12 @@ export function bitNodeLabel(currentNode: number, ownedSF: Readonly<Record<strin
 export interface BitNodeSpan {
   lastNodeReset: number;
   label: string;
+  /**
+   * Its label, with " #2" on for a label seen again (#311: a replay at the cap, BN1.4 into BN1.4; a new game, a save
+   * loaded), as the campaign report names it: unique among the BitNodes seen, so their cycles never merge. The run
+   * report counts names within its window, so one BitNode can be "BN1.4" there and "BN1.4 #3" in the campaign.
+   */
+  name: string;
   currentNode: number;
   /** Its start by the brain's clock: `lastNodeReset`, from the previous BitNode's last slow snapshot to its first. */
   startMs: number;
@@ -364,9 +374,12 @@ export class ResetDetection<B extends BitNodeSpan = BitNodeSpan, C extends Cycle
     const ownedAugs = typeof info?.ownedAugs === "object" && info.ownedAugs !== null ? info.ownedAugs : null;
     let bitNode = this.bitNodes.at(-1);
     if (bitNode?.lastNodeReset !== lastNodeReset) {
+      const label = bitNodeLabel(currentNode as number, ownedSF);
+      const played = this.bitNodes.filter((each) => each.label === label).length + 1;
       bitNode = this.#newBitNode({
         lastNodeReset,
-        label: bitNodeLabel(currentNode as number, ownedSF),
+        label,
+        name: played === 1 ? label : `${label} #${played}`,
         currentNode: currentNode as number,
         startMs: ResetDetection.#startOf(
           lastNodeReset,
@@ -562,10 +575,10 @@ export class BitNodeCycles {
     return first === undefined ? "the window" : `before ${this.#labelOf(first, 0)}`;
   }
 
-  /** "BN1.1 2": the BitNode's label and the cycle's number in it. */
+  /** "BN1.1 2": the BitNode's name ("BN1.4 #2" played again, #311) and the cycle's number in it. */
   #labelOf(cycle: Cycle, index: number): string {
     const number = this.#cycles.filter((each, at) => each.bitNode === cycle.bitNode && at <= index).length;
-    return `${this.bitNodes[cycle.bitNode]?.label ?? "?"} ${number}`;
+    return `${this.bitNodes[cycle.bitNode]?.name ?? "?"} ${number}`;
   }
 
   /** Where the cycle `atMs` falls in started, by the brain's clock, or null before the first (#245). */
@@ -719,14 +732,14 @@ export class BitNodeCycles {
       const before = bitNode.startMs < this.#sinceMs ? " (before the window)" : "";
       const from = `from ${formatIsoTime(bitNode.startMs)}${before}`;
       if (next !== undefined) {
-        return `${bitNode.label} ${from}, destroyed after ${formatDuration(next.startMs - bitNode.startMs)}`;
+        return `${bitNode.name} ${from}, destroyed after ${formatDuration(next.startMs - bitNode.startMs)}`;
       }
       const endMs = Math.max(bitNode.lastRecordMs, ...this.#eventsIn(index).map((event) => event.atMs));
       const sent = this.#destroySentIn(index);
       const destroyed =
         sent === null ? "not destroyed" : `destroy sent at ${formatIsoTime(sent)}, the next BitNode not seen`;
       const lasted = formatDuration(endMs - bitNode.startMs);
-      return `${bitNode.label} ${from}, ${destroyed}, ${lasted} by the window's last record`;
+      return `${bitNode.name} ${from}, ${destroyed}, ${lasted} by the window's last record`;
     });
     return `  BitNodes: ${each.join("; ")}`;
   }
@@ -736,7 +749,7 @@ export class BitNodeCycles {
     const first = this.bitNodes[0];
     return first === undefined
       ? "BitNode not recorded"
-      : `before ${first.label}'s start (an earlier BitNode, with no slow snapshot of it in the window)`;
+      : `before ${first.name}'s start (an earlier BitNode, with no slow snapshot of it in the window)`;
   }
 
   #eventsIn(index: number): StoredEvent[] {
@@ -828,7 +841,7 @@ export class BitNodeCycles {
           .trimEnd()}`,
       );
     for (const [bitNodeIndex, bitNode] of this.bitNodes.entries()) {
-      lines.push(`  ${bitNode.label}:`);
+      lines.push(`  ${bitNode.name}:`);
       for (const [index, cycle] of this.#cycles.entries()) {
         if (cycle.bitNode === bitNodeIndex) lines.push(...(views[index]?.lines ?? []).map((line) => `    ${line}`));
       }

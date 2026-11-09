@@ -49,7 +49,7 @@ import { setSupervisionPaused } from "./supervision.ts";
 import { Supervisor, shouldSupervise } from "./supervisor.ts";
 import { TelemetryStore } from "./telemetry-store.ts";
 import { WindowsGameProcess } from "./windows-game-process.ts";
-import { readWorldDaemonEnabled } from "./world-daemon.ts";
+import { describeWorldDaemonSwitch, readWorldDaemonEnabled } from "./world-daemon.ts";
 
 /** A log line is cut at this length: what a client sends ends up in some, and a 24/7 log must stay readable. */
 const MAX_LOG_LINE_LENGTH = 500;
@@ -372,7 +372,11 @@ try {
       `upgrading home RAM ${readHomeRamEnabled(store) ? "on" : "off"}, buying cloud servers ` +
       `${readCloudServersEnabled(store) ? "on" : "off"}, faction work ${readFactionWorkEnabled(store) ? "on" : "off"}, ` +
       `buying and installing augmentations ${readAugmentationsEnabled(store) ? "on" : "off"}, destroying the BitNode ` +
-      `${readWorldDaemonEnabled(store) ? "on" : "off"}, sharing spare RAM ${readShareEnabled(store) ? "on" : "off"}, ` +
+      // A replay at Source-File 1's cap (#311), as the last slow snapshot stored shows the game.
+      `${describeWorldDaemonSwitch(
+        readWorldDaemonEnabled(store),
+        store.latestSnapshot({ environment: config.environment, tier: "slow" })?.data ?? null,
+      )}, sharing spare RAM ${readShareEnabled(store) ? "on" : "off"}, ` +
       `at the BitNode's end: ${describeStopAtBitNodeEnd(readStopAtBitNodeEnd(store))} (the dashboard's switches)`,
   );
   log(

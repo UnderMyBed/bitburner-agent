@@ -13,8 +13,9 @@
 //   backup). Asked for, it's held until a slow snapshot shows another `lastNodeReset`, as the install's is.
 // - The dashboard's switch ("Stop destroying the BitNode", `worldDaemon.enabled`), on by default, into BitNode 1
 //   (owner decision 50): phase A's exit is a live run that destroys BN1.1 on its own. Another BitNode is the owner's:
-//   the switch off, and `destroyBitNode` queued by hand. With Source-File 1 at 3, BN1 gives nothing: none, loudly (and
-//   the brain stops there if the owner set the stop at the BitNode's end, ./bitnode-end.ts, #303).
+//   the switch off, and `destroyBitNode` queued by hand. With Source-File 1 at 3 the destroy goes ahead all the same, a
+//   replay (#311, owner decision 64): no Source-File gained (`RedPill.tsx:27-31`), BN1 played again from its start for
+//   phase B's live data (the stop at the BitNode's end, if the owner set it, fires on it: ./bitnode-end.ts).
 // - Daedalus's count (#228): short of it (core's `daedalusCountOf`), the path says how many more augmentations are
 //   within reach and where (./invitations.ts's `daedalusReach`, the city group the brain chose). An install while short
 //   that adds none to the count (NeuroFlux Governor's levels count once: run #2's nine NeuroFlux-only installs at 23)
@@ -92,7 +93,14 @@ export const DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND = "daedalusCountNeuroFluxO
 
 export type WorldDaemonEvent =
   | { type: typeof WORLD_DAEMON_STALLED_EVENT_KIND; atMs: number; step: StallStep; sinceMs: number; detail: string }
-  | { type: typeof BITNODE_DESTROY_SENT_EVENT_KIND; atMs: number; source: "brain" | "manual"; nextBitNode: number }
+  | {
+      type: typeof BITNODE_DESTROY_SENT_EVENT_KIND;
+      atMs: number;
+      source: "brain" | "manual";
+      nextBitNode: number;
+      /** Why it's a replay (#311, `replayOf`), or null: from the last slow snapshot's BitNode into this one. */
+      replay: string | null;
+    }
   | {
       type: typeof DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND;
       atMs: number;
@@ -107,7 +115,7 @@ export type WorldDaemonEvent =
  * The steps a stall can be on; `daedalusCount` (#228) is "Daedalus count stuck": an install that added none, passing
  * over one that counts (#238).
  */
-export type StallStep = "daedalusCount" | "daedalus" | "redPill" | "redPillReputation" | "destroy" | "nextBitNode";
+export type StallStep = "daedalusCount" | "daedalus" | "redPill" | "redPillReputation" | "destroy";
 
 /**
  * The Red Pill reached, not installed this long after (#215 review): 15 minutes, from "reached". A6's whole commit
@@ -118,35 +126,51 @@ export const RED_PILL_INSTALL_STALLED_AFTER_MS = 15 * 60_000;
 /** Daedalus's reputation, The Red Pill short, not risen this long (#215 review): 10 minutes, as A5's stall. */
 export const RED_PILL_REPUTATION_STALLED_AFTER_MS = 10 * 60_000;
 
-/** How long each step may take before it's `worldDaemonStalled`. The next BitNode refused is loud at once. */
+/** How long each step may take before it's `worldDaemonStalled`. */
 const STALLED_AFTER_MS: Record<StallStep, number> = {
   daedalusCount: 0,
   daedalus: WORLD_DAEMON_STALLED_AFTER_MS,
   redPill: RED_PILL_INSTALL_STALLED_AFTER_MS,
   redPillReputation: RED_PILL_REPUTATION_STALLED_AFTER_MS,
   destroy: WORLD_DAEMON_STALLED_AFTER_MS,
-  nextBitNode: 0,
 };
 
-/** A Source-File's top level but for BN12's: destroying its BitNode again gives nothing (`RedPill.tsx:16-38`). */
-const SOURCE_FILE_1_TOP_LEVEL = 3;
+/**
+ * A Source-File's top level but for BN12's, which has none: destroying its BitNode again gives no level
+ * (`RedPill.tsx:27-31`). The campaign model's cap too.
+ */
+export const SOURCE_FILE_TOP_LEVEL = 3;
 
 /**
- * Why the brain won't destroy into BitNode 1, or null (#215 review): with Source-File 1 at its top level, BitNode 1
- * gives nothing more, so the next BitNode is the owner's (phase B's to choose). Logged and alerted (`nextBitNode`).
+ * Why a destroy into `nextBitNode` is a replay (#311, owner decision 64), or null: BitNode 1 destroyed into BitNode 1
+ * with Source-File 1 at its top level, so `giveSourceFile` gives no level (`RedPill.tsx:27-31`) and the portal enters
+ * BN1 all the same (`BitNode/ui/PortalModal.tsx:117-126`): the run itself is the gain, phase B's live data.
  */
-export function nextBitNodeProblem(ownedSF: Readonly<Record<string, number>>): string | null {
-  const nothing = nothingMoreToGain(ownedSF);
-  return nothing === null
-    ? null
-    : `${nothing}: the next BitNode is yours (turn the switch off and queue destroyBitNode)`;
+export function replayOf(
+  resetInfo: { currentNode?: unknown; ownedSF?: Readonly<Record<string, unknown>> } | null | undefined,
+  nextBitNode: number,
+): string | null {
+  const level = resetInfo?.ownedSF?.["1"];
+  return resetInfo?.currentNode === 1 &&
+    nextBitNode === 1 &&
+    typeof level === "number" &&
+    level >= SOURCE_FILE_TOP_LEVEL
+    ? `Source-File 1 is at ${SOURCE_FILE_TOP_LEVEL}, nothing to gain but the run`
+    : null;
 }
 
-/** Why BitNode 1 gives nothing more (#303: the brain's stop at the BitNode's end says it), or null. */
-export function nothingMoreToGain(ownedSF: Readonly<Record<string, number>>): string | null {
-  return (ownedSF["1"] ?? 0) >= SOURCE_FILE_1_TOP_LEVEL
-    ? `Source-File 1 is at level ${SOURCE_FILE_1_TOP_LEVEL}, so BitNode 1 gives nothing more`
-    : null;
+/**
+ * The switch in the brain's start line (#311): "on", "off", or on and a replay as the store's last slow snapshot
+ * (`lastSlowData`, the Agent's word, so checked) shows the game: "on (it replays BitNode 1: …)".
+ */
+export function describeWorldDaemonSwitch(enabled: boolean, lastSlowData: unknown): string {
+  if (!enabled) return "off";
+  const resetInfo = (lastSlowData as { resetInfo?: unknown } | null)?.resetInfo;
+  const replay =
+    typeof resetInfo === "object" && resetInfo !== null
+      ? replayOf(resetInfo as Parameters<typeof replayOf>[0], NEXT_BITNODE)
+      : null;
+  return replay === null ? "on" : `on (it replays BitNode 1: ${replay})`;
 }
 
 /** The path, as the snapshots show it (#215): each part null where the snapshots don't say. */
@@ -468,6 +492,8 @@ export interface WorldDaemonView {
   destroying: boolean;
   /** A destroy the owner queued, which goes instead of the brain's (the controller's). */
   ownersDestroy: boolean;
+  /** Why the brain's destroy is a replay (#311, `replayOf`), from the last slow snapshot, or null. */
+  replay: string | null;
   /** A stall, from when it could have been done, or null: the `worldDaemonStalled` alert's. */
   stall: WorldDaemonStall | null;
 }
@@ -507,8 +533,8 @@ export class WorldDaemonRule {
   readonly #expRate = new HackingExpRate();
   #path: WorldDaemonPath | null = null;
   #enabled = true;
-  /** Why a destroy that could go now gains nothing (#303), as of the last update, or null: the stop's. */
-  #nothingMoreToGain: string | null = null;
+  /** Why the brain's destroy, from the BitNode the last slow snapshot showed, is a replay (#311), or null. */
+  #replay: string | null = null;
   /** The destroy asked for, and the BitNode's `lastNodeReset` then: held until a slow snapshot shows another. */
   #asked: { lastNodeReset: number } | null = null;
   /** Each step's start, while it could be done; the stall once stored, so it's stored once. */
@@ -554,18 +580,9 @@ export class WorldDaemonRule {
       lines: this.#path === null ? [] : describeWorldDaemonPath(this.#path),
       destroying: this.#asked !== null,
       ownersDestroy: false,
+      replay: this.#replay,
       stall: this.stall(),
     };
-  }
-
-  /**
-   * Why the destroy, on and ready to go (w0r1d_d43m0n rooted at its level), is refused as its next BitNode, BitNode 1,
-   * gives nothing more (#303), or null: the brain's stop at the BitNode's end. The `nextBitNode` stall is stored once,
-   * as w0r1d_d43m0n shows; this is set once it's ready too, an update after `#watch`'s: the same update as the stall
-   * only when it's ready as it shows (a brain started there), else minutes later (#308).
-   */
-  nothingMoreToGainNow(): string | null {
-    return this.#nothingMoreToGain;
   }
 
   /** The step stalled longest, or null: `worldDaemonStalled`'s. */
@@ -593,7 +610,7 @@ export class WorldDaemonRule {
     augmentationsInstalling = false,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
-    this.#nothingMoreToGain = null;
+    if (slowData !== null) this.#replay = replayOf(slowData.resetInfo, NEXT_BITNODE);
     const hacking = hackingOf(mediumData);
     if (hacking !== null && hacking.exp !== null && mediumGameTimeMs !== null)
       this.#expRate.add(mediumGameTimeMs, hacking.exp);
@@ -630,18 +647,14 @@ export class WorldDaemonRule {
     }
     this.#path = path;
     this.#watchCount(path, slowData, nowMs ?? 0, countFacts, augmentationsInstalling);
-    const blocked = path.daemon === null ? null : nextBitNodeProblem(slowData.resetInfo?.ownedSF ?? {});
-    // Refused, it's logged and alerted once, at once, as the `nextBitNode` stall.
-    this.#watch(path, nowMs ?? 0, enabled, blocked);
-    const ready = path.daemon !== null && path.daemon.problem === null && blocked === null;
-    if (enabled && path.daemon !== null && path.daemon.problem === null && blocked !== null) {
-      this.#nothingMoreToGain = nothingMoreToGain(slowData.resetInfo?.ownedSF ?? {});
-    }
+    this.#watch(path, nowMs ?? 0, enabled);
+    const ready = path.daemon !== null && path.daemon.problem === null;
     if (enabled && ready && this.#asked === null && isFiniteNumber(lastNodeReset)) {
       this.#asked = { lastNodeReset };
       this.#log(
         `world daemon: ${WORLD_DAEMON} rooted at hacking ${path.daemon?.hackingLevel}: destroying the BitNode, into ` +
-          `BitNode ${NEXT_BITNODE} (the gate, then a save backup first)`,
+          `BitNode ${NEXT_BITNODE}${this.#replay === null ? "" : `, a replay (${this.#replay})`} (the gate, then a ` +
+          "save backup first)",
       );
     }
     return this.#asked !== null;
@@ -723,7 +736,7 @@ export class WorldDaemonRule {
   }
 
   /** Each step that could be done, from when; one not done its `STALLED_AFTER_MS` on is stored and logged. */
-  #watch(path: WorldDaemonPath, nowMs: number, enabled: boolean, blocked: string | null): void {
+  #watch(path: WorldDaemonPath, nowMs: number, enabled: boolean): void {
     const steps = new Map<StallStep, { detail: string; sinceMs?: number }>();
     const { daedalus, redPill, daemon } = path;
     if (this.#stuck !== null) {
@@ -758,9 +771,7 @@ export class WorldDaemonRule {
     } else {
       this.#reputation = null;
     }
-    if (enabled && daemon !== null && blocked !== null) {
-      steps.set("nextBitNode", { detail: `the BitNode not destroyed: ${blocked}` });
-    } else if (
+    if (
       enabled &&
       daemon !== null &&
       daemon.requiredHackingLevel !== null &&

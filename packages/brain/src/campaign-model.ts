@@ -9,9 +9,12 @@ import { fieldsOf, isFiniteNumber } from "./augmentation-report.ts";
 import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, advanceOnlineClock, type OnlineClock } from "./augmentations.ts";
 import { type BitNodeSpan, ResetDetection } from "./cycle-report.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
-import { RELOAD_LEAD_MS } from "./run-report.ts";
 import type { SlowResetInfo, StoredEvent } from "./telemetry-store.ts";
-import { BITNODE_DESTROY_SENT_EVENT_KIND } from "./world-daemon.ts";
+import {
+  BITNODE_DESTROY_SENT_EVENT_KIND,
+  SOURCE_FILE_TOP_LEVEL,
+  WORLD_DAEMON_STALLED_AFTER_MS,
+} from "./world-daemon.ts";
 
 /** The events the campaign reads: the brain's starts, the installs sent (yours among them), the destroys. */
 export const CAMPAIGN_EVENT_KINDS = [
@@ -20,12 +23,13 @@ export const CAMPAIGN_EVENT_KINDS = [
   BITNODE_DESTROY_SENT_EVENT_KIND,
 ];
 
-/**
- * A Source-File's highest level, past which destroying its BitNode gains nothing (`RedPill.tsx:28`): every BitNode's
- * but BitNode 12's, which has none.
- */
-const SOURCE_FILE_CAP = 3;
+/** BitNode 12's Source-File has no top level (`RedPill.tsx:28`): every other's is `SOURCE_FILE_TOP_LEVEL`. */
 const UNCAPPED_BITNODE = 12;
+/**
+ * How long before a BitNode's last look its destroy may have been sent (#311 review): the World Daemon's stall, a
+ * destroy not through in 5 minutes.
+ */
+const DESTROY_SENT_LEAD_MS = WORLD_DAEMON_STALLED_AFTER_MS;
 
 /**
  * A stored release as the campaign compares it: the brain's (`git describe` of its checkout, `brainRelease`), the part
@@ -434,11 +438,11 @@ function viewOf(
   const startSeen = !begunBefore && bitNode.entry !== "save loaded";
   // The installs seen, and the one its first look showed already (those before it unseen: at least).
   const installs = bitNode.installs.length + (bitNode.installedBeforeFirstLook ? 1 : 0);
-  const played = bitNodes.slice(0, index + 1).filter((each) => each.label === bitNode.label).length;
   const ending = endingOf(bitNode, next, its);
   return {
     bitNode,
-    name: played === 1 ? bitNode.label : `${bitNode.label} #${played}`,
+    // Unique among the BitNodes seen (`ResetDetection`'s, as the run report's): "BN1.4 #2" played again.
+    name: bitNode.name,
     begunBefore,
     startSeen,
     ending,
@@ -467,17 +471,23 @@ const unseenAfter = (next: CampaignBitNode | undefined) =>
  * - its Source-File gained a level: destroyed (`RedPill.tsx:62-63`, `giveSourceFile`); more than one, or another
  *   Source-File rose too: destroyed, with BitNodes the store didn't see between; another rose alone: those BitNodes;
  * - at its Source-File's cap (`RedPill.tsx:28`, no level to gain), or with its Source-File overridden (its level
- *   doesn't say), the brain's `bitNodeDestroySent` after its last look: destroyed; overridden with none: unknown;
+ *   doesn't say), the brain's last `bitNodeDestroySent` in its last cycle (below): destroyed; overridden with none: unknown;
  * - a Source-File lost, or none to lose (b1t_flum3 needs one: `Programs.ts:29-33`, `BitNodeUtils.ts:21-25`): a new
  *   game (a new player's `lastNodeReset` is the time it began, `PlayerObject.ts:168`);
  * - otherwise b1t_flum3, which enters a BitNode with no Source-File (`RedPill.tsx:62`, its `isFlume`;
  *   `Programs.ts:306-322`, `Singularity.ts:1148`), or, at the cap, a destroy the brain didn't send.
- * The destroy sent counts only as the last in the BitNode, and no more than `RELOAD_LEAD_MS` before its last look: one
- * with slow snapshots of the BitNode after it didn't happen then.
+ * The destroy sent counts only as the last in the BitNode, sent in its last cycle (after its last install, or its
+ * start), and no more than `DESTROY_SENT_LEAD_MS` before its last look (#311 review). Live, the slow snapshots go on
+ * while the destroy's worker types the backdoor, and a busy terminal's retry waits 30 s, so a replay's send can come a
+ * minute or more before the last look. One with the BitNode going on past the stall's 5 minutes didn't happen then.
  */
 function endingOf(bitNode: CampaignBitNode, next: CampaignBitNode | undefined, its: readonly StoredEvent[]): Ending {
   const last = its.findLast((event) => event.kind === BITNODE_DESTROY_SENT_EVENT_KIND);
-  const sent = last !== undefined && last.atMs >= bitNode.lastSlowAtMs - RELOAD_LEAD_MS ? last : undefined;
+  const lastCycleMs = bitNode.installs.at(-1)?.installedAtMs ?? bitNode.startMs;
+  const sent =
+    last !== undefined && last.atMs >= lastCycleMs && last.atMs >= bitNode.lastSlowAtMs - DESTROY_SENT_LEAD_MS
+      ? last
+      : undefined;
   const ended = (text: string, atMs: number | null, destroyedAtMs: number | null = null) => ({
     text,
     atMs,
@@ -513,7 +523,7 @@ function endingOf(bitNode: CampaignBitNode, next: CampaignBitNode | undefined, i
         : ended("destroyed {at} (its Source-File overridden; the destroy sent)", at, at);
   }
   const levelBefore = bitNode.lastOwnedSF[String(bitNode.currentNode)] ?? 0;
-  const atCap = levelBefore >= SOURCE_FILE_CAP && bitNode.currentNode !== UNCAPPED_BITNODE;
+  const atCap = levelBefore >= SOURCE_FILE_TOP_LEVEL && bitNode.currentNode !== UNCAPPED_BITNODE;
   if (atCap && sent !== undefined) return ended("destroyed {at} (at the cap)", at, at);
   const noSourceFile =
     Object.keys(bitNode.lastOverrides).length === 0 && !Object.values(bitNode.lastOwnedSF).some((level) => level > 0);

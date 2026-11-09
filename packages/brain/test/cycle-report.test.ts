@@ -1015,4 +1015,20 @@ describe("ResetDetection: where each BitNode and cycle starts, for the run repor
     detection.add(T0, T0, look(T0 - 60 * MINUTE, T0 - 30 * MINUTE));
     expect(detection.bitNodes[0]).toMatchObject({ label: "BN1.1", installedBeforeFirstLook: true });
   });
+
+  test("each BitNode's name is unique (#311): a label seen again gets \" #2\" on, as the campaign report's", () => {
+    const detection = new ResetDetection();
+    detection.add(T0, T0, look(T0 - MINUTE, T0 - MINUTE));
+    detection.add(T0 + MINUTE, T0 + MINUTE, look(T0 + 30_000, T0 + 30_000));
+    // Another label between: counted apart.
+    const bn12 = slowData({ lastAugReset: T0 + 70_000, lastNodeReset: T0 + 70_000, ownedSF: { 1: 1 } });
+    detection.add(T0 + 80_000, T0 + 80_000, bn12);
+    detection.add(T0 + 2 * MINUTE, T0 + 2 * MINUTE, look(T0 + 90_000, T0 + 90_000));
+    expect(detection.bitNodes.map(({ label, name }) => [label, name])).toEqual([
+      ["BN1.1", "BN1.1"],
+      ["BN1.1", "BN1.1 #2"],
+      ["BN1.2", "BN1.2"],
+      ["BN1.1", "BN1.1 #3"],
+    ]);
+  });
 });

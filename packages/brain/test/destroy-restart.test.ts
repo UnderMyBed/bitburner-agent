@@ -4,6 +4,8 @@
 // backdoor, then the BitVerse's portal) or its Singularity worker; every script dies, the Agent too; the game starts
 // `agent/boot.js` 500 ms after entering the next BitNode, which starts the next Agent, in a new session. Chaos: the
 // brain down mid-destroy, a reload just after it, and a save that starts at the BitVerse before a portal is picked.
+// And the brain's own destroy at Source-File 1's cap (#311): a replay into BN1, SF1 left at 3, the stop at the
+// BitNode's end firing on it, and the campaign report's "destroyed (at the cap)".
 // The `ui` backend's restart (the page timer through the BitVerse) is E2's.
 
 import { gunzipSync } from "node:zlib";
@@ -15,6 +17,7 @@ import {
 } from "@bitburner-agent/core";
 import type { Simulation } from "@bitburner-agent/sim";
 import { expect, test } from "vitest";
+import { campaignReport } from "../src/campaign-report.ts";
 import type { IntentView } from "../src/desired-state.ts";
 import { startBrainInSimulation } from "./helpers/brain-in-simulation.ts";
 import { type FreshGame, ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
@@ -163,6 +166,55 @@ test("destroying BN1 into BN2 (sim): past the gate, the backdoor and the portal;
   expect(fresh.brain.saveBackupEvents.slice(backupsBefore)).toHaveLength(1);
   await expectDestroyedOnce(fresh, resetAt, 2);
   expect(await bitNodeEntries(fresh.simulation)).toHaveLength(1);
+});
+
+test("at Source-File 1's cap (#311): the brain's own destroy replays BN1, Source-File 1 left at 3, and the stop at the BitNode's end fires on it", async () => {
+  // BN1.4: Source-File 1 at 3, The Red Pill installed and w0r1d_d43m0n rooted at its level. Only the World Daemon's
+  // destroy moves the game; the switch set to stop the brain.
+  const fresh = await freshStart({
+    withDesiredState: true,
+    fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 3 } },
+    beforeAgent: (game) => toTheRedPill(game),
+  });
+  fresh.controller().setProgramsEnabled(false);
+  fresh.controller().setAugmentationsEnabled(false);
+  fresh.controller().setHomeRamEnabled(false);
+  fresh.controller().setStopAtBitNodeEnd("brain");
+  await fresh.game.runUntil(() => slow(fresh) !== null, 10_000);
+  const before = slow(fresh)?.resetInfo;
+  expect(before).toMatchObject({ currentNode: 1, ownedSF: { 1: 3 }, ownedAugs: { "The Red Pill": 1 } });
+  const backupsBefore = fresh.brain.saveBackupEvents.length;
+  await fresh.game.runUntil(() => fresh.controller().stoppedAtBitNodeEnd(), 120_000);
+  // The game took it (`RedPill.tsx:27-31`, `BitNode/ui/PortalModal.tsx:117-126`): BN1 again, no Source-File gained.
+  expect(slow(fresh)?.resetInfo).toMatchObject({ currentNode: 1, ownedSF: { 1: 3 }, ownedAugs: {} });
+  expect(slow(fresh)?.resetInfo.lastNodeReset).not.toBe(before?.lastNodeReset);
+  expect(await bitNodeEntries(fresh.simulation)).toEqual([
+    expect.objectContaining({ type: "bitnodeDestroyed", destroyed: 1, entered: 1 }),
+  ]);
+  expect(fresh.brain.saveBackupEvents.length).toBeGreaterThan(backupsBefore);
+  const stored = (kind: string) =>
+    fresh.data.store
+      .eventsInWindow({ environment: "E1", sinceMs: 0, untilMs: fresh.game.clock.now() })
+      .filter((event) => event.kind === kind)
+      .map((event) => event.detail);
+  const replay = "Source-File 1 is at 3, nothing to gain but the run";
+  expect(stored("bitNodeDestroySent")).toEqual([{ source: "brain", nextBitNode: 1, replay }]);
+  expect(stored("worldDaemonStalled")).toEqual([]);
+  expect(stored("brainStoppedAtBitNodeEnd")).toMatchObject([
+    {
+      reason: "destroyed",
+      bitNode: "BN1.4",
+      nextBitNode: "BN1.4",
+      detail: "BN1.4 destroyed, BN1.4 seen again (a replay: no Source-File level gained)",
+    },
+  ]);
+  expect(fresh.brain.logLines).toContainEqual(
+    expect.stringMatching(/destroying the BitNode, into BitNode 1, a replay \(Source-File 1 is at 3, nothing to gain/),
+  );
+  // The campaign report: BN1.4 destroyed at the cap, and BN1.4 again after it.
+  const campaign = campaignReport(fresh.data.store, { environment: "E1" });
+  expect(campaign).toMatch(/BN1\.4\b.*destroyed .* \(at the cap\)/);
+  expect(campaign).toMatch(/BN1\.4 #2/);
 });
 
 test("destroying (singularity): with SF4.3 and a 64 GB home, through its worker's destroyW0r1dD43m0n, which names boot.js for after it", async () => {

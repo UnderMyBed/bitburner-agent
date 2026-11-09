@@ -3140,6 +3140,7 @@ describe("the World Daemon (#215)", () => {
       sinceMs: T0 + 10 * MINUTE,
       detail: "w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed",
     });
+    // Below the cap (and a store from before #311, with no `replay`): no replay said.
     event(16 * MINUTE, "bitNodeDestroySent", { source: "brain", nextBitNode: 1 });
     const { text, failures } = report();
     // In sections 3 and 4, not section 1's timeline.
@@ -3176,7 +3177,9 @@ describe("the stop at the BitNode's end (#303)", () => {
     nextBitNode: null,
     detail: `BN1.4's w0r1d_d43m0n is ready, but ${MAXED}: the next BitNode is yours`,
   };
-  /** The `nextBitNode` stall the World Daemon stores as it refuses the destroy, at `offsetMs`. */
+  // Old stores only (#311): the refusal at the cap and the stop for nothing more to gain, which no brain since emits;
+  // a store from before #311 still holds them, and the report reads them as #308 did.
+  /** The `nextBitNode` stall the World Daemon stored as it refused the destroy, at `offsetMs`. */
   const refused = (offsetMs: number) =>
     event(offsetMs, "worldDaemonStalled", {
       step: "nextBitNode",
@@ -3201,7 +3204,7 @@ describe("the stop at the BitNode's end (#303)", () => {
     );
   });
 
-  test("the nextBitNode stall the stop answered (nothing more to gain): expected, not a failure", () => {
+  test("an old store (#311): the nextBitNode stall the stop answered (nothing more to gain): expected, not a failure", () => {
     cleanRun();
     refused(RUN_MS);
     event(RUN_MS, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
@@ -3239,6 +3242,61 @@ describe("the stop at the BitNode's end (#303)", () => {
       `from ${at(10 * MINUTE)} to at least ${at(10 * MINUTE)} (no stop followed (the switch off, or the stop didn't fire); whether w0r1d_d43m0n was ready can't be ` +
         "told: no static snapshot gives its hacking requirement)",
     );
+  });
+
+  test("a replay at Source-File 1's cap (#311): the destroy sent says it, and the stop's end is the next BN1.4", () => {
+    cleanRun();
+    const replay = "Source-File 1 is at 3, nothing to gain but the run";
+    event(RUN_MS - MINUTE, "bitNodeDestroySent", { source: "brain", nextBitNode: 1, replay });
+    const detail = "BN1.4 destroyed, BN1.4 seen again (a replay: no Source-File level gained)";
+    event(RUN_MS + SECOND, "brainStoppedAtBitNodeEnd", {
+      reason: "destroyed",
+      bitNode: "BN1.4",
+      nextBitNode: "BN1.4",
+      detail,
+    });
+    const { text, failures } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 3 * 60 * MINUTE });
+    expect(failures).toEqual([]);
+    expect(text).toContain(
+      `    ${at(RUN_MS - MINUTE)}  destroy sent (the brain's), into BitNode 1, a replay (${replay})\n`,
+    );
+    expect(text).toContain(
+      `  the run's end: the brain stopped itself at ${at(RUN_MS + SECOND)}, at the BitNode's end (the switch on): ` +
+        `${detail}. Expected, not a failure`,
+    );
+  });
+
+  test("C2 (#311 review): an old store's refusal and its stop still read as #308 did, beside a later replay's destroy", () => {
+    // The 2026-11-08 run's shape: the refusal stored, then the stop for nothing more to gain; then, a newer brain
+    // running on the same store, its replay sent. The old stall stays expected, not a failure, and no warning.
+    cleanRun();
+    refused(MINUTE);
+    event(2 * MINUTE, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
+    const replay = "Source-File 1 is at 3, nothing to gain but the run";
+    event(RUN_MS - MINUTE, "bitNodeDestroySent", { source: "brain", nextBitNode: 1, replay });
+    const { text, failures, warnings } = report();
+    expect([failures, warnings]).toEqual([[], []]);
+    expect(text).toContain(
+      `from ${at(MINUTE)} to at least ${at(MINUTE)} (expected: the brain stopped itself at the BitNode's end at ` +
+        `${at(2 * MINUTE)}, the switch on)`,
+    );
+    expect(text).toContain(`destroy sent (the brain's), into BitNode 1, a replay (${replay})`);
+  });
+
+  test("a window across a replay (#311): BN1.4 then BN1.4 #2, named apart, so their cycles never merge", () => {
+    event(0, "brainStarted", { release: "r" });
+    const atCap = (lastNodeReset: number) => {
+      const slow = slowData([], {}, { 1: 3 });
+      return { ...slow, resetInfo: { ...slow.resetInfo, lastNodeReset, lastAugReset: lastNodeReset } };
+    };
+    for (const offsetMs of [10 * SECOND, 5 * MINUTE]) snapshot("slow", offsetMs, atCap(RESET));
+    // The replay: another lastNodeReset, Source-File 1 still at 3.
+    for (const offsetMs of [10 * MINUTE, 15 * MINUTE]) snapshot("slow", offsetMs, atCap(T0 + 9 * MINUTE));
+    const { text } = report();
+    const summary = text.slice(text.indexOf("  summary, one line a cycle:"));
+    expect(summary).toMatch(/\n {4}BN1\.4 1 /);
+    expect(summary).toMatch(/\n {4}BN1\.4 #2 1 /);
+    expect(summary).not.toMatch(/\n {4}BN1\.4 2 /);
   });
 
   test("a window across the stop and a later start: the silence between is expected, the disconnect too", () => {

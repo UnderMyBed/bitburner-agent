@@ -400,8 +400,9 @@ export interface AugmentationInputs {
   enabled: boolean;
   homeRamEnabled: boolean;
   /**
-   * The BitNode's destroy wanted once The Red Pill is installed (#215 review): the World Daemon's switch on, and its
-   * next BitNode allowed. Then no ordinary install is chosen: it would reset the hacking level w0r1d_d43m0n needs.
+   * The BitNode's destroy wanted once The Red Pill is installed (#215 review): the World Daemon's switch on, at
+   * Source-File 1's cap too, where the destroy is a replay (#311). Then no ordinary install is chosen: it would reset
+   * the hacking level w0r1d_d43m0n needs.
    */
   destroyWanted: boolean;
   /**

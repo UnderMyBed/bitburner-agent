@@ -981,7 +981,7 @@ export function runReport(
  * (#308): its last record, the stop's (stopping alone, it shuts down a second on), or its close's `gameClosed` (or the
  * close not confirmed), and whatever the shutdown stored after, so the window doesn't run on to when the report is
  * made. Null without such a stop, or with the run's last record at the window's end already. For a stop of either
- * reason, "destroyed" or "nothingMoreToGain".
+ * reason, "destroyed" or "nothingMoreToGain" (old stores only: no brain since #311 emits it).
  */
 function stopEndingWindow(store: TelemetryStore, window: RunWindow): { stopAtMs: number; endMs: number } | null {
   const events = store.eventsInWindow(window).filter((event) => !STORE_THINNING_EVENT_KINDS.includes(event.kind));
@@ -1218,7 +1218,7 @@ function progressSection(facts: RunFacts, verbose: boolean): string[] {
   const lines = ["2. Progress, first snapshot → last, in each BitNode", facts.cycles.bitNodesLine()];
   for (const { index, segment } of facts.segments) {
     const bitNode = facts.cycles.bitNodes[index];
-    lines.push(`  ${bitNode?.label ?? facts.cycles.labelBefore()}, first snapshot → last:`);
+    lines.push(`  ${bitNode?.name ?? facts.cycles.labelBefore()}, first snapshot → last:`);
     lines.push(...segmentProgressLines(facts, segment, verbose).map((line) => `  ${line}`));
     lines.push(...facts.cycles.milestoneLines(index).map((line) => `    ${line}`));
   }
