@@ -15,7 +15,7 @@
 //   (owner decision 50): phase A's exit is a live run that destroys BN1.1 on its own. Another BitNode is the owner's:
 //   the switch off, and `destroyBitNode` queued by hand. With Source-File 1 at 3 the destroy goes ahead all the same, a
 //   replay (#311, owner decision 64): no Source-File gained (`RedPill.tsx:27-31`), BN1 played again from its start for
-//   phase B's live data (and the brain stops there if the owner set the stop at the BitNode's end, ./bitnode-end.ts).
+//   phase B's live data (the stop at the BitNode's end, if the owner set it, fires on it: ./bitnode-end.ts).
 // - Daedalus's count (#228): short of it (core's `daedalusCountOf`), the path says how many more augmentations are
 //   within reach and where (./invitations.ts's `daedalusReach`, the city group the brain chose). An install while short
 //   that adds none to the count (NeuroFlux Governor's levels count once: run #2's nine NeuroFlux-only installs at 23)
@@ -135,13 +135,16 @@ const STALLED_AFTER_MS: Record<StallStep, number> = {
   destroy: WORLD_DAEMON_STALLED_AFTER_MS,
 };
 
-/** A Source-File's top level but for BN12's: destroying its BitNode again gives none (`RedPill.tsx:27-31`). */
-const SOURCE_FILE_1_TOP_LEVEL = 3;
+/**
+ * A Source-File's top level but for BN12's, which has none: destroying its BitNode again gives no level
+ * (`RedPill.tsx:27-31`). The campaign model's cap too.
+ */
+export const SOURCE_FILE_TOP_LEVEL = 3;
 
 /**
  * Why a destroy into `nextBitNode` is a replay (#311, owner decision 64), or null: BitNode 1 destroyed into BitNode 1
- * with Source-File 1 at its top level, so `giveSourceFile` gives none (`RedPill.tsx:27-31`) and the portal enters BN1
- * all the same (`BitNode/ui/PortalModal.tsx:117-126`): the run itself is the gain, phase B's live data.
+ * with Source-File 1 at its top level, so `giveSourceFile` gives no level (`RedPill.tsx:27-31`) and the portal enters
+ * BN1 all the same (`BitNode/ui/PortalModal.tsx:117-126`): the run itself is the gain, phase B's live data.
  */
 export function replayOf(
   resetInfo: { currentNode?: unknown; ownedSF?: Readonly<Record<string, unknown>> } | null | undefined,
@@ -151,8 +154,8 @@ export function replayOf(
   return resetInfo?.currentNode === 1 &&
     nextBitNode === 1 &&
     typeof level === "number" &&
-    level >= SOURCE_FILE_1_TOP_LEVEL
-    ? `Source-File 1 is at ${SOURCE_FILE_1_TOP_LEVEL}, nothing to gain but the run`
+    level >= SOURCE_FILE_TOP_LEVEL
+    ? `Source-File 1 is at ${SOURCE_FILE_TOP_LEVEL}, nothing to gain but the run`
     : null;
 }
 

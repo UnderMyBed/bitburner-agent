@@ -1174,7 +1174,7 @@ function progressSection(facts: RunFacts, verbose: boolean): string[] {
   const lines = ["2. Progress, first snapshot → last, in each BitNode", facts.cycles.bitNodesLine()];
   for (const { index, segment } of facts.segments) {
     const bitNode = facts.cycles.bitNodes[index];
-    lines.push(`  ${bitNode?.label ?? facts.cycles.labelBefore()}, first snapshot → last:`);
+    lines.push(`  ${bitNode?.name ?? facts.cycles.labelBefore()}, first snapshot → last:`);
     lines.push(...segmentProgressLines(facts, segment, verbose).map((line) => `  ${line}`));
     lines.push(...facts.cycles.milestoneLines(index).map((line) => `    ${line}`));
   }

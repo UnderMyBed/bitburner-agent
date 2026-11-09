@@ -562,6 +562,28 @@ describe("the campaign report", () => {
     expect(bitNodeRows()[2]?.[2]).toBe(`BitNodes unseen before ${at(15.5)}`);
   });
 
+  test("at the cap (#311 review): a replay sent 45 s before the last look counts; one sent before the last install doesn't", () => {
+    event(-1, V100, "brainStarted", { release: "v1.0.0" });
+    play({ from: 0, to: 10, release: V100, node: -0.5, aug: -0.5, sf: 3 });
+    // Live, the slow snapshots go on while the backdoor is typed: the send 45 s before the BitNode's last look.
+    event(9.25, V100, "bitNodeDestroySent", {});
+    play({ from: 11, to: 12, release: V100, node: 10.5, aug: 10.5, sf: 3 });
+    // A destroy sent, then an install after it: the cycle it was sent in is over, so it's not the BitNode's end.
+    event(12.2, V100, "bitNodeDestroySent", {});
+    installSent(12.5, V100);
+    play({ from: 13, to: 15, release: V100, node: 10.5, aug: 12.7, sf: 3, augs: EARLY });
+    play({ from: 16, to: 17, release: V100, node: 15.5, aug: 15.5, sf: 3 });
+    expect(
+      bitNodeRows()
+        .slice(1)
+        .map((row) => row.slice(0, 3)),
+    ).toEqual([
+      ["BN1.4", at(-0.5), `destroyed ${at(10.5)} (at the cap)`],
+      ["BN1.4 #2", at(10.5), `b1t_flum3, or a destroy not sent by the brain at the cap, ${at(15.5)}`],
+      ["BN1.4 #3", at(15.5), "not yet"],
+    ]);
+  });
+
   test("Source-File overrides: one overridden on either side isn't compared; the BitNode's own falls back on the destroy sent", () => {
     event(-1, V100, "brainStarted", { release: "v1.0.0" });
     // SF4 overridden to 0 in BN1.2 (ownedSF hides it), shown at its level in BN1.3: not another Source-File rising.

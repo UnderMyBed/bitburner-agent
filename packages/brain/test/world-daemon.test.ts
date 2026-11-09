@@ -404,6 +404,20 @@ describe("a replay at Source-File 1's cap (#311)", () => {
     expect(rule.view().replay).toBe(REPLAY);
   });
 
+  test("a replay not through 5 minutes on: the destroy step's stall, as below the cap", () => {
+    const atThree = { slowData: slow({ ownedSF: { 1: 3 } }) };
+    update({ ...atThree, nowMs: 0 });
+    update({ ...atThree, nowMs: WORLD_DAEMON_STALLED_AFTER_MS - 1 });
+    expect(rule.stall()).toBeNull();
+    update({ ...atThree, nowMs: WORLD_DAEMON_STALLED_AFTER_MS });
+    const detail = "w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed";
+    expect(rule.stall()).toEqual({ step: "destroy", sinceMs: 0, detail });
+    expect(events).toEqual([
+      { type: "worldDaemonStalled", atMs: WORLD_DAEMON_STALLED_AFTER_MS, step: "destroy", sinceMs: 0, detail },
+    ]);
+    expect(lines.at(-1)).toBe(`world daemon: STALLED 5 min: ${detail}`);
+  });
+
   test("the start line's words: off, on, or on and a replay as the last slow snapshot shows the game", () => {
     expect(describeWorldDaemonSwitch(false, slow({ ownedSF: { 1: 3 } }))).toBe("off");
     expect(describeWorldDaemonSwitch(true, null)).toBe("on");

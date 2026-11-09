@@ -211,16 +211,17 @@ export class BitNodeEndWatch {
     if (setting === "off" || this.#stopped !== null || !destroyedBetween(before, reading, destroySentAt)) return;
     const next = labelOf(reading);
     const bitNode = before === null ? null : labelOf(before);
+    // The same label again: a replay at the cap (#311), no Source-File level gained. A restarted brain (no BitNode
+    // seen before) can't say it: the next BitNode's label is the same after a replay (BN1.4 to BN1.4) as after a level
+    // gained (BN1.3 to BN1.4). The stored `bitNodeDestroySent`'s `replay` says it in the run report.
+    const replayed = bitNode === next ? " again (a replay: no Source-File level gained)" : "";
     this.#stop(setting, {
       atMs,
       reason: "destroyed",
       bitNode,
       nextBitNode: next,
-      // The same label again: a replay at the cap (#311), no Source-File level gained.
       detail:
-        bitNode === null
-          ? `a destroy went through, ${next} seen`
-          : `${bitNode} destroyed, ${next} seen${bitNode === next ? " again (a replay: no Source-File level gained)" : ""}`,
+        bitNode === null ? `a destroy went through, ${next} seen` : `${bitNode} destroyed, ${next} seen${replayed}`,
     });
   }
 

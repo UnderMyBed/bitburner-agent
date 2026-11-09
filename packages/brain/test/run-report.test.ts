@@ -3209,6 +3209,22 @@ describe("the stop at the BitNode's end (#303)", () => {
     );
   });
 
+  test("a window across a replay (#311): BN1.4 then BN1.4 #2, named apart, so their cycles never merge", () => {
+    event(0, "brainStarted", { release: "r" });
+    const atCap = (lastNodeReset: number) => {
+      const slow = slowData([], {}, { 1: 3 });
+      return { ...slow, resetInfo: { ...slow.resetInfo, lastNodeReset, lastAugReset: lastNodeReset } };
+    };
+    for (const offsetMs of [10 * SECOND, 5 * MINUTE]) snapshot("slow", offsetMs, atCap(RESET));
+    // The replay: another lastNodeReset, Source-File 1 still at 3.
+    for (const offsetMs of [10 * MINUTE, 15 * MINUTE]) snapshot("slow", offsetMs, atCap(T0 + 9 * MINUTE));
+    const { text } = report();
+    const summary = text.slice(text.indexOf("  summary, one line a cycle:"));
+    expect(summary).toMatch(/\n {4}BN1\.4 1 /);
+    expect(summary).toMatch(/\n {4}BN1\.4 #2 1 /);
+    expect(summary).not.toMatch(/\n {4}BN1\.4 2 /);
+  });
+
   test("a window across the stop and a later start: the silence between is expected, the disconnect too", () => {
     cleanRun();
     event(RUN_MS + SECOND, "brainStoppedAtBitNodeEnd", DESTROYED);

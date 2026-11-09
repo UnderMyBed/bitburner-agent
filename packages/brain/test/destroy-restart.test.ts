@@ -4,6 +4,8 @@
 // backdoor, then the BitVerse's portal) or its Singularity worker; every script dies, the Agent too; the game starts
 // `agent/boot.js` 500 ms after entering the next BitNode, which starts the next Agent, in a new session. Chaos: the
 // brain down mid-destroy, a reload just after it, and a save that starts at the BitVerse before a portal is picked.
+// And the brain's own destroy at Source-File 1's cap (#311): a replay into BN1, SF1 left at 3, the stop at the
+// BitNode's end firing on it, and the campaign report's "destroyed (at the cap)".
 // The `ui` backend's restart (the page timer through the BitVerse) is E2's.
 
 import { gunzipSync } from "node:zlib";
