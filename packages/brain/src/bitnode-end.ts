@@ -1,21 +1,19 @@
 // Stopping at the BitNode's end (#303, the owner's requests of 2026-11-07): a dashboard switch with three settings, off
-// by default: "stop the brain", or "stop the brain and close the game". While it's on, the brain stops at the first of:
+// by default: "stop the brain", or "stop the brain and close the game". While it's on, the brain stops at:
 // - **Destroyed:** the next BitNode's first slow snapshot, which main.ts's recorder has stored by then, so the campaign
 //   report has the new BitNode's start and says "destroyed". The next BitNode is another `lastNodeReset` (a destroy's
 //   prestige sets it, `PersonObjects/Player/PlayerObjectGeneralMethods.ts:173`; an install or a soft reset sets only
 //   `lastAugReset`, `:126`), not before the last slow snapshot's game time (else a save loaded, as the campaign model
 //   tells one), with a destroy's reset note out (the brain's or the owner's queued `destroyBitNode`, #175: across a
 //   brain restart too), or else the BitNode's Source-File a level up (a destroy by hand in the game, below the cap:
-//   `giveSourceFile`, `RedPill.tsx:16-52`). b1t_flum3 gives none (`RedPill.tsx:62-63`), and at the cap a destroy gives
-//   none either, so with no note those two can't be told apart: neither stops the brain.
-// - **Nothing more to gain:** the World Daemon's destroy on and ready (w0r1d_d43m0n rooted at its level), refused as
-//   it enters BitNode 1 and Source-File 1 is at its top level, so BitNode 1 gives nothing more (`nextBitNodeProblem`;
-//   in any BitNode), after that refusal's `nextBitNode` stall, in the same update. A brain started with the switch on
-//   in such a BitNode stops as soon as it sees it.
+//   `giveSourceFile`, `RedPill.tsx:16-52`). The note is what tells the brain's replay at Source-File 1's cap (#311,
+//   ./world-daemon.ts's `replayOf`), which gives no level (`RedPill.tsx:27-31`): "BN1.4 destroyed, BN1.4 seen again".
+//   b1t_flum3 gives none (`RedPill.tsx:62-63`), and at the cap a destroy by hand gives none either, so with no note
+//   those two can't be told apart: neither stops the brain.
 // - **Once:** the switch is set back to "play on" as the brain shuts down (logged; the event says so), so it stops
 //   this BitNode's end: a brain started again to look around plays on. Set it again for the next. While the close is
 //   awaited it stays set, so "Play on" calls the close off.
-// Either is logged in a line, stored as `brainStoppedAtBitNodeEnd`, and asked of main.ts once. Stopping the brain
+// The stop is logged in a line, stored as `brainStoppedAtBitNodeEnd`, and asked of main.ts once. Stopping the brain
 // alone, main.ts shuts it down a second on (`shutDown`, as on Ctrl+C, exit 0, so `npm run brain`'s runner ends too);
 // the game goes on without it, the Agent in safe mode (architecture §5.4). Closing the game too, the controller queues
 // `closeGame` (the game's own Save Game, then its window closed, through the irreversible gate: after what was queued
@@ -105,11 +103,12 @@ export type BitNodeEndEvent =
   | {
       type: typeof BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND;
       atMs: number;
-      reason: "destroyed" | "nothingMoreToGain";
+      /** The one end since #311 (a store from before it may hold #303's "nothingMoreToGain"). */
+      reason: "destroyed";
       /** The BitNode that ended ("BN1.3"); null for a destroy whose BitNode this brain never saw (before a restart). */
       bitNode: string | null;
-      /** The next BitNode seen, after a destroy; null for nothing more to gain. */
-      nextBitNode: string | null;
+      /** The next BitNode seen. */
+      nextBitNode: string;
       /** The game to close first (the switch's "stop the brain and close the game"). */
       closeGame: boolean;
       /** The switch, set back to "play on" as the brain shuts down: once, for this BitNode's end. */
@@ -211,35 +210,17 @@ export class BitNodeEndWatch {
     this.#last = reading;
     if (setting === "off" || this.#stopped !== null || !destroyedBetween(before, reading, destroySentAt)) return;
     const next = labelOf(reading);
+    const bitNode = before === null ? null : labelOf(before);
     this.#stop(setting, {
       atMs,
       reason: "destroyed",
-      bitNode: before === null ? null : labelOf(before),
-      nextBitNode: next,
-      detail: before === null ? `a destroy went through, ${next} seen` : `${labelOf(before)} destroyed, ${next} seen`,
-    });
-  }
-
-  /** After the World Daemon's update: `nothingMoreToGain` its `nothingMoreToGainNow()`, in the last BitNode seen. */
-  worldDaemonUpdated({
-    setting,
-    nothingMoreToGain,
-    atMs,
-  }: {
-    setting: StopAtBitNodeEnd;
-    nothingMoreToGain: string | null;
-    atMs: number;
-  }): void {
-    if (setting === "off" || this.#stopped !== null || nothingMoreToGain === null) return;
-    const bitNode = this.#last === null ? null : labelOf(this.#last);
-    this.#stop(setting, {
-      atMs,
-      reason: "nothingMoreToGain",
       bitNode,
-      nextBitNode: null,
+      nextBitNode: next,
+      // The same label again: a replay at the cap (#311), no Source-File level gained.
       detail:
-        `${bitNode ?? "the BitNode"}'s w0r1d_d43m0n is ready, but its destroy would enter BitNode 1, and ` +
-        `${nothingMoreToGain}: the next BitNode is yours`,
+        bitNode === null
+          ? `a destroy went through, ${next} seen`
+          : `${bitNode} destroyed, ${next} seen${bitNode === next ? " again (a replay: no Source-File level gained)" : ""}`,
     });
   }
 

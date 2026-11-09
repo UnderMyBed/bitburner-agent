@@ -14,11 +14,12 @@ import { beforeEach, describe, expect, test } from "vitest";
 import type { CountFacts } from "../src/augmentations.ts";
 import {
   describeWorldDaemonPath,
+  describeWorldDaemonSwitch,
   HackingExpRate,
   hackingEtaSeconds,
-  nextBitNodeProblem,
   RED_PILL_INSTALL_STALLED_AFTER_MS,
   RED_PILL_REPUTATION_STALLED_AFTER_MS,
+  replayOf,
   WORLD_DAEMON_DESTROY_INTENT,
   WORLD_DAEMON_STALLED_AFTER_MS,
   type WorldDaemonEvent,
@@ -362,38 +363,53 @@ describe("stalls", () => {
     at(1.2e6, 2 * RED_PILL_REPUTATION_STALLED_AFTER_MS);
     expect(rule.stall()).toBeNull();
   });
+});
 
-  test("Source-File 1 at 3: BitNode 1 gives nothing more, so no destroy; logged once and loud at once", () => {
-    expect(nextBitNodeProblem({ 1: 2 })).toBeNull();
-    const problem = nextBitNodeProblem({ 1: 3 });
-    expect(problem).toBe(
-      "Source-File 1 is at level 3, so BitNode 1 gives nothing more: the next BitNode is yours (turn the switch off " +
-        "and queue destroyBitNode)",
-    );
-    const atThree = { slowData: slow({ ownedSF: { 1: 3 } }) };
-    expect(update({ ...atThree, nowMs: 0 })).toBe(false);
-    expect(update({ ...atThree, nowMs: 1 })).toBe(false);
-    expect(lines).toEqual([`world daemon: STALLED 0 min: the BitNode not destroyed: ${problem}`]);
-    expect(rule.stall()).toEqual({ step: "nextBitNode", sinceMs: 0, detail: `the BitNode not destroyed: ${problem}` });
-    // Off, it's the owner's: quiet.
-    update({ ...atThree, enabled: false });
-    expect(rule.stall()).toBeNull();
+describe("a replay at Source-File 1's cap (#311)", () => {
+  const REPLAY = "Source-File 1 is at 3, nothing to gain but the run";
+
+  test("replayOf: BitNode 1 into BitNode 1 with Source-File 1 at 3, and only that", () => {
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3 } }, 1)).toBe(REPLAY);
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3, 4: 1 } }, 1)).toBe(REPLAY);
+    // Below the cap: a Source-File level gained.
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: 2 } }, 1)).toBeNull();
+    expect(replayOf({ currentNode: 1, ownedSF: {} }, 1)).toBeNull();
+    // Another BitNode destroyed (its own Source-File gained), or another entered: not a replay of BitNode 1.
+    expect(replayOf({ currentNode: 2, ownedSF: { 1: 3 } }, 1)).toBeNull();
+    expect(replayOf({ currentNode: 3, ownedSF: { 1: 3 } }, 1)).toBeNull();
+    expect(replayOf({ ownedSF: { 1: 3 } }, 1)).toBeNull();
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3 } }, 2)).toBeNull();
+    // Not read: not said.
+    expect(replayOf(undefined, 1)).toBeNull();
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: "3" } }, 1)).toBeNull();
   });
-  test("nothing more to gain (#303): said while the destroy is on, ready and refused, and only then", () => {
-    const atThree = slow({ ownedSF: { 1: 3 } });
-    const said = "Source-File 1 is at level 3, so BitNode 1 gives nothing more";
-    update({ slowData: atThree });
-    expect(rule.nothingMoreToGainNow()).toBe(said);
-    update({ slowData: atThree, mediumData: medium({ daemon: "unrooted" }) });
-    expect(rule.nothingMoreToGainNow()).toBeNull();
-    update({ slowData: atThree });
-    update({ staticData: null, mediumData: null, slowData: null });
-    expect(rule.nothingMoreToGainNow()).toBeNull();
-    update({ slowData: atThree });
-    update({ slowData: atThree, enabled: false });
-    expect(rule.nothingMoreToGainNow()).toBeNull();
+
+  test("the destroy goes ahead at the cap: asked for, logged as a replay, no stall; the view says it", () => {
+    const atThree = { slowData: slow({ ownedSF: { 1: 3 } }) };
+    expect(update({ ...atThree, nowMs: 0 })).toBe(true);
+    // No stall at once (the refusal before #311 was one): only the destroy's own, 5 minutes on, if it doesn't go.
+    expect(update({ ...atThree, nowMs: MINUTE })).toBe(true);
+    expect(lines).toEqual([
+      "world daemon: w0r1d_d43m0n rooted at hacking 3000: destroying the BitNode, into BitNode 1, a replay (Source-File " +
+        "1 is at 3, nothing to gain but the run) (the gate, then a save backup first)",
+    ]);
+    expect(events).toEqual([]);
+    expect(rule.view()).toMatchObject({ destroying: true, replay: REPLAY, stall: null });
+    // Below the cap, the view says no replay.
     update({ slowData: slow({ ownedSF: { 1: 2 } }) });
-    expect(rule.nothingMoreToGainNow()).toBeNull();
+    expect(rule.view().replay).toBeNull();
+    // Kept across the Agent gone (no snapshots).
+    update({ ...atThree });
+    update({ staticData: null, mediumData: null, slowData: null });
+    expect(rule.view().replay).toBe(REPLAY);
+  });
+
+  test("the start line's words: off, on, or on and a replay as the last slow snapshot shows the game", () => {
+    expect(describeWorldDaemonSwitch(false, slow({ ownedSF: { 1: 3 } }))).toBe("off");
+    expect(describeWorldDaemonSwitch(true, null)).toBe("on");
+    expect(describeWorldDaemonSwitch(true, slow({ ownedSF: { 1: 2 } }))).toBe("on");
+    expect(describeWorldDaemonSwitch(true, { resetInfo: "odd" })).toBe("on");
+    expect(describeWorldDaemonSwitch(true, slow({ ownedSF: { 1: 3 } }))).toBe(`on (it replays BitNode 1: ${REPLAY})`);
   });
 });
 

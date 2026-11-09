@@ -3140,6 +3140,7 @@ describe("the World Daemon (#215)", () => {
       sinceMs: T0 + 10 * MINUTE,
       detail: "w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed",
     });
+    // Below the cap (and a store from before #311, with no `replay`): no replay said.
     event(16 * MINUTE, "bitNodeDestroySent", { source: "brain", nextBitNode: 1 });
     const { text, failures } = report();
     // In sections 3 and 4, not section 1's timeline.
@@ -3169,21 +3170,6 @@ describe("the stop at the BitNode's end (#303)", () => {
     nextBitNode: "BN1.4",
     detail: "BN1.3 destroyed, BN1.4 seen",
   };
-  const MAXED = "Source-File 1 is at level 3, so BitNode 1 gives nothing more";
-  const NOTHING_MORE = {
-    reason: "nothingMoreToGain",
-    bitNode: "BN1.4",
-    nextBitNode: null,
-    detail: `BN1.4's w0r1d_d43m0n is ready, but ${MAXED}: the next BitNode is yours`,
-  };
-  /** The `nextBitNode` stall the World Daemon stores as it refuses the destroy, at `offsetMs`. */
-  const refused = (offsetMs: number) =>
-    event(offsetMs, "worldDaemonStalled", {
-      step: "nextBitNode",
-      sinceMs: T0 + offsetMs,
-      detail: `the BitNode not destroyed: ${MAXED}: the next BitNode is yours (turn the switch off and queue destroyBitNode)`,
-    });
-
   test("the run's expected end, with its reason, in section 1; the hours of quiet after it are no gap or stall", () => {
     cleanRun();
     event(RUN_MS + SECOND, "brainStoppedAtBitNodeEnd", DESTROYED);
@@ -3201,30 +3187,26 @@ describe("the stop at the BitNode's end (#303)", () => {
     );
   });
 
-  test("the nextBitNode stall the stop answered (nothing more to gain, within a minute): expected, not a failure", () => {
+  test("a replay at Source-File 1's cap (#311): the destroy sent says it, and the stop's end is the next BN1.4", () => {
     cleanRun();
-    refused(RUN_MS);
-    event(RUN_MS, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
-    const { text, failures } = report();
+    const replay = "Source-File 1 is at 3, nothing to gain but the run";
+    event(RUN_MS - MINUTE, "bitNodeDestroySent", { source: "brain", nextBitNode: 1, replay });
+    const detail = "BN1.4 destroyed, BN1.4 seen again (a replay: no Source-File level gained)";
+    event(RUN_MS + SECOND, "brainStoppedAtBitNodeEnd", {
+      reason: "destroyed",
+      bitNode: "BN1.4",
+      nextBitNode: "BN1.4",
+      detail,
+    });
+    const { text, failures } = runReport(store, { ...window, untilMs: T0 + RUN_MS + 3 * 60 * MINUTE });
     expect(failures).toEqual([]);
     expect(text).toContain(
-      `    world daemon stalled: the BitNode not destroyed: ${MAXED}: the next BitNode is yours (turn the switch off and ` +
-        `queue destroyBitNode), from ${at(RUN_MS)} to at least ${at(RUN_MS)} (expected: the brain stopped itself ` +
-        `at the BitNode's end at ${at(RUN_MS)}, the switch on)`,
+      `    ${at(RUN_MS - MINUTE)}  destroy sent (the brain's), into BitNode 1, a replay (${replay})\n`,
     );
-    expect(text).toContain(`the run's end: the brain stopped itself at ${at(RUN_MS)}, at the BitNode's end`);
-  });
-
-  test("unanswered, or answered over a minute on, or by another reason, the stall is still a failure", () => {
-    cleanRun();
-    refused(MINUTE);
-    event(2 * MINUTE + SECOND, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
-    refused(5 * MINUTE);
-    event(5 * MINUTE, "brainStoppedAtBitNodeEnd", DESTROYED);
-    refused(10 * MINUTE);
-    event(10 * MINUTE - SECOND, "brainStoppedAtBitNodeEnd", NOTHING_MORE);
-    const stalls = report().failures.filter((failure) => failure.startsWith("world daemon stalled"));
-    expect(stalls).toHaveLength(3);
+    expect(text).toContain(
+      `  the run's end: the brain stopped itself at ${at(RUN_MS + SECOND)}, at the BitNode's end (the switch on): ` +
+        `${detail}. Expected, not a failure`,
+    );
   });
 
   test("a window across the stop and a later start: the silence between is expected, the disconnect too", () => {

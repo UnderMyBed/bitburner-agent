@@ -120,8 +120,8 @@ import {
 import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
   NEXT_BITNODE,
-  nextBitNodeProblem,
   readWorldDaemonEnabled,
+  replayOf,
   WORLD_DAEMON_DESTROY_INTENT,
   type WorldDaemonEvent,
   WorldDaemonRule,
@@ -1211,11 +1211,14 @@ export class DesiredStateController {
     if (note?.field === "lastNodeReset") {
       const manual = readManualIntents(this.#store).find((each) => each.id === note.id);
       const destroy = manual ?? WORLD_DAEMON_DESTROY_INTENT;
+      const nextBitNode = destroy.action === "destroyBitNode" ? destroy.args.nextBitNode : NEXT_BITNODE;
       this.#emit({
         type: BITNODE_DESTROY_SENT_EVENT_KIND,
         atMs: this.#lastEventAtMs ?? 0,
         source: manual === undefined ? "brain" : "manual",
-        nextBitNode: destroy.action === "destroyBitNode" ? destroy.args.nextBitNode : NEXT_BITNODE,
+        nextBitNode,
+        // At Source-File 1's cap, into BitNode 1 (#311): said in the run report.
+        replay: replayOf(this.#slowData?.resetInfo, nextBitNode),
       });
     }
     // An install going out (#210): stored, so the run report can look for the reset after it.
@@ -1414,9 +1417,9 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       enabled: readAugmentationsEnabled(this.#store),
       homeRamEnabled: readHomeRamEnabled(this.#store),
-      // The destroy wanted once The Red Pill is installed (#215 review): ordinary installs held for it.
-      destroyWanted:
-        readWorldDaemonEnabled(this.#store) && nextBitNodeProblem(this.#slowData?.resetInfo?.ownedSF ?? {}) === null,
+      // The destroy wanted once The Red Pill is installed (#215 review): ordinary installs held for it. At Source-File
+      // 1's cap too: a replay (#311).
+      destroyWanted: readWorldDaemonEnabled(this.#store),
       // Who works for a faction while an install is held for Daedalus's count (#243 review): A5 under the hold.
       holdWork: { owners: readOwnersWork(this.#store), brainWorks: readFactionWorkEnabled(this.#store) },
     });
@@ -1437,12 +1440,6 @@ export class DesiredStateController {
       // A6's commit's facts while short (#238): an install that added none to the count is judged on them.
       countFacts: this.#augmentations.countFacts(),
       augmentationsInstalling: this.#augmentations.installAskedFor(),
-    });
-    // The stop at the BitNode's end (#303): a destroy ready but refused, after its `nextBitNode` stall.
-    this.#bitNodeEnd.worldDaemonUpdated({
-      setting: readStopAtBitNodeEnd(this.#store),
-      nothingMoreToGain: this.#worldDaemon.nothingMoreToGainNow(),
-      atMs: this.#lastEventAtMs ?? 0,
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({

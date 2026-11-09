@@ -235,6 +235,7 @@ const BUSY_STATUS: DashboardStatus = {
     ],
     destroying: false,
     ownersDestroy: false,
+    replay: null,
     stall: null,
   },
   share: { enabled: true, asked: true, why: null, sharing: null },
@@ -952,11 +953,33 @@ test.each([
     { destroying: true, ownersDestroy: true },
     "yours is queued, and goes instead of the brain's",
   ],
+  [
+    "at Source-File 1's cap (#311)",
+    { replay: "Source-File 1 is at 3, nothing to gain but the run" },
+    "Destroying the BitNode (into BitNode 1): on, once w0r1d_d43m0n is ready; it replays BitNode 1: Source-File 1 is " +
+      "at 3, nothing to gain but the run",
+  ],
 ])("the World Daemon, %s, says so", async (_description, changes, text) => {
   const worldDaemon = { ...(BUSY_STATUS.worldDaemon as NonNullable<DashboardStatus["worldDaemon"]>), ...changes };
   const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, worldDaemon } }));
   expect(textOf(document, "#world-daemon")).toContain(text);
 });
+
+test.each([
+  ["off", { enabled: false }],
+  ["the owner's destroy queued", { destroying: true, ownersDestroy: true }],
+])(
+  "the World Daemon at the cap with the destroy %s: no replay said, it's not the brain's to send (#311)",
+  async (_, changes) => {
+    const worldDaemon = {
+      ...(BUSY_STATUS.worldDaemon as NonNullable<DashboardStatus["worldDaemon"]>),
+      replay: "Source-File 1 is at 3, nothing to gain but the run",
+      ...changes,
+    };
+    const { document } = await openPage(() => ({ status: 200, body: { ...BUSY_STATUS, worldDaemon } }));
+    expect(textOf(document, "#world-daemon")).not.toContain("replays");
+  },
+);
 
 test("the World Daemon from a brain that doesn't give it: said, and its button does nothing (#215 review)", async () => {
   const { document, requests } = await openPage((request) =>

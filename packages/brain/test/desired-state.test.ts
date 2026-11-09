@@ -1616,10 +1616,17 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       ]);
     });
 
-    test("The Red Pill installed, the destroy on: no ordinary install chosen (#215 review)", () => {
+    // At Source-File 1's cap too (#311): the destroy, a replay, is wanted all the same.
+    test.each([
+      ["", {}],
+      [", at Source-File 1's cap (#311)", { 1: 3 }],
+    ])("The Red Pill installed, the destroy on%s: no ordinary install chosen (#215 review)", (_, ownedSF) => {
       const { controller, connection } = connectedWithLoopOff();
       const slow = slowWith();
-      send(connection, "slow", { ...slow, resetInfo: { ...slow.resetInfo, ownedAugs: { "The Red Pill": 1 } } });
+      send(connection, "slow", {
+        ...slow,
+        resetInfo: { ...slow.resetInfo, currentNode: 1, ownedSF, ownedAugs: { "The Red Pill": 1 } },
+      });
       send(connection, "medium", lateMedium(1e9, { hacking: 300 }));
       expect(controller.augmentationsView()).toMatchObject({ committed: false });
       expect(controller.augmentationsView().waitingFor).toMatch(/^the BitNode's destroy: The Red Pill is installed/);
@@ -1766,14 +1773,22 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
 
     describe("the brain's destroy (#215)", () => {
       const BRAINS = intent({ action: "destroyBitNode", args: { nextBitNode: 1 } });
-      /** Connected with w0r1d_d43m0n in the static snapshot and The Red Pill installed in the slow one. */
-      function withTheRedPill() {
+      /**
+       * Connected with w0r1d_d43m0n in the static snapshot and The Red Pill installed in the slow one, with Source-File
+       * 1 at `sf1` (none unless said).
+       */
+      function withTheRedPill({ sf1 = 0 } = {}) {
         const connected = connectedWithLoopOff();
         send(connected.connection, "static", staticWithDaemon());
         const slow = slowAt(1_000, 1_000);
         send(connected.connection, "slow", {
           ...slow,
-          resetInfo: { ...slow.resetInfo, ownedAugs: { "The Red Pill": 1 } },
+          resetInfo: {
+            ...slow.resetInfo,
+            currentNode: 1,
+            ownedAugs: { "The Red Pill": 1 },
+            ownedSF: sf1 === 0 ? {} : { 1: sf1 },
+          },
         });
         const daemonMedium = (hacking = 3000, { rooted = true } = {}) =>
           send(connected.connection, "medium", mediumData(hacking, { [WD]: rooted }));
@@ -1801,7 +1816,38 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         await settleBackup(SAVED);
         expect(sentIds()).toEqual([BRAINS.id]);
         expect(stored).toEqual([
-          { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "brain", nextBitNode: 1 },
+          { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "brain", nextBitNode: 1, replay: null },
+        ]);
+      });
+
+      test("at Source-File 1's cap (#311): it goes all the same, a replay, said in the view and stored", async () => {
+        const { controller, sentIds, settleBackup, daemonMedium } = withTheRedPill({ sf1: 3 });
+        const stored: unknown[] = [];
+        controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
+        daemonMedium();
+        const replay = "Source-File 1 is at 3, nothing to gain but the run";
+        expect(controller.worldDaemonView()).toMatchObject({ destroying: true, replay, stall: null });
+        daemonMedium();
+        daemonMedium();
+        await settleBackup(SAVED);
+        expect(sentIds()).toEqual([BRAINS.id]);
+        expect(stored).toEqual([
+          { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "brain", nextBitNode: 1, replay },
+        ]);
+      });
+
+      test("at the cap, the owner's destroy into another BitNode is no replay (#311): stored without one", async () => {
+        const { controller, sentIds, settleBackup, daemonMedium } = withTheRedPill({ sf1: 3 });
+        const stored: unknown[] = [];
+        controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
+        controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
+        daemonMedium();
+        daemonMedium();
+        daemonMedium();
+        await settleBackup(SAVED);
+        expect(sentIds()).toEqual([DESTROY.id]);
+        expect(stored).toEqual([
+          { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "manual", nextBitNode: 2, replay: null },
         ]);
       });
 
@@ -1903,7 +1949,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(sentIds()).toEqual([DESTROY.id]);
       // Stored as it goes out (#215): the owner's, into their BitNode.
       expect(stored).toEqual([
-        { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "manual", nextBitNode: 2 },
+        { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "manual", nextBitNode: 2, replay: null },
       ]);
       expect(waitingFor(VOLHAVEN.id)).toBe(AFTER_DESTROY);
       // Once out, still judged: the level short again (an augmentation's multiplier gone), it's withdrawn.
