@@ -8,6 +8,7 @@ import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-help
 import {
   AUGMENTATION_NAMES,
   augmentationsSoldBy,
+  bitNodeAssumptions,
   CONTROL_PROTOCOL_VERSION,
   chooseAugmentationsToBuy,
   type DesiredState,
@@ -1611,15 +1612,15 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       send(connection, "slow", { ...slow, resetInfo: { ...slow.resetInfo, ownedAugs: { "The Red Pill": 1 } } });
       send(connection, "medium", lateMedium(0, { daemon: true }));
       expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([
-        ["destroyBitNode(1)", "worldDaemon"],
+        ["destroyBitNode(4)", "worldDaemon"],
         [INSTALL.id, "augmentation"],
       ]);
     });
 
-    // At Source-File 1's cap too (#311): the destroy, a replay, is wanted all the same.
+    // With nothing left in the campaign's order to gain too (#311, #321): the destroy, a replay, is wanted all the same.
     test.each([
       ["", {}],
-      [", at Source-File 1's cap (#311)", { 1: 3 }],
+      [", with nothing left in the order to gain (#311, #321)", { 1: 3, 4: 3 }],
     ])("The Red Pill installed, the destroy on%s: no ordinary install chosen (#215 review)", (_, ownedSF) => {
       const { controller, connection } = connectedWithLoopOff();
       const slow = slowWith();
@@ -1772,12 +1773,15 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     }
 
     describe("the brain's destroy (#215)", () => {
-      const BRAINS = intent({ action: "destroyBitNode", args: { nextBitNode: 1 } });
+      // From BN1 with Source-File 4 short of 3: into BN4, the campaign's order's next (#321).
+      const BRAINS = intent({ action: "destroyBitNode", args: { nextBitNode: 4 } });
+      /** With nothing left in the order to gain: into BN1, a replay (#311). */
+      const REPLAYS = intent({ action: "destroyBitNode", args: { nextBitNode: 1 } });
       /**
-       * Connected with w0r1d_d43m0n in the static snapshot and The Red Pill installed in the slow one, with Source-File
-       * 1 at `sf1` (none unless said).
+       * Connected with w0r1d_d43m0n in the static snapshot and The Red Pill installed in the slow one, in BN1 with
+       * `ownedSF` (none unless said).
        */
-      function withTheRedPill({ sf1 = 0 } = {}) {
+      function withTheRedPill({ ownedSF = {} as Record<string, number> } = {}) {
         const connected = connectedWithLoopOff();
         send(connected.connection, "static", staticWithDaemon());
         const slow = slowAt(1_000, 1_000);
@@ -1787,7 +1791,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
             ...slow.resetInfo,
             currentNode: 1,
             ownedAugs: { "The Red Pill": 1 },
-            ownedSF: sf1 === 0 ? {} : { 1: sf1 },
+            ownedSF,
           },
         });
         const daemonMedium = (hacking = 3000, { rooted = true } = {}) =>
@@ -1795,7 +1799,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         return { ...connected, daemonMedium };
       }
 
-      test("once w0r1d_d43m0n is rooted at its level: into BitNode 1, through the gate and a backup, stored as sent", async () => {
+      test("once w0r1d_d43m0n is rooted at its level: into BitNode 4 (#321), through the gate and a backup, stored as sent", async () => {
         const { controller, sentIds, waitingFor, backupNow, settleBackup, daemonMedium } = withTheRedPill();
         const stored: unknown[] = [];
         controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
@@ -1806,7 +1810,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           BRAINS.id,
           "worldDaemon",
         ]);
-        expect(controller.worldDaemonView()).toMatchObject({ enabled: true, destroying: true });
+        expect(controller.worldDaemonView()).toMatchObject({ enabled: true, destroying: true, nextBitNode: 4 });
         expect(waitingFor(BRAINS.id)).toBe(
           "waiting for the guard to hold on 2 consecutive medium snapshots (0 so far)",
         );
@@ -1816,28 +1820,29 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         await settleBackup(SAVED);
         expect(sentIds()).toEqual([BRAINS.id]);
         expect(stored).toEqual([
-          { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "brain", nextBitNode: 1, replay: null },
+          { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "brain", nextBitNode: 4, replay: null },
         ]);
       });
 
-      test("at Source-File 1's cap (#311): it goes all the same, a replay, said in the view and stored", async () => {
-        const { controller, sentIds, settleBackup, daemonMedium } = withTheRedPill({ sf1: 3 });
+      test("with nothing left in the order to gain (#311, #321): into BN1 all the same, a replay, in the view and stored", async () => {
+        const { controller, sentIds, settleBackup, daemonMedium } = withTheRedPill({ ownedSF: { 1: 3, 4: 3 } });
         const stored: unknown[] = [];
         controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
         daemonMedium();
-        const replay = "Source-File 1 is at 3, nothing to gain but the run";
-        expect(controller.worldDaemonView()).toMatchObject({ destroying: true, replay, stall: null });
+        const replay =
+          "the campaign's order has nothing left to gain (Source-File 1 at 3, Source-File 4 at 3), but the run";
+        expect(controller.worldDaemonView()).toMatchObject({ destroying: true, nextBitNode: 1, replay, stall: null });
         daemonMedium();
         daemonMedium();
         await settleBackup(SAVED);
-        expect(sentIds()).toEqual([BRAINS.id]);
+        expect(sentIds()).toEqual([REPLAYS.id]);
         expect(stored).toEqual([
           { type: "bitNodeDestroySent", atMs: expect.any(Number), source: "brain", nextBitNode: 1, replay },
         ]);
       });
 
       test("at the cap, the owner's destroy into another BitNode is no replay (#311): stored without one", async () => {
-        const { controller, sentIds, settleBackup, daemonMedium } = withTheRedPill({ sf1: 3 });
+        const { controller, sentIds, settleBackup, daemonMedium } = withTheRedPill({ ownedSF: { 1: 3, 4: 3 } });
         const stored: unknown[] = [];
         controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
         controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
@@ -1910,7 +1915,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         controller.addManualIntent({ action: "destroyBitNode", args: { nextBitNode: 2 } });
         daemonMedium();
         expect(controller.intentsView().map(({ id, source }) => [id, source])).toEqual([[DESTROY.id, "manual"]]);
-        expect(controller.worldDaemonView()).toMatchObject({ destroying: true, ownersDestroy: true });
+        // The dashboard names the owner's BitNode (#321).
+        expect(controller.worldDaemonView()).toMatchObject({ destroying: true, ownersDestroy: true, nextBitNode: 2 });
         expect(controller.cancelManualIntent(DESTROY.id)).toBe(true);
         controller.setWorldDaemonEnabled(false);
         expect(store.getSetting("worldDaemon.enabled")).toBe("false");
@@ -3278,5 +3284,23 @@ describe("the brain's own irreversible intents go through the irreversible gate 
     expect(sentIds()).toEqual(expect.arrayContaining(["joinFaction(CyberSec)", "buyProgram(BruteSSH.exe)"]));
     // Nothing beside a join that's reversible itself.
     expect(controller.factionsView()).toMatchObject({ joining: "CyberSec", joiningAlongside: null });
+  });
+});
+
+describe("what the brain takes as BN1's (#321): logged once per BitNode, from the slow snapshot", () => {
+  test("none in BN1; BN4's on its first slow snapshot, once; another BitNode's when it shows", () => {
+    const lines: string[] = [];
+    new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+    const connection = connectAgent();
+    const taken = () => lines.filter((line) => line.includes("taken as BN1's"));
+    send(connection, "slow", slowData(1));
+    expect(taken()).toEqual([]);
+    send(connection, "slow", slowData(4));
+    send(connection, "slow", slowData(4));
+    const bn4 = bitNodeAssumptions(4).map((each) => `in BitNode 4, taken as BN1's: ${each}`);
+    expect(bn4).toHaveLength(2);
+    expect(taken()).toEqual(bn4);
+    send(connection, "slow", slowData(2));
+    expect(taken()).toEqual([...bn4, `in BitNode 2, taken as BN1's: ${bitNodeAssumptions(2)[0]}`]);
   });
 });

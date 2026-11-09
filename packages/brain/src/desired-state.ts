@@ -10,6 +10,7 @@
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
   type BatcherHealth,
+  bitNodeAssumptions,
   type DesiredState,
   EFFECTOR_BACKENDS,
   FACTION_ENEMIES,
@@ -19,6 +20,7 @@ import {
   type Intent,
   type IntentOutcome,
   intentId,
+  isBitNodeNumber,
   isIrreversibleIntent,
   MAX_INTENTS,
   type MediumSnapshotData,
@@ -119,14 +121,13 @@ import {
 } from "./work.ts";
 import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
-  NEXT_BITNODE,
   readWorldDaemonEnabled,
   replayOf,
-  WORLD_DAEMON_DESTROY_INTENT,
   type WorldDaemonEvent,
   WorldDaemonRule,
   type WorldDaemonStall,
   type WorldDaemonView,
+  worldDaemonDestroyInto,
   writeWorldDaemonEnabled,
 } from "./world-daemon.ts";
 
@@ -384,6 +385,8 @@ export class DesiredStateController {
   /** The World Daemon (#215): the rule, and whether it asks for the destroy. */
   readonly #worldDaemon: WorldDaemonRule;
   #worldDaemonDestroy = false;
+  /** The BitNode whose BN1-only assumptions (#321) were last logged: logged again only for another. */
+  #assumptionsLoggedFor: number | null = null;
   /** The stop at the BitNode's end (#303): it asks main.ts, through its event, to shut the brain down. */
   readonly #bitNodeEnd: BitNodeEndWatch;
   /** The close of the game at the BitNode's end (#303): when it went out, and whether it's withdrawn, tried enough. */
@@ -420,9 +423,9 @@ export class DesiredStateController {
     this.#bitNodeEnd = new BitNodeEndWatch({ log, emit: (event) => this.#emit(event) });
     this.#resetSent = readResetSentNote(store);
     // A restarted brain with its destroy out (#215 review): held, and its note kept, until the BitNode's reset shows.
-    if (this.#resetSent?.field === "lastNodeReset" && this.#resetSent.id === WORLD_DAEMON_DESTROY_INTENT.id) {
-      this.#worldDaemon.restore(this.#resetSent.resetAt);
-    }
+    const restoredInto = this.#resetSent?.field === "lastNodeReset" ? worldDaemonDestroyInto(this.#resetSent.id) : null;
+    if (this.#resetSent !== null && restoredInto !== null)
+      this.#worldDaemon.restore(this.#resetSent.resetAt, restoredInto);
     // A brain restarted with an install out: the Agent went with it, as far as this brain knows, since it went out.
     if (this.#resetSent?.field === "lastAugReset" && this.#resetSent.sentAtMs !== undefined) {
       this.#installDisconnectedAtMs = this.#resetSent.sentAtMs;
@@ -483,6 +486,7 @@ export class DesiredStateController {
         this.#slowData = event.snapshot.data as SlowSnapshotData;
         this.#slowGameTimeMs = event.snapshot.gameTimeMs;
         this.#slowAtMs = event.atMs;
+        this.#logBitNodeAssumptions();
         // The stop at the BitNode's end (#303): a destroy's note read before the reset it shows drops it.
         const reading = bitNodeReadingOf(this.#slowData, event.snapshot.gameTimeMs);
         if (reading !== null) {
@@ -631,8 +635,12 @@ export class DesiredStateController {
 
   /** What the dashboard shows of the path to the World Daemon (#215). */
   worldDaemonView(): WorldDaemonView {
-    const ownersDestroy = readManualIntents(this.#store).some((each) => each.action === "destroyBitNode");
-    return { ...this.#worldDaemon.view(), ownersDestroy };
+    const owners = readManualIntents(this.#store).find((each) => each.action === "destroyBitNode");
+    const view = this.#worldDaemon.view();
+    // The owner's queued destroy goes instead (#321): the dashboard names the BitNode it enters.
+    return owners?.action === "destroyBitNode"
+      ? { ...view, ownersDestroy: true, nextBitNode: owners.args.nextBitNode, replay: null }
+      : { ...view, ownersDestroy: false };
   }
 
   /** The travel for invitations (#228): the city group chosen, the travel, and the money held. */
@@ -818,8 +826,10 @@ export class DesiredStateController {
       queue.push(CLOSE_GAME_INTENT);
     }
     // The rule holds its ask until a slow snapshot shows the BitNode reset, so its reset note stays too.
-    if (this.#worldDaemonDestroy && !manual.some((each) => each.action === "destroyBitNode")) {
-      queue.push(WORLD_DAEMON_DESTROY_INTENT);
+    // Into the BitNode it was asked for (#321).
+    const destroy = this.#worldDaemon.destroyIntent();
+    if (this.#worldDaemonDestroy && destroy !== null && !manual.some((each) => each.action === "destroyBitNode")) {
+      queue.push(destroy);
     }
     // Once sent, it stays while the cycle is committed, the snapshots gone with the Agent it killed (or a restarted
     // brain's not yet in), so its reset note does too, until a slow snapshot shows the reset.
@@ -1201,6 +1211,19 @@ export class DesiredStateController {
     return "waiting for the Agent's slow snapshot (the game's last reset), to see the reset when it comes";
   }
 
+  /**
+   * What the brain takes as BN1's in the BitNode the slow snapshot shows (#321, core's `bitNodeAssumptions`): a line
+   * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1.
+   */
+  #logBitNodeAssumptions(): void {
+    const currentNode = this.#slowData?.resetInfo?.currentNode;
+    if (!isBitNodeNumber(currentNode) || currentNode === this.#assumptionsLoggedFor) return;
+    this.#assumptionsLoggedFor = currentNode;
+    for (const assumption of bitNodeAssumptions(currentNode)) {
+      this.#log(`in BitNode ${currentNode}, taken as BN1's: ${assumption}`);
+    }
+  }
+
   /** The note, here and in the store, written only when it changes. */
   #noteResetSent(note: ResetSentNote | null): void {
     if (JSON.stringify(note) === JSON.stringify(this.#resetSent)) return;
@@ -1210,14 +1233,19 @@ export class DesiredStateController {
     // A destroy going out (#215): stored, for the run report.
     if (note?.field === "lastNodeReset") {
       const manual = readManualIntents(this.#store).find((each) => each.id === note.id);
-      const destroy = manual ?? WORLD_DAEMON_DESTROY_INTENT;
-      const nextBitNode = destroy.action === "destroyBitNode" ? destroy.args.nextBitNode : NEXT_BITNODE;
+      // The brain's, into the BitNode it was asked for (#321).
+      const destroy = manual ?? this.#worldDaemon.destroyIntent();
+      if (destroy?.action !== "destroyBitNode") {
+        this.#log(`a destroy went out (${note.id}) that's neither yours nor the brain's: not stored as sent`);
+        return;
+      }
+      const nextBitNode = destroy.args.nextBitNode;
       this.#emit({
         type: BITNODE_DESTROY_SENT_EVENT_KIND,
         atMs: this.#lastEventAtMs ?? 0,
         source: manual === undefined ? "brain" : "manual",
         nextBitNode,
-        // At Source-File 1's cap, into BitNode 1 (#311): said in the run report.
+        // With nothing left in the campaign's order to gain, into BitNode 1 (#311, #321): said in the run report.
         replay: replayOf(this.#slowData?.resetInfo, nextBitNode),
       });
     }

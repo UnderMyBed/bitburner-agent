@@ -8,14 +8,16 @@
 //   `Server/data/servers.ts:1532-1539`: the hack loop's root worker), and the hacking level against its requirement
 //   (3000 × the BitNode's `WorldDaemonDifficulty`, `Server/ServerHelpers.ts:383-385`), with the ETA at the measured
 //   experience rate.
-// - The destroy: `destroyBitNode` (#175, M3), into BitNode 1, once The Red Pill is installed and w0r1d_d43m0n is
-//   rooted at its level; the controller queues it through its gate (two medium snapshots of the preconditions, a save
-//   backup). Asked for, it's held until a slow snapshot shows another `lastNodeReset`, as the install's is.
-// - The dashboard's switch ("Stop destroying the BitNode", `worldDaemon.enabled`), on by default, into BitNode 1
-//   (owner decision 50): phase A's exit is a live run that destroys BN1.1 on its own. Another BitNode is the owner's:
-//   the switch off, and `destroyBitNode` queued by hand. With Source-File 1 at 3 the destroy goes ahead all the same, a
-//   replay (#311, owner decision 64): no Source-File gained (`RedPill.tsx:27-31`), BN1 played again from its start for
-//   phase B's live data (the stop at the BitNode's end, if the owner set it, fires on it: ./bitnode-end.ts).
+// - The destroy: `destroyBitNode` (#175, M3), once The Red Pill is installed and w0r1d_d43m0n is rooted at its level,
+//   into the BitNode the campaign's order gives (#321, owner decision 66: core's `nextBitNodeOf`, from the last slow
+//   snapshot's Source-Files), fixed as it's asked for; the controller queues it through its gate (two medium snapshots
+//   of the preconditions, a save backup). Asked for, it's held until a slow snapshot shows another `lastNodeReset`, as
+//   the install's is.
+// - The dashboard's switch ("Stop destroying the BitNode", `worldDaemon.enabled`), on by default (owner decision 50).
+//   The next BitNode follows the order: BN4 while Source-File 4 is short of 3, then BN1 (owner decision 66, superseding
+//   64). Another is the owner's: `destroyBitNode` queued by hand goes instead. With nothing left in the order to gain,
+//   the destroy goes ahead all the same, into BN1, a replay (#311): BN1 played again from its start for the run (the
+//   stop at the BitNode's end, if the owner set it, fires on it: ./bitnode-end.ts).
 // - Daedalus's count (#228): short of it (core's `daedalusCountOf`), the path says how many more augmentations are
 //   within reach and where (./invitations.ts's `daedalusReach`, the city group the brain chose). An install while short
 //   that adds none to the count (NeuroFlux Governor's levels count once: run #2's nine NeuroFlux-only installs at 23)
@@ -27,6 +29,7 @@
 import {
   augmentationBitNodeMultipliers,
   augmentationCost,
+  CAMPAIGN_ORDER,
   DAEDALUS,
   daedalusCountOf,
   daedalusMissing,
@@ -36,7 +39,10 @@ import {
   hackingExpForLevel,
   type Intent,
   intentId,
+  isBitNodeNumber,
   type MediumSnapshotData,
+  type NextBitNode,
+  nextBitNodeOf,
   type SlowSnapshotData,
   type StaticSnapshotData,
   THE_RED_PILL,
@@ -60,15 +66,18 @@ export function writeWorldDaemonEnabled(store: TelemetryStore, enabled: boolean)
   writeSwitch(store, WORLD_DAEMON_ENABLED_SETTING, enabled);
 }
 
-/** The BitNode the brain's destroy enters: 1, the one the brain is built for (conservative; another is the owner's). */
-export const NEXT_BITNODE = 1;
+/** The brain's destroy (#175's intent) into `nextBitNode` (#321): the owner's into the same BitNode has the same id. */
+export function worldDaemonDestroyIntent(nextBitNode: number): Intent {
+  return { id: intentId("destroyBitNode", { nextBitNode }), action: "destroyBitNode", args: { nextBitNode } };
+}
 
-/** The brain's destroy (#175's intent): the owner's into BitNode 1 has the same id. */
-export const WORLD_DAEMON_DESTROY_INTENT: Intent = {
-  id: intentId("destroyBitNode", { nextBitNode: NEXT_BITNODE }),
-  action: "destroyBitNode",
-  args: { nextBitNode: NEXT_BITNODE },
-};
+/**
+ * The BitNode a reset note's destroy entered, if it's one the brain's destroy can be (#321: a BitNode of the campaign's
+ * order), or null: a restarted brain holds its destroy across the reset by it (#215 review).
+ */
+export function worldDaemonDestroyInto(id: string): number | null {
+  return CAMPAIGN_ORDER.find((step) => worldDaemonDestroyIntent(step.bitNode).id === id)?.bitNode ?? null;
+}
 
 /**
  * A step the brain finishes in minutes, not done this long after it could be, is `worldDaemonStalled` (an event, a log
@@ -135,42 +144,49 @@ const STALLED_AFTER_MS: Record<StallStep, number> = {
   destroy: WORLD_DAEMON_STALLED_AFTER_MS,
 };
 
-/**
- * A Source-File's top level but for BN12's, which has none: destroying its BitNode again gives no level
- * (`RedPill.tsx:27-31`). The campaign model's cap too.
- */
-export const SOURCE_FILE_TOP_LEVEL = 3;
+// Moved to core (#321), with the campaign's order; the name stays here for the campaign model and the tests.
+export { SOURCE_FILE_TOP_LEVEL } from "@bitburner-agent/core";
 
 /**
- * Why a destroy into `nextBitNode` is a replay (#311, owner decision 64), or null: BitNode 1 destroyed into BitNode 1
- * with Source-File 1 at its top level, so `giveSourceFile` gives no level (`RedPill.tsx:27-31`) and the portal enters
- * BN1 all the same (`BitNode/ui/PortalModal.tsx:117-126`): the run itself is the gain, phase B's live data.
+ * The brain's next BitNode (#321, core's `nextBitNodeOf`) from a slow snapshot's `resetInfo`, the Agent's word, so
+ * checked: null where its BitNode or Source-Files can't be read.
  */
-export function replayOf(
-  resetInfo: { currentNode?: unknown; ownedSF?: Readonly<Record<string, unknown>> } | null | undefined,
-  nextBitNode: number,
-): string | null {
-  const level = resetInfo?.ownedSF?.["1"];
-  return resetInfo?.currentNode === 1 &&
-    nextBitNode === 1 &&
-    typeof level === "number" &&
-    level >= SOURCE_FILE_TOP_LEVEL
-    ? `Source-File 1 is at ${SOURCE_FILE_TOP_LEVEL}, nothing to gain but the run`
-    : null;
+export function nextBitNodeFrom(resetInfo: unknown): NextBitNode | null {
+  const info = resetInfo as { currentNode?: unknown; ownedSF?: unknown } | null | undefined;
+  const currentNode = info?.currentNode;
+  const ownedSF = info?.ownedSF;
+  if (!isBitNodeNumber(currentNode) || typeof ownedSF !== "object" || ownedSF === null) return null;
+  if (!Object.values(ownedSF).every((level) => Number.isSafeInteger(level) && (level as number) >= 0)) return null;
+  return nextBitNodeOf({ currentNode, ownedSF: ownedSF as Record<string, number> });
 }
 
 /**
- * The switch in the brain's start line (#311): "on", "off", or on and a replay as the store's last slow snapshot
- * (`lastSlowData`, the Agent's word, so checked) shows the game: "on (it replays BitNode 1: …)".
+ * Why a destroy into `nextBitNode` is a replay (#311, kept by #321 for its one case), or null: the brain's next BitNode
+ * from `resetInfo` is `nextBitNode`, with nothing left in the campaign's order to gain (core's `nextBitNodeOf`). BN1
+ * destroyed at the caps gives no level (`giveSourceFile`, `RedPill.tsx:27-31`), and the portal enters BN1 all the same
+ * (`BitNode/ui/PortalModal.tsx:117-126`): the run itself is the gain.
+ */
+export function replayOf(resetInfo: unknown, nextBitNode: number): string | null {
+  const next = nextBitNodeFrom(resetInfo);
+  return next !== null && next.bitNode === nextBitNode ? next.replay : null;
+}
+
+/** Why the brain's destroy isn't asked for with w0r1d_d43m0n ready (#321): no next BitNode from the slow snapshot. */
+export const NEXT_UNREAD = "the next BitNode can't be read from the slow snapshot (its BitNode or Source-Files)";
+
+/** "into BitNode 4", or "into BitNode 1, a replay (…)" (#321): the brain's log line's words, and the start line's. */
+export function describeNextBitNode(next: NextBitNode): string {
+  return `into BitNode ${next.bitNode}${next.replay === null ? "" : `, a replay (${next.replay})`}`;
+}
+
+/**
+ * The switch in the brain's start line (#311, #321): "off", "on", or on and into the BitNode the store's last slow
+ * snapshot (`lastSlowData`, the Agent's word, so checked) gives: "on (into BitNode 4)".
  */
 export function describeWorldDaemonSwitch(enabled: boolean, lastSlowData: unknown): string {
   if (!enabled) return "off";
-  const resetInfo = (lastSlowData as { resetInfo?: unknown } | null)?.resetInfo;
-  const replay =
-    typeof resetInfo === "object" && resetInfo !== null
-      ? replayOf(resetInfo as Parameters<typeof replayOf>[0], NEXT_BITNODE)
-      : null;
-  return replay === null ? "on" : `on (it replays BitNode 1: ${replay})`;
+  const next = nextBitNodeFrom((lastSlowData as { resetInfo?: unknown } | null)?.resetInfo);
+  return next === null ? "on" : `on (${describeNextBitNode(next)})`;
 }
 
 /** The path, as the snapshots show it (#215): each part null where the snapshots don't say. */
@@ -492,6 +508,11 @@ export interface WorldDaemonView {
   destroying: boolean;
   /** A destroy the owner queued, which goes instead of the brain's (the controller's). */
   ownersDestroy: boolean;
+  /**
+   * The BitNode the brain's destroy enters (#321): the one asked for, else the last slow snapshot's; null before one.
+   * The controller's view gives the owner's queued destroy's instead.
+   */
+  nextBitNode: number | null;
   /** Why the brain's destroy is a replay (#311, `replayOf`), from the last slow snapshot, or null. */
   replay: string | null;
   /** A stall, from when it could have been done, or null: the `worldDaemonStalled` alert's. */
@@ -533,10 +554,15 @@ export class WorldDaemonRule {
   readonly #expRate = new HackingExpRate();
   #path: WorldDaemonPath | null = null;
   #enabled = true;
-  /** Why the brain's destroy, from the BitNode the last slow snapshot showed, is a replay (#311), or null. */
-  #replay: string | null = null;
-  /** The destroy asked for, and the BitNode's `lastNodeReset` then: held until a slow snapshot shows another. */
-  #asked: { lastNodeReset: number } | null = null;
+  /** The brain's next BitNode (#321), from the BitNode and Source-Files the last slow snapshot showed, or null. */
+  #next: NextBitNode | null = null;
+  /**
+   * The destroy asked for, the BitNode's `lastNodeReset` then, and the BitNode it enters, fixed as it's asked for: held
+   * until a slow snapshot shows another reset.
+   */
+  #asked: { lastNodeReset: number; nextBitNode: number } | null = null;
+  /** `NEXT_UNREAD` logged, until the next BitNode is read again: logged once, not every update. */
+  #nextUnreadLogged = false;
   /** Each step's start, while it could be done; the stall once stored, so it's stored once. */
   #ready = new Map<StallStep, { sinceMs: number; stored: boolean; detail: string }>();
   /** Daedalus's reputation while The Red Pill is short, and when it last rose (or was first seen). */
@@ -569,18 +595,26 @@ export class WorldDaemonRule {
    * A restarted brain's destroy, from the controller's reset note (#215 review): asked for in the BitNode whose
    * `lastNodeReset` the note holds, so it's held, and its note kept, until a slow snapshot shows another.
    */
-  restore(lastNodeReset: number): void {
-    this.#asked = { lastNodeReset };
+  restore(lastNodeReset: number, nextBitNode: number): void {
+    this.#asked = { lastNodeReset, nextBitNode };
+  }
+
+  /** The brain's destroy while it's asked for, into the BitNode it was asked for (#321), or null. */
+  destroyIntent(): Intent | null {
+    return this.#asked === null ? null : worldDaemonDestroyIntent(this.#asked.nextBitNode);
   }
 
   view(): WorldDaemonView {
+    const nextBitNode = this.#asked?.nextBitNode ?? this.#next?.bitNode ?? null;
     return {
       enabled: this.#enabled,
       path: this.#path,
       lines: this.#path === null ? [] : describeWorldDaemonPath(this.#path),
       destroying: this.#asked !== null,
       ownersDestroy: false,
-      replay: this.#replay,
+      nextBitNode,
+      // The asked-for BitNode's, as the last slow snapshot says it: a restored ask's too.
+      replay: this.#next !== null && this.#next.bitNode === nextBitNode ? this.#next.replay : null,
       stall: this.stall(),
     };
   }
@@ -610,7 +644,10 @@ export class WorldDaemonRule {
     augmentationsInstalling = false,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
-    if (slowData !== null) this.#replay = replayOf(slowData.resetInfo, NEXT_BITNODE);
+    if (slowData !== null) {
+      this.#next = nextBitNodeFrom(slowData.resetInfo);
+      if (this.#next !== null) this.#nextUnreadLogged = false;
+    }
     const hacking = hackingOf(mediumData);
     if (hacking !== null && hacking.exp !== null && mediumGameTimeMs !== null)
       this.#expRate.add(mediumGameTimeMs, hacking.exp);
@@ -650,11 +687,17 @@ export class WorldDaemonRule {
     this.#watch(path, nowMs ?? 0, enabled);
     const ready = path.daemon !== null && path.daemon.problem === null;
     if (enabled && ready && this.#asked === null && isFiniteNumber(lastNodeReset)) {
-      this.#asked = { lastNodeReset };
+      // The slow snapshot's BitNode or Source-Files not read (#321): no destroy into a BitNode guessed; the destroy
+      // step's stall follows, 5 minutes on.
+      if (this.#next === null) {
+        if (!this.#nextUnreadLogged) this.#log(`world daemon: ${WORLD_DAEMON} ready, but ${NEXT_UNREAD}`);
+        this.#nextUnreadLogged = true;
+        return false;
+      }
+      this.#asked = { lastNodeReset, nextBitNode: this.#next.bitNode };
       this.#log(
-        `world daemon: ${WORLD_DAEMON} rooted at hacking ${path.daemon?.hackingLevel}: destroying the BitNode, into ` +
-          `BitNode ${NEXT_BITNODE}${this.#replay === null ? "" : `, a replay (${this.#replay})`} (the gate, then a ` +
-          "save backup first)",
+        `world daemon: ${WORLD_DAEMON} rooted at hacking ${path.daemon?.hackingLevel}: destroying the BitNode, ` +
+          `${describeNextBitNode(this.#next)} (the gate, then a save backup first)`,
       );
     }
     return this.#asked !== null;

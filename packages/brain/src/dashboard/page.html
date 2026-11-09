@@ -603,7 +603,13 @@ function render(status) {
         : view.destroying
           ? "asked for, through the gate"
           : "on, once w0r1d_d43m0n is ready";
-  // At Source-File 1's cap (#311): the brain's destroy replays BitNode 1. Said while it's the brain's to send.
+  // The BitNode it enters (#321): the campaign's order's, or your queued destroy's; none before a slow snapshot.
+  const intoOf = (view) =>
+    typeof view.nextBitNode === "number"
+      ? `into BitNode ${view.nextBitNode}`
+      : "into the next BitNode, once the Agent's slow snapshot shows this one";
+  // Nothing left in the campaign's order to gain (#311, #321): the brain's destroy replays BitNode 1. Said while it's
+  // the brain's to send.
   const replayOf = (view) =>
     view.enabled && !view.ownersDestroy && typeof view.replay === "string"
       ? `; it replays BitNode 1: ${view.replay}`
@@ -614,7 +620,7 @@ function render(status) {
       : [
           element(
             "div",
-            `Destroying the BitNode (into BitNode 1): ${destroyState(worldDaemon)}${replayOf(worldDaemon)}`,
+            `Destroying the BitNode (${intoOf(worldDaemon)}): ${destroyState(worldDaemon)}${replayOf(worldDaemon)}`,
             worldDaemon.enabled ? "ok" : "muted",
           ),
           ...(worldDaemon.lines.length === 0

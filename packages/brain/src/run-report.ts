@@ -3,6 +3,8 @@
 // the brain already stores (snapshots, events, and the hack loop's and augmentations' switches), in one read
 // transaction, folding the snapshots row by row so a long run's window never sits in memory whole.
 import {
+  bitNodeAssumptions,
+  bitNodePriceMultipliers,
   type FactionState,
   type FastSnapshotData,
   factionStateOf,
@@ -43,7 +45,7 @@ import {
   type SnapshotTime,
   WeakenTimes,
 } from "./clock-incidents.ts";
-import { cloudServerPrice } from "./cloud-servers.ts";
+import { cloudServerPriceIn } from "./cloud-servers.ts";
 import { BitNodeCycles } from "./cycle-report.ts";
 import {
   BACKDOOR_OVERDUE_AFTER_MS,
@@ -1222,6 +1224,10 @@ function progressSection(facts: RunFacts, verbose: boolean): string[] {
     lines.push(`  ${bitNode?.name ?? facts.cycles.labelBefore()}, first snapshot → last:`);
     lines.push(...segmentProgressLines(facts, segment, verbose).map((line) => `  ${line}`));
     lines.push(...facts.cycles.milestoneLines(index).map((line) => `    ${line}`));
+    // Outside BN1 (#321): what the brain takes as BN1's there, the known risks of playing it with BN1's rules.
+    const assumptions = bitNode === undefined ? [] : bitNodeAssumptions(bitNode.currentNode);
+    if (assumptions.length > 0) lines.push(`    taken as BN1's in BitNode ${bitNode?.currentNode} (#321):`);
+    lines.push(...assumptions.map((assumption) => `      ${assumption}`));
   }
   const inferred = [
     "  hack loop target, inferred from the game's servers whose money or security moved between medium snapshots " +
@@ -2004,8 +2010,8 @@ function backdoorHealthLines(facts: RunFacts, failures: string[]): string[] {
 /**
  * The cloud servers bought or upgraded (#194): with `verbose`, each with its RAM and price; by default (#245), the
  * fleet a line a cycle, its count and RAM before the cycle's first change and after its last, with what was bought
- * and upgraded and its price. Then the total. The price is BN1's (the brain's rule knows no other yet): in another
- * BitNode, unknown.
+ * and upgraded and its price. Then the total. The price is the last slow snapshot's BitNode's, BN1's or BN4's (#321,
+ * the brain's rule knows no other yet): in another BitNode, unknown.
  */
 function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
   const lines = [
@@ -2013,8 +2019,11 @@ function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
       (verbose ? ":" : ", the fleet by cycle (--verbose lists each):"),
   ];
   const currentNode = facts.slowLast?.resetInfo?.currentNode;
+  const multipliers = isNumber(currentNode) ? bitNodePriceMultipliers(currentNode) : null;
   const priceOf = ({ fromRam, toRam }: CloudServerChange) =>
-    currentNode === 1 ? cloudServerPrice(toRam) - (fromRam === null ? 0 : cloudServerPrice(fromRam)) : null;
+    multipliers === null
+      ? null
+      : cloudServerPriceIn(toRam, multipliers) - (fromRam === null ? 0 : cloudServerPriceIn(fromRam, multipliers));
   let total = 0;
   for (const change of facts.cloudServerChanges) {
     const price = priceOf(change);
@@ -2038,7 +2047,7 @@ function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
         ? `at ${formatIsoTime(first.atMs)}`
         : `${formatIsoTime(first.atMs)} to ${formatIsoTime(last.atMs)}`;
     const cost =
-      currentNode === 1 ? `, ${formatMoney(changes.reduce((sum, each) => sum + (priceOf(each) ?? 0), 0))}` : "";
+      multipliers !== null ? `, ${formatMoney(changes.reduce((sum, each) => sum + (priceOf(each) ?? 0), 0))}` : "";
     lines.push(
       `    ${label}, ${span}: ${fleet(first.fleetBefore)} → ${fleet(last.fleetAfter)} (${bought} bought, ` +
         `${changes.length - bought} upgraded${cost})`,
@@ -2050,12 +2059,12 @@ function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
     const bought = facts.cloudServerChanges.filter((change) => change.fromRam === null).length;
     const upgraded = facts.cloudServerChanges.length - bought;
     lines.push(
-      `    in all: ${bought} bought, ${upgraded} upgraded${currentNode === 1 ? `, ${formatMoney(total)}` : ""}`,
+      `    in all: ${bought} bought, ${upgraded} upgraded${multipliers !== null ? `, ${formatMoney(total)}` : ""}`,
     );
   }
-  // The brain's rule waits outside BN1 (cloud-servers.ts): said here, so a run with none bought isn't a mystery.
-  if (isNumber(currentNode) && currentNode !== 1) {
-    lines.push(`    the brain buys none in BitNode ${currentNode}: cloud server prices are known only in BN1`);
+  // The brain's rule waits outside BN1 and BN4 (cloud-servers.ts): said here, so a run with none bought isn't a mystery.
+  if (isNumber(currentNode) && multipliers === null) {
+    lines.push(`    the brain buys none in BitNode ${currentNode}: cloud server prices are known only in BN1 and BN4`);
   }
   return lines;
 }

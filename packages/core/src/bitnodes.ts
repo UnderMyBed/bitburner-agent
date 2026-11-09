@@ -40,3 +40,58 @@ export function worldDaemonProblem(standing: WorldDaemonStanding | null): string
   }
   return null;
 }
+
+/**
+ * The BitNode multipliers on the prices the brain pays (#321), by the game's names: home RAM's
+ * (`PlayerObjectServerMethods.ts:38`) and cloud servers' (`Server/ServerPurchases.ts:23-42`, `:96-98`).
+ */
+export interface BitNodePriceMultipliers {
+  HomeComputerRamCost: number;
+  CloudServerCost: number;
+  CloudServerSoftcap: number;
+  CloudServerLimit: number;
+  CloudServerMaxRam: number;
+}
+
+/** The defaults (`BitNode/BitNodeMultipliers.ts:115-140`): BN1's (`BitNode/BitNode.tsx:572-574`). */
+const DEFAULT_PRICE_MULTIPLIERS: BitNodePriceMultipliers = {
+  HomeComputerRamCost: 1,
+  CloudServerCost: 1,
+  CloudServerSoftcap: 1,
+  CloudServerLimit: 1,
+  CloudServerMaxRam: 1,
+};
+
+/** The BitNodes the brain plays (#321, the campaign's order): BN4 sets only the softcap (`BitNode/BitNode.tsx:633-661`). */
+const BITNODE_PRICE_MULTIPLIERS: Readonly<Record<number, BitNodePriceMultipliers>> = {
+  1: DEFAULT_PRICE_MULTIPLIERS,
+  4: { ...DEFAULT_PRICE_MULTIPLIERS, CloudServerSoftcap: 1.2 },
+};
+
+/** `bitNode`'s price multipliers, or null for a BitNode the brain doesn't know them in yet: it buys neither there. */
+export function bitNodePriceMultipliers(bitNode: number): BitNodePriceMultipliers | null {
+  const multipliers = BITNODE_PRICE_MULTIPLIERS[bitNode];
+  return multipliers === undefined ? null : { ...multipliers };
+}
+
+/**
+ * What the brain takes as BN1's in `bitNode` though the game has it otherwise (#321): worded, for the brain's log line
+ * and the run report, a known risk each until a slice models it. None in BN1. BN4's (`BitNode/BitNode.tsx:633-661`):
+ * its hacking, which the snapshots don't carry and Singularity can't read there (`getBitNodeMultipliers` needs SF5).
+ */
+export function bitNodeAssumptions(bitNode: number): string[] {
+  if (bitNode === 1) return [];
+  if (bitNode === 4) {
+    return [
+      "the money a hack thread takes: the hack loop, the batcher and the hacking ceilings take ScriptHackMoney as 1, " +
+        "it's 0.2 in BN4 (Hacking.ts:54), so a batch takes about a fifth of what it plans (fewer threads than " +
+        "it could, never more) and the ceilings are 5 times too high",
+      "hacking exp: the batcher's level forecast takes HackExpGain as 1, it's 0.4 in BN4 (Hacking.ts:37), so it " +
+        "forecasts levels sooner than they come",
+    ];
+  }
+  return [
+    `BitNode ${bitNode}'s multipliers: the brain knows BN1's and BN4's only, so it buys no home RAM or cloud servers ` +
+      "here, and its hacking takes BN1's",
+  ];
+}

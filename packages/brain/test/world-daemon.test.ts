@@ -17,13 +17,15 @@ import {
   describeWorldDaemonSwitch,
   HackingExpRate,
   hackingEtaSeconds,
+  NEXT_UNREAD,
   RED_PILL_INSTALL_STALLED_AFTER_MS,
   RED_PILL_REPUTATION_STALLED_AFTER_MS,
   replayOf,
-  WORLD_DAEMON_DESTROY_INTENT,
   WORLD_DAEMON_STALLED_AFTER_MS,
   type WorldDaemonEvent,
   WorldDaemonRule,
+  worldDaemonDestroyIntent,
+  worldDaemonDestroyInto,
   worldDaemonPath,
 } from "../src/world-daemon.ts";
 import { WORLD_DAEMON_EVENT_KINDS, WorldDaemonFold } from "../src/world-daemon-report.ts";
@@ -245,17 +247,49 @@ describe("the destroy", () => {
     expect(update({ mediumData: medium({ daemon: "absent" }) })).toBe(false);
     expect(update({ slowData: slow({ ownedAugs: THIRTY }) })).toBe(false);
     expect(update({ enabled: false })).toBe(false);
+    expect(rule.destroyIntent()).toBeNull();
+    // BN1.1 (no Source-Files): the campaign's order's next is BN4 (#321).
     expect(update()).toBe(true);
-    expect(rule.view()).toMatchObject({ enabled: true, destroying: true });
+    expect(rule.view()).toMatchObject({ enabled: true, destroying: true, nextBitNode: 4, replay: null });
     expect(lines).toEqual([
-      "world daemon: w0r1d_d43m0n rooted at hacking 3000: destroying the BitNode, into BitNode 1 (the gate, then a " +
+      "world daemon: w0r1d_d43m0n rooted at hacking 3000: destroying the BitNode, into BitNode 4 (the gate, then a " +
         "save backup first)",
     ]);
-    expect(WORLD_DAEMON_DESTROY_INTENT).toEqual({
-      id: "destroyBitNode(1)",
+    expect(rule.destroyIntent()).toEqual({
+      id: "destroyBitNode(4)",
       action: "destroyBitNode",
-      args: { nextBitNode: 1 },
+      args: { nextBitNode: 4 },
     });
+  });
+
+  test("into the BitNode the campaign's order gives (#321), fixed once asked for, though the snapshot changes", () => {
+    // BN4.3 with SF1 at 3: SF4 reaches 3 by this destroy, so BN1, a replay.
+    const bn43 = { slowData: slow({ currentNode: 4, ownedSF: { 1: 3, 4: 2 } }) };
+    expect(update(bn43)).toBe(true);
+    expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(1));
+    expect(rule.view()).toMatchObject({ nextBitNode: 1, replay: expect.stringMatching(/^the campaign's order has/) });
+    // A slow snapshot of the same BitNode saying otherwise (an odd one): the ask keeps its BitNode.
+    expect(update({ slowData: slow({ currentNode: 4, ownedSF: { 1: 3, 4: 1 } }) })).toBe(true);
+    expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(1));
+    expect(rule.view()).toMatchObject({ nextBitNode: 1, replay: null });
+  });
+
+  test("a slow snapshot whose BitNode or Source-Files can't be read: no destroy, logged once", () => {
+    const odd = { slowData: slow({ currentNode: 0 }) };
+    expect(update(odd)).toBe(false);
+    expect(update(odd)).toBe(false);
+    expect(rule.destroyIntent()).toBeNull();
+    expect(rule.view().nextBitNode).toBeNull();
+    expect(lines).toEqual([`world daemon: w0r1d_d43m0n ready, but ${NEXT_UNREAD}`]);
+    expect(update({ slowData: slow({ ownedSF: { 1: -1 } }) })).toBe(false);
+    expect(update()).toBe(true);
+  });
+
+  test("worldDaemonDestroyInto: a reset note's destroy into a BitNode of the order, else null", () => {
+    expect(worldDaemonDestroyInto("destroyBitNode(1)")).toBe(1);
+    expect(worldDaemonDestroyInto("destroyBitNode(4)")).toBe(4);
+    expect(worldDaemonDestroyInto("destroyBitNode(2)")).toBeNull();
+    expect(worldDaemonDestroyInto("installAugmentations()")).toBeNull();
   });
 
   test("held until a slow snapshot shows another lastNodeReset: across the Agent going (no snapshots)", () => {
@@ -365,51 +399,48 @@ describe("stalls", () => {
   });
 });
 
-describe("a replay at Source-File 1's cap (#311)", () => {
-  const REPLAY = "Source-File 1 is at 3, nothing to gain but the run";
+describe("a replay with nothing left in the campaign's order to gain (#311, #321)", () => {
+  const REPLAY = "the campaign's order has nothing left to gain (Source-File 1 at 3, Source-File 4 at 3), but the run";
+  const atCaps = { slowData: slow({ ownedSF: { 1: 3, 4: 3 } }) };
 
-  test("replayOf: BitNode 1 into BitNode 1 with Source-File 1 at 3, and only that", () => {
-    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3 } }, 1)).toBe(REPLAY);
-    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3, 4: 1 } }, 1)).toBe(REPLAY);
-    // Below the cap: a Source-File level gained.
-    expect(replayOf({ currentNode: 1, ownedSF: { 1: 2 } }, 1)).toBeNull();
-    expect(replayOf({ currentNode: 1, ownedSF: {} }, 1)).toBeNull();
-    // Another BitNode destroyed (its own Source-File gained), or another entered: not a replay of BitNode 1.
-    expect(replayOf({ currentNode: 2, ownedSF: { 1: 3 } }, 1)).toBeNull();
-    expect(replayOf({ currentNode: 3, ownedSF: { 1: 3 } }, 1)).toBeNull();
-    expect(replayOf({ ownedSF: { 1: 3 } }, 1)).toBeNull();
-    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3 } }, 2)).toBeNull();
+  test("replayOf: the brain's next BitNode with nothing left in the order, and only that", () => {
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3, 4: 3 } }, 1)).toBe(REPLAY);
+    // BN4.3 destroyed: SF4 reaches 3 by it.
+    expect(replayOf({ currentNode: 4, ownedSF: { 1: 3, 4: 2 } }, 1)).toBe(REPLAY);
+    // At SF1's cap with SF4 short (#311's replay before #321): BN4 is next, not a replay; BN1 isn't the brain's.
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3 } }, 4)).toBeNull();
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3 } }, 1)).toBeNull();
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: 3, 4: 3 } }, 2)).toBeNull();
     // Not read: not said.
+    expect(replayOf({ ownedSF: { 1: 3, 4: 3 } }, 1)).toBeNull();
     expect(replayOf(undefined, 1)).toBeNull();
-    expect(replayOf({ currentNode: 1, ownedSF: { 1: "3" } }, 1)).toBeNull();
+    expect(replayOf({ currentNode: 1, ownedSF: { 1: "3", 4: 3 } }, 1)).toBeNull();
   });
 
-  test("the destroy goes ahead at the cap: asked for, logged as a replay, no stall; the view says it", () => {
-    const atThree = { slowData: slow({ ownedSF: { 1: 3 } }) };
-    expect(update({ ...atThree, nowMs: 0 })).toBe(true);
+  test("the destroy goes ahead at the caps: asked for, logged as a replay, no stall; the view says it", () => {
+    expect(update({ ...atCaps, nowMs: 0 })).toBe(true);
     // No stall at once (the refusal before #311 was one): only the destroy's own, 5 minutes on, if it doesn't go.
-    expect(update({ ...atThree, nowMs: MINUTE })).toBe(true);
+    expect(update({ ...atCaps, nowMs: MINUTE })).toBe(true);
     expect(lines).toEqual([
-      "world daemon: w0r1d_d43m0n rooted at hacking 3000: destroying the BitNode, into BitNode 1, a replay (Source-File " +
-        "1 is at 3, nothing to gain but the run) (the gate, then a save backup first)",
+      `world daemon: w0r1d_d43m0n rooted at hacking 3000: destroying the BitNode, into BitNode 1, a replay (${REPLAY}) ` +
+        "(the gate, then a save backup first)",
     ]);
     expect(events).toEqual([]);
-    expect(rule.view()).toMatchObject({ destroying: true, replay: REPLAY, stall: null });
-    // Below the cap, the view says no replay.
-    update({ slowData: slow({ ownedSF: { 1: 2 } }) });
-    expect(rule.view().replay).toBeNull();
+    expect(rule.view()).toMatchObject({ destroying: true, nextBitNode: 1, replay: REPLAY, stall: null });
+    // A slow snapshot with SF4 short: BN4 would be next, so the asked-for BN1 isn't said to be a replay.
+    update({ slowData: slow({ ownedSF: { 1: 3 } }) });
+    expect(rule.view()).toMatchObject({ nextBitNode: 1, replay: null });
     // Kept across the Agent gone (no snapshots).
-    update({ ...atThree });
+    update({ ...atCaps });
     update({ staticData: null, mediumData: null, slowData: null });
     expect(rule.view().replay).toBe(REPLAY);
   });
 
-  test("a replay not through 5 minutes on: the destroy step's stall, as below the cap", () => {
-    const atThree = { slowData: slow({ ownedSF: { 1: 3 } }) };
-    update({ ...atThree, nowMs: 0 });
-    update({ ...atThree, nowMs: WORLD_DAEMON_STALLED_AFTER_MS - 1 });
+  test("a replay not through 5 minutes on: the destroy step's stall, as for any destroy", () => {
+    update({ ...atCaps, nowMs: 0 });
+    update({ ...atCaps, nowMs: WORLD_DAEMON_STALLED_AFTER_MS - 1 });
     expect(rule.stall()).toBeNull();
-    update({ ...atThree, nowMs: WORLD_DAEMON_STALLED_AFTER_MS });
+    update({ ...atCaps, nowMs: WORLD_DAEMON_STALLED_AFTER_MS });
     const detail = "w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed";
     expect(rule.stall()).toEqual({ step: "destroy", sinceMs: 0, detail });
     expect(events).toEqual([
@@ -418,23 +449,35 @@ describe("a replay at Source-File 1's cap (#311)", () => {
     expect(lines.at(-1)).toBe(`world daemon: STALLED 5 min: ${detail}`);
   });
 
-  test("the start line's words: off, on, or on and a replay as the last slow snapshot shows the game", () => {
+  test("the start line's words: off, on, or on and into the BitNode the last slow snapshot gives (#321)", () => {
     expect(describeWorldDaemonSwitch(false, slow({ ownedSF: { 1: 3 } }))).toBe("off");
     expect(describeWorldDaemonSwitch(true, null)).toBe("on");
-    expect(describeWorldDaemonSwitch(true, slow({ ownedSF: { 1: 2 } }))).toBe("on");
     expect(describeWorldDaemonSwitch(true, { resetInfo: "odd" })).toBe("on");
-    expect(describeWorldDaemonSwitch(true, slow({ ownedSF: { 1: 3 } }))).toBe(`on (it replays BitNode 1: ${REPLAY})`);
+    expect(describeWorldDaemonSwitch(true, slow({ ownedSF: { 1: 2 } }))).toBe("on (into BitNode 4)");
+    expect(describeWorldDaemonSwitch(true, slow({ ownedSF: { 1: 3 } }))).toBe("on (into BitNode 4)");
+    expect(describeWorldDaemonSwitch(true, slow({ currentNode: 4, ownedSF: { 1: 3, 4: 1 } }))).toBe(
+      "on (into BitNode 4)",
+    );
+    expect(describeWorldDaemonSwitch(true, slow({ ownedSF: { 1: 3, 4: 3 } }))).toBe(
+      `on (into BitNode 1, a replay (${REPLAY}))`,
+    );
   });
 });
 
 describe("a restarted brain", () => {
   test("its destroy restored from the reset note: held with no snapshots, over at another lastNodeReset", () => {
-    rule.restore(0);
+    rule.restore(0, 4);
+    expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(4));
     expect(update({ staticData: null, mediumData: null, slowData: null })).toBe(true);
+    expect(rule.view()).toMatchObject({ destroying: true, nextBitNode: 4 });
     expect(update({ slowData: slow({ lastNodeReset: 0 }), mediumData: medium({ hacking: 1 }) })).toBe(true);
+    // A slow snapshot whose next would be a replay into BN1: the restored destroy into BN4 isn't called one.
+    update({ slowData: slow({ lastNodeReset: 0, ownedSF: { 1: 3, 4: 3 } }), mediumData: medium({ hacking: 1 }) });
+    expect(rule.view()).toMatchObject({ destroying: true, nextBitNode: 4, replay: null });
     expect(
       update({ slowData: slow({ ownedAugs: {}, lastNodeReset: 5_000 }), mediumData: medium({ hacking: 1 }) }),
     ).toBe(false);
+    expect(rule.destroyIntent()).toBeNull();
   });
 });
 

@@ -198,12 +198,25 @@ export {
 } from "./batcher.ts";
 export {
   BITNODE_COUNT,
+  type BitNodePriceMultipliers,
+  bitNodeAssumptions,
+  bitNodePriceMultipliers,
   DESTROY_BITNODE_WORKER_NAME,
   isBitNodeNumber,
   THE_RED_PILL,
   type WorldDaemonStanding,
   worldDaemonProblem,
 } from "./bitnodes.ts";
+export {
+  CAMPAIGN_ORDER,
+  type CampaignStep,
+  type NextBitNode,
+  nextBitNodeOf,
+  REPLAY_BITNODE,
+  SOURCE_FILE_TOP_LEVEL,
+  sourceFilesAfterDestroy,
+  UNCAPPED_SOURCE_FILE,
+} from "./campaign-order.ts";
 export {
   type CityGroupChoice,
   type CityGroupValue,

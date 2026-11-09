@@ -381,14 +381,15 @@ describe("not on the wrong signals", () => {
   });
 });
 
-describe("the brain's replay at Source-File 1's cap (#311): its destroy goes, and the stop is on the next BN1.4", () => {
+describe("the brain's replay at the campaign order's caps (#311, #321): its destroy goes, the stop on the next BN1.4", () => {
   const REPLAYED = "BN1.4 destroyed, BN1.4 seen again (a replay: no Source-File level gained)";
+  const CAPS = { 1: 3, 4: 3 };
 
-  /** BN1.4 (Source-File 1 at 3) with The Red Pill installed, w0r1d_d43m0n rooted at its level: the brain's destroy. */
-  async function replaying() {
+  /** BN1.4 (Source-Files 1 and 4 at 3) with The Red Pill installed, w0r1d_d43m0n rooted at its level. */
+  async function replaying(ownedSF: Record<string, number> = CAPS) {
     const started = brain();
     started.send("static", network);
-    started.send("slow", slowSnapshot({ ownedSF: { 1: 3 }, ownedAugs: { [RED_PILL]: 1 } }), 2_000);
+    started.send("slow", slowSnapshot({ ownedSF, ownedAugs: { [RED_PILL]: 1 } }), 2_000);
     // Through the gate: two medium snapshots of the preconditions, then a save backup.
     for (let each = 0; each < 3; each += 1) started.send("medium", mediumData(3000, { [WD]: true }));
     await started.settleBackup();
@@ -400,13 +401,17 @@ describe("the brain's replay at Source-File 1's cap (#311): its destroy goes, an
     const { send, reconnect, events, lines, stops, sentIds } = await replaying();
     expect(sentIds()).toContain("destroyBitNode(1)");
     expect(events.filter((event) => event.type === "bitNodeDestroySent")).toMatchObject([
-      { source: "brain", nextBitNode: 1, replay: "Source-File 1 is at 3, nothing to gain but the run" },
+      {
+        source: "brain",
+        nextBitNode: 1,
+        replay: "the campaign's order has nothing left to gain (Source-File 1 at 3, Source-File 4 at 3), but the run",
+      },
     ]);
     expect(events.filter((event) => event.type === "worldDaemonStalled")).toEqual([]);
     expect(stops()).toEqual([]);
     // The reset kills the Agent; the next one's first slow snapshot: another lastNodeReset, Source-File 1 still at 3.
     reconnect("session-2");
-    send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
+    send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: CAPS }), 9_500);
     expect(stops()).toEqual([
       {
         type: "brainStoppedAtBitNodeEnd",
@@ -426,8 +431,22 @@ describe("the brain's replay at Source-File 1's cap (#311): its destroy goes, an
     const { send, reconnect, stops, sentIds } = await replaying();
     expect(sentIds()).toContain("destroyBitNode(1)");
     reconnect("session-2");
-    send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
+    send("slow", slowSnapshot({ lastNodeReset: 9_000, ownedSF: CAPS }), 9_500);
     expect(stops()).toEqual([]);
+  });
+
+  test("at Source-File 1's cap with Source-File 4 short (#321): into BitNode 4, and the stop on BN4.1's first look", async () => {
+    writeStopAtBitNodeEnd(store, "brain");
+    const { send, reconnect, events, stops, sentIds } = await replaying({ 1: 3 });
+    expect(sentIds()).toContain("destroyBitNode(4)");
+    expect(events.filter((event) => event.type === "bitNodeDestroySent")).toMatchObject([
+      { source: "brain", nextBitNode: 4, replay: null },
+    ]);
+    reconnect("session-2");
+    send("slow", slowSnapshot({ currentNode: 4, lastNodeReset: 9_000, ownedSF: { 1: 3 } }), 9_500);
+    expect(stops()).toMatchObject([
+      { reason: "destroyed", bitNode: "BN1.4", nextBitNode: "BN4.1", detail: "BN1.4 destroyed, BN4.1 seen" },
+    ]);
   });
 
   test("the World Daemon's switch off (your own destroy planned): no destroy and no stop at the cap", () => {

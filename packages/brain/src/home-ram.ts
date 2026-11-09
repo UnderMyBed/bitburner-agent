@@ -2,6 +2,7 @@
 // (#141). The dashboard's switch turns it on and off; on is the default, as for the other activities (owner decision
 // 34's pattern). Which purchase goes first, of this and the programs, is the controller's (desired-state.ts).
 import {
+  bitNodePriceMultipliers,
   HOME_RAM_LIMIT,
   homeRamUpgradePrice,
   isUpgradableHomeRam,
@@ -39,7 +40,8 @@ export interface HomeRamPlan {
 
 /**
  * The next upgrade: home's RAM doubled, if the player's money covers it, at the tech vendor in the player's city. The
- * price is known in BN1 only so far, so the BitNode comes from the slow snapshot (null until the Agent sends one).
+ * price is known in BN1 and BN4 only so far (#321), so the BitNode comes from the slow snapshot (null until the Agent
+ * sends one).
  * Snapshot data comes from the game, so nothing in it is taken on trust: a home RAM that can't be read is no upgrade.
  */
 export function chooseHomeRamUpgrade(mediumData: MediumSnapshotData, slowData: SlowSnapshotData | null): HomeRamPlan {
@@ -58,10 +60,12 @@ export function chooseHomeRamUpgrade(mediumData: MediumSnapshotData, slowData: S
   const resetInfo = slowData.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
   const limit = resetInfo?.bitNodeOptions?.restrictHomePCUpgrade === true ? RESTRICTED_HOME_RAM_LIMIT : HOME_RAM_LIMIT;
   if (ram >= limit) return plan(null);
-  if (resetInfo?.currentNode !== 1) {
-    return plan(`the home RAM price in BitNode ${String(resetInfo?.currentNode)} (not known yet)`);
-  }
-  const price = homeRamUpgradePrice(ram);
+  // BN1's and BN4's (#321, core's `bitNodePriceMultipliers`); another's isn't known yet.
+  const currentNode = resetInfo?.currentNode;
+  const multipliers = typeof currentNode === "number" ? bitNodePriceMultipliers(currentNode) : null;
+  if (multipliers === null) return plan(`the home RAM price in BitNode ${String(currentNode)} (not known yet)`);
+  // `HomeComputerRamCost` last, as the game multiplies it (`PlayerObjectServerMethods.ts:38`): 1 in BN1 and BN4.
+  const price = homeRamUpgradePrice(ram) * multipliers.HomeComputerRamCost;
   const money = typeof mediumData.player?.money === "number" ? mediumData.player.money : 0;
   if (money < price) {
     return plan(`money for ${ram * 2} GB ($${Math.ceil(price).toLocaleString("en-US")})`, price);

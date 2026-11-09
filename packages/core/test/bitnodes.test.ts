@@ -2,7 +2,14 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import { AUGMENTATION_NAMES } from "../src/augmentations.ts";
-import { BITNODE_COUNT, isBitNodeNumber, THE_RED_PILL, worldDaemonProblem } from "../src/bitnodes.ts";
+import {
+  BITNODE_COUNT,
+  bitNodeAssumptions,
+  bitNodePriceMultipliers,
+  isBitNodeNumber,
+  THE_RED_PILL,
+  worldDaemonProblem,
+} from "../src/bitnodes.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -34,4 +41,46 @@ test("worldDaemonProblem: unreachable, then no root, then the level, each saying
   expect(worldDaemonProblem({ rooted: true, hackingLevel: 14999, requiredHackingLevel: 15000 })).toBe(
     "hacking level 14999: w0r1d_d43m0n needs 15000",
   );
+});
+
+test("the price multipliers the brain knows: BN1's the defaults, BN4's softcap 1.2, as the pinned game sets them", () => {
+  const defaults = gameSource("BitNode/BitNodeMultipliers.ts");
+  for (const name of [
+    "HomeComputerRamCost",
+    "CloudServerCost",
+    "CloudServerSoftcap",
+    "CloudServerLimit",
+    "CloudServerMaxRam",
+  ]) {
+    expect(defaults).toContain(`  ${name} = 1;`);
+  }
+  const bitNodes = gameSource("BitNode/BitNode.tsx");
+  expect(bitNodes).toContain("    case 1: {\n      return new BitNodeMultipliers();\n    }");
+  // BN4's own block, up to BN5's: only the softcap among the prices.
+  const bn4 = bitNodes.slice(bitNodes.indexOf("    case 4: {"), bitNodes.indexOf("    case 5: {"));
+  expect(bn4).toContain("CloudServerSoftcap: 1.2,");
+  expect(bn4).not.toMatch(/HomeComputerRamCost|CloudServerCost|CloudServerLimit|CloudServerMaxRam/);
+  expect(bn4).toContain("ScriptHackMoney: 0.2,");
+  expect(bn4).toContain("HackExpGain: 0.4,");
+  const ones = { HomeComputerRamCost: 1, CloudServerCost: 1, CloudServerSoftcap: 1, CloudServerLimit: 1 };
+  expect(bitNodePriceMultipliers(1)).toEqual({ ...ones, CloudServerMaxRam: 1 });
+  expect(bitNodePriceMultipliers(4)).toEqual({ ...ones, CloudServerSoftcap: 1.2, CloudServerMaxRam: 1 });
+  expect(bitNodePriceMultipliers(2)).toBeNull();
+  expect(bitNodePriceMultipliers(0)).toBeNull();
+});
+
+test("bitNodeAssumptions: none in BN1; BN4's hacking money and exp; another BitNode's multipliers unknown", () => {
+  expect(bitNodeAssumptions(1)).toEqual([]);
+  const bn4 = bitNodeAssumptions(4);
+  expect(bn4).toHaveLength(2);
+  expect(bn4[0]).toMatch(/^the money a hack thread takes: .* ScriptHackMoney as 1, it's 0\.2 in BN4/);
+  expect(bn4[1]).toMatch(/^hacking exp: .* HackExpGain as 1, it's 0\.4 in BN4/);
+  // The game's own formulas, where the multipliers apply.
+  const hacking = gameSource("Hacking.ts");
+  expect(hacking).toContain("currentNodeMults.ScriptHackMoney) / balanceFactor;");
+  expect(hacking).toContain("return expGain * person.mults.hacking_exp * currentNodeMults.HackExpGain;");
+  expect(bitNodeAssumptions(2)).toEqual([
+    "BitNode 2's multipliers: the brain knows BN1's and BN4's only, so it buys no home RAM or cloud servers here, " +
+      "and its hacking takes BN1's",
+  ]);
 });

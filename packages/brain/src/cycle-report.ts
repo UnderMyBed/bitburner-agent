@@ -723,7 +723,8 @@ export class BitNodeCycles {
 
   /**
    * The BitNodes line (#244): each entered in the window, with its start, and destroyed (the next one seen) or not,
-   * with how long it lasted, or has so far. "not recorded" with no slow snapshot.
+   * with how long it lasted, or has so far, and the BitNode it went into (#321): the next one seen, or the one the
+   * destroy sent named. "not recorded" with no slow snapshot.
    */
   bitNodesLine(): string {
     if (this.bitNodes.length === 0) return "  BitNodes: not recorded (no slow snapshot in the window)";
@@ -732,12 +733,17 @@ export class BitNodeCycles {
       const before = bitNode.startMs < this.#sinceMs ? " (before the window)" : "";
       const from = `from ${formatIsoTime(bitNode.startMs)}${before}`;
       if (next !== undefined) {
-        return `${bitNode.name} ${from}, destroyed after ${formatDuration(next.startMs - bitNode.startMs)}`;
+        return `${bitNode.name} ${from}, destroyed after ${formatDuration(next.startMs - bitNode.startMs)}, into ${next.name}`;
       }
       const endMs = Math.max(bitNode.lastRecordMs, ...this.#eventsIn(index).map((event) => event.atMs));
       const sent = this.#destroySentIn(index);
+      const into = this.#eventsIn(index).find((event) => event.kind === BITNODE_DESTROY_SENT_EVENT_KIND);
+      const nextBitNode = into === undefined ? undefined : fieldsOf(into.detail).nextBitNode;
+      const intoText = typeof nextBitNode === "number" ? `, into BitNode ${nextBitNode}` : "";
       const destroyed =
-        sent === null ? "not destroyed" : `destroy sent at ${formatIsoTime(sent)}, the next BitNode not seen`;
+        sent === null
+          ? "not destroyed"
+          : `destroy sent at ${formatIsoTime(sent)}${intoText}, the next BitNode not seen`;
       const lasted = formatDuration(endMs - bitNode.startMs);
       return `${bitNode.name} ${from}, ${destroyed}, ${lasted} by the window's last record`;
     });

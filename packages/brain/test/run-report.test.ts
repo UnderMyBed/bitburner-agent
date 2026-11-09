@@ -511,12 +511,15 @@ describe("cloud servers (#194)", () => {
     );
   });
 
-  test("outside BN1, the price is unknown", () => {
+  test("outside BN1 and BN4, the price is unknown; the BN1-only assumptions listed under the BitNode (#321)", () => {
     withPurchases(2);
     const { text } = report({ verbose: true });
     expect(text).toContain(`    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, price unknown in BitNode 2`);
     expect(text).toContain("    in all: 1 bought, 1 upgraded\n");
-    expect(text).toContain("    the brain buys none in BitNode 2: cloud server prices are known only in BN1\n");
+    expect(text).toContain("    the brain buys none in BitNode 2: cloud server prices are known only in BN1 and BN4\n");
+    expect(text).toContain(
+      "\n    taken as BN1's in BitNode 2 (#321):\n      BitNode 2's multipliers: the brain knows BN1's and BN4's only",
+    );
     expect(report().text).toContain(
       `    BN2.1 1, ${at(5 * MINUTE)} to ${at(12 * MINUTE)}: 1 server, 8 GB → 2 servers, 72 GB ` +
         `(1 bought, 1 upgraded)\n` +
@@ -524,8 +527,19 @@ describe("cloud servers (#194)", () => {
     );
   });
 
+  test("in BN4 (#321), BN4's prices; its assumptions taken as BN1's listed under it", () => {
+    withPurchases(4);
+    const { text } = report();
+    expect(text).toContain("    in all: 1 bought, 1 upgraded, $3,520,000\n");
+    expect(text).not.toContain("the brain buys none");
+    expect(text).toMatch(
+      /\n {4}taken as BN1's in BitNode 4 \(#321\):\n {6}the money a hack thread takes: .*\n {6}hacking exp: .*\n/,
+    );
+  });
+
   test("in BN1, no word of other BitNodes' prices", () => {
     withPurchases(1);
+    expect(report().text).not.toContain("taken as BN1's");
     expect(report().text).not.toContain("the brain buys none");
   });
 
