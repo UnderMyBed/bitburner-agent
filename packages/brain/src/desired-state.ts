@@ -1266,8 +1266,9 @@ export class DesiredStateController {
         nextBitNode,
         // With nothing playable left in the order to gain, into BitNode 1 (#311, #321): said in the run report.
         replay: replayOf(this.#slowData?.resetInfo, nextBitNode),
-        // The BitNodes the order skipped on the way to it (#323): said in the run report.
-        skipped: skippedOf(this.#slowData?.resetInfo, nextBitNode),
+        // The BitNodes the order skipped on the way to it (#323): said in the run report; the brain's order's, so
+        // never on the owner's destroy, though into the same BitNode.
+        skipped: manual === undefined ? skippedOf(this.#slowData?.resetInfo, nextBitNode) : null,
       });
     }
     // An install going out (#210): stored, so the run report can look for the reset after it.

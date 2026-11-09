@@ -110,6 +110,12 @@ test("skipping: past BN5 ×1, the unplayable rows before BN5.2-3 are skipped, ea
     skipped,
   });
   expect(describeSkipped(skipped)).toBe(`BN2, BN6, BN7 and BN3 skipped: ${NO_DATA}`);
+  // An unplayable BitNode already at its level has nothing to gain: never said as skipped (a save with SF2.3).
+  expect(nextBitNodeOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3, 2: 3 } })).toEqual({
+    bitNode: 5,
+    replay: null,
+    skipped: [6, 7, 3].map((bitNode) => ({ bitNode, reason: NO_DATA })),
+  });
   // Once BN2 is playable (the gangs slice), BN5.1 goes into it; a Source-File at its level is never skipped.
   const unplayable = (bitNode: number) => (bitNode === 2 ? null : bitNodeUnplayableReason(bitNode));
   expect(nextBitNodeOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3 }, unplayable })).toEqual({
