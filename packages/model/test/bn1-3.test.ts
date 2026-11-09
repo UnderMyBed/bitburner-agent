@@ -1,8 +1,9 @@
 // The validation on BN1.3, the exit run (#276). #263's part 2 held it out; its first review's findings then cited its
 // figures, and #294 was planned from them (the joins' time, the first cloud purchase, the share at a high level), so
-// it is no longer held out: every check here is "seen (no longer held out)". Nothing is fitted on it: #294's refit is
-// on run #3 alone (test/fit.ts, test/model.test.ts), and #294's mechanisms are the brain's code and the game's, tested
-// against them (packages/brain/test). The next live run is the held-out check. Labels:
+// it is no longer held out: every check here is "seen (no longer held out)". The curves are fitted on run #3 alone
+// (#294's refit, test/fit.ts, test/model.test.ts), and #294's mechanisms are the brain's code and the game's, tested
+// against them (packages/brain/test); but #310 fits the curves' tail past 120 min on BN1.3 (`tailCheckedMin`), so the
+// checks that lean on it are labelled fitted. BN1.4 (#310) was the held-out check. Labels:
 // - independent: the fitted model from BN1.3's start (SF1.2, today's brain with #242's share and #243's hold);
 // - downstream: today's rules on BN1.3's own measured level and income a cycle (`BN1_3_CYCLES`). They share inputs with
 //   what they check, so they test the rules' mechanism, not the curves;
@@ -262,7 +263,10 @@ describe("seen (no longer held out), independent: the fitted model from BN1.3's 
     expect(model.inRange(model.endInstalls[3] as number)).toBe(true);
     const offs = model.phases.slice(3).map((minutes, index) => off(minutes, BN1_3_PHASES[index + 3] as number));
     expect(offs.map((each) => Math.round(each * 100))).toEqual([16, -37]);
-    expect(Math.round(off((model.run.destroyedAtMs as number) / MINUTE_MS, BN1_3.destroyedAtMinutes) * 100)).toBe(-15);
+    // The destroy misses by 0.2 points.
+    const destroy = off((model.run.destroyedAtMs as number) / MINUTE_MS, BN1_3.destroyedAtMinutes);
+    expect(destroy).toBeLessThan(-0.15);
+    expect(destroy).toBeGreaterThan(-0.155);
   });
 
   test("cycles 1 to 7: each length [25%]; the count after the 1st to 6th [one]; known: the 7th 2 over", () => {

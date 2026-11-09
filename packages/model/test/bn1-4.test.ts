@@ -137,7 +137,11 @@ function tailDrift(state: CycleState, points: readonly (readonly [number, number
     if (before === undefined || past.length === 0) return null;
     const drifts = past.map((each) => ({ clock: each.clocks[key], by: each[ratio] / before[ratio] }));
     const broke = drifts.findIndex((each) => !within(ratio, each.by));
-    return { drifts, reached: (broke === -1 ? drifts : drifts.slice(0, broke)).at(-1)?.clock ?? 120 };
+    return {
+      drifts,
+      held: broke === -1,
+      reached: (broke === -1 ? drifts : drifts.slice(0, broke)).at(-1)?.clock ?? 120,
+    };
   };
   return { exp: clock("exp", "level"), money: clock("money", "gross"), end: all.at(-1)?.clocks };
 }
@@ -198,7 +202,16 @@ describe("the curves' tail past 120 min: fitted on BN1.3, held out on BN1.4", ()
     // The 10th never passes 120 on either clock; the 4th reaches 151 on both, the 9th 262 and 240.
     expect(drifts[2]?.exp).toBeNull();
     expect(drifts[2]?.money).toBeNull();
-    const reached = (key: "exp" | "money") => Math.max(...drifts.map((each) => each[key]?.reached ?? 120));
+    // Each cycle's own reach within the bars: the 4th 151 on both clocks, the 9th 262 and 240 (in practice the fit).
+    expect(
+      drifts.slice(0, 2).map((each) => [each.exp?.reached, each.money?.reached].map((each) => Math.round(each ?? 0))),
+    ).toEqual([
+      [151, 151],
+      [262, 240],
+    ]);
+    // The extents from the cycles that held within the bars throughout (all of BN1.3's), their furthest reach.
+    const reached = (key: "exp" | "money") =>
+      Math.max(...drifts.flatMap((each) => (each[key]?.held ? [each[key]?.reached ?? 120] : [])));
     expect(Math.round(reached("exp"))).toBe(262);
     expect(Math.round(reached("money"))).toBe(240);
     // Nothing breaks the bars on BN1.3: the level's ratio moves 5.3% at most, the money's to ×0.67.
@@ -213,11 +226,12 @@ describe("the curves' tail past 120 min: fitted on BN1.3, held out on BN1.4", ()
     });
   });
 
-  test("held out on BN1.4's 13th: within #263's bars (the level −2.9%, the money ×0.96); the 14th never passes 120", () => {
+  test("held out on BN1.4's 13th, to 200/162 of 260/240: the level's ratio drifts −2.9%, the money's ×0.96; the 14th never passes", () => {
     const [thirteenth, fourteenth] = [11, 12].map((index) =>
       tailDrift(BN1_4_PER_CYCLE[index] as CycleState, BN1_4_CYCLES[index]?.points ?? []),
     );
-    // The 13th's clocks end at 200 and 162, within the range fitted on BN1.3.
+    // The 13th's clocks end at 200 and 162, within the range fitted on BN1.3: checked to there. Its level is about 40%
+    // high before 120 and past it alike (the pace at hacking 5,000 and more): what's checked is the drift past 120.
     expect(Math.round(thirteenth?.end?.exp ?? 0)).toBe(200);
     expect(Math.round(thirteenth?.end?.money ?? 0)).toBe(162);
     expect(thirteenth?.end?.exp).toBeLessThanOrEqual(curves.range.exp);
@@ -382,7 +396,7 @@ describe("the share at a high level (#294's item 5), on BN1.4's own state", () =
   test("its RAM with the cloud bought, cycles 8 to 13 [×2.1]: 8 of 13; known: hacking 1.9k to 2.7k ×3.0 to ×5.2", () => {
     // Core's batch plan on BN1.4's level, multipliers, home and cloud RAM (`batchesUseOf`), the share by #242's rule
     // (`shareRamGbOfState`), against the share's RAM the game showed. At hacking 6.4k to 7.6k (the 13th) the batches
-    // leave the cloud to the share, as BN1.4's did (×0.99 to ×1.00); at 1.3k to 1.5k they fill it (×1.00). Between, at
+    // leave the cloud to the share, as BN1.4's did (×0.99 to ×1.00); at 1.3k to 1.6k (the 8th) they fill it (×1.00). Between, at
     // 1.9k to 2.7k (the 9th to 11th), the plan leaves 54% to 81% of the cloud to the share, where BN1.4's batches held
     // all of it; and the 8th's 40-min reading caught the hosts sharing for a moment (×0.09).
     const installed: Record<string, number> = { ...BN1_4.start.afterInstall.installed };
@@ -403,6 +417,7 @@ describe("the share at a high level (#294's item 5), on BN1.4's own state", () =
     const within = ratios.map((each) => each <= 2.1 && each >= 1 / 2.1);
     expect(within).toEqual([true, false, true, true, false, false, false, false, true, true, true, true, true]);
     expect(Math.min(...ratios.slice(8))).toBeGreaterThan(0.98);
+    for (const index of [0, 2]) expect(ratios[index]).toBeCloseTo(1, 2);
     expect(Math.min(...[4, 5, 6, 7].map((index) => ratios[index] as number))).toBeGreaterThan(3);
     expect(Math.max(...ratios)).toBeLessThan(5.3);
   });
