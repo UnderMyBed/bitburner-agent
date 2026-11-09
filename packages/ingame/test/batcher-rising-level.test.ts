@@ -9,7 +9,7 @@
 // own exp takes the level past 340 within 6 minutes (the rise is printed). Each hack sized for the level forecast at
 // its landing (core's `LevelForecast`), every grow leaves the target full, with no desync. The control arm runs the
 // same with a config without the forecast's multipliers, its hacks sized at the level as they go out, as every
-// batcher's before #315: its grows leave the money down to 32-40% and it desyncs out of bounds, on seeds 1 to 4
+// batcher's before #315: its grows leave the money down to 32–40% and it desyncs out of bounds, on seeds 1 to 4
 // (#315's review). CI runs seed 1; `BATCHER_SEEDS` (`1,2,3`, say) runs others.
 import {
   BATCHER_HEALTH_PORT,
@@ -34,7 +34,7 @@ const TARGET = "harakiri-sushi";
 /**
  * Home, the batches' only host: 4 PB, so a batch every 80 ms with a share of about three quarters. The more RAM, the
  * steeper the batches' own exp raises the level: on 1 PB the control arm desynced with its least look at 92%, on 4 PB
- * at 32-40% (seeds 1 to 4, #315's review).
+ * at 32–40% (seeds 1 to 4, #315's review).
  */
 const HOME_GB = 2 ** 22;
 /** A fresh BN1 player's multipliers, all 1, and no intelligence. */

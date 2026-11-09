@@ -810,6 +810,11 @@ export class RecoveryClock {
   endsAt(): number | null {
     return this.#endsAt;
   }
+
+  /** The time its streak's ended recoveries have spent recovering, ms: what a desync within the streak has less. */
+  spentMs(): number {
+    return this.#spentMs;
+  }
 }
 
 /** A target ready for batches: at its minimum security and maximum money. */
@@ -1366,6 +1371,17 @@ export interface BatcherHealth {
    * Absent from an older batcher.
    */
   recoveriesTimedOut?: number;
+  /**
+   * The waves of the preparation under way (#315's second re-review), since it last batched or moved: past twice
+   * `MOST_PREPARATION_WAVES` its problem says it may be kept down. Absent from an older batcher.
+   */
+  preparationWaves?: number;
+  /**
+   * The time the latest streak of recoveries has spent recovering, ms (#315's re-review, core's `RecoveryClock`): a
+   * desync within a recovery's time of the last one's end has that much less of it; 0 after a move or one given up.
+   * Absent from an older batcher.
+   */
+  recoverySpentMs?: number;
   /** Landings out of order, operations started too late, records lost, and the target outside the bounds. */
   outOfOrder: number;
   late: number;
@@ -1606,6 +1622,8 @@ export function newBatcherHealth(target: string, runName: string, atMs: number):
     hacksTrimmedForLevel: 0,
     mostLevelRise: 0,
     recoveriesTimedOut: 0,
+    preparationWaves: 0,
+    recoverySpentMs: 0,
     outOfOrder: 0,
     late: 0,
     lost: 0,

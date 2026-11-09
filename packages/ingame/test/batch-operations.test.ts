@@ -346,6 +346,28 @@ test("a config without the level forecast's multipliers (an older brain's, #315)
   expect(health.hacksTrimmedForLevel).toBe(0);
 });
 
+test("a move resets the recovery clock (#315's re-review): the new target's recovery has its whole time", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  expect((await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME)).error).toBeUndefined();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(n00dlesConfig())] });
+  await healthOnceThat(simulation, (health) => health.hacksLanded > 0, 5_000, 20 * 60_000, "hacks landing");
+  // A desync (the later landing recorded first), and a recovery that ends: its streak has spent some time recovering.
+  const running = await inFlight(simulation);
+  const first = running[0] as { id: string; landAt: number };
+  const last = running.at(-1) as { id: string; landAt: number };
+  await simulation.run("home", "write-port.js", {
+    args: [BATCHER_LANDING_PORT, recordJson(last.id, last.landAt), recordJson(first.id, first.landAt)],
+  });
+  await healthOnceThat(simulation, (health) => health.state === "recovering", 1_000, 60_000, "recovering");
+  const back = await healthOnceThat(simulation, (health) => health.state === "batching", 1_000, 10 * 60_000, "back");
+  expect(back.recoverySpentMs).toBeGreaterThan(0);
+  // A move (n00dles' figures anew): the time the old target's streak spent isn't the new one's.
+  const moved = { ...n00dlesConfig(), figures: { ...N00DLES, baseDifficulty: 3 } };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(moved)] });
+  await simulation.advance(1_000);
+  expect((await healthOf(simulation)).recoverySpentMs).toBe(0);
+});
 test("a move back to a target still out of step (#315's re-review): prepared again, it batches, in step", async () => {
   const simulation = await gameWithScripts();
   await simulation.diagnostics.gainHackingExp(2_000);
@@ -363,15 +385,23 @@ test("a move back to a target still out of step (#315's re-review): prepared aga
   // A move to n00dles' own figures anew (with its base difficulty): a move, back to a target out of step.
   const again = { ...n00dlesConfig(), figures: { ...N00DLES, baseDifficulty: 3 } };
   await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(again)] });
+  await simulation.advance(1_000);
+  expect((await healthOf(simulation)).state).toBe("preparing");
+  // Its preparation brings it back: from `preparing` straight to `batching`, in step, never `recovering` (#315's
+  // second re-review), so its first hack's check is never left to a recovery's time.
+  const states = new Set<string>();
   const prepared = await healthOnceThat(
     simulation,
-    (health) => health.state !== "preparing" && health.state !== "recovering",
-    1_000,
+    (health) => {
+      states.add(health.state);
+      return health.state !== "preparing";
+    },
+    250,
     20 * 60_000,
     "prepared again",
   );
-  // Its preparation brought it back: in step, batching, its first hack's check never left to a recovery's time.
   expect(prepared).toMatchObject({ state: "batching", recoveriesTimedOut: 0 });
+  expect([...states].sort()).toEqual(["batching", "preparing"]);
   await healthOnceThat(
     simulation,
     (health) => health.hacksLanded > prepared.hacksLanded,
@@ -1849,8 +1879,16 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
   let silentlyWaiting = 0;
   let saidItWaits = 0;
   let timesNamed = 0;
+  // n00dles' grows still landing after the move, a weaken at most (#315's second re-review): not looked at, never
+  // joesguns' money, until joesguns' own land, a weaken of its after the move.
+  const n00dlesWeakenMs = operationTimeMs("weaken1", N00DLES, player);
+  expect(n00dlesWeakenMs + 10_000).toBeLessThan(operationTimeMs("weaken1", joesguns, player));
+  let looksOnceN00dlesLanded: BatcherHealth | null = null;
   for (let elapsed = 0; elapsed < 5 * 60_000; elapsed += 2_000) {
     await simulation.advance(2_000);
+    if (looksOnceN00dlesLanded === null && elapsed >= n00dlesWeakenMs + 5_000) {
+      looksOnceN00dlesLanded = await healthOf(simulation);
+    }
     for (const { target, landAt } of await hacksInFlight(simulation)) {
       if (target === "n00dles") lastOldHackAt = Math.max(lastOldHackAt, landAt);
       if (target === "joesguns") firstNewHackAt = Math.min(firstNewHackAt, landAt);
@@ -1893,6 +1931,9 @@ test("a move to a prepared target (#236): batches at once beside a dropped next 
   // In step, though joesguns' batches land among n00dles' and harakiri-sushi's (the order is each target's own).
   expect(after).toMatchObject({ state: "batching", desyncs: 0, late: 0, lost: 0, outOfBounds: 0, batchesShort: 0 });
   expect(after.batchesStarted).toBeGreaterThan(before.batchesStarted + 10);
+  expect(looksOnceN00dlesLanded?.moneyLooks).toBe(before.moneyLooks);
+  expect(looksOnceN00dlesLanded?.growsNotLooked ?? 0).toBeGreaterThan(before.growsNotLooked ?? 0);
+  expect(after.moneyLooks ?? 0).toBeGreaterThan(before.moneyLooks ?? 0);
 });
 
 test("batching with no batch that fits the RAM says so, and why (#236), until one does", async () => {
