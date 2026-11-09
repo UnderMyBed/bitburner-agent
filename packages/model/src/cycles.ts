@@ -96,6 +96,16 @@ export type Multipliers = Record<(typeof HACKING_MULTIPLIERS)[number], number>;
 export interface ModelStart {
   currentNode: number;
   ownedSF: Readonly<Record<string, number>>;
+  /**
+   * An install within the BitNode to start from, in place of its start (#310: BN1.4's 2nd cycle, after a 1st with
+   * offline income): what's installed (NeuroFlux Governor's levels as its value), each faction's favour, home's RAM.
+   * Lookups by cycle index (`share: "index"`, `measured`) count from this start, not from the BitNode's 1st cycle.
+   */
+  afterInstall?: {
+    installed: Readonly<Record<string, number>>;
+    favor: Readonly<Record<string, number>>;
+    homeRamGb: number;
+  };
 }
 
 /** What a policy sees at each step. */
@@ -164,8 +174,8 @@ export interface ModelCycle {
   /** Home's RAM after the cycle. */
   homeRamGb: number;
   /**
-   * Minutes of the cycle past its curve's last reading (`Curves.lastMinute`, or a measured cycle's end), each clock's
-   * more: extrapolated at the last slope, so less sure (#263). 0 for none.
+   * Minutes of the cycle past its curves' range (`Curves.range`: the last reading and the tail checked past it, #310),
+   * or a measured cycle's end, each clock's more: extrapolated at the last slope, so less sure (#263). 0 for none.
    */
   extrapolatedMinutes: number;
   /** The share bonus while working, the cycle's average over the minutes worked (`shareBonusOfState`). */
@@ -202,9 +212,10 @@ export interface ModelRun {
 }
 
 /**
- * How far past its last reading a curve is trusted, minutes (#263): half the 120 min it spans. Past the last reading
- * each clock runs on at the last slope (RAM at its most, a steady income), which holds for a while; a cycle further out
- * is flagged out of range (`ModelRun.outOfRange`).
+ * How far past the curves' range (`Curves.range`: their last reading, 120 min, and the tail checked past it, #310) a
+ * cycle is still trusted, minutes (#263): half the 120 min the readings span. There each clock runs on at its last
+ * slope, unchecked; a cycle further out is flagged out of range (`ModelRun.outOfRange`). So with #310's checked tail
+ * a cycle is out of range only past 320 min on the experience's clock or 300 on the money's.
  */
 export const EXTRAPOLATION_BOUND_MIN = 60;
 
@@ -296,7 +307,10 @@ export const startHomeRamGb = (sourceFile1Level: number) => (sourceFile1Level > 
 /** An install puts the player in Sector-12 (`PlayerObjectGeneralMethods.ts:104`). */
 const START_CITY = "Sector-12";
 
-/** Runs the model from a BitNode's start, under `policy` (today's brain by default). */
+/**
+ * Runs the model from a BitNode's start (or an install within it, `ModelStart.afterInstall`), under `policy` (today's
+ * brain by default).
+ */
 export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRun {
   const policy = options.policy ?? TODAYS_POLICY;
   const horizonMs = options.horizonMs ?? 24 * 60 * MINUTE_MS;
@@ -305,8 +319,8 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   const { currentNode, ownedSF } = start;
   const bitNode = augmentationBitNodeMultipliers(currentNode, ownedSF);
   const sourceFile1Level = ownedSF["1"] ?? 0;
-  const installed: Record<string, number> = {};
-  const favor = new Map<string, number>();
+  const installed: Record<string, number> = { ...start.afterInstall?.installed };
+  const favor = new Map<string, number>(Object.entries(start.afterInstall?.favor ?? {}));
   const cycles: ModelCycle[] = [];
   const events: ModelEvent[] = [];
   const byCash = (options.money ?? "cash") === "cash";
@@ -318,7 +332,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   const cloudDelayMs = options.cloudDelayMs ?? 0;
   // The batches' peak RAM by the level and the ports, within a cycle (its multipliers fixed): core's batch maths.
   let peaks = new Map<string, number>();
-  let purse = freshPurse(startHomeRamGb(sourceFile1Level));
+  let purse = freshPurse(start.afterInstall?.homeRamGb ?? startHomeRamGb(sourceFile1Level));
   let destroyedAtMs: number | null = null;
   // The cycle's state.
   let cycleStartMs = 0;
@@ -358,12 +372,13 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
     const reading = measured === undefined ? null : measuredAt(measured.points, onlineMs / MINUTE_MS);
     const hacking = reading?.hacking ?? curves.hackingLevelAt(clocks.exp, multipliers);
     const gross = reading?.money ?? curves.moneyAt(clocks.money, multipliers);
-    // Past the curve's last reading, or the measured cycle's end: extrapolated (#263).
-    const lastMinute = measured === undefined ? curves.lastMinute : (measured.points.at(-1)?.[0] ?? 0);
-    const minutesIntoCurve = measured === undefined ? Math.max(clocks.exp, clocks.money) : onlineMs / MINUTE_MS;
-    if (minutesIntoCurve > lastMinute) {
-      stats.extrapolatedMinutes = Math.max(stats.extrapolatedMinutes, minutesIntoCurve - lastMinute);
-    }
+    // Past the curves' range (their last reading and the tail checked past it, #310), or the measured cycle's end:
+    // extrapolated (#263).
+    const extrapolated =
+      measured === undefined
+        ? curves.extrapolatedMinutes(clocks)
+        : Math.max(0, onlineMs / MINUTE_MS - (measured.points.at(-1)?.[0] ?? 0));
+    stats.extrapolatedMinutes = Math.max(stats.extrapolatedMinutes, extrapolated);
     // The income over the brain's window (`AUGMENTATION_INCOME_WINDOW_MS`, the cloud servers' too): from the newest
     // sample at or before the window's start, as the brain keeps them (`HackLoopIncome.add`); null till it spans it.
     incomeSamples.push({ onlineMs, gross });
