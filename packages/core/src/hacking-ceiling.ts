@@ -37,6 +37,8 @@ export interface HackingTarget {
   minDifficulty: number;
   requiredHackingSkill: number;
   serverGrowth: number;
+  /** Its starting security (#315's review): the batcher's level forecast, absent from an older snapshot. */
+  baseDifficulty?: number;
 }
 
 /** The game's `calculateIntelligenceBonus` at weight 1 (PersonObjects/formulas/intelligence.ts:1-3). */

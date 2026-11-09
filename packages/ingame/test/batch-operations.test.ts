@@ -332,7 +332,7 @@ test("the batcher counts a landing out of order and desyncs, and names a record 
   expect((await healthOf(simulation)).wavesStarted).toBe(wavesBefore);
 });
 
-test("a config without the level forecast's multipliers (an older brain's, #315): it batches, and says so", async () => {
+test("a config without the level forecast's multipliers (an older brain's, #315): batches, and says so", async () => {
   const simulation = await gameWithScripts();
   const config = n00dlesConfig();
   const { hacking: _level, hacking_exp: _exp, ...olderMults } = config.player.mults;
@@ -344,6 +344,42 @@ test("a config without the level forecast's multipliers (an older brain's, #315)
       "out, not at their landing",
   );
   expect(health.hacksTrimmedForLevel).toBe(0);
+});
+
+test("a move back to a target still out of step (#315's re-review): prepared again, it batches, in step", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  expect((await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME)).error).toBeUndefined();
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(n00dlesConfig())] });
+  await healthOnceThat(simulation, (health) => health.hacksLanded > 0, 5_000, 20 * 60_000, "hacks landing");
+  // A desync: the later landing recorded first, then the earlier one.
+  const running = await inFlight(simulation);
+  const first = running[0] as { id: string; landAt: number };
+  const last = running.at(-1) as { id: string; landAt: number };
+  await simulation.run("home", "write-port.js", {
+    args: [BATCHER_LANDING_PORT, recordJson(last.id, last.landAt), recordJson(first.id, first.landAt)],
+  });
+  await healthOnceThat(simulation, (health) => health.state === "recovering", 1_000, 60_000, "recovering");
+  // A move to n00dles' own figures anew (with its base difficulty): a move, back to a target out of step.
+  const again = { ...n00dlesConfig(), figures: { ...N00DLES, baseDifficulty: 3 } };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(again)] });
+  const prepared = await healthOnceThat(
+    simulation,
+    (health) => health.state !== "preparing" && health.state !== "recovering",
+    1_000,
+    20 * 60_000,
+    "prepared again",
+  );
+  // Its preparation brought it back: in step, batching, its first hack's check never left to a recovery's time.
+  expect(prepared).toMatchObject({ state: "batching", recoveriesTimedOut: 0 });
+  await healthOnceThat(
+    simulation,
+    (health) => health.hacksLanded > prepared.hacksLanded,
+    5_000,
+    10 * 60_000,
+    "hacks landing again",
+  );
+  expect((await healthOf(simulation)).recoveriesTimedOut).toBe(0);
 });
 
 test.each([
@@ -1925,6 +1961,51 @@ test("a next target with no room for a wave for a minute is said (#236), until i
   const fed = await healthOf(simulation);
   expect(fed.next?.wavesStarted).toBeGreaterThan(0);
   expect(fed).toMatchObject({ problem: null, desyncs: 0, batchesShort: 0 });
+});
+
+test("recovering in place, the next target's waves go on (#315's review)", async () => {
+  const simulation = await gameWithScripts();
+  await simulation.diagnostics.gainHackingExp(2_000);
+  expect((await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME)).error).toBeUndefined();
+  const foodnstuff = { moneyMax: 50_000_000, minDifficulty: 3, requiredHackingSkill: 1, serverGrowth: 5 };
+  const rest = batchPlan(
+    N00DLES,
+    { skills: { hacking: 50, intelligence: 0 }, mults: MULTS },
+    batchRamGb([16, 16]) * 0.6,
+  );
+  if (rest === null) throw new Error("no plan for n00dles on the rest");
+  const config = {
+    ...n00dlesConfig(),
+    hackShare: rest.hackShare,
+    spacingMs: rest.spacingMs,
+    next: { target: "foodnstuff", figures: foodnstuff, ramGb: 7.2 },
+  };
+  await simulation.run("home", "set-port.js", { args: [BATCHER_CONFIG_PORT, JSON.stringify(config)] });
+  for (let waited = 0; (await healthOf(simulation)).hacksLanded === 0; waited += 5_000) {
+    expect(waited, "hacks landing within 20 virtual minutes").toBeLessThan(20 * 60_000);
+    await simulation.advance(5_000);
+  }
+  // Another script hacks n00dles over and over: a desync, and a recovery in place that lasts while it does.
+  await simulation.diagnostics.setHomeRam(128);
+  await simulation.writeFile(
+    "home",
+    "rogue.js",
+    "export async function main(ns) { for (;;) await ns.hack(ns.args[0]); }",
+  );
+  expect((await simulation.run("home", "rogue.js", { threads: 40, args: ["n00dles"] })).error).toBeUndefined();
+  const recovering = await healthOnceThat(
+    simulation,
+    (health) => health.state === "recovering",
+    1_000,
+    20 * 60_000,
+    "a recovery",
+  );
+  await simulation.advance(3 * 60_000);
+  const later = await healthOf(simulation);
+  // Still recovering, and foodnstuff's waves went on beside it: paused, a target that won't come back would leave the
+  // move away from it a weaken further off.
+  expect(later.state).toBe("recovering");
+  expect(later.next?.wavesStarted ?? 0).toBeGreaterThan(recovering.next?.wavesStarted ?? 0);
 });
 
 test("batching, a stretch with no batch that fits after the first is said too (#237's review), and clears", async () => {

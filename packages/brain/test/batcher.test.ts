@@ -255,7 +255,7 @@ describe("batcherHostsOf", () => {
 });
 
 describe("batcherMultsOf (#315)", () => {
-  test("the formulas' four and the level forecast's two, each the medium snapshot's own; null if one is missing", () => {
+  test("the formulas' four and the level forecast's two, the medium snapshot's own; null if one is missing", () => {
     const mults = { hacking_chance: 1.1, hacking_speed: 1.2, hacking_money: 1.3, hacking_grow: 1.4 };
     const player = { skills: { hacking: 100, intelligence: 0 }, mults: { ...mults, hacking: 3.4, hacking_exp: 4.5 } };
     expect(batcherMultsOf(player)).toEqual({ ...mults, hacking: 3.4, hacking_exp: 4.5 });
@@ -332,7 +332,7 @@ describe("the run report's section", () => {
     expect(lines).toContain("    from 2026-01-01T01:10:00.000Z: no RAM to prepare n00dles");
   });
 
-  test("a desync after grows short of their hacks names the shortfall as its cause (#315); one without, or older, not", () => {
+  test("a desync after grows short of their hacks names the shortfall its cause (#315); one without, or older, not", () => {
     const failures: string[] = [];
     const lines = batcherSection(
       [
@@ -385,9 +385,87 @@ describe("the run report's section", () => {
       older,
     );
     expect(older[0]).not.toContain("its cause");
+    // Grows short on the target before a move (#315's review): not the new target's cause; and the run's least, from
+    // before the reach on another target, isn't given.
+    const moved: string[] = [];
+    batcherSection(
+      [
+        { atMs: at(0), health: health("d", { moneyLooksBelowFull: 0 }) },
+        { atMs: at(1), health: health("d", { moneyLooksBelowFull: 9, ...least(0.0, "n00dles") }) },
+        // The move: zer0 prepared while n00dles' grows still land below full (#315's re-review): not zer0's.
+        {
+          atMs: at(2),
+          health: {
+            ...health("d", { state: "preparing", moneyLooksBelowFull: 12, ...least(0.0, "n00dles") }),
+            target: "zer0",
+          },
+        },
+        {
+          atMs: at(3),
+          health: {
+            ...health("d", { moneyLooksBelowFull: 12, ...least(0.0, "n00dles"), desyncs: 1, outOfBounds: 1 }),
+            target: "zer0",
+          },
+        },
+      ],
+      moved,
+    );
+    expect(moved).toHaveLength(1);
+    expect(moved[0]).not.toContain("grow shortfall");
+    const later: string[] = [];
+    batcherSection(
+      [
+        { atMs: at(0), health: health("e", { moneyLooksBelowFull: 3, ...least(0.5, "n00dles") }) },
+        { atMs: at(10), health: health("e", { moneyLooksBelowFull: 3, ...least(0.5, "n00dles") }) },
+        {
+          atMs: at(11),
+          health: health("e", { moneyLooksBelowFull: 7, ...least(0.5, "n00dles"), desyncs: 1, outOfBounds: 1 }),
+        },
+      ],
+      later,
+    );
+    expect(later[0]).toContain(
+      "its cause: a grow shortfall, the money below full after 4 grows from 2026-01-01T00:11:00.000Z, each hack",
+    );
+    // The run's least fell within the reach, but on another target (a next's, say): not this one's.
+    const elsewhere: string[] = [];
+    batcherSection(
+      [
+        { atMs: at(0), health: health("g", { moneyLooksBelowFull: 3 }) },
+        {
+          atMs: at(1),
+          health: health("g", { moneyLooksBelowFull: 7, ...least(0.2, "zer0"), desyncs: 1, outOfBounds: 1 }),
+        },
+      ],
+      elsewhere,
+    );
+    expect(elsewhere[0]).toContain("its cause: a grow shortfall, the money below full after 4 grows from");
+    expect(elsewhere[0]).not.toContain("the least");
+    // Late operations alone: no money drift's end, so no cause named.
+    const lateOnly: string[] = [];
+    batcherSection(
+      [
+        { atMs: at(0), health: health("f", {}) },
+        { atMs: at(1), health: health("f", { moneyLooksBelowFull: 2, late: 1 }) },
+      ],
+      lateOnly,
+    );
+    expect(lateOnly).toHaveLength(1);
+    expect(lateOnly[0]).not.toContain("grow shortfall");
   });
 
-  test("the level at the hacks' landings (#315): the hacks sent smaller, the most levels; an older batcher's not", () => {
+  test("a recovery in place past its time (#315's review): on the desyncs' line", () => {
+    const lines = batcherSection([
+      { atMs: at(0), health: health("a", {}) },
+      { atMs: at(9), health: health("a", { state: "preparing", desyncs: 2, outOfBounds: 2, recoveriesTimedOut: 1 }) },
+    ]);
+    expect(lines).toContain(
+      "  desyncs: 2 (0 out of order, 2 out of bounds); 1 recovery in place past its time (a weaken and 10 batches: " +
+        "something kept the target down), the target prepared again",
+    );
+  });
+
+  test("the level at the hacks' landings (#315): hacks sent smaller, the most levels; an older batcher's not", () => {
     const lines = batcherSection([
       { atMs: at(0), health: health("a", { hacksTrimmedForLevel: 10, mostLevelRise: 3 }) },
       { atMs: at(1), health: health("a", { hacksTrimmedForLevel: 45, mostLevelRise: 41 }) },
@@ -965,6 +1043,20 @@ function choiceMedium(money: number, security: number): MediumSnapshotData {
 const CHOICE_HOSTS = ["pserv-0", "pserv-1"];
 const PLAYER_100 = { skills: { hacking: 100, intelligence: 0 }, mults: MULTS };
 
+test("planBatcher's figures carry the static snapshot's base difficulty when it has one (#315's review)", () => {
+  const data = choiceMedium(RICH.moneyMax, RICH.minDifficulty);
+  const based: StaticSnapshotData = {
+    servers: choiceNetwork.servers.map((server) =>
+      server.hostname === "rich" ? { ...server, baseDifficulty: 27.5 } : server,
+    ),
+  };
+  expect(planBatcher(based, data, "rich", CHOICE_HOSTS).batcher?.config.figures.baseDifficulty).toBe(27.5);
+  // An older Agent's snapshot, without it: none in the figures (the batcher takes the most a minimum allows).
+  expect(planBatcher(choiceNetwork, data, "rich", CHOICE_HOSTS).batcher?.config.figures).not.toHaveProperty(
+    "baseDifficulty",
+  );
+});
+
 describe("chooseBatcher (#206)", () => {
   const choose = (data: MediumSnapshotData, current: string | null = null, batching: string | null = null) => {
     const planned = current === null ? null : planBatcher(choiceNetwork, data, current, CHOICE_HOSTS);
@@ -1245,6 +1337,33 @@ describe("the run report's section, out of step after a clock step or page stall
     // An older batcher's health, with no clock, keeps the step's warning.
     expect(section(run(), [STEP]).warnings).toHaveLength(1);
   });
+
+  test(
+    "grows short before a desync an incident explains: a cause beside it, which may be its cause instead " + "(#315)",
+    () => {
+      const short = run().map((point, index) =>
+        index === 1 || index === 2
+          ? {
+              ...point,
+              health: {
+                ...(point.health as object),
+                moneyLooksBelowFull: 5,
+                leastMoneyAfterGrow: 0.9,
+                leastMoneyAfterGrowOn: "the-hub",
+              },
+            }
+          : index > 2
+            ? { ...point, health: { ...(point.health as object), moneyLooksBelowFull: 5 } }
+            : point,
+      );
+      const [warning] = section(short).warnings;
+      expect(warning).toContain(
+        `${AFTER}; a grow shortfall before it too, which may be its cause instead, the money below full after 5 ` +
+          "grows " +
+          `from ${iso(734_478)}, the least 90.0% of the-hub's maximum`,
+      );
+    },
+  );
 
   test("of two incidents within a weaken before the first desync, the latest", () => {
     const earlier = { ...STALL, fromMs: at(600_000), toMs: at(605_000) };

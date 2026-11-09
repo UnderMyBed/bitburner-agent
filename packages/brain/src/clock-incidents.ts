@@ -83,8 +83,9 @@ export const PAGE_STALL_SAME_INCIDENT_WITHIN_MS = 60_000;
 export const INCIDENT_ATTRIBUTION_WEAKENS = 1;
 /**
  * A batcher out of step after an incident is a warning only if it's batching again within this of the incident's end,
- * and nothing is out of step for this long after (owner decision 55). Run #3's took 95 s; a recovery lets every part
- * in flight land (one weaken, minutes on most targets) and prepares the target again.
+ * and nothing is out of step for this long after (owner decision 55). Run #3's took 95 s. Since #315 a recovery is in
+ * place: the hacks out land (a hack's time) and the held batches refill the target, within core's `recoveryInPlaceMs`
+ * (a weaken's time and 10 batches, minutes on most targets), past which it prepares the target again.
  */
 export const BATCHER_INCIDENT_RECOVERY_MS = 10 * 60_000;
 /** This many incidents within `TOO_MANY_INCIDENTS_WITHIN_MS` fail the run (owner decision 55). */

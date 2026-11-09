@@ -31,6 +31,7 @@ import {
   type HackingPlayer,
   type HackingTarget,
   operationTimeMs,
+  recoveryInPlaceMs,
   usableRamGb,
 } from "@bitburner-agent/core";
 import type { Simulation } from "@bitburner-agent/sim";
@@ -337,6 +338,113 @@ test.each(SEEDS)(
   },
 );
 
+/** A script that hacks n00dles behind the batcher's back (#315's review), with what to hack it with. */
+async function rogueOnN00dles(simulation: Simulation, script: string): Promise<void> {
+  await simulation.diagnostics.setHomeRam(ROGUE_HOME_RAM_GB);
+  await simulation.writeFile("home", "rogue.js", script);
+  expect(
+    (await simulation.run("home", "rogue.js", { threads: ROGUE_THREADS, args: ["n00dles"] })).error,
+  ).toBeUndefined();
+}
+
+/** A fresh start's batcher on n00dles, batching, hacks landing: its config. */
+async function batchingN00dles(simulation: Simulation, figures: Record<string, HackingTarget>): Promise<BatcherConfig> {
+  const config = await plannedConfig(simulation, "n00dles", figures.n00dles as HackingTarget);
+  expect(
+    (await simulation.run("home", FOLDER + BATCHER_SCRIPT_NAME, { args: [JSON.stringify(config)] })).error,
+  ).toBeUndefined();
+  await advanceUntil(simulation, (health) => health.hacksLanded > 0, PREPARED_WITHIN_MS, "n00dles batched");
+  return config;
+}
+
+/** How long a preparation that can't finish may run before it says so: past `MOST_PREPARATION_WAVES` waves. */
+const UNREADY_SAID_WITHIN_MS = 180 * 60_000;
+/** How long the rogue hacks n00dles twice a minute: its streak's short recoveries add up past a recovery's time. */
+const TWICE_A_MINUTE_FOR_MS = 45 * 60_000;
+
+test.each(SEEDS)(
+  "seed %i: a script hacking n00dles over and over, never stopping: the recovery gives up past its time (#315)",
+  { timeout: 600_000 },
+  async (seed) => {
+    const { simulation, figures } = await freshGame(seed);
+    const config = await batchingN00dles(simulation, figures);
+    await rogueOnN00dles(simulation, "export async function main(ns) { for (;;) await ns.hack(ns.args[0]); }");
+    await advanceUntil(simulation, (health) => health.desyncs > 0, DESYNC_WITHIN_MS, "a desync seen", 1_000);
+    expect((await healthOf(simulation)).state).toBe("recovering");
+    const desyncedAt = await simulation.now();
+    const level = (await simulation.summary()).hackingLevel;
+    const allowedMs = recoveryInPlaceMs(figures.n00dles as HackingTarget, player(level), config.spacingMs);
+    // Recovering in place until its time is up; then it prepares n00dles, `preparing`, so the brain's move rules
+    // weigh it anew.
+    await advanceUntil(
+      simulation,
+      (health) => (health.recoveriesTimedOut ?? 0) > 0,
+      allowedMs + 60_000,
+      "the recovery given up",
+      1_000,
+    );
+    const gaveUpAfterMs = (await simulation.now()) - desyncedAt;
+    const gaveUp = await healthOf(simulation);
+    expect(gaveUpAfterMs).toBeGreaterThanOrEqual(allowedMs - 2_000);
+    expect(gaveUp).toMatchObject({ state: "preparing", recoveriesTimedOut: 1 });
+    expect(gaveUp.batchesPending).toBe(0);
+    // Its first wave waits for the dropped batches' grows and weakens still out, planned a weaken ahead (#216's rule,
+    // #315's re-review), and their money isn't looked at: not the grows' doing.
+    await simulation.advance(30_000);
+    expect((await healthOf(simulation)).wavesStarted).toBe(gaveUp.wavesStarted);
+    // The rogue never stops, so the preparation never finishes: said, once past MOST_PREPARATION_WAVES waves (#315's
+    // re-review), never a silent `preparing`.
+    await advanceUntil(
+      simulation,
+      (health) => health.problem?.includes("waves and it isn't ready") === true,
+      UNREADY_SAID_WITHIN_MS,
+      "an unready preparation said",
+      60_000,
+    );
+    const unready = await healthOf(simulation);
+    console.log(
+      `seed ${seed}, n00dles hacked over and over: recovery given up ${(gaveUpAfterMs / 1000).toFixed(0)} s after ` +
+        `the desync (allowed ${(allowedMs / 1000).toFixed(0)} s); then ${unready.problem}`,
+    );
+    expect(unready.state).toBe("preparing");
+    expect(unready.moneyLooks).toBe(gaveUp.moneyLooks);
+    expect(unready.wavesStarted).toBeGreaterThan(gaveUp.wavesStarted);
+    expect(unready.problem).toMatch(/^preparing n00dles has taken \d+ waves and it isn't ready: something keeps it/);
+  },
+);
+
+test.each(SEEDS)(
+  "seed %i: a script hacking n00dles twice a minute: each short recovery stays in place, none given up (#315)",
+  { timeout: 600_000 },
+  async (seed) => {
+    const { simulation, figures } = await freshGame(seed);
+    const config = await batchingN00dles(simulation, figures);
+    await rogueOnN00dles(
+      simulation,
+      "export async function main(ns) { for (;;) { await ns.hack(ns.args[0]); await ns.hack(ns.args[0]); " +
+        "await ns.sleep(60000); } }",
+    );
+    await advanceUntil(simulation, (health) => health.desyncs > 0, DESYNC_WITHIN_MS, "a desync seen", 1_000);
+    const first = await healthOf(simulation);
+    const level = (await simulation.summary()).hackingLevel;
+    const allowedMs = recoveryInPlaceMs(figures.n00dles as HackingTarget, player(level), config.spacingMs);
+    // n00dles comes back between the rogue's hacks: each recovery ends, the hacks land between, and the next desync
+    // has the time its streak spent recovering, never the time in step between (#315's re-review); and each, short,
+    // has at least a hack's time and 10 batches, though its streak's recoveries, over 45 minutes, add up to more than
+    // a recovery's whole time. None is given up.
+    await simulation.advance(TWICE_A_MINUTE_FOR_MS);
+    const later = await healthOf(simulation);
+    console.log(
+      `seed ${seed}, n00dles hacked twice a minute: ${later.desyncs} desyncs in ${TWICE_A_MINUTE_FOR_MS / 60_000} ` +
+        `virtual minutes (a recovery's time ${(allowedMs / 1000).toFixed(0)} s), ` +
+        `${later.hacksLanded - first.hacksLanded} hacks landed between, ${later.recoveriesTimedOut} given up`,
+    );
+    expect(later.desyncs).toBeGreaterThan(2);
+    expect(later.hacksLanded).toBeGreaterThan(first.hacksLanded);
+    expect(later.recoveriesTimedOut).toBe(0);
+    expect(later.wavesStarted).toBe(first.wavesStarted);
+  },
+);
 test.each(SEEDS)(
   "seed %i: harakiri-sushi (needs 40), A1's best target, batched 10 minutes in step after a restart",
   { timeout: 600_000 },
