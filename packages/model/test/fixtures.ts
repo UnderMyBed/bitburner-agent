@@ -908,7 +908,8 @@ export const BN1_4_CYCLES: readonly { lengthMin: number; points: readonly (reado
 /**
  * BN1.3's cycles the curves' tail past 120 min is fitted on (#310, the review of #316: fitted on the seen run,
  * checked on BN1.4):
- * its 141-min 4th and its Daedalus cycles, the 9th and 10th, in `BN1_4_PER_CYCLE`'s form, with
+ * its 141-min 4th and its Daedalus cycles, the 9th and 10th: `replayCycle`'s state (the game's multipliers, home RAM, the
+ * first cloud server's minute) and
  * [minutes, hacking level, hacking income since the install] from the builder's read-only extract at four significant
  * figures: https://github.com/UnderMyBed/bitburner-agent/issues/310#issuecomment-6734355899.
  */
