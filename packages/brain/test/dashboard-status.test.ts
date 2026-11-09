@@ -647,7 +647,7 @@ test("the hacking rows (#196): the ceiling at the newest snapshots, and hacking'
   const mediumData: MediumSnapshotData = {
     player: {
       skills: { hacking: 150, intelligence: 0 },
-      mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
+      mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 },
     },
     hasTorRouter: false,
     programs: [],

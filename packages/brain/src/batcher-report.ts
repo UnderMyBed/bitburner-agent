@@ -60,7 +60,8 @@ const COUNTS = [
  * Counts an older batcher's health lacks, as 0: the batches trimmed to the RAM, and of them the share's (#232); its
  * looks at the target's money after each batch's grow, those below its maximum (#234), and the grows not looked at
  * (#235's review); the operations that waited for RAM at their time (#246), the hacks held for their batch's, and the
- * orders that found their batch gone (#246's verification).
+ * orders that found their batch gone (#246's verification); the hacks sent smaller for the level forecast at their
+ * landing (#315).
  */
 const NEWER_COUNTS = [
   "ramWaits",
@@ -71,6 +72,7 @@ const NEWER_COUNTS = [
   "moneyLooks",
   "moneyLooksBelowFull",
   "growsNotLooked",
+  "hacksTrimmedForLevel",
 ] as const;
 const ALL_COUNTS = [...COUNTS, ...NEWER_COUNTS] as const;
 type Counts = Record<(typeof ALL_COUNTS)[number], number>;
@@ -616,6 +618,56 @@ interface RunLook {
   rose: OutOfStepCounts;
   /** Whether its batcher times its batches on the page's monotonic clock (#251, its health's `clock`). */
   monotonic: boolean;
+  /**
+   * Its run's looks after a grow that found the target below full so far, and the least money after one so far, a
+   * share of the maximum, and its target (#234); null from an older batcher, which doesn't look.
+   */
+  belowFull: number | null;
+  leastMoneyAfterGrow: number | null;
+  leastMoneyAfterGrowOn: string | null;
+}
+
+/**
+ * How far before a stretch's first look out of step grows short of their hacks are taken as its cause (#315): money
+ * below full after a grow drifts the batches down to the bounds' floor within seconds at a batch every 80 ms (6 s on
+ * clarkinc on 2026-11-08), and within minutes at the slowest spacings.
+ */
+export const GROW_SHORTFALL_REACH_MS = 5 * 60_000;
+
+/** Grows short of their hacks before a stretch out of step (#315): from when, how many looks, and the least money. */
+interface GrowShortfall {
+  sinceMs: number;
+  looks: number;
+  least: number | null;
+  on: string | null;
+}
+
+/** The cause a shortfall gives a stretch out of step (#315), for its line. */
+const shortfallText = ({ sinceMs, looks, least, on }: GrowShortfall) => {
+  const leastText =
+    least === null ? "" : `, the least ${(least * 100).toFixed(1)}% of ${on === null ? "the" : `${on}'s`} maximum`;
+  return (
+    `its cause: a grow shortfall, the money below full after ${looks} grow${looks === 1 ? "" : "s"} from ` +
+    `${formatIsoTime(sinceMs)}${leastText}, each hack taking more than its grow put back, so the batches drifted out ` +
+    "of the bounds (#315)"
+  );
+};
+
+/**
+ * The grows short of their hacks in a run's looks (`history`, in time order, ending with the stretch's first) within
+ * `GROW_SHORTFALL_REACH_MS` before it (#315), or null: none rose, or an older batcher doesn't look.
+ */
+function shortfallBefore(history: readonly RunLook[]): GrowShortfall | null {
+  const last = history.at(-1);
+  if (last === undefined || last.belowFull === null) return null;
+  const fromMs = last.atMs - GROW_SHORTFALL_REACH_MS;
+  // From the last look before the reach; with none, the run's first look here (what it counted before isn't seen).
+  const baseIndex = history.findLastIndex((look) => look.atMs < fromMs);
+  const base = (baseIndex >= 0 ? history[baseIndex] : history[0])?.belowFull ?? 0;
+  const looks = last.belowFull - base;
+  if (!(looks > 0)) return null;
+  const first = history.slice(baseIndex + 1).find((look) => (look.belowFull ?? 0) > base) ?? last;
+  return { sinceMs: first.atMs, looks, least: last.leastMoneyAfterGrow, on: last.leastMoneyAfterGrowOn };
 }
 
 /**
@@ -637,7 +689,8 @@ interface Attribution {
 /**
  * A stretch out of step (#241), one run's: from its first look with something risen to its first look batching with
  * nothing risen (`recoveredMs`), and anything risen within `BATCHER_INCIDENT_RECOVERY_MS` after that (`againMs`, the
- * first). After a desync's recovery (`recovering` seen), everything in flight has landed. With late or lost alone
+ * first). After a desync's recovery (`recovering` seen), the hacks out before it have landed and the target is back
+ * at its maximum (#315: it recovers in place, its held batches' grows and weakens still landing). With late or lost alone
  * it never stops batching, so the parts in flight at its incident may land late, or be found lost, until a weaken and
  * a part's loss after the incident's end (`landingUntilMs`): each such rise is the stretch's, and batching again waits
  * for the last; one over `BATCHER_INCIDENT_RECOVERY_MS` after the incident, once it was batching again
@@ -651,6 +704,8 @@ interface OutOfStepStretch {
   firstMs: number;
   counts: OutOfStepCounts;
   attribution: Attribution | { why: string };
+  /** Grows short of their hacks before it, its cause (#315), or null. */
+  shortfall: GrowShortfall | null;
   sawRecovering: boolean;
   landingUntilMs: number;
   recoveredMs: number | null;
@@ -752,7 +807,12 @@ function stretchesOf(looks: readonly RunLook[], context: IncidentContext): OutOf
   const stretches: OutOfStepStretch[] = [];
   const openStretchOfRun = new Map<string, OutOfStepStretch>();
   const attributed = new Set<ClockIncident>();
-  for (const { runName, atMs, state, target, rose, monotonic } of looks) {
+  const historyOfRun = new Map<string, RunLook[]>();
+  for (const look of looks) {
+    const { runName, atMs, state, target, rose, monotonic } = look;
+    const history = historyOfRun.get(runName) ?? [];
+    history.push(look);
+    historyOfRun.set(runName, history);
     const anyRose = OUT_OF_STEP_COUNTS.some((count) => rose[count] > 0);
     const openStretch = openStretchOfRun.get(runName);
     if (openStretch !== undefined && openStretch.recoveredMs === null) {
@@ -787,6 +847,7 @@ function stretchesOf(looks: readonly RunLook[], context: IncidentContext): OutOf
       firstMs: atMs,
       counts: { ...rose },
       attribution,
+      shortfall: shortfallBefore(history),
       sawRecovering: state === "recovering",
       landingUntilMs:
         "incident" in attribution
@@ -810,7 +871,8 @@ function stretchesOf(looks: readonly RunLook[], context: IncidentContext): OutOf
  * (a run replaced or stopped ends there): a warning if the batcher is batching again within
  * `BATCHER_INCIDENT_RECOVERY_MS` of the incident's end and in step that long after, or if its run's looks end
  * before that can be seen ("recovery not yet confirmed"); otherwise a failure. Then the stretches put down to none, one
- * failure with their totals (#206), each listed under it if more than one.
+ * failure with their totals (#206), each listed under it if more than one. Each names grows short of their hacks
+ * before it as its cause, when there were (#315).
  */
 function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, failures: string[]): string[] {
   const lastLookOfRun = new Map(looks.map(({ runName, atMs }) => [runName, atMs]));
@@ -828,7 +890,8 @@ function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, fai
     const { incident, weakenMs } = attribution;
     const name = kindName(incident);
     const weakenText = `within a weaken there, ${formatDuration(weakenMs)}`;
-    const afterText = `${seenText}, after ${describeIncident(incident)} (${weakenText})`;
+    const causeText = stretch.shortfall === null ? "" : `; ${shortfallText(stretch.shortfall)}`;
+    const afterText = `${seenText}, after ${describeIncident(incident)} (${weakenText})${causeText}`;
     const runEndMs = lastLookOfRun.get(runName) as number;
     const incidentEndMs = batcherSpanOf(incident).toMs;
     const sinceIncident = (atMs: number) => formatDuration(atMs - incidentEndMs);
@@ -878,6 +941,7 @@ function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, fai
     }
     lines.push(`  ${line}`);
   }
+  const causeOf = ({ shortfall }: OutOfStepStretch) => (shortfall === null ? "" : `; ${shortfallText(shortfall)}`);
   const [first] = unexplained;
   if (first !== undefined) {
     const total = Object.fromEntries(OUT_OF_STEP_COUNTS.map((count) => [count, 0])) as OutOfStepCounts;
@@ -886,15 +950,17 @@ function outOfStepLines(looks: readonly RunLook[], context: IncidentContext, fai
     const line =
       unexplained.length === 1
         ? `batcher out of step: ${countsText(first.counts)} on ${first.target}, the first seen at ` +
-          `${formatIsoTime(first.firstMs)}; ${first.attribution.why}`
+          `${formatIsoTime(first.firstMs)}; ${first.attribution.why}${causeOf(first)}`
         : `batcher out of step: ${countsText(total)} in ${unexplained.length} stretches on ${targets}, the ` +
-          `first seen at ${formatIsoTime(first.firstMs)}; the first: ${first.attribution.why}`;
+          `first seen at ${formatIsoTime(first.firstMs)}; the first: ${first.attribution.why}${causeOf(first)}`;
     lines.push(`  ${line}`);
     failures.push(line);
     if (unexplained.length > 1) {
-      for (const { counts, target, firstMs, attribution } of unexplained) {
+      for (const each of unexplained) {
+        const { counts, target, firstMs, attribution } = each;
         lines.push(
-          `    ${countsText(counts)} on ${target}, the first seen at ${formatIsoTime(firstMs)}; ${attribution.why}`,
+          `    ${countsText(counts)} on ${target}, the first seen at ${formatIsoTime(firstMs)}; ${attribution.why}` +
+            causeOf(each),
         );
       }
     }
@@ -960,6 +1026,9 @@ export function batcherSection(
   let anyLooking = false;
   // The moves (#236).
   const moveFold = new MoveFold();
+  // The level forecast at the hacks' landings (#315): whether any health reports it, and each run's most levels so far.
+  let anyForecasting = false;
+  const mostLevelRiseOfRun = new Map<string, number>();
   for (const { atMs, health } of healths) {
     const hour = Math.floor((atMs - firstMs) / HOUR_MS);
     const bucket = hours.get(hour) ?? { counts: zero(), targets: new Set<string>(), states: new Set<string>() };
@@ -973,7 +1042,19 @@ export function batcherSection(
       OUT_OF_STEP_COUNTS.map((count) => [count, Math.max(0, now[count] - before[count])]),
     ) as OutOfStepCounts;
     const monotonic = health.clock === "monotonic";
-    looks.push({ runName: health.runName, atMs, state: health.state, target: health.target, rose, monotonic });
+    looks.push({
+      runName: health.runName,
+      atMs,
+      state: health.state,
+      target: health.target,
+      rose,
+      monotonic,
+      belowFull: typeof health.moneyLooksBelowFull === "number" ? health.moneyLooksBelowFull : null,
+      leastMoneyAfterGrow: typeof health.leastMoneyAfterGrow === "number" ? health.leastMoneyAfterGrow : null,
+      leastMoneyAfterGrowOn: health.leastMoneyAfterGrowOn ?? null,
+    });
+    if (typeof health.hacksTrimmedForLevel === "number") anyForecasting = true;
+    if (typeof health.mostLevelRise === "number") mostLevelRiseOfRun.set(health.runName, health.mostLevelRise);
     const short = Math.max(0, now.batchesShort - before.batchesShort);
     if (sharingOnHosts(lastHealthOfRun.get(health.runName)) || sharingOnHosts(health)) shortWhileSharing += short;
     else if (short > 0) {
@@ -1102,6 +1183,16 @@ export function batcherSection(
   // floor. A line, not a failure: one that reaches the floor is a desync, which fails the run; this shows it earlier.
   const afterGrows = moneyAfterGrows(anyLooking, total, runsBelowFull.size, leastMoneyBelowFull);
   lines.push(`  money after each batch's grow (#234): ${afterGrows}`);
+  // The level forecast (#315): hacks sized for the level at their landing, where the game takes their share. A line,
+  // not a failure: a forecast too low shows as grows short above, and as a desync.
+  const mostRise = Math.max(0, ...mostLevelRiseOfRun.values());
+  lines.push(
+    !anyForecasting
+      ? "  the level at the hacks' landings (#315): not reported (an older batcher)"
+      : `  the level at the hacks' landings (#315): ${total.hacksTrimmedForLevel} hack` +
+          `${total.hacksTrimmedForLevel === 1 ? "" : "s"} sent smaller for the level forecast at their landing; the ` +
+          `most levels forecast between a hack's start and its landing: ${mostRise}`,
+  );
   lines.push(...moveLines(moveFold.moves(resetsMs), moveFold.reporting, failures));
   if (stuck !== undefined) {
     const stuckLooks = healths.map(({ atMs, health }) => ({ atMs, target: health.target }));

@@ -42,7 +42,7 @@ import { TelemetryStore } from "../src/telemetry-store.ts";
 import { worldDaemonPath } from "../src/world-daemon.ts";
 import { mediumData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
-const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 };
+const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 };
 const N00DLES = { moneyMax: 1_750_000, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 3_000 };
 const network: StaticSnapshotData = {
   servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles", N00DLES), staticServer("foodnstuff")],

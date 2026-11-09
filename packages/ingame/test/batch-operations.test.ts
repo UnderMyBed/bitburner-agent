@@ -208,7 +208,7 @@ async function healthOf(simulation: Simulation): Promise<BatcherHealth> {
 }
 
 const OPERATION_HOSTS = ["foodnstuff", "sigma-cosmetics"];
-const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 };
+const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 };
 const N00DLES = { moneyMax: 1_750_000, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 3_000 };
 /** The batcher's config on n00dles from the two hosts, core's plan at hacking 50 (the level the exp gives, or less). */
 function n00dlesConfig(): BatcherConfig {
@@ -321,12 +321,29 @@ test("the batcher counts a landing out of order and desyncs, and names a record 
   expect(after).toMatchObject({ outOfOrder: 1, desyncs: 1, state: "recovering" });
   expect(after.unexpected).toBeGreaterThan(0);
   expect(after.problem).toContain("an unreadable landing record");
-  // Once what's in flight has landed, it prepares and batches again, the problem past.
+  // It recovers in place (#315): once a hack finds the target back in step, it batches again, the problem past. No
+  // preparation wave meanwhile: its held batches brought the target back.
+  const wavesBefore = after.wavesStarted;
   for (let waited = 0; (await healthOf(simulation)).state !== "batching"; waited += 5_000) {
     expect(waited, "batching again within 10 virtual minutes").toBeLessThan(10 * 60_000);
     await simulation.advance(5_000);
   }
   expect((await healthOf(simulation)).problem).toBeNull();
+  expect((await healthOf(simulation)).wavesStarted).toBe(wavesBefore);
+});
+
+test("a config without the level forecast's multipliers (an older brain's, #315): it batches, and says so", async () => {
+  const simulation = await gameWithScripts();
+  const config = n00dlesConfig();
+  const { hacking: _level, hacking_exp: _exp, ...olderMults } = config.player.mults;
+  await batchingBatcher(simulation, { ...config, player: { ...config.player, mults: olderMults } });
+  const health = await healthOf(simulation);
+  expect(health.state).toBe("batching");
+  expect(health.problem).toBe(
+    "its config has no mults.hacking or mults.hacking_exp (an older brain's): hacks sized at the level as they go " +
+      "out, not at their landing",
+  );
+  expect(health.hacksTrimmedForLevel).toBe(0);
 });
 
 test.each([

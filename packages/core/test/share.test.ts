@@ -275,7 +275,10 @@ test("the config's sharing (#224): its reserve, home's kept RAM and the cores; a
   const config = {
     target: "n00dles",
     figures: { moneyMax: 1, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 1 },
-    player: { intelligence: 0, mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 } },
+    player: {
+      intelligence: 0,
+      mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 },
+    },
     hosts: ["a"],
     hackShare: 0.5,
     spacingMs: 100,

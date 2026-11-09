@@ -45,7 +45,7 @@ const HOSTS: [string, number][] = [
   ["hong-fang-tea", 16],
   ["n00dles", 4],
 ];
-const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 };
+const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 };
 const N00DLES = { moneyMax: 1_750_000, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 3_000 };
 /**
  * Where the deploy worker runs the batcher: a 16 GB host, as the brain puts it on an 8 GB home, where the batcher

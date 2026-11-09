@@ -8,6 +8,7 @@
 import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
+  type BatcherPlayerMults,
   type BatcherState,
   batcherIncomePerGigabyteSecond,
   batchPlan,
@@ -54,6 +55,19 @@ export function hackingPlayerOf(player: unknown): HackingPlayer | null {
     skills: { hacking, intelligence },
     mults: Object.fromEntries(multNames.map((name) => [name, mults?.[name] as number])) as HackingPlayer["mults"],
   };
+}
+
+/**
+ * The player's multipliers a batcher config carries (#315): the formulas' four, and the level's and its exp's, with
+ * which the batcher forecasts the level at each hack's landing; or null if any is missing from the medium snapshot.
+ */
+export function batcherMultsOf(player: unknown): BatcherPlayerMults | null {
+  const hackingPlayer = hackingPlayerOf(player);
+  const mults = (player as { mults?: Record<string, unknown> } | null)?.mults;
+  const hacking = mults?.hacking;
+  const hackingExp = mults?.hacking_exp;
+  if (hackingPlayer === null || !isNumber(hacking) || !isNumber(hackingExp)) return null;
+  return { ...hackingPlayer.mults, hacking, hacking_exp: hackingExp };
 }
 
 /** A target's figures from the static snapshot, or null if any is missing. */
@@ -113,7 +127,10 @@ export function planBatcher(
   | { batcher: BatcherState; incomePerSecond: number; ramGb: number; peakRamGb: number }
   | { batcher: null; why: string } {
   const player = hackingPlayerOf(mediumData.player);
-  if (player === null) return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
+  const mults = batcherMultsOf(mediumData.player);
+  if (player === null || mults === null) {
+    return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
+  }
   const figures = figuresOf(staticData, target);
   if (figures === null) return { batcher: null, why: `the static snapshot has no figures for ${target}` };
   const room = batcherRoomOf(mediumData, hosts, current);
@@ -131,7 +148,7 @@ export function planBatcher(
       config: {
         target,
         figures,
-        player: { intelligence: player.skills.intelligence, mults: player.mults },
+        player: { intelligence: player.skills.intelligence, mults },
         hosts: hostsRam.map(([host]) => host),
         hackShare: plan.hackShare,
         spacingMs: plan.spacingMs,

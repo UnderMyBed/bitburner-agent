@@ -2,8 +2,9 @@
 // no-port servers rooted, hacking exp given (hacking about 55), and `batcher.js` on home with core's `batchPlan` on its
 // hosts' RAM, the seven no-port servers. Two cases:
 // - **n00dles** (needs hacking 1, growth 3000): it prepares it from a fresh start's 4% of its money, then batches for
-//   10 virtual minutes; then another script hacks n00dles behind its back, and it counts a desync, stops hacking,
-//   prepares again and batches in step once more. Only n00dles can be prepared in reasonable time on a fresh start's
+//   10 virtual minutes; then another script hacks n00dles behind its back, and it counts a desync and recovers in
+//   place (#315): batching on with its hacks held, no preparation wave, and hacking again soon after the other script
+//   stops. Only n00dles can be prepared in reasonable time on a fresh start's
 //   RAM: the other no-port servers grow 5 to 40, and joesguns took over 20 waves and 40 virtual minutes to reach 6% of
 //   its money on these 84 GB (#204's build).
 // - **harakiri-sushi** (needs hacking 40; A1's best target here): prepared by a first batcher on a home made 8 TB for
@@ -85,6 +86,13 @@ const SAMPLE_EVERY_MS = 10_000;
 /** Bounds on each wait, in virtual time. */
 const PREPARED_WITHIN_MS = 40 * 60_000;
 const DESYNC_WITHIN_MS = 20 * 60_000;
+/**
+ * The rogue hacks on this long after the desync (#315): the batcher recovers in place meanwhile, its hacks held. And
+ * the first hack after it stops comes within a few of n00dles' batches (one every ~27 s) and a hack's time: before
+ * #315 it waited for everything in flight, then a weaken's time more.
+ */
+const ROGUE_KEPT_MS = 2 * 60_000;
+const BACK_WITHIN_MS = 3 * 60_000;
 /**
  * The least score, of A1's measure, over 10 minutes. Seeds 1 to 8 gave 32.1–32.9% on n00dles and 32.0–52.3% on
  * harakiri-sushi (a hack chance of about 80%, over 19 hacks) at #208's review fixes; this is 6 points under the worst,
@@ -171,7 +179,7 @@ async function plannedConfig(simulation: Simulation, target: string, figures: Ha
   return {
     target,
     figures,
-    player: { intelligence: 0, mults: MULTS },
+    player: { intelligence: 0, mults: { ...MULTS, hacking: 1, hacking_exp: 1 } },
     hosts: HOSTS.map(([host]) => host),
     hackShare: plan.hackShare,
     spacingMs: plan.spacingMs,
@@ -271,6 +279,9 @@ test.each(SEEDS)(
         `${after.hacksLanded - before.hacksLanded} hack parts`,
     );
     expect(after).toMatchObject(IN_STEP);
+    // The level forecast at the hacks' landings (#315) follows the level: here a level or two over a hack's time, its
+    // exp taken as just under the next level's. Exp counted after its landing would run it a dozen levels ahead.
+    expect(after.mostLevelRise).toBeLessThanOrEqual(3);
     // Its money looked at after the grows (#234): about one look a batch, all full.
     expect((after.moneyLooks ?? 0) - (before.moneyLooks ?? 0)).toBeGreaterThan(5);
     // Script starts take no virtual time here, so every operation had its whole lead to spare (#211).
@@ -294,27 +305,34 @@ test.each(SEEDS)(
     const desynced = await healthOf(simulation);
     expect(desynced.outOfBounds).toBeGreaterThan(0);
     expect(desynced.hacksSkipped).toBeGreaterThan(0);
-    expect(desynced.state).not.toBe("batching");
+    expect(desynced.state).toBe("recovering");
+    // It recovers in place (#315): batching on while the rogue still hacks, every hack held, no wave.
+    await simulation.advance(ROGUE_KEPT_MS);
+    const held = await healthOf(simulation);
+    expect(held).toMatchObject({ state: "recovering", desyncs: desynced.desyncs, wavesStarted: desynced.wavesStarted });
+    expect(held.batchesStarted).toBeGreaterThan(desynced.batchesStarted);
+    expect(held.hacksSkipped).toBeGreaterThan(desynced.hacksSkipped);
+    expect(held.hacksLanded).toBe(desynced.hacksLanded);
     await simulation.kill(rogue.pid);
-    // Once what's in flight has landed it prepares n00dles again (which, growing 3000, may need no wave by then), and
-    // batches in step: new batches, hacks landing again, with no new desync.
-    await advanceUntil(simulation, (health) => health.state === "batching", PREPARED_WITHIN_MS, "prepared again");
-    const again = await healthOf(simulation);
+    // Its held batches' grows bring n00dles back, and the first hack that finds it so goes out: hacks land again soon,
+    // with no new desync and no preparation wave.
+    const killedAt = await simulation.now();
+    await advanceUntil(simulation, (health) => health.hacksLanded > held.hacksLanded, BACK_WITHIN_MS, "a hack again");
+    const backAfterMs = (await simulation.now()) - killedAt;
     await advanceUntil(
       simulation,
-      (health) => health.hacksLanded > again.hacksLanded + 3,
+      (health) => health.hacksLanded > held.hacksLanded + 3,
       TEN_MINUTES_MS,
       "hacks landing again",
     );
     const recovered = await healthOf(simulation);
     expect(recovered).toMatchObject({ state: "batching", outOfOrder: 0, late: 0, lost: 0, problem: null });
     expect(recovered.desyncs).toBe(desynced.desyncs);
-    // The batches pending when it desynced had their hacks skipped while it recovered, never sent.
-    expect(recovered.hacksSkipped).toBeGreaterThan(desynced.hacksSkipped);
-    expect(recovered.batchesStarted).toBeGreaterThan(desynced.batchesStarted);
+    expect(recovered.wavesStarted).toBe(desynced.wavesStarted);
+    expect(recovered.batchesStarted).toBeGreaterThan(held.batchesStarted);
     console.log(
-      `seed ${seed}, n00dles: a desync ${desynced.outOfBounds} time(s) out of bounds, ${desynced.hacksSkipped} hacks ` +
-        `skipped, ${recovered.wavesStarted - desynced.wavesStarted} preparation waves, then in step again`,
+      `seed ${seed}, n00dles: a desync ${desynced.outOfBounds} time(s) out of bounds, ${held.hacksSkipped} hacks ` +
+        `held, no preparation wave, a hack again ${(backAfterMs / 1000).toFixed(0)} s after the rogue stopped`,
     );
   },
 );

@@ -613,7 +613,7 @@ function hackingRun({
   const player = {
     money: 0,
     skills: { hacking: 150, intelligence: 0 },
-    mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
+    mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 },
   };
   const zer0 = {
     hostname: "zer0",
@@ -3876,7 +3876,7 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
       const player = {
         ...medium.player,
         skills: { hacking: 600, intelligence: 0 },
-        mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
+        mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 },
       };
       snapshot("medium", receivedMs, { ...medium, player }, T0 + gameMs);
     }
@@ -4045,7 +4045,14 @@ describe("a batcher stuck on a poor target (#275)", () => {
   const PLAYER = {
     money: 1e12,
     skills: { hacking: 1_327, intelligence: 0 },
-    mults: { hacking_chance: 1.6, hacking_speed: 1.8, hacking_money: 2.5, hacking_grow: 1.6 },
+    mults: {
+      hacking_chance: 1.6,
+      hacking_speed: 1.8,
+      hacking_money: 2.5,
+      hacking_grow: 1.6,
+      hacking: 1.6,
+      hacking_exp: 1.6,
+    },
   };
   const servers: StaticSnapshotData = {
     servers: [

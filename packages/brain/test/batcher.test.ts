@@ -35,6 +35,7 @@ import {
   BATCHER_TARGETS_PLANNED,
   type BatcherTargetWorth,
   batcherHostsOf,
+  batcherMultsOf,
   batcherOutOfStep,
   batcherTargetsOf,
   batcherViewOf,
@@ -43,14 +44,14 @@ import {
   planBatcher,
   readBatcherEnabled,
 } from "../src/batcher.ts";
-import { batcherSection, whoHacked } from "../src/batcher-report.ts";
+import { batcherSection, GROW_SHORTFALL_REACH_MS, whoHacked } from "../src/batcher-report.ts";
 import type { ClockIncident } from "../src/clock-incidents.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { chooseHackHosts } from "../src/hack-loop.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
-const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 };
+const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 };
 const N00DLES = { moneyMax: 1_750_000, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 3_000 };
 const network: StaticSnapshotData = {
   servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles", N00DLES), staticServer("foodnstuff")],
@@ -253,6 +254,17 @@ describe("batcherHostsOf", () => {
   });
 });
 
+describe("batcherMultsOf (#315)", () => {
+  test("the formulas' four and the level forecast's two, each the medium snapshot's own; null if one is missing", () => {
+    const mults = { hacking_chance: 1.1, hacking_speed: 1.2, hacking_money: 1.3, hacking_grow: 1.4 };
+    const player = { skills: { hacking: 100, intelligence: 0 }, mults: { ...mults, hacking: 3.4, hacking_exp: 4.5 } };
+    expect(batcherMultsOf(player)).toEqual({ ...mults, hacking: 3.4, hacking_exp: 4.5 });
+    expect(batcherMultsOf({ ...player, mults })).toBeNull();
+    expect(batcherMultsOf({ ...player, mults: { ...mults, hacking: 3.4 } })).toBeNull();
+    expect(batcherMultsOf(null)).toBeNull();
+  });
+});
+
 describe("batcherViewOf", () => {
   test("why only while on", () => {
     expect(batcherViewOf(false, null, "no target yet", null).why).toBeNull();
@@ -320,6 +332,77 @@ describe("the run report's section", () => {
     expect(lines).toContain("    from 2026-01-01T01:10:00.000Z: no RAM to prepare n00dles");
   });
 
+  test("a desync after grows short of their hacks names the shortfall as its cause (#315); one without, or older, not", () => {
+    const failures: string[] = [];
+    const lines = batcherSection(
+      [
+        { atMs: at(0), health: health("a", { moneyLooks: 100 }) },
+        { atMs: at(1), health: health("a", { moneyLooks: 200, moneyLooksBelowFull: 14, ...least(0.99, "n00dles") }) },
+        {
+          atMs: at(2),
+          health: health("a", {
+            state: "recovering",
+            moneyLooks: 210,
+            moneyLooksBelowFull: 83,
+            ...least(0.84, "n00dles"),
+            desyncs: 1,
+            outOfBounds: 1,
+          }),
+        },
+      ],
+      failures,
+    );
+    const failure =
+      "batcher out of step: 1 desync (0 out of order, 1 out of bounds), 0 late, 0 lost on n00dles, the first seen at " +
+      "2026-01-01T00:02:00.000Z; no page stall, or delivery lag the page was behind, before it; its cause: a grow " +
+      "shortfall, the money below full after 83 grows from 2026-01-01T00:01:00.000Z, the least 84.0% of n00dles's " +
+      "maximum, each hack taking more than its grow put back, so the batches drifted out of the bounds (#315)";
+    expect(failures).toEqual([failure]);
+    expect(lines).toContain(`  ${failure}`);
+    // Grows short only longer ago than GROW_SHORTFALL_REACH_MS: not its cause.
+    const longAgo: string[] = [];
+    batcherSection(
+      [
+        { atMs: at(0), health: health("b", { moneyLooksBelowFull: 0 }) },
+        { atMs: at(1), health: health("b", { moneyLooksBelowFull: 5 }) },
+        { atMs: at(1 + GROW_SHORTFALL_REACH_MS / 60_000), health: health("b", { moneyLooksBelowFull: 5 }) },
+        {
+          atMs: at(2 + GROW_SHORTFALL_REACH_MS / 60_000),
+          health: health("b", { moneyLooksBelowFull: 5, desyncs: 1, outOfBounds: 1 }),
+        },
+      ],
+      longAgo,
+    );
+    expect(longAgo).toHaveLength(1);
+    expect(longAgo[0]).not.toContain("its cause");
+    // An older batcher, which doesn't look, gives none.
+    const older: string[] = [];
+    batcherSection(
+      [
+        { atMs: at(0), health: { ...health("c", {}), moneyLooksBelowFull: undefined } },
+        { atMs: at(1), health: { ...health("c", { desyncs: 1, outOfBounds: 1 }), moneyLooksBelowFull: undefined } },
+      ],
+      older,
+    );
+    expect(older[0]).not.toContain("its cause");
+  });
+
+  test("the level at the hacks' landings (#315): the hacks sent smaller, the most levels; an older batcher's not", () => {
+    const lines = batcherSection([
+      { atMs: at(0), health: health("a", { hacksTrimmedForLevel: 10, mostLevelRise: 3 }) },
+      { atMs: at(1), health: health("a", { hacksTrimmedForLevel: 45, mostLevelRise: 41 }) },
+    ]);
+    // Run a was under way at the window's start: its hacks counted from there.
+    expect(lines).toContain(
+      "  the level at the hacks' landings (#315): 35 hacks sent smaller for the level forecast at their landing; the " +
+        "most levels forecast between a hack's start and its landing: 41",
+    );
+    const older = batcherSection([
+      { atMs: at(0), health: { ...health("b", {}), hacksTrimmedForLevel: undefined, mostLevelRise: undefined } },
+    ]);
+    expect(older).toContain("  the level at the hacks' landings (#315): not reported (an older batcher)");
+  });
+
   test("in step: no desyncs, nothing late or lost, no problems, always running", () => {
     const failures: string[] = [];
     const lines = batcherSection(
@@ -329,7 +412,7 @@ describe("the run report's section", () => {
       ],
       failures,
     );
-    expect(lines.slice(-14)).toEqual([
+    expect(lines.slice(-15)).toEqual([
       "  desyncs: none",
       "  late or lost: none",
       // The least over the window (#216's review).
@@ -342,6 +425,9 @@ describe("the run report's section", () => {
       "  trimmed to the hosts' RAM (#232): none",
       // Each grow left the target at its maximum (#234): 2 looks in the window.
       "  money after each batch's grow (#234): full at all 2 looks",
+      // No level rise forecast (#315).
+      "  the level at the hacks' landings (#315): 0 hacks sent smaller for the level forecast at their landing; the " +
+        "most levels forecast between a hack's start and its landing: 0",
       // No move in the window (#236).
       "  moves (#236): none",
       "  problems: none",
@@ -1545,7 +1631,7 @@ describe("the controller's target (#206)", () => {
       ),
     });
     expect(agent.lastSent()?.batcher?.config.target).toBe("n00dles");
-    const fast = (state: "batching" | "preparing") => ({
+    const fast = (state: "batching" | "preparing" | "recovering") => ({
       degradedTiers: [],
       pageHeapUsedBytes: null,
       game: null,
@@ -1554,6 +1640,11 @@ describe("the controller's target (#206)", () => {
       batcher: { ...newBatcherHealth("n00dles", "r1", 5), state },
     });
     agent.send("fast", fast("batching"));
+    agent.send("medium", data);
+    expect(controller.batcherView().sent?.target).toBe("n00dles");
+    // Recovering from a desync (#315): it batches on in place, so n00dles is still the one batched, never a hop away
+    // (on 2026-11-08 clarkinc, recovering, read as nothing batched, sent it to rho-construction and back).
+    agent.send("fast", fast("recovering"));
     agent.send("medium", data);
     expect(controller.batcherView().sent?.target).toBe("n00dles");
     // Not batching (still preparing n00dles): rich, prepared, is worth the move.
@@ -1782,7 +1873,7 @@ describe("chooseBatcher, off a poor target (#274)", () => {
   // could be moved to (none prepared) or be the next (none prepared within the horizon): n00dles for hours.
   const player = {
     skills: { hacking: 1327, intelligence: 0 },
-    mults: { hacking_chance: 1.6, hacking_speed: 2.3, hacking_money: 2, hacking_grow: 1.6 },
+    mults: { hacking_chance: 1.6, hacking_speed: 2.3, hacking_money: 2, hacking_grow: 1.6, hacking: 2, hacking_exp: 2 },
   };
   const FIGURES = {
     n00dles: N00DLES,
