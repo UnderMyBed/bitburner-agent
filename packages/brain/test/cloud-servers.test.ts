@@ -273,7 +273,10 @@ describe("chooseCloudServerPurchase: the largest that money allows and pays back
     expect(choose(medium(439_999))).toMatchObject({
       next: null,
       waitingFor: "money for pserv-0 with 8 GB ($440,000)",
+      // What gang equipment leaves its money to (#330, G3).
+      awaitingMoney: { action: "buyServer", hostname: "pserv-0", ram: 8, price: 440_000 },
     });
+    expect(choose(medium(10e6)).awaitingMoney).toBeUndefined();
     const reserve = { amount: 500_000, forWhat: "BruteSSH.exe" };
     expect(choose(medium(900_000), { reserve })).toMatchObject({
       next: null,

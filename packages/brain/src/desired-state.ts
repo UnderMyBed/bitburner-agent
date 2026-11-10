@@ -92,7 +92,7 @@ import {
   resetInfoOf,
   writeFactionWorkEnabled,
 } from "./factions.ts";
-import { GangRule, type GangView, withoutGangFaction } from "./gang.ts";
+import { type GangMoneyHold, GangRule, type GangView, gangMoneyHoldOf, withoutGangFaction } from "./gang.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type InvitationEvent, type InvitationInputs, InvitationRule, type InvitationView } from "./invitations.ts";
@@ -285,6 +285,8 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - Then a cloud server (#194, ./cloud-servers.ts), only while neither of those is being bought, and with the hack loop
  *   on (they only run it). While the cheaper of the two waits for money, its price is held back from cloud servers if
  *   the hack loop's income would cover it within `CLOUD_SERVER_RESERVE_HORIZON_MS`.
+ * - Gang equipment last (#330, G3, ./gang.ts): only from money above every hold cloud servers and home RAM keep, this
+ *   round's purchase and the cloud server waiting for money (`#gangEquipmentHold`), sent as the gang's `keepMoney`.
  * - Intents go in order: the owner's manual queue first, as added, then the brain's install of augmentations (#210,
  *   ./augmentations.ts) behind it, then the purchase, then the augmentation purchase (#210), then the backdoor (#195),
  *   asked for until the connected Agent reports it done, then the join (#203). A manual intent leaves the queue once
@@ -1120,6 +1122,67 @@ export class DesiredStateController {
       : other;
   }
 
+  /**
+   * The money gang equipment leaves alone (G3, #330): it's the brain's last purchase. The most of every hold the brain
+   * keeps for its other spending: what cloud servers leave alone (`#reserveForOtherPurchase`: the program or home RAM
+   * upgrade a minute's income from its price, A6's augmentation reserve, Infinity once an install is chosen, an
+   * invitation's money), and Daedalus's invitation's, the install countdown's and The Red Pill's donation's, as home RAM
+   * keeps them. Then, on top, the price of this round's purchase (`#purchase`), and the cloud server that pays back and
+   * waits for money (`awaitingMoney`): neither is starved.
+   */
+  #gangEquipmentHold(): GangMoneyHold {
+    const reserve = this.#reserveForOtherPurchase(this.#income.rate()?.perSecond ?? 0);
+    const reserves = [...(reserve === null ? [] : [reserve]), ...this.#homeRamHolds()];
+    const purchases: GangMoneyHold[] = [];
+    const purchase = this.#purchase;
+    if (purchase !== null)
+      purchases.push({ amount: this.#purchasePrice(purchase), forWhat: describePurchase(purchase) });
+    const cloud = this.#cloudServersPlan?.awaitingMoney;
+    if (
+      cloud !== undefined &&
+      readCloudServersEnabled(this.#store) &&
+      readHackLoopEnabled(this.#store) &&
+      !this.#augmentationsCommitted
+    ) {
+      purchases.push({ amount: cloud.price, forWhat: `${cloud.hostname} with ${cloud.ram} GB` });
+    }
+    return gangMoneyHoldOf(reserves, purchases);
+  }
+
+  /** The countdown, or an install held for Daedalus's count (#243): the install's minutes off. */
+  #countdownWords(): string {
+    return this.#augmentations.countdownUnderWay()
+      ? "the augmentations' install countdown"
+      : "the augmentations' install, held for Daedalus's count";
+  }
+
+  /**
+   * The holds home RAM buys above (the most of them): Daedalus's $100b for its invitation (#215 review), the install
+   * countdown's money (#222), The Red Pill's donation's (#225 review) and an invitation's (#228). Gang equipment (#330)
+   * keeps them too.
+   */
+  #homeRamHolds(): MoneyReserve[] {
+    return [
+      { amount: this.#augmentations.daedalusHold(), forWhat: "Daedalus's invitation" },
+      { amount: this.#augmentations.countdownReserve(), forWhat: this.#countdownWords() },
+      { amount: this.#augmentations.redPillHold(), forWhat: "The Red Pill's donation" },
+      { amount: this.#invitations.hold(), forWhat: "an invitation travelled for" },
+    ];
+  }
+
+  /** What the purchase going out costs (#330): the program's, home RAM's or the cloud server's plan's price. */
+  #purchasePrice(intent: Intent): number {
+    const price =
+      intent.action === "buyTor" || intent.action === "buyProgram"
+        ? this.#programsPlan?.price
+        : intent.action === "upgradeHomeRam"
+          ? this.#homeRamPlan?.price
+          : intent.action === "buyServer" || intent.action === "upgradeServer"
+            ? this.#cloudServersPlan?.next?.price
+            : 0;
+    return typeof price === "number" && Number.isFinite(price) ? price : 0;
+  }
+
   /** The next program or home RAM upgrade, as an intent: one at a time, cheapest first, among those switched on. */
   #chooseProgramOrHomeRam(): Intent | null {
     const programsEnabled = readProgramsEnabled(this.#store);
@@ -1147,12 +1210,8 @@ export class DesiredStateController {
     }
     // Daedalus's $100b held for its invitation (#215 review), or the money the install's countdown holds (#222): home
     // RAM only with the money above it.
-    const daedalusHold = this.#augmentations.daedalusHold();
     const countdownHold = this.#augmentations.countdownReserve();
-    // The countdown, or an install held for Daedalus's count (#243): the install's minutes off.
-    const countdownWords = this.#augmentations.countdownUnderWay()
-      ? "the augmentations' install countdown"
-      : "the augmentations' install, held for Daedalus's count";
+    const countdownWords = this.#countdownWords();
     // In the countdown, programs are bought no more: they're lost at the install, minutes off.
     if (countdownHold > 0 && programsNext !== null) {
       this.#waitingFor.programs = `${countdownWords} (programs are lost at the install)`;
@@ -1162,13 +1221,9 @@ export class DesiredStateController {
     // too.
     const redPillHold = this.#augmentations.redPillHold();
     const invitationHold = this.#invitations.hold();
-    const holds: [number, string][] = [
-      [daedalusHold, "Daedalus's invitation"],
-      [countdownHold, countdownWords],
-      [redPillHold, "The Red Pill's donation"],
-      [invitationHold, "an invitation travelled for"],
-    ];
-    const [hold, heldFor] = holds.reduce((most, each) => (each[0] > most[0] ? each : most));
+    const { amount: hold, forWhat: heldFor } = this.#homeRamHolds().reduce((most, each) =>
+      each.amount > most.amount ? each : most,
+    );
     const playerMoney = this.#mediumData?.player?.money;
     const [programsHold, programsHeldFor] =
       redPillHold >= invitationHold
@@ -1559,6 +1614,13 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
     });
     this.#purchase = this.#choosePurchase();
+    // Gang equipment (G3, #330), the last purchase: from the money above every hold, this round's purchase and the
+    // cloud server waiting for money (`#gangEquipmentHold`).
+    const playerMoney = this.#mediumData?.player?.money;
+    this.#gangState = this.#gang.equip({
+      money: typeof playerMoney === "number" ? playerMoney : null,
+      hold: this.#gangEquipmentHold(),
+    });
     this.#backdoor = this.#backdoors.intent({
       staticData: this.#staticData,
       mediumData: this.#mediumData,

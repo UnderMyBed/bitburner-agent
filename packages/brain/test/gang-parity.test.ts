@@ -3,17 +3,24 @@
 // (Formulas.exe, bought through the simulator's own effectors) over gangs and members that differ in every figure the
 // formulas read, training's experience against the members' own `expGain`, the recruit threshold against
 // `respectForNextRecruit`, every BitNode's `GangSoftcap` against the engine's multipliers, and (#328, G2) the ascension
-// result and the member after it against `getAscensionResult` and `ascendMember`. In BN2 (softcap 1), where the brain
-// plays gangs.
+// result and the member after it against `getAscensionResult` and `ascendMember`; (#330, G3) every upgrade against the
+// equipment getters, a purchase against `purchaseEquipment`, and an ascension keeping an augmentation. In BN2 (softcap
+// 1), where the brain plays gangs.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
+  GANG_EQUIPMENT,
   GANG_STATS,
   GANG_TASKS,
   type GangMemberFigures,
   gangAscensionPointsOf,
   gangAscensionResult,
+  gangEquipment,
+  gangEquipmentCost,
+  gangEquipmentCostMultOf,
+  gangEquipmentDiscount,
   gangExpPerCycle,
   gangMemberAscended,
+  gangMemberEquipped,
   gangMoneyPerCycle,
   gangRespectPerCycle,
   gangRespectToRecruit,
@@ -231,5 +238,91 @@ out({ again: ns.gang.getMemberInformation("a"), result: ns.gang.getAscensionResu
   expect(again.result).not.toBeNull();
   for (const stat of GANG_STATS) {
     expect(gangAscensionResult(again.again)?.[stat], stat).toBeCloseTo(again.result?.[stat] as number, 12);
+  }
+}, 60_000);
+
+test("core's equipment is the engine's (G3): every upgrade's type, multipliers and cost, a purchase, an ascension keeping augmentations", async () => {
+  const sim = await start({
+    seed: 1,
+    epochMs: Date.UTC(2026, 0, 1),
+    fixture: { kind: "bitnode", n: 2, sourceFiles: {} },
+  });
+  await sim.diagnostics.setHomeRam(128);
+  await sim.diagnostics.setMoney(1e11);
+  await sim.diagnostics.joinFactionWithReputation("NiteSec", 0);
+  // Two trained 3 minutes, then b a minute on Territory Warfare, for power (`Gang.ts:184-190`): the discount's second
+  // term. Read with every upgrade's figures; then a equipped with a rootkit, an augmentation and a weapon, and ascended.
+  const { out, log } = await runScript(
+    sim,
+    `ns.gang.createGang("NiteSec");
+for (const name of ["a", "b"]) {
+  ns.gang.recruitMember(name);
+  ns.gang.setMemberTask(name, "Train Hacking");
+}
+await ns.sleep(180000);
+ns.gang.setMemberTask("b", "Territory Warfare");
+await ns.sleep(60000);
+const { respect, power, equipmentCostMult } = ns.gang.getGangInformation();
+out({ gang: { respect, power, equipmentCostMult } });
+out({
+  equipment: ns.gang.getEquipmentNames().map((name) => ({
+    name,
+    type: ns.gang.getEquipmentType(name),
+    cost: ns.gang.getEquipmentCost(name),
+    mults: ns.gang.getEquipmentStats(name),
+  })),
+});
+out({ before: ns.gang.getMemberInformation("a") });
+const bought = ${JSON.stringify(["NUKE Rootkit", "BitWire", "Katana"])}.map((item) => ns.gang.purchaseEquipment("a", item));
+out({ bought, again: ns.gang.purchaseEquipment("a", "BitWire"), equipped: ns.gang.getMemberInformation("a") });
+ns.gang.ascendMember("a");
+out({ ascended: ns.gang.getMemberInformation("a") });`,
+    300_000,
+  );
+  expect((await sim.events()).events.filter((event) => event.type === "error")).toEqual([]);
+  expect(log.filter((line) => !line.startsWith("out:"))).toEqual([]);
+  const find = <T>(key: string) => out.find((each) => (each as Record<string, unknown>)[key] !== undefined) as T;
+  const { gang } = find<{ gang: { respect: number; power: number; equipmentCostMult: number } }>("gang");
+  // Power from a minute of Territory Warfare (about 1.004): the discount over 1, its terms each in it, to 15 digits.
+  expect(gang.power).toBeGreaterThan(1);
+  expect(gangEquipmentDiscount(gang)).toBeGreaterThan(1 + 1e-6);
+  expect(1 / gangEquipmentDiscount(gang)).toBeCloseTo(gang.equipmentCostMult, 15);
+  const { equipment } = find<{ equipment: { name: string; type: string; cost: number; mults: object }[] }>("equipment");
+  expect(equipment.map(({ name, type, mults }) => ({ name, type, mults }))).toEqual(
+    GANG_EQUIPMENT.map(({ name, type, mults }) => ({ name, type, mults })),
+  );
+  for (const [index, { name, cost }] of equipment.entries()) {
+    const ours = GANG_EQUIPMENT[index] as (typeof GANG_EQUIPMENT)[number];
+    expect(gangEquipmentCost(ours, gangEquipmentCostMultOf(gang)), name).toBeCloseTo(cost, 6);
+    // From an older Agent's reading, without the multiplier: the discount from the respect and power.
+    expect(
+      gangEquipmentCost(ours, gangEquipmentCostMultOf({ respect: gang.respect, power: gang.power })),
+      name,
+    ).toBeCloseTo(cost, 6);
+  }
+
+  type Read = GangMemberFigures & { upgrades: string[]; augmentations: string[] };
+  const { before } = find<{ before: Read }>("before");
+  const { bought, again, equipped } = find<{ bought: boolean[]; again: boolean; equipped: Read }>("equipped");
+  expect(bought).toEqual([true, true, true]);
+  // One owned is refused (`GangMember.ts:355-356`).
+  expect(again).toBe(false);
+  expect(equipped).toMatchObject({ upgrades: ["NUKE Rootkit", "Katana"], augmentations: ["BitWire"] });
+  const ours = ["NUKE Rootkit", "BitWire", "Katana"].reduce(
+    (member, item) => gangMemberEquipped(member, gangEquipment(item)),
+    before as GangMemberFigures,
+  );
+  expect(ours).toMatchObject({ upgrades: ["NUKE Rootkit", "Katana"], augmentations: ["BitWire"] });
+  for (const stat of GANG_STATS) expect(ours[`${stat}_mult`], `${stat}_mult`).toBeCloseTo(equipped[`${stat}_mult`], 12);
+
+  // The ascension: the rootkit and the weapon lost, BitWire kept, its multiplier applied again (`GangMember.ts:308-319`).
+  const { ascended } = find<{ ascended: Read }>("ascended");
+  expect(ascended).toMatchObject({ upgrades: [], augmentations: ["BitWire"] });
+  expect(ascended.hack_mult).toBeCloseTo(1.05, 12);
+  const after = gangMemberAscended(equipped);
+  for (const stat of GANG_STATS) {
+    for (const key of [stat, `${stat}_exp`, `${stat}_mult`, `${stat}_asc_mult`, `${stat}_asc_points`] as const) {
+      expect(after[key], key).toBeCloseTo(ascended[key], 9);
+    }
   }
 }, 60_000);

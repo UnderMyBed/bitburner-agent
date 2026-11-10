@@ -1,6 +1,6 @@
-// The gang (#325, slice G1 of the gangs epic #324; ascension #328, G2): in BN2, the brain forms a gang, recruits,
-// ascends members and sets each member's task, by core's rule (`planGang`, ../../core/src/gang-rule.ts), from the
-// gang worker's reading in the medium snapshot.
+// The gang (#325, slice G1 of the gangs epic #324; ascension #328, G2; equipment #330, G3): in BN2, the brain forms a
+// gang, recruits, ascends members, buys their equipment and sets each member's task, by core's rule (`planGang`,
+// ../../core/src/gang-rule.ts), from the gang worker's reading in the medium snapshot.
 // - Only in BN2 for now: the campaign plays gangs there (BN2 ×3, docs/synthesis.md §3), where no karma is needed
 //   (`PersonObjects/Player/PlayerObjectGangMethods.ts:16-18`). With SF2 elsewhere a gang needs −54,000 karma, which
 //   the brain doesn't seek: not managed there, and the desired state carries no gang.
@@ -10,6 +10,9 @@
 // - Managing: the desired state's `gang`, the recruits the respect allows, the member to ascend (G2, core's
 //   `gangAscensionToMake`, with its points as read, so the worker ascends it once) and each member's task, done by the
 //   Agent's worker every 10 s, which reads the gang after. A recruit is set to train at once.
+// - Equipment (#330, G3): the purchases core's `planGangEquipment` makes within the money the desired state's
+//   controller leaves free (`equip`, `gangMoneyHoldOf`), each with the member's points as read, and the hold as
+//   `keepMoney`, so the worker spends none of it.
 // - The gang's faction is left out of what the faction and augmentation rules see as joined (`withoutGangFaction`):
 //   the game offers no work or donations there (`Faction/ui/FactionRoot.tsx:97-99`, `:113`; Singularity's work and
 //   donation, `NetscriptFunctions/Singularity.ts:808-810`, `:934-935`), and its shop is nearly every augmentation
@@ -19,14 +22,18 @@
 //   sets them back within 10 s.
 import {
   GANG_ASCENSION_HORIZON_CAP_MS,
+  GANG_EQUIPMENT_NAMES,
   GANG_FACTIONS,
   GANG_STATS,
+  type GangEquipmentPlan,
   type GangInformation,
   type GangMemberReading,
   type GangPlan,
+  type GangRuleInputs,
   type GangStat,
   type GangState,
   gangAscensionPointsOf,
+  gangEquipmentCostMultOf,
   gangFactionOf,
   gangFactionToForm,
   gangInBonusTime,
@@ -37,6 +44,7 @@ import {
   MAX_GANG_MEMBER_NAME_LENGTH,
   type MediumSnapshotData,
   planGang,
+  planGangEquipment,
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -106,6 +114,19 @@ export function gangSnapshotOf(mediumData: unknown): GangSnapshot {
   );
   if (!wellFormed || !Array.isArray(reading.members)) {
     return { kind: "unread", problem: "a gang member's figures aren't numbers" };
+  }
+  // The equipment (G3): absent from an older Agent; else the game's, by name.
+  const isEquipmentList = (list: unknown) =>
+    list === undefined ||
+    (Array.isArray(list) && list.every((name) => typeof name === "string" && GANG_EQUIPMENT_NAMES.includes(name)));
+  const equipped = (member: unknown) =>
+    isEquipmentList((member as Record<string, unknown>).upgrades) &&
+    isEquipmentList((member as Record<string, unknown>).augmentations);
+  if (!members.every(equipped)) {
+    return { kind: "unread", problem: "a gang member's equipment isn't the game's" };
+  }
+  if (gang.equipmentCostMult !== undefined && !(isNumber(gang.equipmentCostMult) && gang.equipmentCostMult > 0)) {
+    return { kind: "unread", problem: "the gang's equipment cost multiplier isn't a number" };
   }
   return {
     kind: "gang",
@@ -185,6 +206,62 @@ export interface GangView {
   line: string;
   /** The rule's plan while it manages a gang, or null. */
   plan: GangPlan | null;
+  /** The equipment rule's (G3) while it manages a gang, once the brain has said what money it may spend; or null. */
+  equipment: GangEquipmentPlan | null;
+}
+
+/**
+ * The money gang equipment leaves alone (G3, #330), as the brain holds it for its other spending, and what for: Infinity
+ * spends none (an install chosen).
+ */
+export interface GangMoneyHold {
+  amount: number;
+  forWhat: string;
+}
+
+/**
+ * The hold gang equipment leaves alone (G3): the most of `reserves` (the brain's holds, each of which keeps the same
+ * money from what it holds it from, so the largest covers the rest), plus each of `purchases` on top (money already
+ * spoken for: the purchase going out, the cloud server waiting). Infinity in any, Infinity: none spent.
+ */
+export function gangMoneyHoldOf(
+  reserves: readonly GangMoneyHold[],
+  purchases: readonly GangMoneyHold[],
+): GangMoneyHold {
+  const most = reserves.reduce<GangMoneyHold | null>(
+    (top, each) => (each.amount > 0 && (top === null || each.amount > top.amount) ? each : top),
+    null,
+  );
+  const holds = [...(most === null ? [] : [most]), ...purchases.filter((each) => each.amount > 0)];
+  return {
+    amount: holds.reduce((sum, each) => sum + each.amount, 0),
+    forWhat: holds.map((each) => each.forWhat).join(" and ") || "nothing",
+  };
+}
+
+const formatDollars = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
+
+/**
+ * The plan's equipment (G3), for the dashboard: "buying NUKE Rootkit for member-02 ($4,762,000, $6,100,000 more
+ * money by its next ascension)", and how many more; with none bought, the best that pays and the hold it waits above,
+ * or that none pays back within its horizon.
+ */
+export function describeEquipment(equipment: GangEquipmentPlan, hold: GangMoneyHold): string {
+  const [first, ...more] = equipment.buy;
+  const by = (each: { kept: boolean }) => (each.kept ? "in a day" : "by its next ascension");
+  if (first !== undefined) {
+    return (
+      `buying ${first.equipment} for ${first.name} (${formatDollars(first.cost)}, ${formatDollars(first.gain)} more ` +
+      `money ${by(first)})${more.length > 0 ? ` and ${more.length} more` : ""}`
+    );
+  }
+  const best = equipment.paying[0];
+  if (best === undefined) return "no equipment pays back within its horizon";
+  const held = Number.isFinite(hold.amount) ? `above the ${formatDollars(hold.amount)} held for ${hold.forWhat}` : "";
+  return (
+    `${best.equipment} for ${best.name} pays (${formatDollars(best.cost)}), waiting for ` +
+    (held === "" ? `${hold.forWhat}, which spends everything` : `money ${held}`)
+  );
 }
 
 const formatCount = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -229,7 +306,12 @@ export function describeAscension(plan: GangPlan): string {
 
 export class GangRule {
   readonly #log: (line: string) => void;
-  #view: GangView = { stage: "notManaged", line: "Gang: not managed (no slow snapshot yet)", plan: null };
+  #view: GangView = {
+    stage: "notManaged",
+    line: "Gang: not managed (no slow snapshot yet)",
+    plan: null,
+    equipment: null,
+  };
   /** The faction of the gang the last reading showed, or null. */
   #faction: string | null = null;
   /** In BN2 with no reading yet that says whether there's a gang, or whose: every gang faction is held out. */
@@ -241,6 +323,19 @@ export class GangRule {
   #placed: string[] = [];
   readonly #store: TelemetryStore | null;
   #lastLogged = "";
+  /** The last decision's gang state, before its equipment (`equip`). */
+  #state: GangState | null = null;
+  /** What the managed decision read (G3): its medium snapshot, the rule's inputs and plan, and the equipment's cost. */
+  #basis: { mediumData: unknown; inputs: GangRuleInputs; plan: GangPlan; costMult: number } | null = null;
+  /** The equipment worked out for a medium snapshot (G3), the hold it was within, and the purchases sent. */
+  #equipped: {
+    mediumData: unknown;
+    equipment: GangEquipmentPlan;
+    hold: GangMoneyHold;
+    buy: GangState["buy"];
+    keepMoney: number | null;
+  } | null = null;
+  #lastBought = "";
 
   /** `store`: where the rule's justice members are kept across a restart; none (the tests), in memory only. */
   constructor(log: (line: string) => void = () => {}, store: TelemetryStore | null = null) {
@@ -282,15 +377,19 @@ export class GangRule {
       this.#holding = false;
       this.#setPlaced([]);
       const why = bitNode === null ? "no slow snapshot yet" : `gangs play in BN2 only for now; this is BN${bitNode}`;
-      return this.#decide({ stage: "notManaged", line: `Gang: not managed (${why})`, plan: null }, null, null);
+      return this.#decide(
+        { stage: "notManaged", line: `Gang: not managed (${why})`, plan: null, equipment: null },
+        null,
+        null,
+      );
     }
     // Managed from here on: the worker reads the gang even before one is formed.
-    const read: GangState = { recruit: [], ascend: [], tasks: {} };
+    const read: GangState = { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null };
     const snapshot = gangSnapshotOf(mediumData);
     if (snapshot.kind === "absent" || snapshot.kind === "unread") {
       this.#holding = this.#faction === null;
       const why = snapshot.kind === "unread" ? `unread: ${snapshot.problem}` : "waiting for the gang worker's reading";
-      return this.#decide({ stage: "waiting", line: `Gang: ${why}`, plan: null }, null, read);
+      return this.#decide({ stage: "waiting", line: `Gang: ${why}`, plan: null, equipment: null }, null, read);
     }
     this.#holding = false;
     if (snapshot.kind === "none") {
@@ -299,21 +398,27 @@ export class GangRule {
       const faction = gangFactionToForm(joinedFactionsOf(mediumData));
       if (faction === null) {
         const line = "Gang: none yet: no gang faction joined (NiteSec comes with avmnite-02h's backdoor)";
-        return this.#decide({ stage: "noFaction", line, plan: null }, null, read);
+        return this.#decide({ stage: "noFaction", line, plan: null, equipment: null }, null, read);
       }
       const intent: Intent = { action: "createGang", args: { faction }, id: intentId("createGang", { faction }) };
-      return this.#decide({ stage: "forming", line: `Gang: forming with ${faction}`, plan: null }, intent, read);
+      return this.#decide(
+        { stage: "forming", line: `Gang: forming with ${faction}`, plan: null, equipment: null },
+        intent,
+        read,
+      );
     }
     const { gang, members } = snapshot;
     this.#faction = gang.faction;
-    const plan = planGang({
+    const inputs: GangRuleInputs = {
       gang: { respect: gang.respect, wantedLevel: gang.wantedLevel, territory: gang.territory },
       isHacking: gang.isHacking,
       members,
       softcap: gangSoftcapOf(GANG_BITNODE),
       placedOnJustice: this.#placed,
       bonusTime: gangInBonusTime(gang.bonusTimeMs),
-    });
+    };
+    const plan = planGang(inputs);
+    this.#basis = { mediumData, inputs, plan, costMult: gangEquipmentCostMultOf(gang) };
     this.#setPlaced(plan.assignments.filter((each) => each.role === "justice").map((each) => each.name));
     const tasks: Record<string, string> = {};
     // A member the owner named past what the protocol takes is left as it is: the Agent would refuse the whole state.
@@ -327,7 +432,13 @@ export class GangRule {
       `respect ${Math.round(gang.respect).toLocaleString("en-US")}, wanted penalty ${percent(1 - gang.wantedPenalty)}` +
       ` (above its floor ${percent(plan.lostShare)}, bound ${percent(plan.bound)}); ` +
       `$${Math.round(gang.moneyGainRate * 5).toLocaleString("en-US")}/s; ${describeAscension(plan)}`;
-    return this.#decide({ stage: "managed", line, plan }, null, { recruit: plan.recruit, ascend, tasks });
+    return this.#decide({ stage: "managed", line, plan, equipment: null }, null, {
+      recruit: plan.recruit,
+      ascend,
+      tasks,
+      buy: [],
+      keepMoney: null,
+    });
   }
 
   /** The rule's justice members, written to the store on a change. */
@@ -337,8 +448,45 @@ export class GangRule {
     this.#store?.setSetting(GANG_PLACED_ON_JUSTICE_SETTING, JSON.stringify(names));
   }
 
+  /**
+   * The gang state with its equipment (G3, #330): the purchases `planGangEquipment` makes with the player's `money` (the
+   * medium snapshot's) above `hold`, the brain's holds for its other spending, sent as `keepMoney` (null for Infinity:
+   * none spent). Worked out once a gang reading (a medium snapshot), as the purchases are, so the state, and the
+   * worker's runs, change only with it, not with each fast snapshot's holds. The state `update` gave as it is, but
+   * while it manages the gang.
+   */
+  equip({ money, hold }: { money: number | null; hold: GangMoneyHold }): GangState | null {
+    const state = this.#state;
+    const basis = this.#basis;
+    if (state === null || basis === null || this.#view.stage !== "managed") return state;
+    let equipped = this.#equipped;
+    if (equipped === null || equipped.mediumData !== basis.mediumData) {
+      const budget = typeof money === "number" && Number.isFinite(hold.amount) ? Math.max(0, money - hold.amount) : 0;
+      const equipment = planGangEquipment(basis.inputs, basis.plan, { budget, costMult: basis.costMult });
+      const byName = new Map(basis.inputs.members.map((member) => [member.name, member]));
+      const buy = equipment.buy.flatMap(({ name, equipment: item }) => {
+        const member = byName.get(name);
+        return member === undefined || !isProtocolName(name)
+          ? []
+          : [{ name, equipment: item, pointsBefore: gangAscensionPointsOf(member) }];
+      });
+      const keepMoney = Number.isFinite(hold.amount) ? Math.max(0, hold.amount) : null;
+      equipped = { mediumData: basis.mediumData, equipment, hold, buy, keepMoney };
+      this.#equipped = equipped;
+      const bought = buy.map((each) => `${each.equipment} for ${each.name}`).join(", ");
+      if (bought !== this.#lastBought && bought !== "") this.#log(`gang: buying ${bought}`);
+      this.#lastBought = bought;
+    }
+    const { equipment, hold: heldBy, buy, keepMoney } = equipped;
+    const line = this.#view.line.replace(/; equipment: .*$/, "");
+    this.#view = { ...this.#view, line: `${line}; equipment: ${describeEquipment(equipment, heldBy)}`, equipment };
+    return { ...state, buy, keepMoney };
+  }
+
   #decide(view: GangView, intent: Intent | null, gang: GangState | null): GangDecision {
     this.#view = view;
+    this.#state = gang;
+    if (view.stage !== "managed") this.#basis = null;
     // Logged on a change of stage, recruits or task mix, not each figure.
     const logged =
       view.plan === null

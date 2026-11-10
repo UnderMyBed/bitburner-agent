@@ -11,19 +11,28 @@
 //   justice it's all the game allows, however long the decay takes;
 // - the outcome, whatever that forecast: over the bound with a member off justice for `GANG_WANTED_OUTCOME_MS`;
 // - the gang unread (no reading, or the worker's problem) in BN2 for over `GANG_UNREAD_WITHIN_MS`;
-// - an ascension the rule makes (core's `gangAscensionToMake`, #328, G2) not made, for over `GANG_ASCEND_WITHIN_MS`.
+// - an ascension the rule makes (core's `gangAscensionToMake`, #328, G2) not made, for over `GANG_ASCEND_WITHIN_MS`;
+// - equipment the rule buys (core's `planGangEquipment`, #330, G3), with the money above the reading's `keepMoney`
+//   (the brain's holds, as the worker was given them), not bought, for over `GANG_EQUIP_WITHIN_MS`.
 // The ascensions themselves (G2) are seen as a member's ascension points rising between readings (core's
-// `gangAscensionPointsOf`), each with its largest multiplier gain and the respect it had earned, by hour.
+// `gangAscensionPointsOf`), each with its largest multiplier gain and the respect it had earned, by hour; the
+// equipment bought (G3) as an item new in a member's lists, its cost the discounted one at the reading before.
 import {
   GANG_CYCLE_MS,
+  GANG_EQUIPMENT,
   GANG_FACTIONS,
   GANG_STATS,
   GANG_WANTED_RECOVERY_MS,
+  type GangAscensionAppraisal,
+  type GangEquipmentAppraisal,
   type GangMemberReading,
   type GangPlan,
   type GangRuleInputs,
   gangAscensionPointsOf,
   gangAscensionToMake,
+  gangEquipment,
+  gangEquipmentCost,
+  gangEquipmentCostMultOf,
   gangInBonusTime,
   gangLostShare,
   gangLostShareBound,
@@ -34,6 +43,7 @@ import {
   isGangJusticeTask,
   type MediumSnapshotData,
   planGang,
+  planGangEquipment,
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
 import { bitNodeOfSlow, describeTaskMix, GANG_BITNODE, gangSnapshotOf, topAscensionGain } from "./gang.ts";
@@ -68,6 +78,20 @@ export const GANG_UNREAD_WITHIN_MS = 5 * 60_000;
  * snapshot shows it.
  */
 export const GANG_ASCEND_WITHIN_MS = GANG_RECRUIT_WITHIN_MS;
+/**
+ * How long equipment the rule buys may wait (G3): 1 minute, as a recruit (`GANG_RECRUIT_WITHIN_MS`): the brain orders
+ * it on the next medium snapshot, the Agent's worker runs at once on the changed state, and the next medium snapshot
+ * shows it.
+ */
+export const GANG_EQUIP_WITHIN_MS = GANG_RECRUIT_WITHIN_MS;
+
+/** An upgrade bought (G3): new in a member's lists between two readings, at its cost then. */
+interface Purchase {
+  atMs: number;
+  name: string;
+  equipment: string;
+  cost: number;
+}
 
 /** An ascension seen (G2): a member's points risen between two readings. */
 interface Ascension {
@@ -144,6 +168,10 @@ export class GangFold {
   readonly #unread = new Stretches();
   readonly #ascensionWaiting = new Stretches();
   readonly #ascensions: Ascension[] = [];
+  readonly #equipmentWaiting = new Stretches();
+  readonly #purchases: Purchase[] = [];
+  /** The cost multiplier at the reading before: what a purchase since cost. */
+  #lastCostMult: number | null = null;
   /** Each member at the reading before, by name: its ascension points rising says it ascended. */
   #lastMembers = new Map<string, GangMemberReading>();
 
@@ -173,6 +201,7 @@ export class GangFold {
         this.#overBoundOffJustice,
         this.#unread,
         this.#ascensionWaiting,
+        this.#equipmentWaiting,
       ]) {
         stretches.add(atMs, null);
       }
@@ -199,6 +228,7 @@ export class GangFold {
       this.#overBound.add(atMs, null);
       this.#overBoundOffJustice.add(atMs, null);
       this.#ascensionWaiting.add(atMs, null);
+      this.#equipmentWaiting.add(atMs, null);
       // A gang gone (another BitNode's start) has none of these members; one unread keeps them.
       if (snapshot.kind === "none") this.#lastMembers = new Map();
       return;
@@ -246,6 +276,21 @@ export class GangFold {
     // The ascensions since the reading before, and the rule's own (core's `gangAscensionToMake`, as the brain's plan
     // has it) not made.
     let ascended = false;
+    // The equipment bought since (G3): new in the member's lists, its upgrades against none if it ascended since.
+    const costMult = gangEquipmentCostMultOf(gang);
+    const boughtBefore = this.#purchases.length;
+    for (const member of members) {
+      const before = this.#lastMembers.get(member.name);
+      if (before === undefined) continue;
+      const rose = gangAscensionPointsOf(member) > gangAscensionPointsOf(before);
+      const had = new Set([...(rose ? [] : (before.upgrades ?? [])), ...(before.augmentations ?? [])]);
+      for (const item of [...(member.upgrades ?? []), ...(member.augmentations ?? [])]) {
+        if (had.has(item)) continue;
+        const cost = gangEquipmentCost(gangEquipment(item), this.#lastCostMult ?? costMult);
+        this.#purchases.push({ atMs, name: member.name, equipment: item, cost });
+      }
+    }
+    this.#lastCostMult = costMult;
     for (const member of members) {
       const before = this.#lastMembers.get(member.name);
       if (before === undefined || gangAscensionPointsOf(member) <= gangAscensionPointsOf(before)) continue;
@@ -264,6 +309,20 @@ export class GangFold {
         : `${due.name}'s, multipliers up to ×${topAscensionGain(due.result).toFixed(2)}, a gain of ` +
             `${whole(due.gain)} over a cost of ${whole(due.cost)} in ${formatDuration(due.horizonMs)}`,
     );
+    // The rule's equipment (core's `planGangEquipment`) with the money above the reading's `keepMoney`, none bought
+    // since the reading before.
+    const money = (data.player as { money?: unknown } | undefined)?.money;
+    const keepMoney = (data.gang as { keepMoney?: unknown } | null | undefined)?.keepMoney;
+    const free = typeof money === "number" && typeof keepMoney === "number" ? money - keepMoney : 0;
+    const top =
+      this.#purchases.length > boughtBefore || ascended ? null : gangEquipmentDue(inputs, due, free, costMult);
+    this.#equipmentWaiting.add(
+      atMs,
+      top === null
+        ? null
+        : `${top.equipment} for ${top.name}, $${whole(top.cost)} for $${whole(top.gain)} more money in ` +
+            `${formatDuration(top.horizonMs)}, $${whole(free)} above the $${whole(keepMoney as number)} held`,
+    );
     this.#points.push({
       atMs,
       members: members.length,
@@ -278,7 +337,7 @@ export class GangFold {
 
   /** The section's lines, its failures added to `failures`. */
   section(failures: string[], windowEndMs: number): string[] {
-    const lines = ["7. The gang (#325, ascension G2; played in BN2 only for now)"];
+    const lines = ["7. The gang (#325, ascension G2, equipment G3; played in BN2 only for now)"];
     if (this.#mediumInBitNode2 === 0) {
       lines.push("  not in BN2 in the window: no gang played");
       return lines;
@@ -314,6 +373,10 @@ export class GangFold {
         const money = points.reduce((sum, each) => sum + each.moneyPerSecond, 0) / points.length;
         const worst = points.reduce((top, each) => (each.lostShare > top.lostShare ? each : top));
         const ascensions = this.#ascensions.filter((each) => hourOf(each.atMs) === hour);
+        const purchases = this.#purchases.filter((each) => hourOf(each.atMs) === hour);
+        const items = new Map<string, number>();
+        for (const { equipment } of purchases) items.set(equipment, (items.get(equipment) ?? 0) + 1);
+        const spent = purchases.reduce((sum, each) => sum + each.cost, 0);
         lines.push(
           `    hour ${hour + 1}: ${start.members} → ${end.members} members; respect ${whole(start.respect)} → ` +
             `${whole(end.respect)} (${((end.respect - start.respect) / seconds).toFixed(2)}/s); ` +
@@ -327,6 +390,12 @@ export class GangFold {
                 ascensions
                   .map((each) => `${each.name} ×${each.gain.toFixed(2)}, ${whole(each.respect)} respect`)
                   .join("; ") +
+                ")") +
+            "; " +
+            (purchases.length === 0
+              ? "no equipment bought"
+              : `${purchases.length} equipment bought for $${whole(spent)} (` +
+                [...items].map(([item, count]) => (count === 1 ? item : `${item} ×${count}`)).join(", ") +
                 ")"),
         );
       }
@@ -345,6 +414,7 @@ export class GangFold {
       ],
       [this.#unread, GANG_UNREAD_WITHIN_MS, "the gang unread in BN2"],
       [this.#ascensionWaiting, GANG_ASCEND_WITHIN_MS, "an ascension the rule makes not made"],
+      [this.#equipmentWaiting, GANG_EQUIP_WITHIN_MS, "equipment the rule buys, with the money free, not bought"],
     ] as const;
     for (const [stretches, withinMs, what] of judged) {
       lines.push(`  ${what} for ${formatDuration(withinMs)} or more:`);
@@ -364,3 +434,19 @@ export class GangFold {
 
 const whole = (value: number) => Math.round(value).toLocaleString("en-US");
 const percent = (share: number) => `${(share * 100).toFixed(1)}%`;
+
+/**
+ * The first upgrade the rule buys with `free` dollars (core's `planGangEquipment`), as the brain would: the ascension
+ * the rule makes (`due`) first, each member's forecasts worked out there. None, before any of that, with the money
+ * short of the cheapest upgrade.
+ */
+function gangEquipmentDue(
+  inputs: GangRuleInputs,
+  due: GangAscensionAppraisal | null,
+  free: number,
+  costMult: number,
+): GangEquipmentAppraisal | null {
+  const cheapest = Math.min(...GANG_EQUIPMENT.map((each) => each.cost)) * costMult;
+  if (!(free >= cheapest)) return null;
+  return planGangEquipment(inputs, { assignments: [], ascend: due }, { budget: free, costMult }).buy[0] ?? null;
+}

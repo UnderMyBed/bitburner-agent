@@ -1,4 +1,5 @@
-// Gangs (#325, G1 of #324): the game's facts checked against its source, the formulas worked by hand, and the rule.
+// Gangs (#325, G1 of #324; G2 #328, G3 #330): the game's facts checked against its source, the formulas worked by hand,
+// and the rule.
 // The formulas and the task table are checked against the engine too (packages/brain's gang-parity.test.ts).
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
@@ -6,6 +7,8 @@ import {
   GANG_ASCENSION_EXP_LEFT_OUT,
   GANG_ASCENSION_POINTS_SCALE,
   GANG_CYCLE_MS,
+  GANG_EQUIPMENT,
+  GANG_EQUIPMENT_NAMES,
   GANG_FACTIONS,
   GANG_FREE_MEMBERS,
   GANG_MOST_MEMBERS,
@@ -18,10 +21,17 @@ import {
   gangAscensionPointsOf,
   gangAscensionResult,
   gangCanAscend,
+  gangEquipment,
+  gangEquipmentCost,
+  gangEquipmentCostMultOf,
+  gangEquipmentDiscount,
+  gangEquipmentKept,
   gangExpPerCycle,
   gangFactionToForm,
   gangMemberAfter,
   gangMemberAscended,
+  gangMemberEquipped,
+  gangMemberOwns,
   gangMoneyPerCycle,
   gangRecruitsAllowed,
   gangRespectPerCycle,
@@ -38,9 +48,13 @@ import {
 import {
   GANG_ASCENSION_HORIZON_CAP_MS,
   GANG_ASCENSION_MOST_LEFT_OUT,
+  GANG_AUGMENTATION_HORIZON_MS,
   GANG_MEMBER_NAMES,
   GANG_TRAINING_STEP_MS,
   GANG_WANTED_RECOVERY_MS,
+  type GangAscensionAppraisal,
+  type GangAssignment,
+  type GangEquipmentAppraisal,
   type GangRuleInputs,
   gangAscensionAppraisal,
   gangAscensionConvertsEnough,
@@ -48,6 +62,7 @@ import {
   gangAscensionToMake,
   gangBestWork,
   gangCycleSoFarMs,
+  gangEquipmentAppraisal,
   gangLostShare,
   gangLostShareBound,
   gangOutputOver,
@@ -58,6 +73,7 @@ import {
   gangWantedRecovers,
   gangWorkRespectPerCycle,
   planGang,
+  planGangEquipment,
 } from "../src/gang-rule.ts";
 
 const gameSource = (file: string) =>
@@ -465,9 +481,29 @@ describe("the desired state's gang", () => {
     expect(parseGangState(undefined)).toEqual({ ok: true, gang: null });
     expect(parseGangState({ recruit: ["a"], tasks: { a: "Ransomware" } })).toEqual({
       ok: true,
-      gang: { recruit: ["a"], ascend: [], tasks: { a: "Ransomware" } },
+      gang: { recruit: ["a"], ascend: [], tasks: { a: "Ransomware" }, buy: [], keepMoney: null },
     });
     expect(parseGangState({ recruit: [], tasks: { a: "Nap" } })).toMatchObject({ ok: false });
+  });
+
+  test("parsed: the purchases (G3), the game's equipment, with the money to keep; a bad one refuses the state", () => {
+    const buy = [{ name: "a", equipment: "NUKE Rootkit", pointsBefore: 12.5 }];
+    expect(parseGangState({ recruit: [], tasks: {}, buy, keepMoney: 1e9 })).toEqual({
+      ok: true,
+      gang: { recruit: [], ascend: [], tasks: {}, buy, keepMoney: 1e9 },
+    });
+    expect(parseGangState({ recruit: [], tasks: {}, buy, keepMoney: null })).toMatchObject({ ok: true });
+    for (const bad of [
+      { buy: [{ name: "a", equipment: "Spoon", pointsBefore: 0 }], keepMoney: 0 },
+      { buy: [{ name: "a", equipment: "NUKE Rootkit", pointsBefore: -1 }], keepMoney: 0 },
+      { buy: [{ name: "", equipment: "NUKE Rootkit", pointsBefore: 0 }], keepMoney: 0 },
+      { buy: Array.from({ length: 13 }, () => buy[0]), keepMoney: 0 },
+      { buy: "NUKE Rootkit", keepMoney: 0 },
+      { buy, keepMoney: -1 },
+      { buy, keepMoney: "lots" },
+    ]) {
+      expect(parseGangState({ recruit: [], tasks: {}, ...bad }), JSON.stringify(bad)).toMatchObject({ ok: false });
+    }
   });
 });
 
@@ -712,5 +748,239 @@ describe("ascension (G2)", () => {
     expect(
       gangAscensionToMake(inputs([{ ...ready, earnedRespect: 4 }, ...three.slice(1)], recruiting), "respect")?.name,
     ).toBe("member-01");
+  });
+});
+
+describe("equipment (G3)", () => {
+  /** A hacker with ascension multiplier `asc` and `exp` hacking experience, on `task`. */
+  const hacker = (name: string, asc: number, exp: number, task = "Money Laundering"): GangMemberFigures => ({
+    ...member(name),
+    task,
+    hack_asc_mult: asc,
+    hack_asc_points: GANG_ASCENSION_POINTS_SCALE * asc ** 2,
+    hack_exp: exp,
+    hack: gangSkillLevel(exp, asc),
+  });
+  const GANG = { respect: 1_000, wantedLevel: 1, territory: 1 / 7 };
+  const inputs = (members: GangMemberFigures[], gang = GANG): GangRuleInputs => ({
+    gang,
+    isHacking: true,
+    members,
+    softcap: 1,
+  });
+  const NUKE = gangEquipment("NUKE Rootkit");
+  const BITWIRE = gangEquipment("BitWire");
+  const MINUTE = 60_000;
+  /** A plan with these members working (or in `roles`), each `nextMs` from its next ascension. */
+  const planOf = (
+    members: GangMemberFigures[],
+    nextMs: number,
+    roles: Record<string, GangAssignment["role"]> = {},
+    ascend: string | null = null,
+  ) => ({
+    assignments: members.map((each) => ({
+      name: each.name,
+      task: each.task,
+      role: roles[each.name] ?? ("working" as const),
+      value: 0,
+      bestTask: each.task,
+      nextAscensionMs: nextMs,
+    })),
+    ascend: ascend === null ? null : ({ name: ascend } as GangAscensionAppraisal),
+  });
+
+  test("the upgrades are the game's: names, costs, types and multipliers, in order", () => {
+    const source = gameSource("Gang/data/upgrades.ts");
+    const blocks = [
+      ...source.matchAll(/cost: ([\d.e]+),\s+mults: \{([^}]*)\},\s+name: "([^"]+)",\s+upgType: \w+\.(\w+)/g),
+    ];
+    expect(blocks).toHaveLength(32);
+    expect(
+      blocks.map(([, cost, mults, name, type]) => ({
+        name,
+        cost: Number(cost),
+        type,
+        mults: Object.fromEntries(
+          (mults as string).split(",").map((pair) => {
+            const [stat, value] = pair.split(":").map((part) => part.trim());
+            return [stat, Number(value)];
+          }),
+        ),
+      })),
+    ).toEqual(GANG_EQUIPMENT.map((each) => ({ ...each })));
+    expect(GANG_EQUIPMENT_NAMES).toEqual(blocks.map((each) => each[3]));
+    // `getType()`'s names (`GangMemberUpgrade.ts:51-66`) for the source's enum.
+    expect(GANG_EQUIPMENT.filter((each) => each.type === "Augmentation")).toHaveLength(11);
+    expect(GANG_EQUIPMENT.filter(gangEquipmentKept).map((each) => each.name)).toEqual(
+      GANG_EQUIPMENT.slice(21).map((each) => each.name),
+    );
+    expect(() => gangEquipment("Spoon")).toThrow(RangeError);
+  });
+
+  test("the discount from respect and power, as the game's, at least 1; the cost is the upgrade's × its inverse", () => {
+    const gang = gameSource("Gang/Gang.ts");
+    expect(gang).toContain("const respectLinearFac = 5e6;");
+    expect(gang).toContain("const powerLinearFac = 1e6;");
+    expect(gang).toContain(
+      "Math.pow(respect, 0.01) + respect / respectLinearFac + Math.pow(power, 0.01) + power / powerLinearFac - 1;",
+    );
+    expect(gang).toContain("return Math.max(1, discount);");
+    expect(gang).toContain("return upg.cost / this.getDiscount();");
+    // At the start (respect and power 1): 1 + 1/5e6 + 1/1e6. Grown: 10^0.06 + 0.2 + 100^0.01 + 1e-4 − 1.
+    expect(gangEquipmentDiscount({ respect: 1, power: 1 })).toBeCloseTo(1 + 1 / 5e6 + 1 / 1e6, 15);
+    expect(gangEquipmentDiscount({ respect: 1e6, power: 100 })).toBeCloseTo(
+      10 ** 0.06 + 0.2 + 100 ** 0.01 - 1 + 1e-4,
+      12,
+    );
+    expect(gangEquipmentDiscount({ respect: 0, power: 0 })).toBe(1);
+    expect(gangEquipmentCost(NUKE, 0.5)).toBe(2.5e6);
+    // From an older Agent's reading, without `equipmentCostMult`: 1 / the discount.
+    expect(gangEquipmentCostMultOf({ respect: 1e6, power: 100 })).toBeCloseTo(
+      1 / gangEquipmentDiscount({ respect: 1e6, power: 100 }),
+      15,
+    );
+    expect(gangEquipmentCostMultOf({ respect: 1e6, power: 100, equipmentCostMult: 0.7 })).toBe(0.7);
+  });
+
+  test("a member equipped: its multiplier × the upgrade's, its level from it, the upgrade listed by kind", () => {
+    const before = hacker("a", 2, 10_000);
+    const rooted = gangMemberEquipped(before, NUKE);
+    expect(rooted).toMatchObject({ hack_mult: 1.05, upgrades: ["NUKE Rootkit"], cha_mult: 1, cha: 1 });
+    expect(rooted.hack).toBe(gangSkillLevel(10_000, 1.05 * 2));
+    expect(rooted.hack).toBeGreaterThan(before.hack);
+    expect(gangMemberOwns(rooted, "NUKE Rootkit")).toBe(true);
+    const wired = gangMemberEquipped(rooted, BITWIRE);
+    expect(wired).toMatchObject({ upgrades: ["NUKE Rootkit"], augmentations: ["BitWire"] });
+    expect(wired.hack_mult).toBeCloseTo(1.05 * 1.05, 15);
+    expect(gangMemberOwns(wired, "BitWire")).toBe(true);
+    expect(gangMemberOwns(before, "BitWire")).toBe(false);
+    // Training's experience is faster with it: (mult − 1) / 4 + 1 (`GangMember.ts:141-150`).
+    expect(gangExpPerCycle(wired, gangTask("Train Hacking")).hack).toBeCloseTo(
+      gangExpPerCycle(before, gangTask("Train Hacking")).hack * (1 + (1.05 * 1.05 - 1) / 4),
+      12,
+    );
+  });
+
+  test("an ascension loses the upgrades and keeps the augmentations: G2's member after, and its appraisal, count them", () => {
+    const member_ = gameSource("Gang/GangMember.ts");
+    expect(member_).toContain("this.upgrades.length = 0;");
+    expect(member_).toMatch(
+      /for \(let i = 0; i < this\.augmentations\.length; \+\+i\) \{\s+const aug = GangMemberUpgrades/,
+    );
+    const base = { ...hacker("member-01", 1, 9_000, "Phishing"), earnedRespect: 0 };
+    const equipped = gangMemberEquipped(
+      gangMemberEquipped(gangMemberEquipped(base, NUKE), BITWIRE),
+      gangEquipment("DataJack"),
+    );
+    const after = gangMemberAscended(equipped);
+    expect(after).toMatchObject({ upgrades: [], augmentations: ["BitWire", "DataJack"], hack_exp: 0, cha_mult: 1 });
+    expect(after.hack_mult).toBeCloseTo(1.05 * 1.1, 15);
+    expect(after.hack).toBe(gangSkillLevel(0, 1.05 * 1.1 * after.hack_asc_mult));
+    // Its level from them too: at an ascension multiplier of 100, 115 from no experience, not 100.
+    const grown = gangMemberAscended(
+      gangMemberEquipped(gangMemberEquipped(hacker("member-02", 100, 9_000), BITWIRE), gangEquipment("DataJack")),
+    );
+    expect(grown.hack).toBe(gangSkillLevel(0, 1.05 * 1.1 * grown.hack_asc_mult));
+    expect([grown.hack, gangSkillLevel(0, grown.hack_asc_mult)]).toEqual([115, 100]);
+    // None: G2's 1.
+    expect(gangMemberAscended(base).hack_mult).toBe(1);
+    // G2's appraisal: the ascended member with its augmentations out-earns it without, so the gain is larger.
+    const withAugs = gangAscensionAppraisal(inputs([equipped]), equipped, "respect", 60 * MINUTE);
+    const without = gangAscensionAppraisal(
+      inputs([{ ...equipped, augmentations: [] }]),
+      { ...equipped, augmentations: [] },
+      "respect",
+      60 * MINUTE,
+    );
+    expect(withAugs?.gain).toBeGreaterThan(without?.gain as number);
+  });
+
+  test("an upgrade pays when the member's money output gains more than its cost within the horizon", () => {
+    const strong = hacker("member-01", 8, 10_000);
+    // A rootkit for a strong hacker on Money Laundering: about $4,000 a second more, so $5m back within 30 minutes.
+    const appraisal = gangEquipmentAppraisal(inputs([strong]), strong, NUKE, 30 * MINUTE, 1);
+    expect(appraisal).toMatchObject({
+      name: "member-01",
+      equipment: "NUKE Rootkit",
+      kept: false,
+      cost: 5e6,
+      pays: true,
+    });
+    expect(appraisal.gain).toBeGreaterThan(5e6);
+    // Not within 10 minutes; nor for a weak one, whose money tasks pay little.
+    expect(gangEquipmentAppraisal(inputs([strong]), strong, NUKE, 10 * MINUTE, 1).pays).toBe(false);
+    const weak = hacker("member-02", 2, 10_000, "Identity Theft");
+    expect(gangEquipmentAppraisal(inputs([weak]), weak, NUKE, 30 * MINUTE, 1).pays).toBe(false);
+    // The discount brings it nearer: at half the cost, within 15 minutes.
+    expect(gangEquipmentAppraisal(inputs([strong]), strong, NUKE, 15 * MINUTE, 1).pays).toBe(false);
+    expect(gangEquipmentAppraisal(inputs([strong]), strong, NUKE, 15 * MINUTE, 0.5).pays).toBe(true);
+    // The gain is in money at the gang's wanted penalty now: at a penalty of a half, half of it.
+    const penalised = inputs([strong], { respect: 1_000, wantedLevel: 1_000, territory: 1 / 7 });
+    expect(gangEquipmentAppraisal(penalised, strong, NUKE, 30 * MINUTE, 1).gain).toBeCloseTo(
+      appraisal.gain / 2 / gangWantedPenaltyOf(GANG),
+      3,
+    );
+    // A weapon does nothing for a hacking gang: no stat its tasks weigh.
+    expect(gangEquipmentAppraisal(inputs([strong]), strong, gangEquipment("Katana"), 30 * MINUTE, 1).gain).toBe(0);
+  });
+
+  test("the plan: lost items for a working member, over G2's time to its next ascension; augmentations over a day", () => {
+    const strong = [hacker("member-01", 8, 10_000), hacker("member-02", 8, 10_000)];
+    const budget = { budget: 1e12, costMult: 1 };
+    // Each working, 30 minutes from its next ascension: a rootkit each, the cheapest-for-its-gain.
+    const working = planGangEquipment(inputs(strong), planOf(strong, 30 * MINUTE), budget);
+    expect(working.buy.map(({ name, equipment, horizonMs }) => [name, equipment, horizonMs])).toEqual([
+      ["member-01", "NUKE Rootkit", 30 * MINUTE],
+      ["member-02", "NUKE Rootkit", 30 * MINUTE],
+    ]);
+    expect(working.paying).toEqual(working.buy);
+    // 5 minutes off: nothing pays back so soon. Due now (0, held): none either.
+    expect(planGangEquipment(inputs(strong), planOf(strong, 5 * MINUTE), budget).paying).toEqual([]);
+    expect(planGangEquipment(inputs(strong), planOf(strong, 0), budget).paying).toEqual([]);
+    // Training or on justice: no lost item, whatever the forecast: it earns nothing before the ascension that loses it.
+    const roles = { "member-01": "training", "member-02": "justice" } as const;
+    expect(planGangEquipment(inputs(strong), planOf(strong, 30 * MINUTE, roles), budget).paying).toEqual([]);
+    // Under 5,000 experience its ascension doesn't convert enough, and G2's forecast leaves out the training that soon
+    // brings it: no lost item, though the forecast (a day) would pay it.
+    const recruit = [hacker("member-01", 8, 4_999), strong[1] as GangMemberFigures];
+    expect(gangAscensionConvertsEnough(recruit[0] as GangMemberFigures, true)).toBe(false);
+    const early = planGangEquipment(inputs(recruit), planOf(recruit, GANG_ASCENSION_HORIZON_CAP_MS), budget);
+    expect(early.paying.map((each) => each.name)).toEqual(["member-02"]);
+    // With no plan (the run report's): working unless on the training or a justice task, its forecast worked out.
+    const read = [{ ...(strong[0] as GangMemberFigures), task: "Train Hacking" }, strong[1] as GangMemberFigures];
+    const unplanned = planGangEquipment(inputs(read), { assignments: [], ascend: null }, budget);
+    expect(unplanned.paying.map((each) => [each.name, each.horizonMs])).toEqual([
+      ["member-02", gangTimeToAscensionMs(inputs(read), read[1] as GangMemberFigures, "respect")],
+    ]);
+    const ascending = planGangEquipment(inputs(strong), planOf(strong, 30 * MINUTE, {}, "member-01"), budget);
+    expect(ascending.paying.map((each) => each.name)).toEqual(["member-02"]);
+    // An item owned is skipped: the next rootkit that pays, Soulstealer's.
+    const owning = [{ ...(strong[0] as GangMemberFigures), upgrades: ["NUKE Rootkit"] }];
+    expect(planGangEquipment(inputs(owning), planOf(owning, 30 * MINUTE), budget).paying[0]?.equipment).not.toBe(
+      "NUKE Rootkit",
+    );
+    // A hacker far stronger (hacking 48,000): an augmentation pays over a day, kept, whatever its task, training too.
+    const veryStrong = [hacker("member-01", 200, 1e6)];
+    const kept = planGangEquipment(inputs(veryStrong), planOf(veryStrong, 0, { "member-01": "training" }), budget);
+    expect(kept.paying).toHaveLength(1);
+    expect(kept.paying[0]).toMatchObject({ kept: true, horizonMs: GANG_AUGMENTATION_HORIZON_MS, pays: true });
+    expect(GANG_AUGMENTATION_HORIZON_MS).toBe(GANG_ASCENSION_HORIZON_CAP_MS);
+    // A name the protocol can't carry: none.
+    const long = [hacker("x".repeat(65), 8, 10_000)];
+    expect(planGangEquipment(inputs(long), planOf(long, 30 * MINUTE), budget).paying).toEqual([]);
+  });
+
+  test("the budget: the best gain for its cost first, then what still fits; nothing with none", () => {
+    const members = [hacker("member-01", 8, 10_000), hacker("member-02", 16, 10_000)];
+    const plan = planOf(members, 30 * MINUTE);
+    const all = planGangEquipment(inputs(members), plan, { budget: 1e12, costMult: 1 });
+    expect(all.paying.map((each) => each.name)).toEqual(["member-02", "member-01"]);
+    const ratios = all.paying.map((each) => each.gain / each.cost);
+    expect(ratios).toEqual([...ratios].sort((a, b) => b - a));
+    // Room for one: the best; none with no money, though both still pay.
+    const first = all.paying[0] as GangEquipmentAppraisal;
+    expect(planGangEquipment(inputs(members), plan, { budget: first.cost, costMult: 1 }).buy).toEqual([first]);
+    expect(planGangEquipment(inputs(members), plan, { budget: 0, costMult: 1 }).buy).toEqual([]);
+    expect(planGangEquipment(inputs(members), plan, { budget: 0, costMult: 1 }).paying).toEqual(all.paying);
   });
 });

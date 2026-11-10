@@ -460,16 +460,26 @@ describe("the gang (#325)", () => {
     expect(gangOf(null)).toBeUndefined();
   });
 
-  test("carried with its recruits, ascensions (G2) and tasks, only its known fields", () => {
+  test("carried with its recruits, ascensions (G2), tasks and purchases (G3), only its known fields", () => {
     const gang = {
       recruit: ["member-04"],
       ascend: [{ name: "member-02", pointsBefore: 1234.5 }],
       tasks: { "member-01": "Train Hacking", "member-04": "Ransomware" },
+      buy: [{ name: "member-01", equipment: "NUKE Rootkit", pointsBefore: 0 }],
+      keepMoney: 5e8,
     };
-    expect(gangOf({ ...gang, extra: 1, ascend: [{ ...gang.ascend[0], extra: 2 }] })).toEqual(gang);
-    expect(gangOf({ recruit: [], ascend: [], tasks: {} })).toEqual({ recruit: [], ascend: [], tasks: {} });
-    // A G1 brain's, with no ascensions: none.
-    expect(gangOf({ recruit: [], tasks: {} })).toEqual({ recruit: [], ascend: [], tasks: {} });
+    expect(
+      gangOf({
+        ...gang,
+        extra: 1,
+        ascend: [{ ...gang.ascend[0], extra: 2 }],
+        buy: [{ ...gang.buy[0], extra: 3 }],
+      }),
+    ).toEqual(gang);
+    const none = { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null };
+    expect(gangOf({ recruit: [], ascend: [], tasks: {} })).toEqual(none);
+    // A G1 brain's, with no ascensions: none; a G2 brain's, with no purchases: none, and none spent.
+    expect(gangOf({ recruit: [], tasks: {} })).toEqual(none);
   });
 
   test.each([
@@ -499,7 +509,7 @@ describe("the gang (#325)", () => {
   });
 
   test("while the brain holds, no gang is managed: none goes", () => {
-    const gang = { recruit: [], ascend: [], tasks: { "member-01": "Train Hacking" } };
+    const gang = { recruit: [], ascend: [], tasks: { "member-01": "Train Hacking" }, buy: [], keepMoney: null };
     const desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents: [], gang };
     expect(desiredStateWhileHolding(desired, null)).toEqual({ hackLoop: desired.hackLoop, intents: [] });
   });

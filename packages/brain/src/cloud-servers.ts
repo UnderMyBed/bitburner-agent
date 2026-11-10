@@ -160,6 +160,11 @@ export interface CloudServersPlan {
   next: CloudServerPurchase | null;
   /** Why nothing is bought now, for the dashboard, or null when something is (or all are at the most RAM). */
   waitingFor: string | null;
+  /**
+   * The purchase that pays back within the limit and waits for money, when that's what it waits for: what gang
+   * equipment leaves its money to (#330, G3), so the gang never starves cloud servers. Absent otherwise.
+   */
+  awaitingMoney?: CloudServerPurchase;
 }
 
 /** Money held back for another purchase: its price, and what it is, for the dashboard. */
@@ -312,7 +317,7 @@ export function chooseCloudServerPurchase({
   const what =
     least.action === "buyServer" ? `${least.hostname} with ${least.ram} GB` : `${least.hostname} to ${least.ram} GB`;
   const held = reserve === null ? "" : `, beyond ${formatMoney(reserve.amount)} held for ${reserve.forWhat}`;
-  return plan(`money for ${what} (${formatMoney(least.price)}${held})`);
+  return { ...plan(`money for ${what} (${formatMoney(least.price)}${held})`), awaitingMoney: least };
 }
 
 /**

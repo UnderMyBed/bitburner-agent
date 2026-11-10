@@ -1,12 +1,14 @@
-// The gang (#325, G1 of #324; ascension #328, G2): the brain's rule on the snapshots, the gang faction left out of
-// what the other rules see, the gate's guard on forming, and the run report's section with each of its failures. The
-// rule against the real engine is gang-simulation.test.ts's; the formulas against it, gang-parity.test.ts's.
+// The gang (#325, G1 of #324; ascension #328, G2; equipment #330, G3): the brain's rule on the snapshots, the gang
+// faction left out of what the other rules see, the gate's guard on forming, the equipment's hold, and the run report's
+// section with each of its failures.
+// The rule against the real engine is gang-simulation.test.ts's; the formulas against it, gang-parity.test.ts's.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
+  AUGMENTATION_NAMES,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
@@ -16,6 +18,7 @@ import {
   type GangMemberReading,
   type GangReading,
   gangMemberAscended,
+  gangSkillLevel,
   type Intent,
   intentId,
   type MediumSnapshotData,
@@ -30,11 +33,13 @@ import {
   GANG_PLACED_ON_JUSTICE_SETTING,
   GangFactionCarry,
   GangRule,
+  gangMoneyHoldOf,
   gangSnapshotOf,
   withoutGangFaction,
 } from "../src/gang.ts";
 import {
   GANG_ASCEND_WITHIN_MS,
+  GANG_EQUIP_WITHIN_MS,
   GANG_FORM_WITHIN_MS,
   GANG_RECRUIT_WITHIN_MS,
   GANG_UNREAD_WITHIN_MS,
@@ -112,7 +117,7 @@ describe("the rule", () => {
     const rule = new GangRule();
     expect(rule.update({ mediumData: withGang(undefined), slowData: slowData(2) })).toEqual({
       intent: null,
-      gang: { recruit: [], ascend: [], tasks: {} },
+      gang: { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null },
     });
     expect(rule.view().stage).toBe("waiting");
     const unread = withGang({ gang: null, members: [], problems: ["the gang state isn't one to do"] });
@@ -126,7 +131,7 @@ describe("the rule", () => {
     expect(rule.view().stage).toBe("noFaction");
     expect(rule.update({ mediumData: withGang(NONE), slowData: slowData(2) })).toEqual({
       intent: FORM_NITESEC,
-      gang: { recruit: [], ascend: [], tasks: {} },
+      gang: { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null },
     });
     expect(rule.view().line).toBe("Gang: forming with NiteSec");
     // A combat faction joined too: formed there (core's gangFactionToForm).
@@ -143,6 +148,8 @@ describe("the rule", () => {
       recruit: ["member-01", "member-02", "member-03"],
       ascend: [],
       tasks: { "member-01": "Train Hacking", "member-02": "Train Hacking", "member-03": "Train Hacking" },
+      buy: [],
+      keepMoney: null,
     });
     expect(rule.gangFaction()).toBe("NiteSec");
     const grown = formed([member("member-01", 300), member("member-02", 40), member("member-03", 120)], {
@@ -164,6 +171,8 @@ describe("the rule", () => {
         "member-06": "Train Hacking",
         "member-07": "Train Hacking",
       },
+      buy: [],
+      keepMoney: null,
     });
     expect(rule.view().line).toMatch(/^Gang: NiteSec's, 3 members of 12 \(2 training, 1 on Phishing\);/);
     expect(rule.view().line).toMatch(/; ascending member-01 \(multipliers up to ×\d+\.\d\d, 0 respect lost\)$/);
@@ -349,7 +358,7 @@ describe("the run report's section", () => {
 
   test("outside BN2: no gang played, nothing judged", () => {
     expect(fold([withGang(NONE)], 1)).toEqual({
-      text: "7. The gang (#325, ascension G2; played in BN2 only for now)\n  not in BN2 in the window: no gang played",
+      text: "7. The gang (#325, ascension G2, equipment G3; played in BN2 only for now)\n  not in BN2 in the window: no gang played",
       failures: [],
     });
   });
@@ -518,6 +527,9 @@ test("the wanted grace is one justice member's time to halve the wanted level: a
   expect(GANG_WANTED_OVER_BOUND_MS / MINUTE).toBeCloseTo(23.09, 2);
 });
 
+/** Every rootkit (G3): a grown member has them, so only an augmentation is left to pay. */
+const ROOTKITS = ["NUKE Rootkit", "Soulstealer Rootkit", "Demon Rootkit", "Hmap Node", "Jack the Ripper"];
+
 describe("the controller (#325)", () => {
   const TOKEN = "the-token";
   let directory: string;
@@ -596,7 +608,7 @@ describe("the controller (#325)", () => {
     const { controller, send, last, lines } = connected();
     send("slow", niteSecSlow(2));
     send("medium", niteSecMedium(NONE));
-    expect(last()?.gang).toEqual({ recruit: [], ascend: [], tasks: {} });
+    expect(last()?.gang).toEqual({ recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null });
     expect(controller.intentsView()).toEqual([
       { id: FORM_NITESEC.id, source: "gang", outcome: null, waitingFor: expect.any(String) },
     ]);
@@ -656,11 +668,210 @@ describe("the controller (#325)", () => {
     ]);
   });
 
+  test("equipment (G3): bought from the money above the brain's holds, this round's purchase held on top", () => {
+    const { controller, send, last } = connected();
+    send("slow", niteSecSlow(2));
+    const grown = {
+      ...member("member-01", 1, "Train Hacking"),
+      hack_asc_mult: 200,
+      hack_asc_points: 80e6,
+      hack_exp: 1e6,
+      hack: gangSkillLevel(1e6, 200),
+      upgrades: ROOTKITS,
+      augmentations: [],
+    };
+    const data = niteSecMedium(
+      formed([grown, member("member-02"), member("member-03")], {
+        respect: 1_000,
+        wantedPenalty: 0.999,
+        equipmentCostMult: 1,
+      }),
+    );
+    data.player = { ...data.player, money: 1e11 };
+    send("medium", data);
+    expect(last()?.gang?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 80e6 }]);
+    // The holds: the travel for an invitation's (a city faction's money requirement, #228) and, on top, the TOR
+    // router going out this round, $200,000.
+    expect(last()?.intents.map((each) => each.id)).toEqual(["buyTor(Alpha Enterprises)"]);
+    const invitation = controller.invitationsView().hold;
+    expect(invitation).toBeGreaterThan(0);
+    expect(last()?.gang?.keepMoney).toBe(invitation + 200_000);
+    expect(controller.gangView().line).toContain("; equipment: buying Neuralstimulator for member-01");
+  });
+
+  test("equipment (G3): Daedalus's $100b, held from home RAM, held from gang equipment too", () => {
+    const { send, last } = connected();
+    const thirty = Object.fromEntries(
+      AUGMENTATION_NAMES.filter((name) => name !== "The Red Pill" && name !== "NeuroFlux Governor")
+        .slice(0, 30)
+        .map((name) => [name, 1]),
+    );
+    const slow = niteSecSlow(2);
+    send("slow", { ...slow, resetInfo: { ...slow.resetInfo, ownedAugs: thirty } });
+    const data = niteSecMedium(formed([member("member-01"), member("member-02")], { respect: 1_000 }));
+    data.player = {
+      ...data.player,
+      money: 101e9,
+      skills: { ...(data.player?.skills as object), hacking: 2600 },
+    } as MediumSnapshotData["player"];
+    send("medium", data);
+    // The most of the holds, Daedalus's, and the TOR router going out on top.
+    expect(last()?.intents.map((each) => each.id)).toContain("buyTor(Alpha Enterprises)");
+    expect(last()?.gang?.keepMoney).toBe(100e9 + 200_000);
+  });
+
   test("outside BN2: no gang in the state, nothing logged of it", () => {
     const { send, last, lines } = connected();
     send("slow", niteSecSlow(1));
     send("medium", niteSecMedium(NONE));
     expect(last()?.gang).toBeUndefined();
     expect(lines.filter((line) => line.startsWith("gang:"))).toEqual([]);
+  });
+});
+
+describe("equipment (G3)", () => {
+  /**
+   * A hacker far grown, training: ascension multiplier 200, a million experience (hacking 48,000), its ascension not
+   * paying (×1.006), with every rootkit already. An augmentation pays it back within a day (core's
+   * `GANG_AUGMENTATION_HORIZON_MS`).
+   */
+  const strong = (name: string, changes: Partial<GangMemberReading> = {}): GangMemberReading => ({
+    ...member(name, 1, "Train Hacking"),
+    hack_asc_mult: 200,
+    hack_asc_points: 80e6,
+    hack_exp: 1e6,
+    hack: gangSkillLevel(1e6, 200),
+    upgrades: ROOTKITS,
+    augmentations: [],
+    ...changes,
+  });
+  const GROWN = { respect: 1_000, wantedPenalty: 0.999, equipmentCostMult: 1 };
+  /** A medium snapshot with the members read and the player's `money`, `keepMoney` the worker's echo. */
+  const reading = (members: GangMemberReading[], money: number, keepMoney: number | null = null) => {
+    const data = withGang({ ...formed(members, GROWN), keepMoney });
+    return { ...data, player: { ...data.player, money } } as MediumSnapshotData;
+  };
+  const HOLD = { amount: 1e8, forWhat: "the augmentations to buy before the install" };
+  const three = (first = strong("member-01")) => [
+    first,
+    member("member-02", 1, "Train Hacking"),
+    member("member-03", 1, "Train Hacking"),
+  ];
+  const NEURALSTIMULATOR = 10e9;
+
+  test("the reading's equipment: absent from an older Agent, none; the game's names; any other, unread", () => {
+    expect(gangSnapshotOf(reading([member("member-01")], 0)).kind).toBe("gang");
+    expect(gangSnapshotOf(reading([strong("member-01", { upgrades: ["NUKE Rootkit"] })], 0)).kind).toBe("gang");
+    expect(gangSnapshotOf(reading([strong("member-01", { augmentations: ["Spoon"] })], 0))).toEqual({
+      kind: "unread",
+      problem: "a gang member's equipment isn't the game's",
+    });
+    const odd = withGang({ ...formed([member("member-01")], { equipmentCostMult: -1 }) });
+    expect(gangSnapshotOf(odd)).toMatchObject({ kind: "unread" });
+  });
+
+  test("the hold: the most of the reserves, the purchases spoken for on top; Infinity spends none", () => {
+    const reserves = [
+      { amount: 2e8, forWhat: "The Red Pill's donation" },
+      { amount: 0, forWhat: "Daedalus's invitation" },
+      { amount: 5e8, forWhat: "the augmentations to buy before the install" },
+    ];
+    expect(gangMoneyHoldOf(reserves, [{ amount: 3e6, forWhat: "BruteSSH.exe" }])).toEqual({
+      amount: 5e8 + 3e6,
+      forWhat: "the augmentations to buy before the install and BruteSSH.exe",
+    });
+    expect(gangMoneyHoldOf([], [])).toEqual({ amount: 0, forWhat: "nothing" });
+    // An install chosen: A6's reserve is Infinity, so is the hold.
+    expect(gangMoneyHoldOf([{ amount: Number.POSITIVE_INFINITY, forWhat: "the install" }], []).amount).toBe(
+      Number.POSITIVE_INFINITY,
+    );
+  });
+
+  test("bought with the money above the hold, at the member's points; a medium snapshot's once; its line and log", () => {
+    const lines: string[] = [];
+    const rule = new GangRule((line) => lines.push(line));
+    const data = reading(three(), 1e11);
+    rule.update({ mediumData: data, slowData: slowData(2) });
+    const state = rule.equip({ money: 1e11, hold: HOLD });
+    expect(state?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 80e6 }]);
+    expect(state?.keepMoney).toBe(1e8);
+    expect(rule.view().equipment?.buy).toHaveLength(1);
+    expect(rule.view().line).toMatch(
+      /; equipment: buying Neuralstimulator for member-01 \(\$10,000,000,000, \$[\d,]+ more money in a day\)$/,
+    );
+    expect(lines).toContain("gang: buying Neuralstimulator for member-01");
+    // The same medium snapshot, another hold (a fast snapshot's round): the same purchases, so the worker isn't rerun.
+    rule.update({ mediumData: data, slowData: slowData(2) });
+    expect(rule.equip({ money: 1e11, hold: { amount: 2e8, forWhat: "x" } })).toEqual(state);
+    // The next: the money above the hold short of it. It still pays: waiting.
+    rule.update({ mediumData: reading(three(), 1e10 + 1e6), slowData: slowData(2) });
+    expect(rule.equip({ money: 1e10 + 1e6, hold: HOLD })).toMatchObject({ buy: [], keepMoney: 1e8 });
+    expect(rule.view().line).toMatch(
+      /; equipment: Neuralstimulator for member-01 pays \(\$10,000,000,000\), waiting for money above the \$100,000,000 held for the augmentations to buy before the install$/,
+    );
+    // An install chosen: none spent, keepMoney null.
+    rule.update({ mediumData: reading(three(), 1e12), slowData: slowData(2) });
+    expect(
+      rule.equip({ money: 1e12, hold: { amount: Number.POSITIVE_INFINITY, forWhat: "the install chosen" } }),
+    ).toMatchObject({ buy: [], keepMoney: null });
+    expect(rule.view().line).toContain("waiting for the install chosen, which spends everything");
+    // Owned already: the next augmentation that pays, of those that raise hacking.
+    rule.update({
+      mediumData: reading(three(strong("member-01", { augmentations: ["Neuralstimulator"] })), 1e12),
+      slowData: slowData(2),
+    });
+    expect(rule.equip({ money: 1e12, hold: HOLD })?.buy.map((each) => each.equipment)).not.toContain(
+      "Neuralstimulator",
+    );
+    // Weak members: none pays.
+    rule.update({ mediumData: reading([member("member-01"), member("member-02")], 1e12), slowData: slowData(2) });
+    expect(rule.equip({ money: 1e12, hold: HOLD })?.buy).toEqual([]);
+    expect(rule.view().line).toMatch(/; equipment: no equipment pays back within its horizon$/);
+    // Outside BN2: nothing managed, nothing bought.
+    rule.update({ mediumData: reading(three(), 1e12), slowData: slowData(1) });
+    expect(rule.equip({ money: 1e12, hold: HOLD })).toBeNull();
+  });
+
+  test("the run report: what was bought, by hour, for how much; the rule's purchase with the money free, unbought, fails", () => {
+    const fold = (readings: MediumSnapshotData[]) => {
+      const gang = new GangFold();
+      gang.addSlow(0, slowData(2));
+      readings.forEach((data, index) => {
+        gang.addMedium(index * 10_000, data);
+      });
+      const failures: string[] = [];
+      const text = gang.section(failures, readings.length * 10_000).join("\n");
+      // This check's alone: the respect of 1,000 lets 3 members recruit, which these readings never do.
+      return { text, failures: failures.filter((each) => each.startsWith("equipment the rule buys")) };
+    };
+    const repeat = <Value>(value: Value, count: number) => Array.from({ length: count }, () => value);
+    const waiting = reading(three(), 1e11, 1e8);
+    // Unbought for the minute, the money free: a failure, saying what and why.
+    const steps = GANG_EQUIP_WITHIN_MS / 10_000;
+    expect(fold(repeat(waiting, steps)).failures).toEqual([]);
+    const { failures } = fold(repeat(waiting, steps + 1));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(
+      /^equipment the rule buys, with the money free, not bought for 1 min, from 1970-01-01T00:00:00\.000Z to 1970-01-01T00:01:00\.000Z \(Neuralstimulator for member-01, \$10,000,000,000 for \$[\d,]+ more money in 24 h 0 min, \$99,900,000,000 above the \$100,000,000 held\)$/,
+    );
+    // Not with the money held: keepMoney null (none spent), or the money above it short.
+    expect(fold(repeat(reading(three(), 1e11, null), steps * 2)).failures).toEqual([]);
+    expect(fold(repeat(reading(three(), 1e10 + 1e6, 1e8), steps * 2)).failures).toEqual([]);
+    // Bought: the hour's line counts it, at its cost, and the wait starts again.
+    const equipped = strong("member-01", { augmentations: ["Neuralstimulator"], hack_mult: 1.15 });
+    const bought = reading(three(equipped), 1e11 - NEURALSTIMULATOR, 1e8);
+    const { text, failures: none } = fold([waiting, waiting, bought]);
+    expect(none).toEqual([]);
+    expect(text).toContain("; 1 equipment bought for $10,000,000,000 (Neuralstimulator)");
+    expect(fold([waiting]).text).toContain("; no equipment bought");
+    // A purchase starts the wait again, though another item still pays: 40 s waiting, then 30 s more, no failure.
+    expect(fold([...repeat(waiting, 5), ...repeat(bought, 3)]).failures).toEqual([]);
+    expect(fold([...repeat(waiting, 5), ...repeat(waiting, 3)]).failures).toHaveLength(1);
+    // An ascension loses the upgrades: a rootkit bought again after it counts again; the augmentation kept doesn't.
+    const rooted = strong("member-01", { upgrades: ["NUKE Rootkit"], augmentations: ["Neuralstimulator"] });
+    const ascended = gangMemberAscended(rooted);
+    const rebought = { ...rooted, ...ascended, upgrades: ["NUKE Rootkit"] } as GangMemberReading;
+    const again = fold([reading(three(rooted), 1e11, 1e8), reading(three(rebought), 1e11, 1e8)]);
+    expect(again.text).toContain("; 1 equipment bought for $5,000,000 (NUKE Rootkit)");
   });
 });
