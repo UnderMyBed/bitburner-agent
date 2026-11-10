@@ -509,6 +509,8 @@ export interface HostMethods {
    * can do. No gang, no such member, or another field throws.
    */
   "diagnostics.setGangMemberFigures"(params: { name: string; figures: Record<string, number> }): void;
+  /** Sets the player's gang's respect (finite, 0 or more), for test scenarios (#330). A harness edit. No gang throws. */
+  "diagnostics.setGangRespect"(params: { respect: number }): void;
   /**
    * Gives the player charisma experience (finite, 0 or more) through the game's own `gainCharismaExp`, which sets the
    * skill from it, for test scenarios that need a job's required charisma (#155). A harness edit.

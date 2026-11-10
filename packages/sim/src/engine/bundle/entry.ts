@@ -295,6 +295,15 @@ export function setGangMemberFigures(name: string, figures: Record<string, numbe
 }
 
 /**
+ * Sets the player's gang's respect: a harness edit for test scenarios (#330's re-review, a gang of 12 recruited at
+ * once), not something a player can do. No gang throws.
+ */
+export function setGangRespect(respect: number) {
+  if (!Player.gang) throw new RangeError("no gang");
+  Player.gang.respect = respect;
+}
+
+/**
  * Gives the player `exp` charisma experience through the game's own `gainCharismaExp` (`PersonObjects/Person.ts:133`),
  * which sets the charisma skill from it: a harness edit for test scenarios, not something a player can do (#155).
  */

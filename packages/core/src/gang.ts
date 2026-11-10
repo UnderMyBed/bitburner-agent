@@ -724,9 +724,9 @@ export interface GangState {
   /** Tasks by member name (a recruit's too); a member not named keeps its task. */
   tasks: Record<string, string>;
   /**
-   * Equipment to buy (G3, #330), after the ascensions and before the tasks: each while the member's ascension points are
-   * still `pointsBefore` (it hasn't ascended since the brain read it), it hasn't the item, and the money less the item's
-   * cost stays at `keepMoney` or more. Absent from an older brain: none.
+   * Equipment to buy (G3, #330), after the ascensions and before the tasks: each while the member's ascension points
+   * are still `pointsBefore` (it hasn't ascended since the brain read it), it hasn't the item, and the money less the
+   * item's cost stays at `keepMoney` or more. Absent from an older brain: none.
    */
   buy: GangPurchaseOrder[];
   /** The money the purchases leave alone (G3): the brain's holds for its other spending; null, none spent. */

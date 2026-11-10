@@ -251,7 +251,8 @@ test("core's equipment is the engine's (G3): every upgrade's type, multipliers a
   await sim.diagnostics.setMoney(1e11);
   await sim.diagnostics.joinFactionWithReputation("NiteSec", 0);
   // Two trained 3 minutes, then b a minute on Territory Warfare, for power (`Gang.ts:184-190`): the discount's second
-  // term. Read with every upgrade's figures; then a equipped with a rootkit, an augmentation and a weapon, and ascended.
+  // term. Read with every upgrade's figures; then a equipped with a rootkit, an augmentation and a weapon, and
+  // ascended.
   const { out, log } = await runScript(
     sim,
     `ns.gang.createGang("NiteSec");
@@ -315,7 +316,8 @@ out({ ascended: ns.gang.getMemberInformation("a") });`,
   expect(ours).toMatchObject({ upgrades: ["NUKE Rootkit", "Katana"], augmentations: ["BitWire"] });
   for (const stat of GANG_STATS) expect(ours[`${stat}_mult`], `${stat}_mult`).toBeCloseTo(equipped[`${stat}_mult`], 12);
 
-  // The ascension: the rootkit and the weapon lost, BitWire kept, its multiplier applied again (`GangMember.ts:308-319`).
+  // The ascension: the rootkit and the weapon lost, BitWire kept, its multiplier applied again
+  // (`GangMember.ts:308-319`).
   const { ascended } = find<{ ascended: Read }>("ascended");
   expect(ascended).toMatchObject({ upgrades: [], augmentations: ["BitWire"] });
   expect(ascended.hack_mult).toBeCloseTo(1.05, 12);

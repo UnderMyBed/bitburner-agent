@@ -226,6 +226,12 @@ async function start(options: HostOptions): Promise<Host> {
       }
       engine.setGangMemberFigures(name, figures);
     },
+    "diagnostics.setGangRespect": ({ respect }) => {
+      booted();
+      if (!Number.isFinite(respect) || respect < 0)
+        throw new RangeError(`respect must be finite and 0 or more, not ${respect}`);
+      engine.setGangRespect(respect);
+    },
     "diagnostics.gainHackingExp": ({ exp }) => {
       booted();
       if (!Number.isFinite(exp) || exp < 0) throw new RangeError(`exp must be finite and 0 or more, not ${exp}`);

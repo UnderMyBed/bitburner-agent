@@ -1,7 +1,7 @@
 // The diagnostics' harness edits (#145, #149, #151, #155, #162, #164): state a test sets up that no player could,
 // checked in the game's own save. `setMoney`, `joinFactionWithReputation`, `employWithReputation`,
 // `giveInstalledAugmentation`, `gainHackingExp`, `gainCharismaExp`, `queueAugmentation` and (#330)
-// `setGangMemberFigures`.
+// `setGangMemberFigures` and `setGangRespect`.
 import { expect, test } from "vitest";
 import type { Simulation } from "../src/simulation.ts";
 import { decodeSave } from "./helpers/save-diff.ts";
@@ -116,12 +116,13 @@ test("employWithReputation (#155): the job held and the company's reputation, as
   expect((await saved(sim)).player.jobs).toEqual({ "Carmichael Security": "IT Intern" });
 });
 
-test("setGangMemberFigures (#330): the member's experience and points set, its levels from them; others refused", async () => {
+test("setGangMemberFigures and setGangRespect (#330): the member's figures and levels, the respect; others refused", async () => {
   const sim = await start({
     seed: 1,
     epochMs: Date.UTC(2026, 0, 1),
     fixture: { kind: "bitnode", n: 2, sourceFiles: {} },
   });
+  await expect(sim.diagnostics.setGangRespect(1)).rejects.toThrow(/no gang/);
   await expect(sim.diagnostics.setGangMemberFigures("a", { hack_exp: 1 })).rejects.toThrow(/no gang member a/);
   await sim.diagnostics.joinFactionWithReputation("NiteSec", 0);
   await sim.writeFile(
@@ -139,4 +140,8 @@ test("setGangMemberFigures (#330): the member's experience and points set, its l
   await expect(sim.diagnostics.setGangMemberFigures("b", { hack_exp: 1 })).rejects.toThrow(/no gang member b/);
   await expect(sim.diagnostics.setGangMemberFigures("a", { hack: 1 })).rejects.toThrow(/isn't a gang member figure/);
   await expect(sim.diagnostics.setGangMemberFigures("a", { hack_exp: -1 })).rejects.toThrow(/finite and 0 or more/);
+  // setGangRespect: the gang's respect, as saved; a negative one refused.
+  await sim.diagnostics.setGangRespect(2e6);
+  expect((await saved(sim)).player.gang.data.respect).toBe(2e6);
+  await expect(sim.diagnostics.setGangRespect(-1)).rejects.toThrow(/finite and 0 or more/);
 });

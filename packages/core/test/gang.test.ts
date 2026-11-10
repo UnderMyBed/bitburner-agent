@@ -781,7 +781,13 @@ describe("equipment (G3)", () => {
   ) => ({
     assignments: members.map((each) => ({
       name: each.name,
-      task: each.task,
+      // The task its role gives it: training's, a justice task, or its own work.
+      task:
+        roles[each.name] === "training"
+          ? "Train Hacking"
+          : roles[each.name] === "justice"
+            ? "Ethical Hacking"
+            : each.task,
       role: roles[each.name] ?? ("working" as const),
       value: 0,
       bestTask: each.task,
@@ -915,12 +921,32 @@ describe("equipment (G3)", () => {
     // The discount brings it nearer: at half the cost, within 15 minutes.
     expect(gangEquipmentAppraisal(inputs([strong]), strong, NUKE, 15 * MINUTE, 1).pays).toBe(false);
     expect(gangEquipmentAppraisal(inputs([strong]), strong, NUKE, 15 * MINUTE, 0.5).pays).toBe(true);
-    // The gain is in money at the gang's wanted penalty now: at a penalty of a half, half of it.
-    const penalised = inputs([strong], { respect: 1_000, wantedLevel: 1_000, territory: 1 / 7 });
-    expect(gangEquipmentAppraisal(penalised, strong, NUKE, 30 * MINUTE, 1).gain).toBeCloseTo(
-      appraisal.gain / 2 / gangWantedPenaltyOf(GANG),
+    // The gain is the money its task earns, the game's formula with the gang's wanted penalty in it
+    // (`formulas.ts:56-73`).
+    const cycles = (30 * MINUTE) / GANG_CYCLE_MS;
+    const laundering = gangTask("Money Laundering");
+    const moneyGain = (gang: typeof GANG) =>
+      cycles *
+      (gangMoneyPerCycle(gang, gangMemberEquipped(strong, NUKE), laundering, 1) -
+        gangMoneyPerCycle(gang, strong, laundering, 1));
+    expect(appraisal.gain).toBeCloseTo(moneyGain(GANG), 3);
+    const penalised = { respect: 1_000, wantedLevel: 1_000, territory: 1 / 7 };
+    expect(gangEquipmentAppraisal(inputs([strong], penalised), strong, NUKE, 30 * MINUTE, 1).gain).toBeCloseTo(
+      moneyGain(penalised),
       3,
     );
+    expect(moneyGain(penalised)).toBeLessThan(moneyGain(GANG));
+    // Another task's money: Identity Theft's for the same member, the task given.
+    const theft = gangEquipmentAppraisal(inputs([strong]), strong, NUKE, 30 * MINUTE, 1, "Identity Theft");
+    expect(theft.gain).toBeCloseTo(
+      cycles *
+        (gangMoneyPerCycle(GANG, gangMemberEquipped(strong, NUKE), gangTask("Identity Theft"), 1) -
+          gangMoneyPerCycle(GANG, strong, gangTask("Identity Theft"), 1)),
+      3,
+    );
+    // A task the game hasn't, or one earning no money: nothing.
+    expect(gangEquipmentAppraisal(inputs([strong]), strong, NUKE, 30 * MINUTE, 1, "Napping").gain).toBe(0);
+    expect(gangEquipmentAppraisal(inputs([strong]), strong, NUKE, 30 * MINUTE, 1, "Train Hacking").gain).toBe(0);
     // A weapon does nothing for a hacking gang: no stat its tasks weigh.
     expect(gangEquipmentAppraisal(inputs([strong]), strong, gangEquipment("Katana"), 30 * MINUTE, 1).gain).toBe(0);
   });
@@ -960,12 +986,33 @@ describe("equipment (G3)", () => {
     expect(planGangEquipment(inputs(owning), planOf(owning, 30 * MINUTE), budget).paying[0]?.equipment).not.toBe(
       "NUKE Rootkit",
     );
-    // A hacker far stronger (hacking 4.8 million): an augmentation pays back within 15 minutes, kept, whatever its task,
-    // training too.
+    // A hacker far stronger (hacking 4.8 million), on Money Laundering: an augmentation pays back within 15 minutes
+    // from the money it earns, kept. The same member training (the simulator's end-to-end case under 12 members), or on
+    // a respect task that earns no money, earns none back: nothing, augmentations included (#330's re-review).
     const veryStrong = [hacker("member-01", 20_000, 1e6)];
-    const kept = planGangEquipment(inputs(veryStrong), planOf(veryStrong, 0, { "member-01": "training" }), budget);
+    const kept = planGangEquipment(inputs(veryStrong), planOf(veryStrong, 0), budget);
     expect(kept.paying).toHaveLength(1);
     expect(kept.paying[0]).toMatchObject({ kept: true, horizonMs: GANG_AUGMENTATION_HORIZON_MS, pays: true });
+    expect(kept.paying[0]?.paybackMs).toBeLessThanOrEqual(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
+    // 30 minutes from its next ascension, a rootkit: less money in all than an augmentation's day, but far more for
+    // its price. The most gain for its cost, not the most gain.
+    const either = planGangEquipment(inputs(veryStrong), planOf(veryStrong, 30 * MINUTE), budget).paying[0];
+    expect(either?.kept).toBe(false);
+    const augmentation = gangEquipmentAppraisal(
+      inputs(veryStrong),
+      veryStrong[0] as GangMemberFigures,
+      gangEquipment("Neuralstimulator"),
+      GANG_AUGMENTATION_HORIZON_MS,
+      1,
+    );
+    expect(augmentation.gain).toBeGreaterThan(either?.gain as number);
+    for (const task of ["Train Hacking", "Cyberterrorism", "Ethical Hacking"]) {
+      const idle = [{ ...(veryStrong[0] as GangMemberFigures), task }];
+      expect(planGangEquipment(inputs(idle), planOf(idle, 0), budget).paying, task).toEqual([]);
+      // The plan's task, not the one read: the brain sets it to train, so nothing.
+      const planned = { ...planOf(veryStrong, 0), assignments: planOf(idle, 0).assignments };
+      expect(planGangEquipment(inputs(veryStrong), planned, budget).paying, task).toEqual([]);
+    }
     expect(GANG_AUGMENTATION_HORIZON_MS).toBe(GANG_ASCENSION_HORIZON_CAP_MS);
     // A name the protocol can't carry: none.
     const long = [hacker("x".repeat(65), 16, 10_000)];

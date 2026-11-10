@@ -12,8 +12,8 @@
 //   reading); a gang the owner grew for 80 minutes, with $10b, then the brain for 45 minutes: still none pays (G2
 //   keeps its members training, then works them minutes before an ascension), none is bought, and the report's
 //   equipment check, on the same readings, passes; and (#330's review) one member boosted by a harness edit far past
-//   that, then the brain for 3 minutes: the rule orders an augmentation for it, the worker buys it, and the report
-//   counts it, end to end.
+//   that, in a gang of 12 (its objective money, so the plan puts it on Money Laundering): the rule orders equipment
+//   for it, the worker buys it, and the report counts it, end to end.
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import {
   GANG_AUGMENTATION_HORIZON_MS,
@@ -131,8 +131,8 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
   // (1,348 respect). Why, computed on the hour's last reading, with no limit on the money: G2 works its members minutes
   // before each ascension, and trains them the rest (which earns nothing before the ascension loses a lost item); and
   // no augmentation pays back within a day at these levels. The strongest's NUKE Rootkit, worked an hour, pays back in
-  // about 47 min (measured on 2026-11-09: member-02, hacking 263, on justice). Valued over G2's forecast of 7 h for such
-  // members, rootkits were bought ($42m) and lost at ascensions within the hour, before they paid back.
+  // about 47 min (measured on 2026-11-09: member-02, hacking 263, on justice). Valued over G2's forecast of 7 h for
+  // such members, rootkits were bought ($42m) and lost at ascensions within the hour, before they paid back.
   // The brain's own plan and the gang's own discount, as the brain had them at the end.
   expect(section).toMatch(/; no equipment bought\n/);
   const inputs = { gang: final.gang, isHacking: true, members: final.members, softcap: 1 };
@@ -256,7 +256,7 @@ test("equipment (G3): a grown gang and $10b, then the brain for 45 minutes: none
   // a day: none is bought, with $10b free, and the report's check, on the same readings, passes.
   expect(section).toMatch(/\n {4}hour 1: 3 → \d+ members; .*; [1-9]\d* ascensions? \(.*\); no equipment bought\n/);
   expect(section).toContain("equipment the rule buys, with the money free, not bought for 1 min or more:\n    none");
-  expect([...equipmentLines]).toEqual(["no equipment pays back within its horizon"]);
+  expect([...equipmentLines]).toEqual(["no equipment pays back within 15 minutes"]);
   expect(last.members.every((each) => (each.upgrades ?? []).length === 0)).toBe(true);
   // Why, computed on the last reading: the strongest's best augmentation for hacking, Neuralstimulator, over a day.
   const inputs = { gang: last.gang, isHacking: true, members: last.members, softcap: 1 };
@@ -277,29 +277,37 @@ test("equipment (G3): a grown gang and $10b, then the brain for 45 minutes: none
 }, 120_000);
 
 /**
- * The owner's gang, NiteSec's: three recruits training, member-01 boosted by a harness edit (`setGangMemberFigures`)
- * to ascension points of 8e13 (×200,000) and a million hacking experience, about 48 million hacking, far past any
- * hour's play; then $100b.
+ * The owner's gang, NiteSec's, of 12: the three free recruits, then the gang's respect set to 2 million by a harness
+ * edit (`setGangRespect`) and nine more recruited, all training. So the brain's objective is money (12 members), and
+ * its plan puts a member strong enough on Money Laundering: under 12 the plan has members on respect tasks or training,
+ * which earn no money, so nothing would be bought (#330's re-review). Then member-01 boosted by `setGangMemberFigures`
+ * to ascension points of 4.5e13 (×150,000) and 4.5e10 hacking experience, about 88 million hacking: its ascension
+ * converts a thousandth more, so it doesn't pay, and a minute's training adds too little to pay within a day, so it
+ * works. Then $100b.
  */
 async function boostedGang(game: FreshGame) {
   await game.simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
-  const names = JSON.stringify(["member-01", "member-02", "member-03"]);
-  await ownerRunsOnHome(
-    game,
-    `export async function main(ns) {
-  ns.gang.createGang("NiteSec");
-  for (const name of ${names}) {
+  const names = Array.from({ length: 12 }, (_, index) => `member-${String(index + 1).padStart(2, "0")}`);
+  const recruit = (some: string[]) =>
+    ownerRunsOnHome(
+      game,
+      `export async function main(ns) {
+  if (!ns.gang.inGang()) ns.gang.createGang("NiteSec");
+  for (const name of ${JSON.stringify(some)}) {
     ns.gang.recruitMember(name);
     ns.gang.setMemberTask(name, "Train Hacking");
   }
 }`,
-  );
-  await game.simulation.diagnostics.setGangMemberFigures("member-01", { hack_asc_points: 8e13, hack_exp: 1e6 });
+    );
+  await recruit(names.slice(0, 3));
+  await game.simulation.diagnostics.setGangRespect(2e6);
+  await recruit(names.slice(3));
+  await game.simulation.diagnostics.setGangMemberFigures("member-01", { hack_asc_points: 4.5e13, hack_exp: 4.5e10 });
   await game.simulation.diagnostics.setMoney(1e11);
   await withoutSimEffectors(game);
 }
 
-test("equipment (G3) end to end: a member boosted far past an hour's play, then the brain: the rule orders an augmentation, the worker buys it, the report counts it", async () => {
+test("equipment (G3) end to end: a member boosted far past an hour's play, on Money Laundering in a gang of 12: the rule orders, the worker buys, the report counts it", async () => {
   const fresh = await freshStartOf({ withDesiredState: true, fixture: BN2, beforeAgent: boostedGang });
   await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
   await fresh.game.runUntil(() => {
@@ -312,11 +320,16 @@ test("equipment (G3) end to end: a member boosted far past an hour's play, then 
   if (last.kind !== "gang") throw new Error("no gang read");
   const { section, failures } = reportOf(fresh);
   console.log(section);
-  const bought = last.members[0]?.augmentations ?? [];
-  // An augmentation that raises hacking, the rule's best payback; none for the others, which can't pay one back.
-  expect(bought.length).toBeGreaterThan(0);
+  // On the plan's money task, which earns the money back.
+  expect(last.members).toHaveLength(12);
+  expect(last.members[0]?.task).toBe("Money Laundering");
+  const bought = [...(last.members[0]?.augmentations ?? []), ...(last.members[0]?.upgrades ?? [])];
+  // What raises hacking, the rule's best payback; none for the others, training, which earn nothing.
+  expect(last.members[0]?.augmentations?.length).toBeGreaterThan(0);
   for (const item of bought) expect(gangEquipment(item).mults.hack, item).toBeGreaterThan(1);
-  expect(last.members.slice(1).every((each) => (each.augmentations ?? []).length === 0)).toBe(true);
+  for (const each of last.members.slice(1)) {
+    expect([...(each.augmentations ?? []), ...(each.upgrades ?? [])], each.name).toEqual([]);
+  }
   expect(last.members[0]?.hack_mult).toBeGreaterThan(1);
   expect(section).toMatch(/\n {4}hour 1: .*; [1-9]\d* equipment bought for \$[\d,]+ \(/);
   expect(section).toContain("equipment the rule buys, with the money free, not bought for 1 min or more:\n    none");

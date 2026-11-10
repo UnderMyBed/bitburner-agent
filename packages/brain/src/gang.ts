@@ -212,8 +212,8 @@ export interface GangView {
 }
 
 /**
- * The money gang equipment leaves alone (G3, #330), as the brain holds it for its other spending, and what for: Infinity
- * spends none (an install chosen).
+ * The money gang equipment leaves alone (G3, #330), as the brain holds it for its other spending, and what for:
+ * Infinity spends none (an install chosen).
  */
 export interface GangMoneyHold {
   amount: number;
@@ -288,7 +288,8 @@ const formatDollars = (money: number) => `$${Math.round(money).toLocaleString("e
 /**
  * The plan's equipment (G3), for the dashboard: "buying NUKE Rootkit for member-02 ($4,762,000, $6,100,000 more
  * money by its next ascension)", and how many more; with none bought, the best that pays and the hold it waits above,
- * or that none pays back within its horizon.
+ * or that none pays back within 15 minutes (or within its horizon: an augmentation's day, a lost item's next
+ * ascension).
  */
 export function describeEquipment(equipment: GangEquipmentPlan, hold: GangMoneyHold): string {
   const [first, ...more] = equipment.buy;
@@ -300,7 +301,7 @@ export function describeEquipment(equipment: GangEquipmentPlan, hold: GangMoneyH
     );
   }
   const best = equipment.paying[0];
-  if (best === undefined) return "no equipment pays back within its horizon";
+  if (best === undefined) return "no equipment pays back within 15 minutes";
   const waiting = !Number.isFinite(hold.amount)
     ? `${hold.forWhat}, which spends everything`
     : hold.amount > 0
@@ -494,10 +495,10 @@ export class GangRule {
   }
 
   /**
-   * The gang state with its equipment (G3, #330): the purchases `planGangEquipment` makes with the player's `money` (the
-   * medium snapshot's) above `hold`, the brain's holds for its other spending, sent as `keepMoney` (null for Infinity:
-   * none spent). Worked out once a gang reading (a medium snapshot), as the purchases are, so the state, and the
-   * worker's runs, change only with it, not with each fast snapshot's holds; and again at once when an install is
+   * The gang state with its equipment (G3, #330): the purchases `planGangEquipment` makes with the player's `money`
+   * (the medium snapshot's) above `hold`, the brain's holds for its other spending, sent as `keepMoney` (null for
+   * Infinity: none spent). Worked out once a gang reading (a medium snapshot), as the purchases are, so the state, and
+   * the worker's runs, change only with it, not with each fast snapshot's holds; and again at once when an install is
    * chosen (#330's review), so none is spent from then on. The state `update` gave as it is, but while it manages the
    * gang.
    */

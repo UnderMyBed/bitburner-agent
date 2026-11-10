@@ -705,6 +705,14 @@ export class DesiredStateController {
   }
 
   /**
+   * The money gang equipment leaves alone now (#330, `#gangEquipmentHold`), as the last update's plans have it: the
+   * dashboard's figure behind the gang's "waiting for money above …", in any BitNode (only BN2's gang spends above it).
+   */
+  gangEquipmentHold(): GangMoneyHold {
+    return this.#gangEquipmentHold();
+  }
+
+  /**
    * The money held back for augmentations (#210, the rule's `reserve()`): Infinity once an install is chosen; in the
    * install's countdown, what the counted purchases cost (#222); before it, that only for an install the count rule
    * would choose with `AUGMENTATION_RESERVE_LOOKAHEAD_MS` more income, else 0; Daedalus's $100b while it holds for its
@@ -1101,9 +1109,10 @@ export class DesiredStateController {
    * The money held back from cloud servers (#194): the price of the program or home RAM upgrade bought next (the
    * cheaper, among those switched on) while it waits for money, if the hack loop's income (`perSecond`) would cover
    * what's still short of it within `CLOUD_SERVER_RESERVE_HORIZON_MS`; else none. Or the augmentations' (#210), the
-   * money of the set the money will cover within that horizon, where that's more.
+   * money of the set the money will cover within that horizon, where that's more. `leaveOutNearlyAffordable` (gang
+   * equipment's, #330): without the program or home RAM, when it goes out this round, held at its price instead.
    */
-  #reserveForOtherPurchase(perSecond: number): MoneyReserve | null {
+  #reserveForOtherPurchase(perSecond: number, leaveOutNearlyAffordable = false): MoneyReserve | null {
     const waiting: MoneyReserve[] = [];
     const programs = this.#programsPlan;
     if (readProgramsEnabled(this.#store) && programs !== null && programs.price !== null) {
@@ -1117,8 +1126,8 @@ export class DesiredStateController {
     const cheaper = waiting.sort((a, b) => a.amount - b.amount)[0];
     const money = this.#mediumData?.player?.money;
     const shortfall = (cheaper?.amount ?? 0) - (typeof money === "number" ? money : 0);
-    const other =
-      cheaper !== undefined && shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaper : null;
+    const nearly = shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000;
+    const other = !leaveOutNearlyAffordable && cheaper !== undefined && nearly ? cheaper : null;
     const augmentations = this.#augmentations.reserve();
     const invitation = this.#invitations.hold();
     if (invitation > Math.max(augmentations, other?.amount ?? 0)) {
@@ -1133,14 +1142,17 @@ export class DesiredStateController {
    * The money gang equipment leaves alone (G3, #330): it's the brain's last purchase. The most of every hold the brain
    * keeps for its other spending: what cloud servers leave alone (`#reserveForOtherPurchase`: the program or home RAM
    * upgrade a minute's income from its price, A6's augmentation reserve, Infinity once an install is chosen, an
-   * invitation's money), and Daedalus's invitation's, the install countdown's and The Red Pill's donation's, as home RAM
-   * keeps them. Then, on top, the price of this round's purchase (`#purchase`), and the cloud server that pays back and
-   * waits for money (`awaitingMoney`): neither is starved.
+   * invitation's money), and Daedalus's invitation's, the install countdown's and The Red Pill's donation's, as home
+   * RAM keeps them. Then, on top, the price of this round's purchase (`#purchase`), and the cloud server that pays back
+   * and waits for money (`awaitingMoney`): neither is starved.
    */
   #gangEquipmentHold(): GangMoneyHold {
-    const reserve = this.#reserveForOtherPurchase(this.#income.rate()?.perSecond ?? 0);
-    const reserves = [...(reserve === null ? [] : [reserve]), ...this.#homeRamHolds()];
     const purchase = this.#purchase;
+    // A program or home RAM going out this round is the one the reserve holds (the cheaper, affordable): held once, at
+    // its price, below (#330's re-review).
+    const goingOut = purchase !== null && ["buyTor", "buyProgram", "upgradeHomeRam"].includes(purchase.action);
+    const reserve = this.#reserveForOtherPurchase(this.#income.rate()?.perSecond ?? 0, goingOut);
+    const reserves = [...(reserve === null ? [] : [reserve]), ...this.#homeRamHolds()];
     const purchases = gangPurchasesSpokenFor({
       purchase: purchase === null ? null : { intent: purchase, forWhat: describePurchase(purchase) },
       prices: {

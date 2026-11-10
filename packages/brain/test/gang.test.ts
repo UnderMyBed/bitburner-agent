@@ -20,6 +20,7 @@ import {
   type GangReading,
   gangMemberAscended,
   gangSkillLevel,
+  homeRamUpgradePrice,
   type Intent,
   intentId,
   type MediumSnapshotData,
@@ -536,6 +537,32 @@ test("the wanted grace is one justice member's time to halve the wanted level: a
 /** Every rootkit (G3): a grown member has them, so only an augmentation is left to pay. */
 const ROOTKITS = ["NUKE Rootkit", "Soulstealer Rootkit", "Demon Rootkit", "Hmap Node", "Jack the Ripper"];
 
+/**
+ * A hacker far grown (G3), on Money Laundering: ascension multiplier 150,000, 4.5e10 experience (hacking about 88
+ * million), its ascension converting a thousandth more (not paying), a minute's training adding too little to pay
+ * within a day, every rootkit already. With 12 members (the money objective) the plan keeps it on Money Laundering,
+ * whose money pays an augmentation back within 15 minutes; under 12 the plan has it train, which earns none back.
+ */
+const grownHacker = (name: string, changes: Partial<GangMemberReading> = {}): GangMemberReading => ({
+  ...member(name, 1, "Money Laundering"),
+  hack_asc_mult: 150_000,
+  hack_asc_points: 4.5e13,
+  hack_exp: 4.5e10,
+  hack: gangSkillLevel(4.5e10, 150_000),
+  upgrades: ROOTKITS,
+  augmentations: [],
+  ...changes,
+});
+/** `first` and 11 recruits training: a gang of 12, its objective money. */
+const twelveWith = (first: GangMemberReading) => [
+  first,
+  ...Array.from({ length: 11 }, (_, index) =>
+    member(`member-${String(index + 2).padStart(2, "0")}`, 1, "Train Hacking"),
+  ),
+];
+/** The gang's figures for a grown gang: respect 2 million, as 12 members need, and no discount. */
+const GROWN_GANG = { respect: 2e6, wantedPenalty: 1, equipmentCostMult: 1 };
+
 describe("the controller (#325)", () => {
   const TOKEN = "the-token";
   let directory: string;
@@ -677,25 +704,10 @@ describe("the controller (#325)", () => {
   test("equipment (G3): bought from the money above the brain's holds, this round's purchase held on top", () => {
     const { controller, send, last } = connected();
     send("slow", niteSecSlow(2));
-    const grown = {
-      ...member("member-01", 1, "Train Hacking"),
-      hack_asc_mult: 20_000,
-      hack_asc_points: 8e11,
-      hack_exp: 1e6,
-      hack: gangSkillLevel(1e6, 20_000),
-      upgrades: ROOTKITS,
-      augmentations: [],
-    };
-    const data = niteSecMedium(
-      formed([grown, member("member-02"), member("member-03")], {
-        respect: 1_000,
-        wantedPenalty: 0.999,
-        equipmentCostMult: 1,
-      }),
-    );
+    const data = niteSecMedium(formed(twelveWith(grownHacker("member-01")), GROWN_GANG));
     data.player = { ...data.player, money: 1e11 };
     send("medium", data);
-    expect(last()?.gang?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 8e11 }]);
+    expect(last()?.gang?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 4.5e13 }]);
     // The holds: the travel for an invitation's (a city faction's money requirement, #228) and, on top, the TOR
     // router going out this round, $200,000.
     expect(last()?.intents.map((each) => each.id)).toEqual(["buyTor(Alpha Enterprises)"]);
@@ -703,6 +715,22 @@ describe("the controller (#325)", () => {
     expect(invitation).toBeGreaterThan(0);
     expect(last()?.gang?.keepMoney).toBe(invitation + 200_000);
     expect(controller.gangView().line).toContain("; equipment: buying Neuralstimulator for member-01");
+  });
+
+  test("equipment (G3): the home RAM upgrade going out, held at its price on top (#330's re-review: the wiring)", () => {
+    // BN1, where home RAM's price is known (BN2's isn't yet): TOR and every port opener owned, home at 64 GB, $1b.
+    const { controller, send, last } = connected();
+    send("slow", slowData(1));
+    const programs = ["BruteSSH.exe", "FTPCrack.exe", "relaySMTP.exe", "HTTPWorm.exe", "SQLInject.exe"];
+    send("medium", mediumData(50, {}, { money: 1e9, hasTorRouter: true, programs, homeRam: 64 }));
+    expect(last()?.intents.map((each) => each.id)).toContain(
+      intentId("upgradeHomeRam", { fromRam: 64, vendor: "Alpha Enterprises" }),
+    );
+    const most = Math.max(controller.invitationsView().hold, controller.augmentationReserve());
+    expect(controller.gangEquipmentHold()).toEqual({
+      amount: most + homeRamUpgradePrice(64),
+      forWhat: expect.stringContaining("home RAM to 128 GB"),
+    });
   });
 
   test("equipment (G3): Daedalus's $100b, held from home RAM, held from gang equipment too", () => {
@@ -736,34 +764,33 @@ describe("the controller (#325)", () => {
 });
 
 describe("equipment (G3)", () => {
-  /**
-   * A hacker far grown, training: ascension multiplier 20,000, a million experience (hacking 4.8 million), its ascension
-   * not paying, with every rootkit already. An augmentation pays it back within 15 minutes, over a day (core's
-   * `GANG_AUGMENTATION_HORIZON_MS`).
-   */
-  const strong = (name: string, changes: Partial<GangMemberReading> = {}): GangMemberReading => ({
-    ...member(name, 1, "Train Hacking"),
-    hack_asc_mult: 20_000,
-    hack_asc_points: 8e11,
-    hack_exp: 1e6,
-    hack: gangSkillLevel(1e6, 20_000),
-    upgrades: ROOTKITS,
-    augmentations: [],
-    ...changes,
-  });
-  const GROWN = { respect: 1_000, wantedPenalty: 0.999, equipmentCostMult: 1 };
+  const strong = grownHacker;
+  const GROWN = GROWN_GANG;
   /** A medium snapshot with the members read and the player's `money`, `keepMoney` the worker's echo. */
   const reading = (members: GangMemberReading[], money: number, keepMoney: number | null = null) => {
     const data = withGang({ ...formed(members, GROWN), keepMoney });
     return { ...data, player: { ...data.player, money } } as MediumSnapshotData;
   };
   const HOLD = { amount: 1e8, forWhat: "the augmentations to buy before the install" };
-  const three = (first = strong("member-01")) => [
-    first,
-    member("member-02", 1, "Train Hacking"),
-    member("member-03", 1, "Train Hacking"),
-  ];
+  /** The gang of 12: `first` and 11 training. */
+  const three = (first = strong("member-01")) => twelveWith(first);
   const NEURALSTIMULATOR = 10e9;
+
+  test("valued at the plan's task (#330's re-review): the grown hacker in 3 trains and gets nothing; in 12 it works, and gets it", () => {
+    // Three members (the simulator's first end-to-end case): the respect objective, and the plan trains the hacker,
+    // which earns no money back, so nothing is bought for it, augmentations included, with $1t free.
+    const rule = new GangRule();
+    const small = [grownHacker("member-01"), member("member-02", 1, "Train Hacking"), member("member-03", 1)];
+    const decision = rule.update({ mediumData: reading(small, 1e12), slowData: slowData(2) });
+    expect(decision.gang?.tasks["member-01"]).not.toBe("Money Laundering");
+    expect(rule.equip({ money: 1e12, hold: HOLD })?.buy).toEqual([]);
+    expect(rule.view().line).toMatch(/; equipment: no equipment pays back within 15 minutes$/);
+    // Twelve: the money objective, the hacker on Money Laundering, its augmentation paid back within 15 minutes.
+    rule.update({ mediumData: reading(three(), 1e12), slowData: slowData(2) });
+    expect(rule.view().plan?.assignments[0]).toMatchObject({ task: "Money Laundering", role: "working" });
+    expect(rule.equip({ money: 1e12, hold: HOLD })?.buy.map((each) => each.equipment)).toEqual(["Neuralstimulator"]);
+    expect(rule.view().equipment?.buy[0]?.paybackMs).toBeLessThanOrEqual(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
+  });
 
   test("the reading's equipment: absent from an older Agent, none; the game's names; any other, unread", () => {
     expect(gangSnapshotOf(reading([member("member-01")], 0)).kind).toBe("gang");
@@ -851,7 +878,7 @@ describe("equipment (G3)", () => {
     const data = reading(three(), 1e11);
     rule.update({ mediumData: data, slowData: slowData(2) });
     const state = rule.equip({ money: 1e11, hold: HOLD });
-    expect(state?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 8e11 }]);
+    expect(state?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 4.5e13 }]);
     expect(state?.keepMoney).toBe(1e8);
     expect(rule.view().equipment?.buy).toHaveLength(1);
     expect(rule.view().line).toMatch(
@@ -898,7 +925,7 @@ describe("equipment (G3)", () => {
     // Weak members: none pays.
     rule.update({ mediumData: reading([member("member-01"), member("member-02")], 1e12), slowData: slowData(2) });
     expect(rule.equip({ money: 1e12, hold: HOLD })?.buy).toEqual([]);
-    expect(rule.view().line).toMatch(/; equipment: no equipment pays back within its horizon$/);
+    expect(rule.view().line).toMatch(/; equipment: no equipment pays back within 15 minutes$/);
     // Outside BN2: nothing managed, nothing bought.
     rule.update({ mediumData: reading(three(), 1e12), slowData: slowData(1) });
     expect(rule.equip({ money: 1e12, hold: HOLD })).toBeNull();
@@ -964,7 +991,7 @@ describe("equipment (G3)", () => {
       [
         strong("member-01"),
         { ...member("member-02", 1, "Train Hacking"), hack_asc_points: 2_000 },
-        three()[2] as GangMemberReading,
+        ...three().slice(2),
       ],
       1e11,
       1e8,
