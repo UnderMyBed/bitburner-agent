@@ -455,11 +455,13 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   console.log(fresh.controller().gangView().line);
   const last = gangSnapshotOf(fresh.medium());
   if (last.kind !== "gang") throw new Error("no gang read");
-  // Measured on 2026-11-09 (seed 1): the fighters on Territory Warfare from the brain's first plan (at equal powers,
-  // not engaged yet), the gang's power past the others' at the first territory update (11 × 2,200 × 0.015 × 1/7, about
-  // 52, against their 1), engaged from then on: 19 min 30 s of it, territory 14.3% → 17.4% in 20 minutes, power 3,181. One fighter died (member-06, about 0.35 × 0.005 a clash at defence 1, 2 clashes an update: about 2.3 deaths
-  // expected among 11 over 60 updates); the brain recruited a member-06 again, which trains, and the ten others stayed.
-  // Expected 9.5% territory an hour at the end, the win chance 100% against each.
+  // Measured on 2026-11-09, again on 2026-11-10 with the others' clash losses and the gang's own (seed 1): the same.
+  // The fighters on Territory Warfare from the brain's first plan (at equal powers, not engaged yet), the gang's power
+  // past the others' at the first territory update (10 × 2,200 × 0.015 × 1/7, about 47 an update, against their 1),
+  // engaged from then on: 19 min 30 s of it, territory 14.3% → 17.4% in 20 minutes, power 3,181. One fighter died
+  // (member-06; about 0.35 × 0.005 a clash at defence 1, 2 clashes an update: about 2.1 deaths expected among 10 over
+  // 60 updates); the brain recruited a member-06 again, which trains, and the ten others stayed. Expected 9.5%
+  // territory an hour at the end, the win chance 100% against each.
   expect(readings.every((each) => each.engaged)).toBe(true);
   expect(readings.every((each) => each.crew === 10)).toBe(true);
   expect(last.gang.territory).toBeGreaterThan(1 / 7 + 0.02);

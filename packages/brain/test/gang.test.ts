@@ -9,6 +9,7 @@ import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
   AUGMENTATION_NAMES,
+  BATCHER_RAM_BUDGET_GB,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
@@ -19,9 +20,12 @@ import {
   type GangInformation,
   type GangMemberReading,
   type GangReading,
+  type GangWarfareFigures,
   gangMemberAscended,
   gangSkillLevel,
   gangTerritoryPerUpdate,
+  gangWarfareBasis,
+  gangWarfareMeasure,
   homeRamUpgradePrice,
   type Intent,
   intentId,
@@ -909,6 +913,10 @@ describe("equipment (G3)", () => {
       readFileSync(new URL("../../ingame/ram-budget.json", import.meta.url), "utf8"),
     ) as Record<string, number>;
     expect(budgets["gang.js"]).toBeLessThanOrEqual(SHARE_HOME_KEPT_GB);
+    // With the Agent and the batcher on home too, both within what share threads leave (G4's review): 32 − 3.0 − 3.85.
+    const room = SHARE_HOME_KEPT_GB - (budgets["agent.js"] as number) - BATCHER_RAM_BUDGET_GB;
+    expect(room).toBeCloseTo(25.15, 9);
+    expect(budgets["gang.js"]).toBeLessThanOrEqual(room);
     expect(budgets["gang.js"]).toBeGreaterThan(HOME_KEPT_FOR_THE_AGENT_GB);
   });
 
@@ -1099,7 +1107,7 @@ describe("territory warfare (G4)", () => {
     });
     expect(building.gang?.warfare).toEqual({ engage: false, leastTerritoryPerUpdate: 0 });
     expect(rule.view().line).toMatch(
-      /; territory 14\.3%, power 1\.0; warfare off: the clashes would lose territory \(win chance 50%–50%\); 2 on Territory Warfare; 0 deaths seen$/,
+      /; territory 14\.3%, power 1\.0; warfare off: the clashes would gain no territory \(win chance 50%–50%\); 2 on Territory Warfare; 0 deaths seen$/,
     );
     const strong = update(rule, warring(members, 50, 1));
     const plan = rule.view().plan;
@@ -1127,6 +1135,7 @@ describe("territory warfare (G4)", () => {
       pays: false,
       leastTerritoryPerUpdate: 1,
       winChances: { least: 0.6, most: 0.7 },
+      tailCostPerUpdate: 0,
     };
     expect(describeWarfare({ crew: ["a"], engage: false, measure }, NITESEC, 2)).toBe(
       "territory 14.3%, power 1.0; warfare off: its deaths would cost more than the 1.8% territory an hour it'd gain " +
@@ -1134,7 +1143,7 @@ describe("territory warfare (G4)", () => {
     );
     const alone = { ...measure, territoryPerUpdate: 0, winChances: null };
     expect(describeWarfare({ crew: [], engage: false, measure: alone }, { ...NITESEC, territory: 1 }, 0)).toBe(
-      "territory 100.0%, power 1.0; warfare off: the clashes would lose territory (no other gang has territory); none on " +
+      "territory 100.0%, power 1.0; warfare off: the clashes would gain no territory (no other gang has territory); none on " +
         "Territory Warfare; 0 deaths seen",
     );
   });
@@ -1156,6 +1165,22 @@ describe("territory warfare (G4)", () => {
     // member-01 isn't on Territory Warfare: gone, it's no death.
     update(rule, warring([members[2] as GangMemberReading], 1, 1));
     expect(rule.view().line).toMatch(/; 1 death seen$/);
+    // A gang gone (none read, or another BitNode) and another formed: its members aren't deaths of the last one's.
+    const crew = (...names: string[]) => names.map((name) => fighter(name));
+    update(rule, warring(crew("member-03", "member-09"), 1, 1));
+    update(rule, NONE);
+    update(rule, warring(crew("member-10"), 1, 1));
+    expect(rule.view().line).toMatch(/; 1 death seen$/);
+    update(rule, warring(crew("member-10", "member-11"), 1, 1));
+    rule.update({ mediumData: withGang(NONE), slowData: slowData(1) });
+    update(rule, warring(crew("member-12"), 1, 1));
+    expect(rule.view().line).toMatch(/; 1 death seen$/);
+    expect(logs.filter((line) => line.includes("died"))).toEqual([
+      "gang: member-02 died in a clash, on Territory Warfare",
+    ]);
+    // Weaker: the clashes would lose territory.
+    update(rule, warring(members, 1, 50));
+    expect(rule.view().line).toMatch(/; warfare off: the clashes would lose territory \(win chance 2\.0%–2\.0%\); /);
   });
 
   /** A fold over a BN2 window: a slow snapshot, then a medium one every 10 s from `readings`. */
@@ -1182,6 +1207,11 @@ describe("territory warfare (G4)", () => {
       /^territory warfare engaged while the rule's measure says it loses for 1 min, from .* \(the clashes expected to lose territory, 1 on Territory Warfare\)$/,
     );
     expect(fold(repeat(losing, minute - 1)).failures).toEqual([]);
+    // At equal powers the clashes gain none: engaged, it loses by the measure all the same.
+    const even = warring(crew, 1, 1, { territoryWarfareEngaged: true, territoryClashChance: 1 });
+    expect(fold(repeat(even, minute)).failures).toEqual([
+      expect.stringMatching(/ \(the clashes expected to gain no territory, 1 on Territory Warfare\)$/),
+    ]);
     // Off while it pays: stronger, no crew, so no deaths.
     const paying = warring([member("member-01", 400)], 50, 1);
     expect(fold(repeat(paying, minute)).failures).toEqual([
@@ -1189,6 +1219,25 @@ describe("territory warfare (G4)", () => {
         /^territory warfare off while the rule's measure says it pays for 1 min, from .* \(the territory expected worth [\d,]+ an update against deaths costing 0, 0 on Territory Warfare\)$/,
       ),
     ]);
+    // The detail's deaths with the tail's (a fighter at defence 1, the gang's respect 1e8: deaths worth counting).
+    const exposedFighter = { ...fighter("member-02"), def: 1, def_exp: 0 } as GangMemberReading;
+    const exposed = (engaged: boolean) =>
+      warring([member("member-01", 400), exposedFighter], 50, 1, { respect: 1e8, territoryWarfareEngaged: engaged });
+    const reading = exposed(false);
+    const gang = reading.gang as GangInformation;
+    const inputs = {
+      gang: { respect: gang.respect, wantedLevel: gang.wantedLevel, territory: gang.territory },
+      isHacking: true,
+      members: reading.members,
+      softcap: 1,
+      warfare: gangWarfareFiguresOf(gang) as GangWarfareFigures,
+    };
+    const measure = gangWarfareMeasure(inputs, gangWarfareBasis(inputs, "respect"), ["member-02"]);
+    expect(measure.tailCostPerUpdate).toBeGreaterThan(1);
+    const counted = Math.round(measure.deathCostPerUpdate + measure.tailCostPerUpdate).toLocaleString("en-US");
+    const either = [true, false].flatMap((engaged) => fold(repeat(exposed(engaged), minute)).failures);
+    expect(either).toHaveLength(1);
+    expect(either[0]).toContain(`against deaths costing ${counted}, 1 on Territory Warfare)`);
     // Each the right way: none; an older Agent's readings: never judged.
     const engaged = { ...paying, gang: { ...(paying.gang as GangInformation), territoryWarfareEngaged: true } };
     expect(fold(repeat(engaged, minute)).failures).toEqual([]);
@@ -1208,7 +1257,7 @@ describe("territory warfare (G4)", () => {
     ];
     const { text } = fold(readings);
     expect(text).toMatch(
-      /; territory 14\.3% → 16\.0%, power 1\.0 → 50\.0; warfare engaged 20 s; 1 death \(member-02\)\n/,
+      /; territory 14\.3% → 16\.0%, power 1\.0 → 50\.0; warfare engaged 30 s; 1 death \(member-02\)\n/,
     );
     expect(text).toContain(
       "  clashes won and lost: not read, the game counts neither (the territory and power show what they came to)",

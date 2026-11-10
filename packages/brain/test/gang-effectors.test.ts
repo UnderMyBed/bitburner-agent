@@ -318,3 +318,58 @@ test("the gang worker's territory warfare (G4): engaged while the order stands; 
   expect(last?.gang?.territory).toBeGreaterThan(1 / 7);
   expect(last?.problems).toEqual([]);
 }, 120_000);
+
+test("the brain gone (G4): warfare it ordered goes off, the tasks left; an older brain's flag left as it was", async () => {
+  const fresh = await freshStart({ withDesiredState: false, fixture: BN2, beforeAgent: joinNiteSec });
+  const state = (gang: GangOrders): DesiredState => ({ hackLoop: HACK_LOOP_OFF, intents: [], gang: orders(gang) });
+  expect(await triedOnce(fresh, createGang("NiteSec"))).toMatchObject({ done: true });
+  const tasks = { a: "Territory Warfare", b: "Territory Warfare", c: "Train Hacking" };
+  const engage = { engage: true, leastTerritoryPerUpdate: 0 };
+  fresh.brain.channel.setDesiredState(state({ recruit: ["a", "b", "c"], ascend: [], tasks }));
+  await fresh.game.runUntil(() => (fresh.medium()?.gang?.members.length ?? 0) === 3, 30_000);
+  const strong = Object.fromEntries(
+    ["str", "def", "dex", "agi"].flatMap((stat) => [
+      [`${stat}_exp`, 1e7],
+      [`${stat}_asc_points`, 1e8],
+    ]),
+  );
+  for (const name of ["a", "b"]) await fresh.simulation.diagnostics.setGangMemberFigures(name, strong);
+  const engaged = () => (fresh.medium() as MediumSnapshotData).gang?.gang?.territoryWarfareEngaged;
+  /** The game's flag and a's task now, read by the owner's script (the medium snapshot has no gang without a brain). */
+  const inGame = async () => {
+    await fresh.simulation.writeFile(
+      "home",
+      "flag.js",
+      `export async function main(ns) {
+  ns.print("flag:" + JSON.stringify([ns.gang.getGangInformation().territoryWarfareEngaged, ns.gang.getMemberInformation("a").task]));
+}`,
+    );
+    const { pid, error } = await fresh.simulation.run("home", "flag.js");
+    expect(error).toBeUndefined();
+    await fresh.game.run(1_000);
+    const line = (await fresh.simulation.logs(pid)).find((each) => each.startsWith("flag:"));
+    return JSON.parse((line ?? "flag:null").slice(5)) as [boolean, string];
+  };
+  const engageAgain = async () => {
+    fresh.brain.channel.setDesiredState(state({ recruit: [], ascend: [], tasks, warfare: engage }));
+    await fresh.game.runUntil(() => engaged() === true, 60_000);
+  };
+  // Holding (a state with no gang): the warfare it ordered goes off; the crew keeps its task.
+  await engageAgain();
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  await fresh.game.run(12_000);
+  expect(fresh.medium()?.gang).toBeNull();
+  expect(await inGame()).toEqual([false, "Territory Warfare"]);
+  // An older brain's state (no order) before it goes: the flag, engaged, left as it was.
+  await engageAgain();
+  fresh.brain.channel.setDesiredState(state({ recruit: [], ascend: [], tasks, warfare: null }));
+  await fresh.game.run(12_000);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  await fresh.game.run(12_000);
+  expect(await inGame()).toEqual([true, "Territory Warfare"]);
+  // The brain gone (a disconnect, and none to reconnect to): off at once, the tasks left.
+  await engageAgain();
+  fresh.brain.stop();
+  await fresh.game.run(5_000);
+  expect(await inGame()).toEqual([false, "Territory Warfare"]);
+}, 120_000);

@@ -711,6 +711,26 @@ export const GANG_DEATH_CHANCE_LOST = 0.01;
 export const GANG_DEATH_RESPECT_SHARE = 0.05;
 /** The clash chance's fall an update once warfare is disengaged (`Gang.ts:210-216`), from 1 while engaged. */
 export const GANG_CLASH_CHANCE_FALL_PER_UPDATE = 0.01;
+/** The power the player's gang keeps when it loses a clash (`Gang.ts:286`): 1/1.008, 0.8% less. */
+export const GANG_POWER_KEPT_LOSING = 1 / 1.008;
+/**
+ * The power another gang keeps when it loses a clash, to the player's or another (`Gang.ts:243`, `:247`, `:258`,
+ * `:260`): 1/1.01, 1% less.
+ */
+export const GANG_OTHER_POWER_KEPT_LOSING = 1 / 1.01;
+
+/**
+ * The clashes still to come after a disengage at clash chance `clashChance`, in updates at the full rate
+ * (`Gang.ts:210-216`): the chance falls 0.01 an update first, so from 1, 0.99 + 0.98 + … + 0.01 = 49.5.
+ */
+export function gangClashTailUpdates(clashChance: number): number {
+  let total = 0;
+  for (let chance = clashChance - GANG_CLASH_CHANCE_FALL_PER_UPDATE; chance > 1e-9; ) {
+    total += chance;
+    chance -= GANG_CLASH_CHANCE_FALL_PER_UPDATE;
+  }
+  return total;
+}
 
 /** A member's power, its levels summed over 95 (`GangMember.ts:87-89`). */
 export function gangMemberPower(member: MemberLevels): number {
@@ -725,7 +745,10 @@ export function gangPowerGainPerUpdate(territory: number, crew: readonly MemberL
   return 0.015 * Math.max(0.002, territory) * crew.reduce((sum, each) => sum + gangMemberPower(each), 0);
 }
 
-/** The chance to win a clash, power / (power + the other's) (`AllGangs.ts:73-77`, `NetscriptFunctions/Gang.ts:328-339`). */
+/**
+ * The chance to win a clash, power / (power + the other's) (`AllGangs.ts:73-77`,
+ * `NetscriptFunctions/Gang.ts:328-339`).
+ */
 export function gangClashWinChance(power: number, otherPower: number): number {
   const chance = power / (power + otherPower);
   return Number.isFinite(chance) ? chance : 0;
@@ -754,6 +777,40 @@ export interface GangOtherGang {
 export function gangOtherPowerGainPerUpdate(other: GangOtherGang): number {
   const multiplier = GANG_POWER_MULTIPLIERS[other.faction] ?? 1;
   return 0.5 * Math.min(0.85, 0.005 * other.power) + 0.5 * 0.75 * 0.75 * other.territory * multiplier;
+}
+
+/**
+ * The other gangs' expected powers after an update (`Gang.ts:184-269`): each one's gain
+ * (`gangOtherPowerGainPerUpdate`), then its clashes with the others but the player's gang, which happen whatever the
+ * player's clash chance: 2/(n − 1) an update against each other gang with territory (`gangClashesPerUpdate`), each
+ * lost with the other's power over both, costing 1% of its power (`GANG_OTHER_POWER_KEPT_LOSING`). A gang with no
+ * territory clashes none. Its clashes with the player's gang, which it loses 1% at each too, are the caller's.
+ */
+export function gangOthersAfterUpdate(others: readonly GangOtherGang[]): GangOtherGang[] {
+  const clashes = gangClashesPerUpdate(others);
+  const grown = others.map((each) => ({ ...each, power: each.power + gangOtherPowerGainPerUpdate(each) }));
+  return grown.map((each) => {
+    if (!(each.territory > 0)) return each;
+    const losses = grown.reduce(
+      (sum, other) =>
+        other === each || !(other.territory > 0) ? sum : sum + clashes * gangClashWinChance(other.power, each.power),
+      0,
+    );
+    return { ...each, power: each.power * (1 - losses * (1 - GANG_OTHER_POWER_KEPT_LOSING)) };
+  });
+}
+
+/**
+ * The share of its power the player's gang is expected to lose at an update, at clash chance 1 (`Gang.ts:286`): 0.8%
+ * at each clash lost, 2/(n − 1) clashes against each other gang with territory, each lost with the loss chance.
+ */
+export function gangOwnPowerLossPerUpdate(power: number, others: readonly GangOtherGang[]): number {
+  const clashes = gangClashesPerUpdate(others);
+  const lost = others.reduce(
+    (sum, other) => (other.territory > 0 ? sum + clashes * (1 - gangClashWinChance(power, other.power)) : sum),
+    0,
+  );
+  return lost * (1 - GANG_POWER_KEPT_LOSING);
 }
 
 /**

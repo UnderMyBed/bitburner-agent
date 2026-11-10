@@ -323,11 +323,12 @@ export class GangFold {
       this.#warfarePaying.add(atMs, null);
     } else {
       const crew = members.filter((member) => member.task === TERRITORY_WARFARE_TASK).map((member) => member.name);
-      const gains = gangTerritoryPerUpdate(warfare.power, gang.territory, warfare.others) > 0;
-      const measure = gains
-        ? gangWarfareMeasure(inputs, gangWarfareBasis(inputs, gangObjectiveOf(members.length)), crew)
-        : null;
-      const detail = describeMeasure(measure, crew.length);
+      const expected = gangTerritoryPerUpdate(warfare.power, gang.territory, warfare.others);
+      const measure =
+        expected > 0
+          ? gangWarfareMeasure(inputs, gangWarfareBasis(inputs, gangObjectiveOf(members.length)), crew)
+          : null;
+      const detail = describeMeasure(measure, expected, crew.length);
       this.#warfareLosing.add(atMs, warfare.engaged && measure?.pays !== true ? detail : null);
       this.#warfarePaying.add(atMs, !warfare.engaged && measure?.pays === true ? detail : null);
     }
@@ -429,6 +430,7 @@ export class GangFold {
         const hour = hourOf(point.atMs);
         hours.set(hour, [...(hours.get(hour) ?? []), point]);
       }
+      const nextAt = new Map(this.#points.map((point, index) => [point, this.#points[index + 1]?.atMs ?? null]));
       for (const [hour, points] of hours) {
         const start = points[0] as GangPoint;
         const end = points.at(-1) as GangPoint;
@@ -441,10 +443,10 @@ export class GangFold {
         for (const { equipment } of purchases) items.set(equipment, (items.get(equipment) ?? 0) + 1);
         const spent = purchases.reduce((sum, each) => sum + each.cost, 0);
         const deaths = this.#deaths.filter((each) => hourOf(each.atMs) === hour);
-        // The time engaged: each reading engaged, to the next (the hour's last to the end of its readings).
+        // The time engaged: each reading engaged, to the next (the window's last to the hour's end, or the window's).
+        const hourEndMs = Math.min(windowEndMs, first.atMs + (hour + 1) * 3_600_000);
         const engagedMs = points.reduce(
-          (sum, each, index) =>
-            each.engaged === true ? sum + ((points[index + 1]?.atMs ?? each.atMs) - each.atMs) : sum,
+          (sum, each) => (each.engaged === true ? sum + Math.max(0, (nextAt.get(each) ?? hourEndMs) - each.atMs) : sum),
           0,
         );
         const warfareRead = points.some((each) => each.engaged !== null);
@@ -516,14 +518,17 @@ const whole = (value: number) => Math.round(value).toLocaleString("en-US");
 const percent = (share: number) => `${(share * 100).toFixed(1)}%`;
 
 /**
- * The measure at a reading (G4), for a failure's detail: the clashes expected to lose territory (null: the measure
- * wasn't needed), or the territory's worth an update against the deaths' cost, with the crew's size.
+ * The measure at a reading (G4), for a failure's detail: the clashes expected to lose territory or gain none (null:
+ * the measure wasn't needed), or the territory's worth an update against the deaths' cost, with the crew's size.
  */
-function describeMeasure(measure: GangWarfareMeasure | null, crew: number): string {
-  if (measure === null) return `the clashes expected to lose territory, ${crew} on Territory Warfare`;
+function describeMeasure(measure: GangWarfareMeasure | null, expected: number, crew: number): string {
+  if (measure === null) {
+    const what = expected === 0 ? "gain no territory" : "lose territory";
+    return `the clashes expected to ${what}, ${crew} on Territory Warfare`;
+  }
   return (
     `the territory expected worth ${whole(measure.gainPerUpdate)} an update against deaths costing ` +
-    `${whole(measure.deathCostPerUpdate)}, ${crew} on Territory Warfare`
+    `${whole(measure.deathCostPerUpdate + measure.tailCostPerUpdate)}, ${crew} on Territory Warfare`
   );
 }
 

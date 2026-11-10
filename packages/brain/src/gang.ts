@@ -367,8 +367,9 @@ const UPDATES_AN_HOUR = 3_600_000 / GANG_TERRITORY_UPDATE_MS;
 
 /**
  * Territory warfare (G4), for the dashboard: "territory 14.3%, power 2.1; warfare off: the clashes would lose
- * territory (win chance 4–9%); none on Territory Warfare; 0 deaths". On, the territory expected an hour; off with the
- * clashes gaining, that their deaths would cost more; with no figures (an older Agent), territory and power only.
+ * territory (win chance 4.0%–9.0%); none on Territory Warfare; 0 deaths seen". On, the territory expected an hour; off
+ * with the clashes gaining, that their deaths would cost more; off with none expected (equal powers, or no other gang
+ * with territory), that they'd gain none; with no figures (an older Agent), territory and power only.
  */
 export function describeWarfare(warfare: GangWarfarePlan | null, gang: GangInformation, deaths: number): string {
   const share = `territory ${(gang.territory * 100).toFixed(1)}%, power ${gang.power.toFixed(1)}`;
@@ -383,7 +384,9 @@ export function describeWarfare(warfare: GangWarfarePlan | null, gang: GangInfor
     ? `warfare on: ${hourly} expected (${chances})`
     : measure.territoryPerUpdate > 0
       ? `warfare off: its deaths would cost more than the ${hourly} it'd gain is worth (${chances})`
-      : `warfare off: the clashes would lose territory (${chances})`;
+      : measure.territoryPerUpdate === 0
+        ? `warfare off: the clashes would gain no territory (${chances})`
+        : `warfare off: the clashes would lose territory (${chances})`;
   const crew = warfare.crew.length === 0 ? "none" : String(warfare.crew.length);
   return `${share}; ${state}; ${crew} on Territory Warfare; ${formatCount(deaths, "death")} seen`;
 }
@@ -501,6 +504,8 @@ export class GangRule {
       this.#faction = null;
       this.#holding = false;
       this.#setPlaced([]);
+      // No gang here (G4): the next one's members are no deaths of this one's.
+      this.#lastMembers = null;
       const why = bitNode === null ? "no slow snapshot yet" : `gangs play in BN2 only for now; this is BN${bitNode}`;
       return this.#decide(
         { stage: "notManaged", line: `Gang: not managed (${why})`, plan: null, equipment: null },
@@ -520,6 +525,7 @@ export class GangRule {
     if (snapshot.kind === "none") {
       this.#faction = null;
       this.#setPlaced([]);
+      this.#lastMembers = null;
       const faction = gangFactionToForm(joinedFactionsOf(mediumData));
       if (faction === null) {
         const line = "Gang: none yet: no gang faction joined (NiteSec comes with avmnite-02h's backdoor)";
