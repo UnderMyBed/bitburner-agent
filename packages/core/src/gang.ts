@@ -1,10 +1,11 @@
 /**
  * Gangs (#325, slice G1 of the gangs epic #324; ascension, #328, G2; equipment, #330, G3): the game's gang facts and
  * formulas, and the brain's rule for a gang that grows: which faction it's formed with, who is recruited, who ascends,
- * each member's task, and its equipment. Paths are `vendor/bitburner-src/src/`'s. The formulas are the game's own (`Gang/formulas/formulas.ts`,
- * `Gang/GangMember.ts`), checked against the engine's `ns.formulas.gang` and `getTaskStats` in the brain's parity
- * suite (`gang-parity.test.ts`). In-game code bundles the protocol's part (the worker names, `GANG_TASK_NAMES`), so no
- * name here is an NS function's (packages/ingame/README.md, "RAM"): `gangRespectPerCycle`, never `respectGain`.
+ * each member's task, and its equipment. Paths are `vendor/bitburner-src/src/`'s. The formulas are the game's own
+ * (`Gang/formulas/formulas.ts`, `Gang/GangMember.ts`), checked against the engine's `ns.formulas.gang` and
+ * `getTaskStats` in the brain's parity suite (`gang-parity.test.ts`). In-game code bundles the protocol's part (the
+ * worker names, `GANG_TASK_NAMES`), so no name here is an NS function's (packages/ingame/README.md, "RAM"):
+ * `gangRespectPerCycle`, never `respectGain`.
  */
 
 /** The factions a gang can be formed with, in the game's order (`Gang/data/Constants.ts:18-26`). */

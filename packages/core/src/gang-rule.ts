@@ -587,6 +587,17 @@ export function planGang(given: GangRuleInputs): GangPlan {
 }
 
 /**
+ * The longest an upgrade may take to pay for itself (G3, #330's review), at its gain's average pace over its horizon: 15
+ * minutes, the cloud servers' payback limit (the brain's `CLOUD_SERVER_PAYBACK_LIMIT_MS`, a test checks). Gang equipment
+ * spends only money above what cloud servers leave alone: A6's set held only for an install within 15 minutes' more
+ * income (`AUGMENTATION_RESERVE_LOOKAHEAD_MS`), a program or home RAM only within a minute's. Those holds are sized for
+ * a purchase that earns its price back within 15 minutes; an upgrade that pays back slower could delay the install or
+ * home's RAM by more than they allow for (#330's review: a $10b augmentation bought 25 min before an install the
+ * reserve doesn't hold yet). So an upgrade must pay back within it too.
+ */
+export const GANG_EQUIPMENT_PAYBACK_LIMIT_MS = 15 * 60_000;
+
+/**
  * The horizon an augmentation's gain is counted over (G3, #330): a day, `GANG_ASCENSION_HORIZON_CAP_MS`, the longest
  * the rule forecasts a member, and so at least any lost item's (the time to the next ascension). Augmentations are kept
  * through ascensions (`GangMember.ts:308-319`) and installs (`Prestige.ts:133-147` cuts only the ascension points), so
@@ -610,6 +621,8 @@ export interface GangEquipmentAppraisal {
   gain: number;
   /** The gain beats the cost. */
   pays: boolean;
+  /** The time it takes to pay for itself at its gain's average pace over the horizon, ms; Infinity with no gain. */
+  paybackMs: number;
 }
 
 /** The stats the gang's work and training tasks weigh: an upgrade on none of them gains nothing. */
@@ -652,6 +665,7 @@ export function gangEquipmentAppraisal(
     horizonMs,
     gain,
     pays: gain > cost && gain > 0,
+    paybackMs: gain > 0 ? (cost / gain) * horizonMs : Number.POSITIVE_INFINITY,
   };
 }
 
@@ -683,9 +697,13 @@ export interface GangEquipmentPlan {
  * - A member `plan` has no assignment for (the run report's, which reads the tasks): working unless on the training or
  *   a justice task, its forecast worked out here, only for one with a lost item that pays over a day (the most any
  *   forecast gives it, the gain growing with the time).
- * - Of each member's upgrades not owned that pay (`gangEquipmentAppraisal`), the one with the most gain for its cost; one
- *   a member a plan, so the next plan (10 s on) values the next upgrade on the member with this one. Then, best first,
- *   those the budget covers. None for a name the protocol can't carry (an owner's, over 64 characters).
+ * - Only an upgrade that pays for itself within `GANG_EQUIPMENT_PAYBACK_LIMIT_MS`, 15 minutes, as a cloud server must:
+ *   the holds gang equipment leaves alone are sized for that.
+ * - A lost item's lasting value is left out: the faster training its multiplier gives (`GangMember.ts:141-150`) raises
+ *   the experience the next ascension converts, which outlives the item. Left out, it errs on the cautious side.
+ * - Of each member's upgrades not owned that pay (`gangEquipmentAppraisal`), the one with the most gain for its cost;
+ *   one a member a plan, so the next plan (10 s on) values the next upgrade on the member with this one. Then, best
+ *   first, those the budget covers. None for a name the protocol can't carry (an owner's, over 64 characters).
  */
 export function planGangEquipment(
   inputs: GangRuleInputs,
@@ -725,7 +743,7 @@ export function planGangEquipment(
         if (!forecast || !appraise(item, GANG_ASCENSION_HORIZON_CAP_MS).pays || lostHorizon() === 0) continue;
         appraisal = appraise(item, lostHorizon());
       }
-      if (!appraisal.pays) continue;
+      if (!appraisal.pays || appraisal.paybackMs > GANG_EQUIPMENT_PAYBACK_LIMIT_MS) continue;
       if (best === null || appraisal.gain / appraisal.cost > best.gain / best.cost) best = appraisal;
     }
     if (best !== null) paying.push(best);

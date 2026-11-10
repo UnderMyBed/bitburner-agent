@@ -47,6 +47,7 @@ import {
   planGangEquipment,
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
+import type { CloudServerPurchase } from "./cloud-servers.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
 /** The store's setting with the members the gang rule put on justice (#325's re-review), as a JSON list of names. */
@@ -239,6 +240,49 @@ export function gangMoneyHoldOf(
   };
 }
 
+/**
+ * The money spoken for on top of the holds (G3, #330's review), `gangMoneyHoldOf`'s `purchases`: the purchase going out
+ * this round at its plan's price (a program or the TOR router at the programs plan's, home RAM at its plan's, a cloud
+ * server at the cloud plan's next), and the cloud server that pays back and waits for money (`awaitingMoney`) while
+ * cloud servers would buy it: switched on, with the hack loop on (they only run it), no install chosen (they're lost
+ * at it), and no problem holding them back (until the owner turns them off and on again, maybe for good). A price not
+ * a finite number counts as none.
+ */
+export function gangPurchasesSpokenFor({
+  purchase,
+  prices,
+  cloud,
+}: {
+  purchase: { intent: Intent; forWhat: string } | null;
+  prices: { programs?: number | null; homeRam?: number | null; cloudServer?: number | null };
+  cloud: {
+    awaiting?: CloudServerPurchase | undefined;
+    enabled: boolean;
+    hackLoop: boolean;
+    committed: boolean;
+    problem: boolean;
+  };
+}): GangMoneyHold[] {
+  const held: GangMoneyHold[] = [];
+  if (purchase !== null) {
+    const { action } = purchase.intent;
+    const price =
+      action === "buyTor" || action === "buyProgram"
+        ? prices.programs
+        : action === "upgradeHomeRam"
+          ? prices.homeRam
+          : action === "buyServer" || action === "upgradeServer"
+            ? prices.cloudServer
+            : 0;
+    held.push({ amount: typeof price === "number" && Number.isFinite(price) ? price : 0, forWhat: purchase.forWhat });
+  }
+  const waiting = cloud.awaiting;
+  if (waiting !== undefined && cloud.enabled && cloud.hackLoop && !cloud.committed && !cloud.problem) {
+    held.push({ amount: waiting.price, forWhat: `${waiting.hostname} with ${waiting.ram} GB` });
+  }
+  return held;
+}
+
 const formatDollars = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
 
 /**
@@ -257,11 +301,12 @@ export function describeEquipment(equipment: GangEquipmentPlan, hold: GangMoneyH
   }
   const best = equipment.paying[0];
   if (best === undefined) return "no equipment pays back within its horizon";
-  const held = Number.isFinite(hold.amount) ? `above the ${formatDollars(hold.amount)} held for ${hold.forWhat}` : "";
-  return (
-    `${best.equipment} for ${best.name} pays (${formatDollars(best.cost)}), waiting for ` +
-    (held === "" ? `${hold.forWhat}, which spends everything` : `money ${held}`)
-  );
+  const waiting = !Number.isFinite(hold.amount)
+    ? `${hold.forWhat}, which spends everything`
+    : hold.amount > 0
+      ? `money above the ${formatDollars(hold.amount)} held for ${hold.forWhat}`
+      : "money";
+  return `${best.equipment} for ${best.name} pays (${formatDollars(best.cost)}), waiting for ${waiting}`;
 }
 
 const formatCount = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -452,15 +497,18 @@ export class GangRule {
    * The gang state with its equipment (G3, #330): the purchases `planGangEquipment` makes with the player's `money` (the
    * medium snapshot's) above `hold`, the brain's holds for its other spending, sent as `keepMoney` (null for Infinity:
    * none spent). Worked out once a gang reading (a medium snapshot), as the purchases are, so the state, and the
-   * worker's runs, change only with it, not with each fast snapshot's holds. The state `update` gave as it is, but
-   * while it manages the gang.
+   * worker's runs, change only with it, not with each fast snapshot's holds; and again at once when an install is
+   * chosen (#330's review), so none is spent from then on. The state `update` gave as it is, but while it manages the
+   * gang.
    */
   equip({ money, hold }: { money: number | null; hold: GangMoneyHold }): GangState | null {
     const state = this.#state;
     const basis = this.#basis;
     if (state === null || basis === null || this.#view.stage !== "managed") return state;
     let equipped = this.#equipped;
-    if (equipped === null || equipped.mediumData !== basis.mediumData) {
+    // Again at once when an install is chosen, or let go (the hold Infinity, or no longer): nothing is spent past it.
+    const spends = Number.isFinite(hold.amount);
+    if (equipped === null || equipped.mediumData !== basis.mediumData || (equipped.keepMoney !== null) !== spends) {
       const budget = typeof money === "number" && Number.isFinite(hold.amount) ? Math.max(0, money - hold.amount) : 0;
       const equipment = planGangEquipment(basis.inputs, basis.plan, { budget, costMult: basis.costMult });
       const byName = new Map(basis.inputs.members.map((member) => [member.name, member]));

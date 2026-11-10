@@ -66,7 +66,8 @@ export function gangManagement(ns: NS, state: GangState): GangReading {
       if (!gangAscensionOrderStands(order, gangAscensionPointsOf(member))) continue;
       if (gangMemberOwns(member, order.equipment)) continue;
       const cost = gangEquipmentCost(gangEquipment(order.equipment), equipmentCostMult);
-      if (ns.getServerMoneyAvailable("home") - cost < keepMoney) continue;
+      // Negated, so a cost not a number (an older game's multiplier gone) buys nothing.
+      if (!(ns.getServerMoneyAvailable("home") - cost >= keepMoney)) continue;
       if (!ns.gang.purchaseEquipment(order.name, order.equipment)) {
         problems.push(`the game didn't buy ${order.equipment} for ${order.name}`);
       }

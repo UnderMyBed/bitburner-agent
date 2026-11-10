@@ -281,7 +281,8 @@ export class GangFold {
     const boughtBefore = this.#purchases.length;
     for (const member of members) {
       const before = this.#lastMembers.get(member.name);
-      if (before === undefined) continue;
+      // Only against a reading with the lists: an Agent upgraded in the window would show every item as bought.
+      if (before === undefined || before.upgrades === undefined || before.augmentations === undefined) continue;
       const rose = gangAscensionPointsOf(member) > gangAscensionPointsOf(before);
       const had = new Set([...(rose ? [] : (before.upgrades ?? [])), ...(before.augmentations ?? [])]);
       for (const item of [...(member.upgrades ?? []), ...(member.augmentations ?? [])]) {

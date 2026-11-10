@@ -49,6 +49,7 @@ import {
   GANG_ASCENSION_HORIZON_CAP_MS,
   GANG_ASCENSION_MOST_LEFT_OUT,
   GANG_AUGMENTATION_HORIZON_MS,
+  GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
   GANG_MEMBER_NAMES,
   GANG_TRAINING_STEP_MS,
   GANG_WANTED_RECOVERY_MS,
@@ -925,7 +926,7 @@ describe("equipment (G3)", () => {
   });
 
   test("the plan: lost items for a working member, over G2's time to its next ascension; augmentations over a day", () => {
-    const strong = [hacker("member-01", 8, 10_000), hacker("member-02", 8, 10_000)];
+    const strong = [hacker("member-01", 16, 10_000), hacker("member-02", 16, 10_000)];
     const budget = { budget: 1e12, costMult: 1 };
     // Each working, 30 minutes from its next ascension: a rootkit each, the cheapest-for-its-gain.
     const working = planGangEquipment(inputs(strong), planOf(strong, 30 * MINUTE), budget);
@@ -942,7 +943,7 @@ describe("equipment (G3)", () => {
     expect(planGangEquipment(inputs(strong), planOf(strong, 30 * MINUTE, roles), budget).paying).toEqual([]);
     // Under 5,000 experience its ascension doesn't convert enough, and G2's forecast leaves out the training that soon
     // brings it: no lost item, though the forecast (a day) would pay it.
-    const recruit = [hacker("member-01", 8, 4_999), strong[1] as GangMemberFigures];
+    const recruit = [hacker("member-01", 16, 4_999), strong[1] as GangMemberFigures];
     expect(gangAscensionConvertsEnough(recruit[0] as GangMemberFigures, true)).toBe(false);
     const early = planGangEquipment(inputs(recruit), planOf(recruit, GANG_ASCENSION_HORIZON_CAP_MS), budget);
     expect(early.paying.map((each) => each.name)).toEqual(["member-02"]);
@@ -959,19 +960,41 @@ describe("equipment (G3)", () => {
     expect(planGangEquipment(inputs(owning), planOf(owning, 30 * MINUTE), budget).paying[0]?.equipment).not.toBe(
       "NUKE Rootkit",
     );
-    // A hacker far stronger (hacking 48,000): an augmentation pays over a day, kept, whatever its task, training too.
-    const veryStrong = [hacker("member-01", 200, 1e6)];
+    // A hacker far stronger (hacking 4.8 million): an augmentation pays back within 15 minutes, kept, whatever its task,
+    // training too.
+    const veryStrong = [hacker("member-01", 20_000, 1e6)];
     const kept = planGangEquipment(inputs(veryStrong), planOf(veryStrong, 0, { "member-01": "training" }), budget);
     expect(kept.paying).toHaveLength(1);
     expect(kept.paying[0]).toMatchObject({ kept: true, horizonMs: GANG_AUGMENTATION_HORIZON_MS, pays: true });
     expect(GANG_AUGMENTATION_HORIZON_MS).toBe(GANG_ASCENSION_HORIZON_CAP_MS);
     // A name the protocol can't carry: none.
-    const long = [hacker("x".repeat(65), 8, 10_000)];
+    const long = [hacker("x".repeat(65), 16, 10_000)];
     expect(planGangEquipment(inputs(long), planOf(long, 30 * MINUTE), budget).paying).toEqual([]);
   });
 
+  test("only an upgrade that pays back within 15 minutes, the cloud servers' limit (#330's review): both sides", () => {
+    expect(GANG_EQUIPMENT_PAYBACK_LIMIT_MS).toBe(15 * MINUTE);
+    // A rootkit for a hacker ×8 pays within the 30 minutes to its next ascension, but slower than 15 minutes: none.
+    const slower = [hacker("member-01", 8, 10_000)];
+    const appraisal = gangEquipmentAppraisal(inputs(slower), slower[0] as GangMemberFigures, NUKE, 30 * MINUTE, 1);
+    expect(appraisal.pays).toBe(true);
+    expect(appraisal.paybackMs).toBeGreaterThan(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
+    expect(appraisal.paybackMs).toBeCloseTo((appraisal.cost / appraisal.gain) * 30 * MINUTE, 6);
+    const budget = { budget: 1e12, costMult: 1 };
+    expect(planGangEquipment(inputs(slower), planOf(slower, 30 * MINUTE), budget).paying).toEqual([]);
+    // ×16: within it, bought.
+    const faster = [hacker("member-01", 16, 10_000)];
+    const bought = planGangEquipment(inputs(faster), planOf(faster, 30 * MINUTE), budget).paying;
+    expect(bought).toHaveLength(1);
+    expect(bought[0]?.paybackMs).toBeLessThanOrEqual(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
+    // No gain: never paid back.
+    expect(
+      gangEquipmentAppraisal(inputs(slower), slower[0] as GangMemberFigures, gangEquipment("Katana"), MINUTE, 1),
+    ).toMatchObject({ gain: 0, paybackMs: Number.POSITIVE_INFINITY });
+  });
+
   test("the budget: the best gain for its cost first, then what still fits; nothing with none", () => {
-    const members = [hacker("member-01", 8, 10_000), hacker("member-02", 16, 10_000)];
+    const members = [hacker("member-01", 16, 10_000), hacker("member-02", 32, 10_000)];
     const plan = planOf(members, 30 * MINUTE);
     const all = planGangEquipment(inputs(members), plan, { budget: 1e12, costMult: 1 });
     expect(all.paying.map((each) => each.name)).toEqual(["member-02", "member-01"]);

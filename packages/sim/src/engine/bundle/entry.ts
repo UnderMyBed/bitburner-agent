@@ -273,6 +273,27 @@ export function gainHackingExp(exp: number) {
   Player.gainHackingExp(exp);
 }
 
+/** The gang member figures `setGangMemberFigures` sets: each stat's experience and ascension points. */
+const GANG_MEMBER_FIGURES = ["hack", "str", "def", "dex", "agi", "cha"].flatMap((stat) => [
+  `${stat}_exp`,
+  `${stat}_asc_points`,
+]);
+
+/**
+ * Sets a gang member's experience and ascension points (`figures`, by the game's field names), then its levels as the
+ * gang's process does (`GangMember.ts:78-85`): a harness edit for test scenarios (#330, a member grown past what an
+ * hour's play gives), not something a player can do. No gang, no such member, or another field throws.
+ */
+export function setGangMemberFigures(name: string, figures: Record<string, number>) {
+  const member = Player.gang?.members.find((each) => each.name === name);
+  if (member === undefined) throw new RangeError(`no gang member ${name}`);
+  for (const [field, value] of Object.entries(figures)) {
+    if (!GANG_MEMBER_FIGURES.includes(field)) throw new RangeError(`${field} isn't a gang member figure to set`);
+    (member as unknown as Record<string, number>)[field] = value;
+  }
+  member.updateSkillLevels();
+}
+
 /**
  * Gives the player `exp` charisma experience through the game's own `gainCharismaExp` (`PersonObjects/Person.ts:133`),
  * which sets the charisma skill from it: a harness edit for test scenarios, not something a player can do (#155).

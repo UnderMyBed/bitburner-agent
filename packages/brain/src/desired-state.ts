@@ -92,7 +92,14 @@ import {
   resetInfoOf,
   writeFactionWorkEnabled,
 } from "./factions.ts";
-import { type GangMoneyHold, GangRule, type GangView, gangMoneyHoldOf, withoutGangFaction } from "./gang.ts";
+import {
+  type GangMoneyHold,
+  GangRule,
+  type GangView,
+  gangMoneyHoldOf,
+  gangPurchasesSpokenFor,
+  withoutGangFaction,
+} from "./gang.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type InvitationEvent, type InvitationInputs, InvitationRule, type InvitationView } from "./invitations.ts";
@@ -1133,19 +1140,22 @@ export class DesiredStateController {
   #gangEquipmentHold(): GangMoneyHold {
     const reserve = this.#reserveForOtherPurchase(this.#income.rate()?.perSecond ?? 0);
     const reserves = [...(reserve === null ? [] : [reserve]), ...this.#homeRamHolds()];
-    const purchases: GangMoneyHold[] = [];
     const purchase = this.#purchase;
-    if (purchase !== null)
-      purchases.push({ amount: this.#purchasePrice(purchase), forWhat: describePurchase(purchase) });
-    const cloud = this.#cloudServersPlan?.awaitingMoney;
-    if (
-      cloud !== undefined &&
-      readCloudServersEnabled(this.#store) &&
-      readHackLoopEnabled(this.#store) &&
-      !this.#augmentationsCommitted
-    ) {
-      purchases.push({ amount: cloud.price, forWhat: `${cloud.hostname} with ${cloud.ram} GB` });
-    }
+    const purchases = gangPurchasesSpokenFor({
+      purchase: purchase === null ? null : { intent: purchase, forWhat: describePurchase(purchase) },
+      prices: {
+        programs: this.#programsPlan?.price,
+        homeRam: this.#homeRamPlan?.price,
+        cloudServer: this.#cloudServersPlan?.next?.price,
+      },
+      cloud: {
+        awaiting: this.#cloudServersPlan?.awaitingMoney,
+        enabled: readCloudServersEnabled(this.#store),
+        hackLoop: readHackLoopEnabled(this.#store),
+        committed: this.#augmentationsCommitted,
+        problem: this.#cloudServerProblem !== null,
+      },
+    });
     return gangMoneyHoldOf(reserves, purchases);
   }
 
@@ -1168,19 +1178,6 @@ export class DesiredStateController {
       { amount: this.#augmentations.redPillHold(), forWhat: "The Red Pill's donation" },
       { amount: this.#invitations.hold(), forWhat: "an invitation travelled for" },
     ];
-  }
-
-  /** What the purchase going out costs (#330): the program's, home RAM's or the cloud server's plan's price. */
-  #purchasePrice(intent: Intent): number {
-    const price =
-      intent.action === "buyTor" || intent.action === "buyProgram"
-        ? this.#programsPlan?.price
-        : intent.action === "upgradeHomeRam"
-          ? this.#homeRamPlan?.price
-          : intent.action === "buyServer" || intent.action === "upgradeServer"
-            ? this.#cloudServersPlan?.next?.price
-            : 0;
-    return typeof price === "number" && Number.isFinite(price) ? price : 0;
   }
 
   /** The next program or home RAM upgrade, as an intent: one at a time, cheapest first, among those switched on. */

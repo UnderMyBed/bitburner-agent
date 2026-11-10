@@ -2,7 +2,7 @@
 // faction left out of what the other rules see, the gate's guard on forming, the equipment's hold, and the run report's
 // section with each of its failures.
 // The rule against the real engine is gang-simulation.test.ts's; the formulas against it, gang-parity.test.ts's.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
@@ -12,6 +12,7 @@ import {
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
+  GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
   GANG_FACTIONS,
   GANG_STATS,
   type GangInformation,
@@ -28,12 +29,16 @@ import {
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { donationStatus } from "../src/augmentation-report.ts";
+import { AUGMENTATION_RESERVE_LOOKAHEAD_MS } from "../src/augmentations.ts";
+import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
+import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "../src/cloud-servers.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import {
   GANG_PLACED_ON_JUSTICE_SETTING,
   GangFactionCarry,
   GangRule,
   gangMoneyHoldOf,
+  gangPurchasesSpokenFor,
   gangSnapshotOf,
   withoutGangFaction,
 } from "../src/gang.ts";
@@ -48,6 +53,7 @@ import {
   GangFold,
 } from "../src/gang-report.ts";
 import { snapshotGuardFailure } from "../src/irreversible-gate.ts";
+import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
@@ -673,10 +679,10 @@ describe("the controller (#325)", () => {
     send("slow", niteSecSlow(2));
     const grown = {
       ...member("member-01", 1, "Train Hacking"),
-      hack_asc_mult: 200,
-      hack_asc_points: 80e6,
+      hack_asc_mult: 20_000,
+      hack_asc_points: 8e11,
       hack_exp: 1e6,
-      hack: gangSkillLevel(1e6, 200),
+      hack: gangSkillLevel(1e6, 20_000),
       upgrades: ROOTKITS,
       augmentations: [],
     };
@@ -689,7 +695,7 @@ describe("the controller (#325)", () => {
     );
     data.player = { ...data.player, money: 1e11 };
     send("medium", data);
-    expect(last()?.gang?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 80e6 }]);
+    expect(last()?.gang?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 8e11 }]);
     // The holds: the travel for an invitation's (a city faction's money requirement, #228) and, on top, the TOR
     // router going out this round, $200,000.
     expect(last()?.intents.map((each) => each.id)).toEqual(["buyTor(Alpha Enterprises)"]);
@@ -731,16 +737,16 @@ describe("the controller (#325)", () => {
 
 describe("equipment (G3)", () => {
   /**
-   * A hacker far grown, training: ascension multiplier 200, a million experience (hacking 48,000), its ascension not
-   * paying (×1.006), with every rootkit already. An augmentation pays it back within a day (core's
+   * A hacker far grown, training: ascension multiplier 20,000, a million experience (hacking 4.8 million), its ascension
+   * not paying, with every rootkit already. An augmentation pays it back within 15 minutes, over a day (core's
    * `GANG_AUGMENTATION_HORIZON_MS`).
    */
   const strong = (name: string, changes: Partial<GangMemberReading> = {}): GangMemberReading => ({
     ...member(name, 1, "Train Hacking"),
-    hack_asc_mult: 200,
-    hack_asc_points: 80e6,
+    hack_asc_mult: 20_000,
+    hack_asc_points: 8e11,
     hack_exp: 1e6,
-    hack: gangSkillLevel(1e6, 200),
+    hack: gangSkillLevel(1e6, 20_000),
     upgrades: ROOTKITS,
     augmentations: [],
     ...changes,
@@ -770,6 +776,58 @@ describe("equipment (G3)", () => {
     expect(gangSnapshotOf(odd)).toMatchObject({ kind: "unread" });
   });
 
+  test("the purchases spoken for: the one going out at its plan's price, each kind; the cloud server waiting, while it'd buy", () => {
+    const intent = (action: string, args: Record<string, unknown> = {}) =>
+      ({ action, args, id: `${action}()` }) as unknown as Intent;
+    const prices = { programs: 1e6, homeRam: 2e8, cloudServer: 3e7 };
+    const server = { action: "buyServer", hostname: "pserv-3", ram: 64, price: 4e6, paybackMs: 60_000 } as const;
+    const buys: {
+      awaiting?: typeof server;
+      enabled: boolean;
+      hackLoop: boolean;
+      committed: boolean;
+      problem: boolean;
+    } = { enabled: true, hackLoop: true, committed: false, problem: false };
+    const spoken = (action: string | null, cloud: Partial<typeof buys> = {}) =>
+      gangPurchasesSpokenFor({
+        purchase: action === null ? null : { intent: intent(action), forWhat: action },
+        prices,
+        cloud: { ...buys, ...cloud },
+      });
+    expect(spoken("buyTor")).toEqual([{ amount: 1e6, forWhat: "buyTor" }]);
+    expect(spoken("buyProgram")).toEqual([{ amount: 1e6, forWhat: "buyProgram" }]);
+    expect(spoken("upgradeHomeRam")).toEqual([{ amount: 2e8, forWhat: "upgradeHomeRam" }]);
+    expect(spoken("buyServer")).toEqual([{ amount: 3e7, forWhat: "buyServer" }]);
+    expect(spoken("upgradeServer")).toEqual([{ amount: 3e7, forWhat: "upgradeServer" }]);
+    expect(spoken("travel")).toEqual([{ amount: 0, forWhat: "travel" }]);
+    expect(spoken(null)).toEqual([]);
+    // A price that isn't a number: none.
+    expect(
+      gangPurchasesSpokenFor({ purchase: { intent: intent("upgradeHomeRam"), forWhat: "x" }, prices: {}, cloud: buys }),
+    ).toEqual([{ amount: 0, forWhat: "x" }]);
+    // The cloud server waiting for money, on top, only while cloud servers would buy it.
+    expect(spoken(null, { awaiting: server })).toEqual([{ amount: 4e6, forWhat: "pserv-3 with 64 GB" }]);
+    for (const off of [{ enabled: false }, { hackLoop: false }, { committed: true }, { problem: true }]) {
+      expect(spoken(null, { awaiting: server, ...off }), JSON.stringify(off)).toEqual([]);
+    }
+  });
+
+  test("its payback limit is the cloud servers', the lookahead A6's reserve holds the set for (#330's review)", () => {
+    expect(GANG_EQUIPMENT_PAYBACK_LIMIT_MS).toBe(CLOUD_SERVER_PAYBACK_LIMIT_MS);
+    expect(GANG_EQUIPMENT_PAYBACK_LIMIT_MS).toBe(AUGMENTATION_RESERVE_LOOKAHEAD_MS);
+  });
+
+  test("gang.js starts in the room home keeps free of share threads, whatever the batcher does (#330's review)", () => {
+    // The batcher itself takes its budget on home only with 8 GB left beyond it (`HOME_KEPT_FOR_THE_AGENT_GB`), and its
+    // operations run on the hack loop's hosts, never home; share threads leave `homeKeptGb` free on home (32 GB, and
+    // the largest Singularity worker's beside it with SF4). The Agent starts gang.js only in home's free RAM.
+    const budgets = JSON.parse(
+      readFileSync(new URL("../../ingame/ram-budget.json", import.meta.url), "utf8"),
+    ) as Record<string, number>;
+    expect(budgets["gang.js"]).toBeLessThanOrEqual(SHARE_HOME_KEPT_GB);
+    expect(budgets["gang.js"]).toBeGreaterThan(HOME_KEPT_FOR_THE_AGENT_GB);
+  });
+
   test("the hold: the most of the reserves, the purchases spoken for on top; Infinity spends none", () => {
     const reserves = [
       { amount: 2e8, forWhat: "The Red Pill's donation" },
@@ -793,7 +851,7 @@ describe("equipment (G3)", () => {
     const data = reading(three(), 1e11);
     rule.update({ mediumData: data, slowData: slowData(2) });
     const state = rule.equip({ money: 1e11, hold: HOLD });
-    expect(state?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 80e6 }]);
+    expect(state?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 8e11 }]);
     expect(state?.keepMoney).toBe(1e8);
     expect(rule.view().equipment?.buy).toHaveLength(1);
     expect(rule.view().line).toMatch(
@@ -815,6 +873,20 @@ describe("equipment (G3)", () => {
       rule.equip({ money: 1e12, hold: { amount: Number.POSITIVE_INFINITY, forWhat: "the install chosen" } }),
     ).toMatchObject({ buy: [], keepMoney: null });
     expect(rule.view().line).toContain("waiting for the install chosen, which spends everything");
+    // An install chosen on a fast snapshot, the medium the same (#330's review): none spent from then on, at once.
+    const same = reading(three(), 1e12);
+    rule.update({ mediumData: same, slowData: slowData(2) });
+    expect(rule.equip({ money: 1e12, hold: HOLD })).toMatchObject({ keepMoney: 1e8 });
+    rule.update({ mediumData: same, slowData: slowData(2) });
+    expect(
+      rule.equip({ money: 1e12, hold: { amount: Number.POSITIVE_INFINITY, forWhat: "the install chosen" } }),
+    ).toMatchObject({ buy: [], keepMoney: null });
+    // Nothing held, the money short: just "waiting for money" (#330's review).
+    rule.update({ mediumData: reading(three(), 1e6), slowData: slowData(2) });
+    rule.equip({ money: 1e6, hold: { amount: 0, forWhat: "nothing" } });
+    expect(rule.view().line).toMatch(
+      /; equipment: Neuralstimulator for member-01 pays \(\$10,000,000,000\), waiting for money$/,
+    );
     // Owned already: the next augmentation that pays, of those that raise hacking.
     rule.update({
       mediumData: reading(three(strong("member-01", { augmentations: ["Neuralstimulator"] })), 1e12),
@@ -873,5 +945,30 @@ describe("equipment (G3)", () => {
     const rebought = { ...rooted, ...ascended, upgrades: ["NUKE Rootkit"] } as GangMemberReading;
     const again = fold([reading(three(rooted), 1e11, 1e8), reading(three(rebought), 1e11, 1e8)]);
     expect(again.text).toContain("; 1 equipment bought for $5,000,000 (NUKE Rootkit)");
+    // An Agent upgraded in the window (#330's review): the reading before had no lists, so nothing counts as bought.
+    const older = reading(three(), 1e11, 1e8);
+    const unlisted = {
+      ...older,
+      gang: {
+        ...older.gang,
+        members: (older.gang?.members ?? []).map(({ upgrades: _u, augmentations: _a, ...rest }) => rest),
+      },
+    } as MediumSnapshotData;
+    expect(fold([unlisted, reading(three(rooted), 1e11, 1e8)]).text).toContain("; no equipment bought");
+    // Its cost the discounted one at the reading before: there half, after it the full price.
+    const half = (data: MediumSnapshotData) =>
+      ({ ...data, gang: { ...data.gang, gang: { ...data.gang?.gang, equipmentCostMult: 0.5 } } }) as MediumSnapshotData;
+    expect(fold([half(waiting), bought]).text).toContain("; 1 equipment bought for $5,000,000,000 (Neuralstimulator)");
+    // An ascension seen in a reading starts the wait again, as the brain ascends first: 40 s, then 30 s, no failure.
+    const ascendedTwo = reading(
+      [
+        strong("member-01"),
+        { ...member("member-02", 1, "Train Hacking"), hack_asc_points: 2_000 },
+        three()[2] as GangMemberReading,
+      ],
+      1e11,
+      1e8,
+    ) as MediumSnapshotData;
+    expect(fold([...repeat(waiting, 5), ...repeat(ascendedTwo, 3)]).failures).toEqual([]);
   });
 });
