@@ -3,15 +3,25 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
+  GANG_ASCENSION_EXP_LEFT_OUT,
+  GANG_ASCENSION_POINTS_SCALE,
+  GANG_CYCLE_MS,
   GANG_FACTIONS,
   GANG_FREE_MEMBERS,
   GANG_MOST_MEMBERS,
   GANG_RECRUIT_RESPECT_BASE,
   GANG_TASK_NAMES,
   type GangMemberFigures,
+  gangAscensionMult,
+  gangAscensionOrderStands,
+  gangAscensionPointsGain,
+  gangAscensionPointsOf,
+  gangAscensionResult,
+  gangCanAscend,
   gangExpPerCycle,
   gangFactionToForm,
   gangMemberAfter,
+  gangMemberAscended,
   gangMoneyPerCycle,
   gangRecruitsAllowed,
   gangRespectPerCycle,
@@ -26,16 +36,25 @@ import {
   parseGangState,
 } from "../src/gang.ts";
 import {
+  GANG_ASCENSION_HORIZON_CAP_MS,
   GANG_MEMBER_NAMES,
+  GANG_TRAINING_STEP_MS,
   GANG_WANTED_RECOVERY_MS,
   type GangRuleInputs,
+  gangAscensionAppraisal,
+  gangAscensionCost,
+  gangAscensionToMake,
   gangBestWork,
+  gangCycleSoFarMs,
   gangLostShare,
   gangLostShareBound,
+  gangOutputOver,
+  gangTimeToAscensionMs,
   gangTrains,
   gangWantedAfter,
   gangWantedAtBound,
   gangWantedRecovers,
+  gangWorkRespectPerCycle,
   planGang,
 } from "../src/gang-rule.ts";
 
@@ -51,6 +70,7 @@ function member(name: string, levels: Partial<Record<"hack" | "str" | "def" | "d
   const figures: GangMemberFigures = {
     name,
     task: "Unassigned",
+    earnedRespect: 0,
     hack: level("hack"),
     str: level("str"),
     def: level("def"),
@@ -75,6 +95,12 @@ function member(name: string, levels: Partial<Record<"hack" | "str" | "def" | "d
     dex_asc_mult: 1,
     agi_asc_mult: 1,
     cha_asc_mult: 1,
+    hack_asc_points: 0,
+    str_asc_points: 0,
+    def_asc_points: 0,
+    dex_asc_points: 0,
+    agi_asc_points: 0,
+    cha_asc_points: 0,
   };
   return figures;
 }
@@ -230,9 +256,9 @@ describe("the rule", () => {
     expect(planGang(inputs(recruits, START, false)).assignments[0]?.task).toBe("Train Combat");
   });
 
-  test("training stops where a minute's more no longer pays back within the hour: about hacking 90", () => {
+  test("training stops where a minute's more no longer pays back within a horizon of an hour: about hacking 90", () => {
     const gang = { respect: 1_000, wantedLevel: 1, territory: 1 / 7 };
-    const trains = (hack: number) => gangTrains(inputs([], gang), member("a", { hack }), "respect");
+    const trains = (hack: number) => gangTrains(inputs([], gang), member("a", { hack }), "respect", 60 * 60_000);
     expect([20, 50, 80, 88].map(trains)).toEqual([true, true, true, true]);
     expect([95, 120, 300, 800].map(trains)).toEqual([false, false, false, false]);
   });
@@ -258,7 +284,10 @@ describe("the rule", () => {
     const twelve = GANG_MEMBER_NAMES.map((name) => member(name, { hack: 500, cha: 100 }));
     const plan = planGang(inputs(twelve, gang));
     expect(plan.objective).toBe("money");
-    expect(new Set(plan.assignments.map((each) => each.task))).toEqual(new Set(["Money Laundering"]));
+    // One ascends (G2): never ascended, its experience is all to gain from; it trains, the rest launder money.
+    expect(plan.ascend?.name).toBe("member-01");
+    expect(plan.assignments[0]).toMatchObject({ name: "member-01", role: "training" });
+    expect(new Set(plan.assignments.slice(1).map((each) => each.task))).toEqual(new Set(["Money Laundering"]));
     expect(plan.recruit).toEqual([]);
   });
 
@@ -271,9 +300,10 @@ describe("the rule", () => {
     expect(gangMoneyPerCycle(gang, strong, laundering, 1)).toBeGreaterThan(
       gangMoneyPerCycle(gang, strong, gangTask("Fraud & Counterfeiting"), 1),
     );
-    expect(new Set(planGang(inputs(twelve, gang)).assignments.map((each) => each.task))).toEqual(
-      new Set(["Fraud & Counterfeiting"]),
-    );
+    const plan = planGang(inputs(twelve, gang));
+    expect(
+      new Set(plan.assignments.filter((each) => each.name !== plan.ascend?.name).map((each) => each.task)),
+    ).toEqual(new Set(["Fraud & Counterfeiting"]));
   });
 
   test("recruits as the respect allows, the first names free", () => {
@@ -383,14 +413,27 @@ describe("the rule", () => {
       const plan = planGang({ ...inputs(membersOn(tasks), at(share)), placedOnJustice: placed });
       tasks = plan.assignments.map((each) => each.task);
       placed = plan.assignments.filter((each) => each.role === "justice").map((each) => each.name);
-      roles.push(plan.assignments.map((each) => each.role));
+      // The member that ascends (G2), under the bound and off justice, recorded as such: it trains after.
+      roles.push(plan.assignments.map((each) => (each.name === plan.ascend?.name ? "ascending" : each.role)));
     }
+    // The justice members as in G1; the working one ascends (G2) at each share under the bound, never over it (0.4,
+    // 0.34, 0.35): these members' levels are all experience, never ascended, so it pays each time.
     const twoOnJustice = ["working", "justice", "justice"];
-    expect(roles).toEqual([...Array(7).fill(twoOnJustice), ...Array(2).fill(["working", "working", "working"])]);
+    const ascendingBeside = ["ascending", "justice", "justice"];
+    expect(roles).toEqual([
+      twoOnJustice,
+      twoOnJustice,
+      ascendingBeside,
+      twoOnJustice,
+      ascendingBeside,
+      ascendingBeside,
+      ascendingBeside,
+      ...Array(2).fill(["ascending", "working", "working"]),
+    ]);
     // Between half the bound and the bound, none goes to justice anew; and one the owner put there, not the rule, is
     // the rule's to move back to work.
     const working = membersOn(["Plant Virus", "Plant Virus", "Plant Virus"]);
-    expect(planGang(inputs(working, at(0.32))).assignments.every((each) => each.role === "working")).toBe(true);
+    expect(planGang(inputs(working, at(0.32))).assignments.some((each) => each.role === "justice")).toBe(false);
     const owners = membersOn(["Plant Virus", "Ethical Hacking", "Plant Virus"]);
     expect(planGang(inputs(owners, at(0.32))).assignments[1]).toMatchObject({ role: "working", task: "Plant Virus" });
     expect(planGang({ ...inputs(owners, at(0.32)), placedOnJustice: ["member-02"] }).assignments[1]).toMatchObject({
@@ -415,7 +458,11 @@ describe("the rule", () => {
     // 199 / 1,200 = 0.17, under 1/3.
     const three = ["member-01", "member-02", "member-03"].map((name) => member(name, { hack: 300 }));
     const plan = planGang(inputs(three, gang));
-    expect(plan.assignments.every((each) => each.role === "working")).toBe(true);
+    // One ascends (G2), under the bound: it trains; the others work.
+    const others = plan.assignments.filter((each) => each.name !== plan.ascend?.name);
+    expect(plan.ascend).not.toBeNull();
+    expect(others.length).toBe(2);
+    expect(others.every((each) => each.role === "working")).toBe(true);
   });
 });
 
@@ -424,8 +471,212 @@ describe("the desired state's gang", () => {
     expect(parseGangState(undefined)).toEqual({ ok: true, gang: null });
     expect(parseGangState({ recruit: ["a"], tasks: { a: "Ransomware" } })).toEqual({
       ok: true,
-      gang: { recruit: ["a"], tasks: { a: "Ransomware" } },
+      gang: { recruit: ["a"], ascend: [], tasks: { a: "Ransomware" } },
     });
     expect(parseGangState({ recruit: [], tasks: { a: "Nap" } })).toMatchObject({ ok: false });
+  });
+});
+
+describe("ascension (G2)", () => {
+  const TRAIN = gangTask("Train Hacking");
+  /** A member trained `minutes` from level 1, never ascended, on `task`, with `earnedRespect`. */
+  const trained = (name: string, minutes: number, task = "Train Hacking", earnedRespect = 0): GangMemberFigures => ({
+    ...gangMemberAfter(member(name), TRAIN, (minutes * 60_000) / GANG_CYCLE_MS),
+    task,
+    earnedRespect,
+  });
+  const GANG = { respect: 1_000, wantedLevel: 1, territory: 1 / 7 };
+  const inputs = (members: GangMemberFigures[], gang = GANG): GangRuleInputs => ({
+    gang,
+    isHacking: true,
+    members,
+    softcap: 1,
+  });
+
+  test("the game's ascension formulas: points are experience over 1,000; the multiplier √(points / 2,000), at least 1", () => {
+    const formulas = gameSource("Gang/formulas/formulas.ts");
+    expect(formulas).toContain("return Math.max(exp - 1000, 0);");
+    expect(formulas).toContain("return Math.max(Math.pow(points / 2000, 0.5), 1);");
+    expect([GANG_ASCENSION_EXP_LEFT_OUT, GANG_ASCENSION_POINTS_SCALE]).toEqual([1000, 2000]);
+    // The respect it takes from the gang, the member's earned respect, never below 1 (`Gang.ts:390-393`).
+    expect(gameSource("Gang/Gang.ts")).toContain("this.respect = Math.max(1, this.respect - res.respect);");
+    expect(gameSource("Gang/GangMember.ts")).toContain("const respectToDeduct = this.earnedRespect;");
+    expect([gangAscensionPointsGain(800), gangAscensionPointsGain(9_000)]).toEqual([0, 8_000]);
+    expect([gangAscensionMult(0), gangAscensionMult(1_999), gangAscensionMult(8_000)]).toEqual([1, 1, 2]);
+  });
+
+  test("the result by hand: hacking 9,000 experience gives ×2; with 8,000 points already, ×√2; none under 1,000", () => {
+    const hacker = { ...member("a"), hack_exp: 9_000, cha_exp: 999, earnedRespect: 42 };
+    expect(gangCanAscend(hacker)).toBe(true);
+    expect(gangAscensionResult(hacker)).toEqual({ respect: 42, hack: 2, str: 1, def: 1, dex: 1, agi: 1, cha: 1 });
+    const again = { ...hacker, hack_asc_points: 8_000, hack_asc_mult: 2 };
+    expect(gangAscensionResult(again)?.hack).toBeCloseTo(Math.SQRT2, 12);
+    expect(gangCanAscend({ ...hacker, hack_exp: 1_000 })).toBe(false);
+    expect(gangAscensionResult({ ...hacker, hack_exp: 1_000 })).toBeNull();
+  });
+
+  test("the member after: experience 0, the points added, its multiplier and levels from them, no respect earned", () => {
+    const hacker = { ...member("a", { hack: 100 }), hack_mult: 1.5, hack_asc_points: 2_000, earnedRespect: 42 };
+    const after = gangMemberAscended(hacker);
+    const points = 2_000 + hacker.hack_exp - 1_000;
+    expect(after).toMatchObject({ hack_exp: 0, hack_mult: 1, hack_asc_points: points, earnedRespect: 0 });
+    expect(after.hack_asc_mult).toBeCloseTo(Math.sqrt(points / 2_000), 12);
+    expect(after.hack).toBe(gangSkillLevel(0, after.hack_asc_mult));
+    expect(after.cha).toBe(1);
+    expect(gangAscensionPointsOf(after)).toBeCloseTo(points, 9);
+  });
+
+  test("an order stands while the member's points are the brain's reading", () => {
+    const order = { name: "a", pointsBefore: 12_345.678 };
+    expect(gangAscensionOrderStands(order, 12_345.678)).toBe(true);
+    expect(gangAscensionOrderStands(order, 12_345.678 + 1e-8)).toBe(true);
+    expect(gangAscensionOrderStands(order, 13_000)).toBe(false);
+    expect(gangAscensionOrderStands({ name: "a", pointsBefore: 0 }, 0)).toBe(true);
+  });
+
+  test("the cycle so far: the training stats' experience over training's pace, plus earned respect over work's", () => {
+    const twenty = trained("a", 20);
+    expect(gangCycleSoFarMs(inputs([twenty]), twenty)).toBeCloseTo(20 * 60_000, 3);
+    const working = { ...twenty, task: "Phishing", earnedRespect: 50 };
+    const respect = gangWorkRespectPerCycle(inputs([working]), working);
+    expect(respect).toBeGreaterThan(0);
+    expect(gangCycleSoFarMs(inputs([working]), working)).toBeCloseTo(20 * 60_000 + (50 / respect) * GANG_CYCLE_MS, 3);
+  });
+
+  test("it pays once the ascended member out-earns it over its cycle so far: not after 5 min's training, after 20", () => {
+    const five = trained("a", 5);
+    const appraisal5 = gangAscensionAppraisal(inputs([five]), five, "respect");
+    // ×1.02: 3,075 experience, 2,075 points.
+    expect(appraisal5?.result.hack).toBeCloseTo(Math.sqrt(2_075 / 2_000), 2);
+    expect(appraisal5).toMatchObject({ pays: false, cost: 0 });
+    expect(appraisal5?.gain).toBeLessThan(0);
+    const twenty = trained("a", 20);
+    const appraisal20 = gangAscensionAppraisal(inputs([twenty]), twenty, "respect");
+    expect(appraisal20).toMatchObject({ name: "a", pays: true, cost: 0 });
+    expect(appraisal20?.horizonMs).toBeCloseTo(20 * 60_000, 3);
+    // Over the same horizon, the gain is the difference of the best outputs, training a share then working.
+    const cycles = (20 * 60_000) / GANG_CYCLE_MS;
+    expect(appraisal20?.gain).toBeCloseTo(
+      gangOutputOver(inputs([twenty]), gangMemberAscended(twenty), "respect", cycles) -
+        gangOutputOver(inputs([twenty]), twenty, "respect", cycles),
+      6,
+    );
+    expect(gangAscensionAppraisal(inputs([member("b")]), member("b"), "respect")).toBeNull();
+  });
+
+  test("the cost: the earned respect for respect, and the penalty's toll on the others while they earn it back", () => {
+    const gang = { respect: 500, wantedLevel: 50, territory: 1 / 7 };
+    const alone = trained("a", 20, "Phishing", 400);
+    expect(gangAscensionCost(inputs([alone], gang), alone, "respect", 6_000)).toBe(400);
+    expect(gangAscensionCost(inputs([alone], gang), alone, "money", 6_000)).toBe(0);
+    const other = trained("b", 20, "Phishing");
+    const both = inputs([alone, other], gang);
+    const after = { ...gang, respect: 100 };
+    const phishing = gangTask("Phishing");
+    const regrowth = gangRespectPerCycle(after, other, phishing, 1);
+    // The toll lasts while the other earns the 400 back, or the horizon if that's shorter.
+    const earnedBack = 400 / regrowth;
+    for (const horizon of [earnedBack / 2, 1e6]) {
+      expect(earnedBack).toBeLessThan(1e6);
+      const tollCycles = Math.min(horizon, earnedBack);
+      expect(gangAscensionCost(both, alone, "respect", horizon)).toBeCloseTo(
+        400 + (gangRespectPerCycle(gang, other, phishing, 1) - regrowth) * tollCycles,
+        6,
+      );
+      expect(gangAscensionCost(both, alone, "money", horizon)).toBeCloseTo(
+        (gangMoneyPerCycle(gang, other, phishing, 1) - gangMoneyPerCycle(after, other, phishing, 1)) * tollCycles,
+        3,
+      );
+    }
+  });
+
+  test("a member's earned respect can outweigh the gain: it doesn't ascend while it holds the gang's respect", () => {
+    const twenty = trained("a", 20, "Phishing", 0);
+    const appraise = (earnedRespect: number) =>
+      gangAscensionAppraisal(
+        inputs([{ ...twenty, earnedRespect }]),
+        { ...twenty, earnedRespect },
+        "respect",
+        20 * 60_000,
+      );
+    const free = appraise(0);
+    expect(free?.pays).toBe(true);
+    expect(appraise((free?.gain ?? 0) * 0.9)?.pays).toBe(true);
+    expect(appraise((free?.gain ?? 0) * 1.1)?.pays).toBe(false);
+  });
+
+  test("the time to the next ascension, working from now: none while it can't pay, minutes once training nears it", () => {
+    // 5 min's training: ×1.02, and working adds no experience: never within a day, the cap.
+    const five = trained("a", 5, "Ransomware");
+    expect(gangTimeToAscensionMs(inputs([five]), five, "respect")).toBe(GANG_ASCENSION_HORIZON_CAP_MS);
+    expect(gangTimeToAscensionMs(inputs([member("b")]), member("b"), "respect")).toBe(GANG_ASCENSION_HORIZON_CAP_MS);
+    // Paying now: 0.
+    const twenty = trained("a", 20, "Phishing");
+    expect(gangTimeToAscensionMs(inputs([twenty]), twenty, "respect")).toBe(0);
+    // 10 min's: it pays a few minutes' work on, its earned respect and cycle grown at work's pace, not a minute before.
+    const ten = trained("a", 10, "Ransomware");
+    const nextMs = gangTimeToAscensionMs(inputs([ten]), ten, "respect");
+    expect(nextMs).toBeGreaterThan(0);
+    expect(nextMs).toBeLessThan(10 * 60_000);
+    const respect = gangWorkRespectPerCycle(inputs([ten]), ten);
+    const workedFor = (ms: number) => {
+      const worked = { ...ten, earnedRespect: (respect * ms) / GANG_CYCLE_MS };
+      return gangAscensionAppraisal(inputs([worked]), worked, "respect", gangCycleSoFarMs(inputs([ten]), ten) + ms);
+    };
+    expect(workedFor(nextMs)?.pays).toBe(true);
+    expect(workedFor(nextMs - GANG_TRAINING_STEP_MS)?.pays).toBe(false);
+  });
+
+  test("training's horizon is the time to the next ascension: a recruit that can't ascend trains, as with a day", () => {
+    const recruit = member("member-01");
+    const plan = planGang(inputs([recruit]));
+    expect(plan.assignments[0]).toMatchObject({ role: "training", nextAscensionMs: GANG_ASCENSION_HORIZON_CAP_MS });
+    // A minute's training pays back within a day at levels it wouldn't within an hour (G1's horizon).
+    const hacker = member("member-01", { hack: 100 });
+    expect(gangTrains(inputs([hacker]), hacker, "respect", 60 * 60_000)).toBe(false);
+    expect(gangTrains(inputs([hacker]), hacker, "respect", GANG_ASCENSION_HORIZON_CAP_MS)).toBe(true);
+  });
+
+  test("the plan: the member to ascend first, then the rest for the gang after it; it trains, its levels reset", () => {
+    const members = [trained("member-01", 20, "Phishing"), trained("member-02", 30, "Phishing")];
+    const plan = planGang(inputs(members));
+    // The longer trained gains more: its cycle is longer and its multiplier higher.
+    expect(plan.ascend).toMatchObject({ name: "member-02", pays: true });
+    expect(plan.assignments.map((each) => [each.name, each.role])).toEqual([
+      ["member-01", "working"],
+      ["member-02", "training"],
+    ]);
+    expect(gangAscensionToMake(inputs(members), "respect")?.name).toBe("member-02");
+    // The rest of the plan is for the gang after it: 300 respect of 1,000 lost, the share above the floor 49 / 750.
+    const earned = [members[0] as GangMemberFigures, { ...(members[1] as GangMemberFigures), earnedRespect: 300 }];
+    const after = planGang(inputs(earned, { respect: 1_000, wantedLevel: 50, territory: 1 / 7 }));
+    expect(after.ascend).toMatchObject({ name: "member-02", result: { respect: 300 } });
+    expect(after.lostShare).toBeCloseTo(49 / 750, 12);
+  });
+
+  test("none over the bound, of a member on justice, past the bound after, or leaving fewer recruits allowed", () => {
+    const ready = trained("member-01", 30, "Phishing");
+    expect(gangAscensionToMake(inputs([ready]), "respect")?.name).toBe("member-01");
+    // The penalty's share over the bound: two members, 1/2.
+    const two = [ready, trained("member-02", 5, "Ransomware")];
+    expect(
+      gangAscensionToMake(inputs(two, { respect: 100, wantedLevel: 200, territory: 1 / 7 }), "respect"),
+    ).toBeNull();
+    // On justice: skipped, the other considered.
+    const onJustice = [{ ...ready, task: "Ethical Hacking" }, trained("member-02", 30, "Phishing")];
+    expect(gangAscensionToMake(inputs(onJustice), "respect")?.name).toBe("member-02");
+    // Its earned respect would take the share over the bound: respect 1,000, wanted 300, share 0.23 of 1/2; after
+    // losing 800 respect, 299 / 500 = 0.6.
+    const holding = [{ ...ready, earnedRespect: 800 }, trained("member-02", 5, "Ransomware")];
+    const wanted = { respect: 1_000, wantedLevel: 300, territory: 1 / 7 };
+    expect(gangLostShare(wanted)).toBeLessThan(0.5);
+    expect(gangAscensionToMake(inputs(holding, wanted), "respect")).toBeNull();
+    // Respect 130 lets the gang recruit three more of 3 (at 5, 25 and 125); 10 lost leaves 120, two; 4 lost, three.
+    const three = [{ ...ready, earnedRespect: 10 }, trained("member-02", 5), trained("member-03", 5)];
+    const recruiting = { respect: 130, wantedLevel: 1, territory: 1 / 7 };
+    expect(gangAscensionToMake(inputs(three, recruiting), "respect")).toBeNull();
+    expect(
+      gangAscensionToMake(inputs([{ ...ready, earnedRespect: 4 }, ...three.slice(1)], recruiting), "respect")?.name,
+    ).toBe("member-01");
   });
 });

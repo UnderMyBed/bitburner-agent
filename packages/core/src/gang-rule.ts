@@ -1,6 +1,7 @@
 /**
  * The brain's gang rule (#325, slice G1 of #324): who is recruited and each member's task, from the game's formulas
- * (./gang.ts). "A gang that grows", not optimal play: no ascension (G2), equipment (G3) or territory (G4) yet.
+ * (./gang.ts), and when a member ascends (#328, G2). "A gang that grows", not optimal play: no equipment (G3) or
+ * territory (G4) yet.
  * - **The objective:** while recruiting matters (under 12 members), respect less wanted level, a cycle, the respect
  *   taken with no wanted penalty. The penalty, respect / (respect + wanted) (`Gang.ts:357-359`), scales what the gang
  *   earns: with R its respect a cycle before the penalty and W its wanted, both stocks grow until respect × penalty +
@@ -10,9 +11,14 @@
  *   of the moment, which wanted control looks after. With 12 members: money, from the tasks whose respect covers their
  *   wanted, so the penalty doesn't grow.
  * - **Training:** a member trains (Train Hacking in a hacking gang, Train Combat in a combat one) while a minute's
- *   training, then work for the rest of `GANG_TRAINING_HORIZON_MS`, beats that time's work now. Training raises its
- *   levels by the game's exp formula (`GangMember.ts:155-210`, `:70-72`). With no ascension yet, the horizon is a fixed
- *   hour: G2's ascension replaces it with the time to the next one.
+ *   training, then work until its next ascension (`gangTimeToAscensionMs`, G2), beats that time's work now. Training
+ *   raises its levels by the game's exp formula (`GangMember.ts:155-210`, `:70-72`); an ascension resets them.
+ * - **Ascension (G2):** a member ascends when, over a horizon, its ascended self (bigger multipliers: faster training,
+ *   higher levels, `GangMember.ts:262-320`, `formulas.ts:75-81`) out-earns it as it is by more than the cost: the
+ *   respect lost (`Gang.ts:390-404`) and its toll on the others' output through the penalty
+ *   (`gangAscensionAppraisal`, `gangAscensionCost`). The horizon is its cycle so far, the next taken as long
+ *   (`gangCycleSoFarMs`). One a plan, none over the wanted bound, and none that leaves fewer recruits allowed
+ *   (`gangAscensionToMake`).
  * - **Wanted control:** the penalty's floor is respect / (respect + 1), the wanted level never falling below 1
  *   (`Gang.ts:164-166`). The share of output the penalty takes above that floor is (wanted − 1) / (respect + wanted);
  *   a member moved to a justice task costs about its own share, 1/N of N members', the bound (`gangLostShareBound`).
@@ -33,11 +39,16 @@ import {
   GANG_CYCLES_PER_PROCESS,
   GANG_JUSTICE_DECAY_PER_PROCESS,
   GANG_MOST_MEMBERS,
+  GANG_STATS,
   GANG_TASK_NAMES,
+  type GangAscensionResult,
   type GangFigures,
   type GangMemberFigures,
   type GangTask,
+  gangAscensionResult,
+  gangExpPerCycle,
   gangMemberAfter,
+  gangMemberAscended,
   gangMoneyPerCycle,
   gangRecruitsAllowed,
   gangRespectPerCycle,
@@ -48,8 +59,13 @@ import {
   TRAIN_HACKING_TASK,
 } from "./gang.ts";
 
-/** The horizon training must pay back within (#325): an hour, until G2's ascension gives the real one. */
-export const GANG_TRAINING_HORIZON_MS = 60 * 60_000;
+/**
+ * The longest time to a member's next ascension the rule looks to (G2), training's horizon when its ascension doesn't
+ * pay within it (`gangTimeToAscensionMs`): a day.
+ */
+export const GANG_ASCENSION_HORIZON_CAP_MS = 24 * 60 * 60_000;
+/** The shares of a horizon a member's training is tried for, the rest worked (`gangOutputOver`): sixteenths. */
+export const GANG_HORIZON_SPLITS = 16;
 /** The step of training the rule weighs against working: a minute. */
 export const GANG_TRAINING_STEP_MS = 60_000;
 /** The share of the bound under which members on justice go back to work (#325's review): half, the hysteresis. */
@@ -95,6 +111,8 @@ export interface GangAssignment {
   value: number;
   /** The best work task now, whatever the member does. */
   bestTask: string;
+  /** The time to its next ascension, its training's horizon (`gangTimeToAscensionMs`), ms: 0 when it pays now. */
+  nextAscensionMs: number;
 }
 
 /** The rule's answer: the objective, each member's task, the recruits to make, and the wanted control's figures. */
@@ -107,6 +125,8 @@ export interface GangPlan {
   lostShare: number;
   /** The bound on it: one member's share of the output, 1/N of N members (`gangLostShareBound`). */
   bound: number;
+  /** The member to ascend now (G2, `gangAscensionToMake`), before the tasks are set, or null. */
+  ascend: GangAscensionAppraisal | null;
 }
 
 /** The names the rule gives recruits, in order: `member-01` to `member-12`. */
@@ -186,18 +206,212 @@ export function gangBestWork(
 
 /**
  * Whether the member trains (#325): a minute's training, then work for the rest of the horizon, beats the horizon's
- * work now; or nothing earns now at all.
+ * work now; or nothing earns now at all. The horizon (G2): the time to the member's next ascension
+ * (`gangTimeToAscensionMs`), which resets its levels; never under the minute's step.
  */
-export function gangTrains(inputs: GangRuleInputs, member: GangMemberFigures, objective: GangObjective): boolean {
+export function gangTrains(
+  inputs: GangRuleInputs,
+  member: GangMemberFigures,
+  objective: GangObjective,
+  horizonMs: number,
+): boolean {
   const now = gangBestWork(inputs, member, objective).value;
   if (now <= 0) return true;
+  const horizon = Math.max(horizonMs, GANG_TRAINING_STEP_MS);
   const trained = gangMemberAfter(
     member,
     gangTask(gangTrainingTask(inputs.isHacking)),
     GANG_TRAINING_STEP_MS / GANG_CYCLE_MS,
   );
   const after = gangBestWork(inputs, trained, objective).value;
-  return after * (GANG_TRAINING_HORIZON_MS - GANG_TRAINING_STEP_MS) > now * GANG_TRAINING_HORIZON_MS;
+  return after * (horizon - GANG_TRAINING_STEP_MS) > now * horizon;
+}
+
+/**
+ * The best a member earns over `cycles` (G2), in the objective's units (`gangBestWork`'s figure × cycles): training
+ * for a share of them, then working the rest, the best of `GANG_HORIZON_SPLITS` shares (0, 1/16, … 15/16). The
+ * experience work gives is left out: a work task's difficulty^0.9 is a tenth of training's or less (`GangMember.ts
+ * :155-210`, Phishing 3.5 against Train Hacking's 45).
+ */
+export function gangOutputOver(
+  inputs: GangRuleInputs,
+  member: GangMemberFigures,
+  objective: GangObjective,
+  cycles: number,
+): number {
+  const training = gangTask(gangTrainingTask(inputs.isHacking));
+  let best = 0;
+  for (let split = 0; split < GANG_HORIZON_SPLITS; split += 1) {
+    const trainingCycles = (cycles * split) / GANG_HORIZON_SPLITS;
+    const trained = split === 0 ? member : gangMemberAfter(member, training, trainingCycles);
+    best = Math.max(best, gangBestWork(inputs, trained, objective).value * (cycles - trainingCycles));
+  }
+  return best;
+}
+
+/**
+ * How long the member's cycle has run, since its recruit or last ascension (G2), read from what the game keeps of it
+ * (the reading has no clock): its training time, the training stats' experience over training's pace now
+ * (`gangExpPerCycle`), and its working time, its earned respect (reset by an ascension, `GangMember.ts:315-316`) over
+ * its best work's respect a cycle at the gang's penalty now. Both are estimates: work's own experience, time on
+ * justice and the penalty's swings are left out.
+ */
+export function gangCycleSoFarMs(inputs: GangRuleInputs, member: GangMemberFigures): number {
+  const training = gangTask(gangTrainingTask(inputs.isHacking));
+  const pace = gangExpPerCycle(member, training);
+  let exp = 0;
+  let rate = 0;
+  for (const stat of GANG_STATS) {
+    if (training[`${stat}Weight`] === 0) continue;
+    exp += member[`${stat}_exp`];
+    rate += pace[stat];
+  }
+  const trainingCycles = rate > 0 ? exp / rate : 0;
+  const respect = gangWorkRespectPerCycle(inputs, member);
+  const workingCycles = respect > 0 ? member.earnedRespect / respect : 0;
+  return (trainingCycles + workingCycles) * GANG_CYCLE_MS;
+}
+
+/** The respect a cycle of the member's best work for respect earns, at the gang's penalty now (`formulas.ts:15-31`). */
+export function gangWorkRespectPerCycle(inputs: GangRuleInputs, member: GangMemberFigures): number {
+  const work = gangBestWork(inputs, member, "respect").task;
+  return gangRespectPerCycle(inputs.gang, member, work, inputs.softcap);
+}
+
+/** What an ascension of a member would give and cost over the horizon (G2), in the objective's units. */
+export interface GangAscensionAppraisal {
+  name: string;
+  /** The game's ascension result: the respect lost and each stat's multiplier after over before. */
+  result: GangAscensionResult;
+  /** The horizon, ms: the member's cycle so far (`gangCycleSoFarMs`), the next one taken as long. */
+  horizonMs: number;
+  /** The ascended member's best output over the horizon less the member's as it is (`gangOutputOver`). */
+  gain: number;
+  /** The respect lost (under the respect objective) and the penalty's toll on the others (`gangAscensionCost`). */
+  cost: number;
+  pays: boolean;
+}
+
+/**
+ * The cost of the member's ascension over `cycles` (G2), in the objective's units:
+ * - **the respect lost**, its earned respect (`Gang.ts:390-393`): under the respect objective, respect itself, the
+ *   stock that buys recruits (`Gang.ts:316-323`); with 12 members, no more;
+ * - **the penalty's toll**: the gang's respect falls to max(1, respect − earned), so the penalty respect / (respect +
+ *   wanted) does (`formulas.ts:11-13`), and every other member's output with it (respect and money both,
+ *   `formulas.ts:28`, `:72`), until the others earn the respect back at their pace then, at most the horizon: charged
+ *   in full until then, an overestimate.
+ */
+export function gangAscensionCost(
+  inputs: GangRuleInputs,
+  member: GangMemberFigures,
+  objective: GangObjective,
+  cycles: number,
+): number {
+  const { gang, softcap } = inputs;
+  const after = { ...gang, respect: Math.max(1, gang.respect - member.earnedRespect) };
+  const others = inputs.members.filter((each) => each.name !== member.name);
+  const outputAt = (figures: GangFigures) =>
+    others.reduce((sum, each) => {
+      if (!GANG_TASK_NAMES.includes(each.task)) return sum;
+      const task = gangTask(each.task);
+      return (
+        sum +
+        (objective === "respect"
+          ? gangRespectPerCycle(figures, each, task, softcap)
+          : gangMoneyPerCycle(figures, each, task, softcap))
+      );
+    }, 0);
+  const regrowth = others.reduce(
+    (sum, each) =>
+      GANG_TASK_NAMES.includes(each.task) ? sum + gangRespectPerCycle(after, each, gangTask(each.task), softcap) : sum,
+    0,
+  );
+  const lost = gang.respect - after.respect;
+  const tollCycles = regrowth > 0 ? Math.min(cycles, lost / regrowth) : cycles;
+  const toll = (outputAt(gang) - outputAt(after)) * tollCycles;
+  return (objective === "respect" ? member.earnedRespect : 0) + toll;
+}
+
+/**
+ * Whether ascending the member pays (G2): over the horizon, its ascended self's best output (`gangMemberAscended`,
+ * with its bigger multipliers it trains faster, `GangMember.ts:155-210`, and its levels go higher for the same
+ * experience, `:70-79`) less its own as it is, beats the cost (`gangAscensionCost`); the retraining's time is in the
+ * gain, as the ascended member starts from level 1. Null when the game wouldn't ascend it. The horizon: the member's
+ * cycle so far, the next taken as long (`gangCycleSoFarMs`); its next would be longer, as its multipliers grow.
+ */
+export function gangAscensionAppraisal(
+  inputs: GangRuleInputs,
+  member: GangMemberFigures,
+  objective: GangObjective,
+  horizonMs = gangCycleSoFarMs(inputs, member),
+): GangAscensionAppraisal | null {
+  const result = gangAscensionResult(member);
+  if (result === null) return null;
+  const cycles = horizonMs / GANG_CYCLE_MS;
+  const gain =
+    gangOutputOver(inputs, gangMemberAscended(member), objective, cycles) -
+    gangOutputOver(inputs, member, objective, cycles);
+  const cost = gangAscensionCost(inputs, member, objective, cycles);
+  return { name: member.name, result, horizonMs, gain, cost, pays: gain > 0 && gain > cost };
+}
+
+/**
+ * The time to the member's next ascension (G2), the horizon its training pays back within (`gangTrains`): working from
+ * now, the time until its ascension pays (`gangAscensionAppraisal`), its cycle and its earned respect growing at its
+ * best work's pace (`gangWorkRespectPerCycle`), its levels as they are (work's experience left out, as in
+ * `gangOutputOver`). Working, as training asks whether to stop now and work until then. Searched by doubling from a
+ * minute, then halving to within a minute; `GANG_ASCENSION_HORIZON_CAP_MS` if it doesn't pay within that; 0 if now.
+ */
+export function gangTimeToAscensionMs(
+  inputs: GangRuleInputs,
+  member: GangMemberFigures,
+  objective: GangObjective,
+): number {
+  const cycleMs = gangCycleSoFarMs(inputs, member);
+  const respect = gangWorkRespectPerCycle(inputs, member);
+  const paysAfter = (ms: number) => {
+    const worked = { ...member, earnedRespect: member.earnedRespect + (respect * ms) / GANG_CYCLE_MS };
+    return gangAscensionAppraisal(inputs, worked, objective, cycleMs + ms)?.pays === true;
+  };
+  if (paysAfter(0)) return 0;
+  let low = 0;
+  let high = GANG_TRAINING_STEP_MS;
+  while (!paysAfter(high)) {
+    if (high >= GANG_ASCENSION_HORIZON_CAP_MS) return GANG_ASCENSION_HORIZON_CAP_MS;
+    low = high;
+    high = Math.min(2 * high, GANG_ASCENSION_HORIZON_CAP_MS);
+  }
+  while (high - low > GANG_TRAINING_STEP_MS) {
+    const middle = (low + high) / 2;
+    if (paysAfter(middle)) high = middle;
+    else low = middle;
+  }
+  return high;
+}
+
+/**
+ * The member to ascend now, if any (G2): of those whose ascension pays (`gangAscensionAppraisal`), the one that gains
+ * the most over its cost; one at a time, so each is judged on the gang's respect as the last left it. None that would
+ * leave the penalty's share above its floor (`gangLostShare`) over the bound, so none while it's over already, when
+ * wanted control puts members on justice (the respect lost only raises it); no member on justice (its justice would
+ * start again from level 1); and none that would leave fewer recruits allowed than now (`gangRecruitsAllowed`): the
+ * respect a recruit due needs.
+ */
+export function gangAscensionToMake(inputs: GangRuleInputs, objective: GangObjective): GangAscensionAppraisal | null {
+  const { gang, members } = inputs;
+  const bound = gangLostShareBound(members.length);
+  const recruitsNow = gangRecruitsAllowed(gang.respect, members.length);
+  let best: GangAscensionAppraisal | null = null;
+  for (const member of members) {
+    if (isGangJusticeTask(member.task)) continue;
+    const respect = Math.max(1, gang.respect - member.earnedRespect);
+    if (gangLostShare({ respect, wantedLevel: gang.wantedLevel }) > bound) continue;
+    if (gangRecruitsAllowed(respect, members.length) < recruitsNow) continue;
+    const appraisal = gangAscensionAppraisal(inputs, member, objective);
+    if (appraisal === null || !appraisal.pays) continue;
+    if (best === null || appraisal.gain - appraisal.cost > best.gain - best.cost) best = appraisal;
+  }
+  return best;
 }
 
 /** The justice task that lowers the member's wanted most, and by how much a cycle (negative). */
@@ -254,19 +468,33 @@ export function gangWantedRecovers(
 }
 
 /** Each member's task, and the recruits, by the rule above. `members` in the game's order, each with its task now. */
-export function planGang(inputs: GangRuleInputs): GangPlan {
+export function planGang(given: GangRuleInputs): GangPlan {
+  const objective = gangObjectiveOf(given.members.length);
+  // The ascension first (G2): the rest of the plan is for the gang after it, the member ascended and the respect less.
+  const ascend = gangAscensionToMake(given, objective);
+  const inputs: GangRuleInputs =
+    ascend === null
+      ? given
+      : {
+          ...given,
+          gang: { ...given.gang, respect: Math.max(1, given.gang.respect - ascend.result.respect) },
+          members: given.members.map((member) =>
+            member.name === ascend.name ? { ...gangMemberAscended(member), task: member.task } : member,
+          ),
+        };
   const { gang, isHacking, members } = inputs;
-  const objective = gangObjectiveOf(members.length);
   const training = gangTrainingTask(isHacking);
   const assignments: GangAssignment[] = members.map((member) => {
     const best = gangBestWork(inputs, member, objective);
-    const trains = gangTrains(inputs, member, objective);
+    const nextAscensionMs = gangTimeToAscensionMs(inputs, member, objective);
+    const trains = gangTrains(inputs, member, objective, nextAscensionMs);
     return {
       name: member.name,
       task: trains ? training : best.task.name,
       role: trains ? "training" : "working",
       value: best.value,
       bestTask: best.task.name,
+      nextAscensionMs,
     };
   });
 
@@ -299,7 +527,7 @@ export function planGang(inputs: GangRuleInputs): GangPlan {
   const taken = new Set(members.map((member) => member.name));
   const recruit = GANG_MEMBER_NAMES.filter((name) => !taken.has(name)).slice(
     0,
-    gangRecruitsAllowed(gang.respect, members.length),
+    gangRecruitsAllowed(given.gang.respect, members.length),
   );
-  return { objective, assignments, recruit, lostShare, bound };
+  return { objective, assignments, recruit, lostShare, bound, ascend };
 }

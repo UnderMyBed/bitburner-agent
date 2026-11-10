@@ -460,10 +460,16 @@ describe("the gang (#325)", () => {
     expect(gangOf(null)).toBeUndefined();
   });
 
-  test("carried with its recruits and tasks, only its known fields", () => {
-    const gang = { recruit: ["member-04"], tasks: { "member-01": "Train Hacking", "member-04": "Ransomware" } };
-    expect(gangOf({ ...gang, extra: 1 })).toEqual(gang);
-    expect(gangOf({ recruit: [], tasks: {} })).toEqual({ recruit: [], tasks: {} });
+  test("carried with its recruits, ascensions (G2) and tasks, only its known fields", () => {
+    const gang = {
+      recruit: ["member-04"],
+      ascend: [{ name: "member-02", pointsBefore: 1234.5 }],
+      tasks: { "member-01": "Train Hacking", "member-04": "Ransomware" },
+    };
+    expect(gangOf({ ...gang, extra: 1, ascend: [{ ...gang.ascend[0], extra: 2 }] })).toEqual(gang);
+    expect(gangOf({ recruit: [], ascend: [], tasks: {} })).toEqual({ recruit: [], ascend: [], tasks: {} });
+    // A G1 brain's, with no ascensions: none.
+    expect(gangOf({ recruit: [], tasks: {} })).toEqual({ recruit: [], ascend: [], tasks: {} });
   });
 
   test.each([
@@ -472,6 +478,19 @@ describe("the gang (#325)", () => {
     ["more than 12 recruits", { recruit: Array.from({ length: 13 }, (_, i) => `m${i}`), tasks: {} }, "at most 12"],
     ["an empty recruit's name", { recruit: [""], tasks: {} }, "gang.recruit isn't a list"],
     ["a long recruit's name", { recruit: ["x".repeat(65)], tasks: {} }, "gang.recruit isn't a list"],
+    ["ascensions that aren't a list", { recruit: [], ascend: "member-01", tasks: {} }, "gang.ascend isn't a list"],
+    [
+      "more than 12 ascensions",
+      { recruit: [], ascend: Array.from({ length: 13 }, (_, i) => ({ name: `m${i}`, pointsBefore: 0 })), tasks: {} },
+      "gang.ascend isn't a list",
+    ],
+    ["an ascension with no points", { recruit: [], ascend: [{ name: "a" }], tasks: {} }, "gang.ascend isn't a list"],
+    [
+      "an ascension's points negative",
+      { recruit: [], ascend: [{ name: "a", pointsBefore: -1 }], tasks: {} },
+      "gang.ascend isn't a list",
+    ],
+    ["an ascension's empty name", { recruit: [], ascend: [{ name: "", pointsBefore: 0 }], tasks: {} }, "gang.ascend"],
     ["tasks that aren't an object", { recruit: [], tasks: [] }, "gang.tasks isn't an object"],
     ["a task the game hasn't", { recruit: [], tasks: { "member-01": "Hack the Gibson" } }, "a task the game hasn't"],
     ["a task named in another case", { recruit: [], tasks: { "member-01": "train hacking" } }, "the game hasn't"],
@@ -480,7 +499,7 @@ describe("the gang (#325)", () => {
   });
 
   test("while the brain holds, no gang is managed: none goes", () => {
-    const gang = { recruit: [], tasks: { "member-01": "Train Hacking" } };
+    const gang = { recruit: [], ascend: [], tasks: { "member-01": "Train Hacking" } };
     const desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents: [], gang };
     expect(desiredStateWhileHolding(desired, null)).toEqual({ hackLoop: desired.hackLoop, intents: [] });
   });

@@ -82,9 +82,9 @@ export interface DesiredState {
    */
   work?: Work | null;
   /**
-   * The gang (#325): recruits and members' tasks, done and the gang read every 10 s by the Agent's gang worker, whose
-   * reading goes in the medium snapshot; or absent (null): no gang managed, nothing read. Absent is how an older brain
-   * says none. Not kept for safe mode: the members keep their tasks in the game.
+   * The gang (#325): recruits, ascensions (#328) and members' tasks, done and the gang read every 10 s by the Agent's
+   * gang worker, whose reading goes in the medium snapshot; or absent (null): no gang managed, nothing read. Absent is
+   * how an older brain says none. Not kept for safe mode: the members keep their tasks in the game.
    */
   gang?: GangState | null;
   /**

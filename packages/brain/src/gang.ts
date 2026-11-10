@@ -1,14 +1,15 @@
-// The gang (#325, slice G1 of the gangs epic #324): in BN2, the brain forms a gang, recruits, and sets each member's
-// task, by core's rule (`planGang`, ../../core/src/gang-rule.ts), from the gang worker's reading in the medium
-// snapshot.
+// The gang (#325, slice G1 of the gangs epic #324; ascension #328, G2): in BN2, the brain forms a gang, recruits,
+// ascends members and sets each member's task, by core's rule (`planGang`, ../../core/src/gang-rule.ts), from the
+// gang worker's reading in the medium snapshot.
 // - Only in BN2 for now: the campaign plays gangs there (BN2 ×3, docs/synthesis.md §3), where no karma is needed
 //   (`PersonObjects/Player/PlayerObjectGangMethods.ts:16-18`). With SF2 elsewhere a gang needs −54,000 karma, which
 //   the brain doesn't seek: not managed there, and the desired state carries no gang.
 // - Forming: once a gang faction is joined (core's `gangFactionToForm`: NiteSec in practice, by A3's backdoor), the
 //   `createGang` intent, irreversible, past the gate (its guard: the faction joined, ./irreversible-gate.ts; then a
 //   save backup). Done once the reading shows the gang.
-// - Managing: the desired state's `gang`, the recruits the respect allows and each member's task, done by the Agent's
-//   worker every 10 s, which reads the gang after. A recruit is set to train at once.
+// - Managing: the desired state's `gang`, the recruits the respect allows, the member to ascend (G2, core's
+//   `gangAscensionToMake`, with its points as read, so the worker ascends it once) and each member's task, done by the
+//   Agent's worker every 10 s, which reads the gang after. A recruit is set to train at once.
 // - The gang's faction is left out of what the faction and augmentation rules see as joined (`withoutGangFaction`):
 //   the game offers no work or donations there (`Faction/ui/FactionRoot.tsx:97-99`, `:113`; Singularity's work and
 //   donation, `NetscriptFunctions/Singularity.ts:808-810`, `:934-935`), and its shop is nearly every augmentation
@@ -17,12 +18,15 @@
 // - No switch (#325): in BN2 the gang is the brain's to play; the owner can move members in the game, and the brain
 //   sets them back within 10 s.
 import {
+  GANG_ASCENSION_HORIZON_CAP_MS,
   GANG_FACTIONS,
   GANG_STATS,
   type GangInformation,
   type GangMemberReading,
   type GangPlan,
+  type GangStat,
   type GangState,
+  gangAscensionPointsOf,
   gangFactionOf,
   gangFactionToForm,
   gangInBonusTime,
@@ -90,7 +94,7 @@ export function gangSnapshotOf(mediumData: unknown): GangSnapshot {
     "respectGain",
     "moneyGain",
     "wantedLevelGain",
-    ...GANG_STATS.flatMap((stat) => [stat, `${stat}_exp`, `${stat}_mult`, `${stat}_asc_mult`]),
+    ...GANG_STATS.flatMap((stat) => [stat, `${stat}_exp`, `${stat}_mult`, `${stat}_asc_mult`, `${stat}_asc_points`]),
   ];
   const members = Array.isArray(reading.members) ? reading.members : [];
   const wellFormed = members.every(
@@ -196,6 +200,33 @@ export function describeTaskMix(plan: GangPlan): string {
   return [...counts].map(([label, count]) => `${count} ${label}`).join(", ") || "no members";
 }
 
+/** The largest of an ascension's multiplier gains, "×1.45": what it gave the member's best stat. */
+export function topAscensionGain(result: Record<GangStat, number>): number {
+  return Math.max(...GANG_STATS.map((stat) => result[stat]));
+}
+
+/**
+ * The plan's ascension (G2): "ascending member-02 (multipliers up to ×1.45, 60 respect lost)"; with none, the soonest
+ * member's next, "next ascension: member-02's, in about 12 min" (training's horizon, `gangTimeToAscensionMs`).
+ */
+export function describeAscension(plan: GangPlan): string {
+  if (plan.ascend !== null) {
+    const { name, result } = plan.ascend;
+    return (
+      `ascending ${name} (multipliers up to ×${topAscensionGain(result).toFixed(2)}, ` +
+      `${Math.round(result.respect).toLocaleString("en-US")} respect lost)`
+    );
+  }
+  const next = plan.assignments.reduce<GangPlan["assignments"][number] | null>(
+    (soonest, each) => (soonest === null || each.nextAscensionMs < soonest.nextAscensionMs ? each : soonest),
+    null,
+  );
+  if (next === null || next.nextAscensionMs >= GANG_ASCENSION_HORIZON_CAP_MS) return "no ascension due within a day";
+  if (next.nextAscensionMs === 0)
+    return `${next.name}'s ascension pays, held (on justice, the wanted bound or a recruit's respect)`;
+  return `next ascension: ${next.name}'s, in about ${Math.max(1, Math.round(next.nextAscensionMs / 60_000))} min`;
+}
+
 export class GangRule {
   readonly #log: (line: string) => void;
   #view: GangView = { stage: "notManaged", line: "Gang: not managed (no slow snapshot yet)", plan: null };
@@ -254,7 +285,7 @@ export class GangRule {
       return this.#decide({ stage: "notManaged", line: `Gang: not managed (${why})`, plan: null }, null, null);
     }
     // Managed from here on: the worker reads the gang even before one is formed.
-    const read: GangState = { recruit: [], tasks: {} };
+    const read: GangState = { recruit: [], ascend: [], tasks: {} };
     const snapshot = gangSnapshotOf(mediumData);
     if (snapshot.kind === "absent" || snapshot.kind === "unread") {
       this.#holding = this.#faction === null;
@@ -288,12 +319,15 @@ export class GangRule {
     // A member the owner named past what the protocol takes is left as it is: the Agent would refuse the whole state.
     for (const { name, task } of plan.assignments) if (isProtocolName(name)) tasks[name] = task;
     for (const name of plan.recruit) tasks[name] = gangTrainingTask(gang.isHacking);
+    const ascending = members.find((member) => member.name === plan.ascend?.name && isProtocolName(member.name));
+    const ascend =
+      ascending === undefined ? [] : [{ name: ascending.name, pointsBefore: gangAscensionPointsOf(ascending) }];
     const line =
       `Gang: ${gang.faction}'s, ${formatCount(members.length, "member")} of 12 (${describeTaskMix(plan)}); ` +
       `respect ${Math.round(gang.respect).toLocaleString("en-US")}, wanted penalty ${percent(1 - gang.wantedPenalty)}` +
       ` (above its floor ${percent(plan.lostShare)}, bound ${percent(plan.bound)}); ` +
-      `$${Math.round(gang.moneyGainRate * 5).toLocaleString("en-US")}/s`;
-    return this.#decide({ stage: "managed", line, plan }, null, { recruit: plan.recruit, tasks });
+      `${Math.round(gang.moneyGainRate * 5).toLocaleString("en-US")}/s; ${describeAscension(plan)}`;
+    return this.#decide({ stage: "managed", line, plan }, null, { recruit: plan.recruit, ascend, tasks });
   }
 
   /** The rule's justice members, written to the store on a change. */
@@ -311,7 +345,8 @@ export class GangRule {
         ? view.line
         : `${this.#faction}'s gang: ${formatCount(view.plan.assignments.length, "member")} ` +
           `(${describeTaskMix(view.plan)})` +
-          (view.plan.recruit.length > 0 ? `; recruiting ${view.plan.recruit.join(", ")}` : "");
+          (view.plan.recruit.length > 0 ? `; recruiting ${view.plan.recruit.join(", ")}` : "") +
+          (view.plan.ascend !== null ? `; ${describeAscension(view.plan)}` : "");
     // Not managed (outside BN2, every other BitNode's brain) is never logged: it's no news.
     if (logged !== this.#lastLogged && view.stage !== "notManaged") {
       this.#log(logged.startsWith("Gang: ") ? `gang: ${logged.slice(6)}` : `gang: ${logged}`);

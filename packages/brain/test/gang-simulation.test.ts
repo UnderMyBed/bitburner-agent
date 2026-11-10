@@ -1,8 +1,9 @@
-// Gangs G1 (#325): the brain from a BN2 start with SF1.3 and SF4.3, as the campaign's order enters BN2 (after BN4 ×3
-// and BN5), its rules as on Steam (all on), the simulator's own effectors taken away so the Agent uses its workers as
-// in a browser. NiteSec is joined by a harness edit, as A3's backdoor on avmnite-02h would have it (hacking 202-220,
-// which an hour from a fresh start doesn't reach). One seed each: a thin slice, no sweep.
-// - A bounded hour: the gang forms through the gate, recruits, trains, works, and the run report's gang section passes.
+// Gangs G1 (#325) and G2 (#328): the brain from a BN2 start with SF1.3 and SF4.3, as the campaign's order enters BN2
+// (after BN4 ×3 and BN5), its rules as on Steam (all on), the simulator's own effectors taken away so the Agent uses
+// its workers as in a browser. NiteSec is joined by a harness edit, as A3's backdoor on avmnite-02h would have it
+// (hacking 202-220, which an hour from a fresh start doesn't reach). One seed each: a thin slice, no sweep.
+// - A bounded hour: the gang forms through the gate, recruits, trains, works, ascends (G2) and keeps growing, and the
+//   run report's gang section passes.
 // - Wanted control, end to end: a gang the owner left with its wanted level far over the bound (three members on DDoS
 //   Attacks, which earns them no respect at their levels), then the brain for 10 minutes: every member goes to
 //   justice, as fewer couldn't bring the wanted level back to the bound within the 23 min, it falls fast, and the
@@ -71,10 +72,16 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
   expect(text).toMatch(/\n {4}createGang\(NiteSec\): done after 1 try \(ui\); /);
   expect(createGang === undefined || createGang.done).toBe(true);
   expect(section).toMatch(/\n {2}formed: with NiteSec, first seen 2026-01-01T00:0[12]:/);
-  // Measured on 2026-11-09 (seed 1): formed 1 min 25 s in; the members trained 10 to 20 min, then took Phishing; at the
-  // hour 7 members and 911 respect, the penalty 5.9%, at most 6.8% above its floor (the bound 25% at 4 members then).
-  expect(section).toMatch(/\n {4}hour 1: 0 → 7 members; respect 1 → (8[5-9]\d|9\d\d) \(0\.2\d\/s\); /);
-  expect(section).toMatch(/; wanted penalty 50\.0% → \d\.\d%, above its floor at most \d\.\d% \(the bound then 25\.0%/);
+  // Measured on 2026-11-09 (seed 1), with G2's ascensions: formed 1 min 25 s in; the first three trained 5 min, worked,
+  // and ascended at 23 min (×1.45 each, 60 respect each), 15 ascensions in the hour, the multipliers up to ×1.53. At
+  // the hour 7 members, as G1's, and 656 respect (G1: 911), the ascensions' respect taken; by 2 hours (measured once,
+  // not in CI) 3,840 against G1's 3,514, 0.90/s in the second hour against 0.73. The penalty 9.8% at the hour, at most
+  // 18.0% above its floor, briefly over the bound of 16.7%, and back in time.
+  expect(section).toMatch(/\n {4}hour 1: 0 → 7 members; respect 1 → (5[5-9]\d|[67]\d\d) \(0\.1\d\/s\); /);
+  expect(section).toMatch(/; wanted penalty 50\.0% → \d+\.\d%, above its floor at most \d+\.\d% \(the bound then /);
+  const ascensions = /; (\d+) ascensions? \(((member-\d\d ×\d\.\d\d, [\d,]+ respect(; )?)+)\)\n/.exec(section);
+  expect(Number(ascensions?.[1])).toBeGreaterThanOrEqual(5);
+  expect(ascensions?.[2]).toMatch(/^member-01 ×1\.\d\d, \d+ respect; /);
   const final = gangSnapshotOf(fresh.medium() as MediumSnapshotData);
   expect(final.kind).toBe("gang");
   if (final.kind !== "gang") return;
@@ -82,10 +89,14 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
   expect(final.members.map((member) => member.name)).toEqual(
     final.members.map((_, index) => `member-${String(index + 1).padStart(2, "0")}`),
   );
-  // Tasks assigned: none left Unassigned; the first trained, then worked for respect.
+  // Tasks assigned: none left Unassigned; trained, then worked for respect.
   expect(final.members.every((member) => member.task !== "Unassigned")).toBe(true);
-  expect(readings[0]?.tasks.every((task) => task === "Train Hacking")).toBe(true);
-  expect(readings.at(-1)?.tasks.some((task) => !task.startsWith("Train"))).toBe(true);
+  expect(readings.some((each) => each.tasks.some((task) => !task.startsWith("Train")))).toBe(true);
+  // Ascended (G2): the first three's multipliers up, and the gang kept growing, its members never fewer.
+  for (const member of final.members.slice(0, 3)) expect(member.hack_asc_mult, member.name).toBeGreaterThan(1.4);
+  const counts = readings.map((each) => each.members);
+  expect(counts).toEqual([...counts].sort((a, b) => a - b));
+  expect(final.gang.respect).toBeGreaterThan(Math.max(...readings.slice(0, -1).map((each) => each.respect)));
   // The wanted penalty within the rule's bound, and nothing stuck: the section's checks.
   expect(section).toContain("  problems the gang worker reported, as first seen:\n    none\n");
   for (const what of [
@@ -93,6 +104,7 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
     "a recruit the respect allows not made for 1 min or more:\n    none",
     `${WANTED_CHECK} or more:\n    none`,
     "the gang unread in BN2 for 5 min or more:\n    none",
+    "an ascension the rule makes not made for 1 min or more:\n    none",
   ]) {
     expect(section).toContain(what);
   }

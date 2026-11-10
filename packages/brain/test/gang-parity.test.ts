@@ -2,14 +2,18 @@
 // `ns.gang.getTaskStats`, the respect, money and wanted a cycle and the penalty against `ns.formulas.gang`
 // (Formulas.exe, bought through the simulator's own effectors) over gangs and members that differ in every figure the
 // formulas read, training's experience against the members' own `expGain`, the recruit threshold against
-// `respectForNextRecruit`, and every BitNode's `GangSoftcap` against the engine's multipliers. In BN2 (softcap 1),
-// where the brain plays gangs.
+// `respectForNextRecruit`, every BitNode's `GangSoftcap` against the engine's multipliers, and (#328, G2) the ascension
+// result and the member after it against `getAscensionResult` and `ascendMember`. In BN2 (softcap 1), where the brain
+// plays gangs.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   GANG_STATS,
   GANG_TASKS,
   type GangMemberFigures,
+  gangAscensionPointsOf,
+  gangAscensionResult,
   gangExpPerCycle,
+  gangMemberAscended,
   gangMoneyPerCycle,
   gangRespectPerCycle,
   gangRespectToRecruit,
@@ -153,3 +157,79 @@ test("every BitNode's GangSoftcap is the engine's (BN12 at two levels)", async (
     expect(gangSoftcapOf(bitNode as number), `BN${bitNode}.${level}`).toBe(multipliers.GangSoftcap);
   }
 });
+
+test("core's ascension result and the member after it are the engine's (G2): `getAscensionResult`, `ascendMember`", async () => {
+  const sim = await start({
+    seed: 1,
+    epochMs: Date.UTC(2026, 0, 1),
+    fixture: { kind: "bitnode", n: 2, sourceFiles: {} },
+  });
+  await sim.diagnostics.setHomeRam(128);
+  await sim.diagnostics.joinFactionWithReputation("NiteSec", 0);
+  // Three trained 3 minutes on the three training tasks, read with the game's result; the first ascended, read again;
+  // then trained 4 minutes more, with its points.
+  const { out, log } = await runScript(
+    sim,
+    `ns.gang.createGang("NiteSec");
+const tasks = [["a", "Train Hacking"], ["b", "Train Combat"], ["c", "Train Charisma"]];
+for (const [name, task] of tasks) {
+  ns.gang.recruitMember(name);
+  ns.gang.setMemberTask(name, task);
+}
+await ns.sleep(180000);
+for (const [name] of tasks) {
+  out({ before: ns.gang.getMemberInformation(name), result: ns.gang.getAscensionResult(name) ?? null });
+}
+const respect = ns.gang.getGangInformation().respect;
+out({ ascended: ns.gang.ascendMember("a") ?? null, after: ns.gang.getMemberInformation("a"), respect });
+await ns.sleep(240000);
+out({ again: ns.gang.getMemberInformation("a"), result: ns.gang.getAscensionResult("a") ?? null });`,
+    430_000,
+  );
+  expect((await sim.events()).events.filter((event) => event.type === "error")).toEqual([]);
+  expect(log.filter((line) => !line.startsWith("out:"))).toEqual([]);
+  type Read = GangMemberFigures & { expGain: unknown };
+  const readings = out.filter((each) => (each as { before?: unknown }).before) as {
+    before: Read;
+    result: Record<string, number> | null;
+  }[];
+  expect(readings).toHaveLength(3);
+  for (const { before, result } of readings) {
+    const ours = gangAscensionResult(before);
+    if (result === null) {
+      expect(ours, before.name).toBeNull();
+      continue;
+    }
+    expect(ours?.respect).toBe(result.respect);
+    for (const stat of GANG_STATS)
+      expect(ours?.[stat], `${before.name}'s ${stat}`).toBeCloseTo(result[stat] as number, 12);
+  }
+  // Only a could ascend: 3 minutes of Train Combat give each combat stat 945 experience (25/1,500 × 100^0.9 a cycle),
+  // of Train Charisma 390, both under the 1,000 an ascension leaves out; Train Hacking 1,854.
+  expect(readings.map(({ result }) => result !== null)).toEqual([true, false, false]);
+
+  const { ascended, after } = out.find((each) => (each as { after?: unknown }).after) as {
+    ascended: Record<string, number>;
+    after: Read;
+  };
+  const before = readings[0]?.before as Read;
+  expect(ascended).toMatchObject({ respect: before.earnedRespect });
+  const ours = gangMemberAscended(before);
+  for (const stat of GANG_STATS) {
+    for (const key of [stat, `${stat}_exp`, `${stat}_mult`, `${stat}_asc_mult`, `${stat}_asc_points`] as const) {
+      expect(ours[key], key).toBeCloseTo(after[key], 9);
+    }
+  }
+  expect(gangAscensionPointsOf(after)).toBeGreaterThan(gangAscensionPointsOf(before));
+
+  // A second ascension's result, from points already gained.
+  const again = out.find((each) => (each as { again?: unknown }).again) as {
+    again: Read;
+    result: Record<string, number> | null;
+  };
+  expect(again.again.hack_asc_points).toBeGreaterThan(0);
+  expect(again.result).not.toBeNull();
+  for (const stat of GANG_STATS) {
+    expect(gangAscensionResult(again.again)?.[stat], stat).toBeCloseTo(again.result?.[stat] as number, 12);
+  }
+}, 60_000);
