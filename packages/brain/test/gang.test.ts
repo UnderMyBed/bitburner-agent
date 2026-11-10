@@ -1136,6 +1136,7 @@ describe("territory warfare (G4)", () => {
       leastTerritoryPerUpdate: 1,
       winChances: { least: 0.6, most: 0.7 },
       tailCostPerUpdate: 0,
+      crewDeaths: [],
     };
     expect(describeWarfare({ crew: ["a"], engage: false, measure }, NITESEC, 2)).toBe(
       "territory 14.3%, power 1.0; warfare off: its deaths would cost more than the 1.8% territory an hour it'd gain " +

@@ -780,23 +780,35 @@ export function gangOtherPowerGainPerUpdate(other: GangOtherGang): number {
 }
 
 /**
- * The other gangs' expected powers after an update (`Gang.ts:184-269`): each one's gain
+ * The other gangs' expected powers and territories after an update (`Gang.ts:184-269`): each one's gain
  * (`gangOtherPowerGainPerUpdate`), then its clashes with the others but the player's gang, which happen whatever the
  * player's clash chance: 2/(n − 1) an update against each other gang with territory (`gangClashesPerUpdate`), each
- * lost with the other's power over both, costing 1% of its power (`GANG_OTHER_POWER_KEPT_LOSING`). A gang with no
- * territory clashes none. Its clashes with the player's gang, which it loses 1% at each too, are the caller's.
+ * lost with the other's power over both, costing 1% of its power (`GANG_OTHER_POWER_KEPT_LOSING`) and the territory a
+ * clash moves (`gangTerritoryPerClash`, capped at the loser's); each won takes that from the other. So the weak lose
+ * their territory to the strong over hours, and a gang with none clashes none. Its clashes with the player's gang (the
+ * 1% it loses at each, the territory the player takes) are the caller's: left out here.
  */
 export function gangOthersAfterUpdate(others: readonly GangOtherGang[]): GangOtherGang[] {
   const clashes = gangClashesPerUpdate(others);
   const grown = others.map((each) => ({ ...each, power: each.power + gangOtherPowerGainPerUpdate(each) }));
   return grown.map((each) => {
     if (!(each.territory > 0)) return each;
-    const losses = grown.reduce(
-      (sum, other) =>
-        other === each || !(other.territory > 0) ? sum : sum + clashes * gangClashWinChance(other.power, each.power),
-      0,
-    );
-    return { ...each, power: each.power * (1 - losses * (1 - GANG_OTHER_POWER_KEPT_LOSING)) };
+    let losses = 0;
+    let territory = each.territory;
+    for (const other of grown) {
+      if (other === each || !(other.territory > 0)) continue;
+      const lost = gangClashWinChance(other.power, each.power);
+      losses += clashes * lost;
+      territory +=
+        clashes *
+        ((1 - lost) * Math.min(other.territory, gangTerritoryPerClash(each.power, other.power)) -
+          lost * Math.min(each.territory, gangTerritoryPerClash(other.power, each.power)));
+    }
+    return {
+      ...each,
+      power: each.power * (1 - losses * (1 - GANG_OTHER_POWER_KEPT_LOSING)),
+      territory: Math.max(0, territory),
+    };
   });
 }
 

@@ -41,12 +41,15 @@ import {
   GANG_WARFARE_HORIZON_MS,
   type GangRuleInputs,
   type GangWarfareFigures,
+  gangAscensionConvertsEnough,
   gangAscensionCost,
   gangAscensionToMake,
   gangDeathCost,
+  gangMemberBestOutputOver,
   gangOutputOver,
   gangWarfareBasis,
   gangWarfareCrew,
+  gangWarfareGuard,
   gangWarfareMeasure,
   planGang,
 } from "../src/gang-rule.ts";
@@ -208,12 +211,23 @@ describe("the rule (G4)", () => {
   test("territory's worth: the rise in each member's output over a day per unit of territory; none for nothing earned", () => {
     const given = inputs([HACKER("h"), FIGHTER("f")], 1, 1);
     const basis = gangWarfareBasis(given, "respect");
-    const output = gangOutputOver(given, HACKER("h"), "respect", DAY);
+    const output = gangMemberBestOutputOver(given, HACKER("h"), "respect", DAY);
     expect(basis.output.get("h")).toBeCloseTo(output, 6);
     const more = { ...given, gang: { ...given.gang, territory: 1 / 7 + 0.001 } };
     expect(basis.territoryValue.get("h")).toBeCloseTo(
-      (gangOutputOver(more, HACKER("h"), "respect", DAY) - output) / 0.001,
+      (gangMemberBestOutputOver(more, HACKER("h"), "respect", DAY) - output) / 0.001,
       0,
+    );
+    // The best (PR #333's review): the hacker's ascension is due (its experience converts enough), so its ascended
+    // self's day, which a death would destroy as surely as it adds to territory's worth; a member with none due, as it is.
+    const ascended = gangOutputOver(given, gangMemberAscended(HACKER("h")), "respect", DAY);
+    expect(ascended).toBeGreaterThan(gangOutputOver(given, HACKER("h"), "respect", DAY));
+    expect(output).toBeCloseTo(ascended, 6);
+    const fresh = member("y", { hack: 60 });
+    expect(gangMemberBestOutputOver(given, fresh, "respect", DAY)).toBe(gangOutputOver(given, fresh, "respect", DAY));
+    // The death's cost on the same footing: the best less a recruit's, and the respect's.
+    expect(basis.deathCost.get("h") ?? 0).toBeGreaterThan(
+      output - gangOutputOver(given, gangFreshRecruit("r"), "respect", DAY),
     );
     // The hacker's output grows with territory (every task's factor is at least 1, `formulas.ts:26`).
     expect(basis.territoryValue.get("h")).toBeGreaterThan(0);
@@ -270,6 +284,10 @@ describe("the rule (G4)", () => {
     expect(crewed.deathCostPerUpdate).toBeCloseTo(crewed.deathsPerUpdate * (basis.deathCost.get("f") ?? 0), 6);
     // A disengage's tail, 49.5 updates of clashes at the full rate, its deaths spread over the day's 4,320 updates.
     expect(crewed.tailCostPerUpdate).toBeCloseTo((crewed.deathCostPerUpdate * 49.5) / 4_320, 18);
+    // Each death's cost with the tail's share, as the crew's projection counts it.
+    expect(crewed.crewDeaths).toEqual([
+      { name: "f", perUpdate: crewed.deathsPerUpdate, cost: (basis.deathCost.get("f") ?? 0) * (1 + 49.5 / 4_320) },
+    ]);
     expect(crewed.leastTerritoryPerUpdate).toBeCloseTo(
       (crewed.deathCostPerUpdate + crewed.tailCostPerUpdate) / crewed.territoryValue,
       18,
@@ -312,11 +330,12 @@ describe("the rule (G4)", () => {
   test("the crew: none against others far stronger; fighters, not the hackers who earn, when their power can tell", () => {
     // An hour's gang: the others grown to 20 against 1, hackers on respect: no crew a day's power could make pay.
     const hour = inputs(["a", "b", "c", "d"].map(HACKER), 1, 20);
-    expect(gangWarfareCrew(hour, gangWarfareBasis(hour, "respect"))).toEqual({ crew: [], value: 0 });
-    // Fighters at 300 can't: two gain 0.054 power an update, under the others' 0.2 (Speakers for the Dead, The Black
-    // Hand: 0.28125 × 1/7 × 5) before their own growth.
+    expect(gangWarfareCrew(hour, gangWarfareBasis(hour, "respect"))).toMatchObject({ crew: [], value: 0 });
+    // A fighter at 300 can, against others at 1 (PR #333's review, the others' territory projected): the four weak
+    // gangs, beaten early, are worth it before the two strong take their territory (`gangOthersAfterUpdate`), the
+    // hacker's due ascension making territory worth much; and the fighter earns nothing, so its death costs little.
     const weak = inputs([HACKER("h1"), member("f1", { str: 300, def: 300, dex: 300, agi: 300 })], 1, 1);
-    expect(gangWarfareCrew(weak, gangWarfareBasis(weak, "respect")).crew).toEqual([]);
+    expect(gangWarfareCrew(weak, gangWarfareBasis(weak, "respect")).crew).toEqual(["f1"]);
     // Two hackers and two fighters, all at power 1: the fighters' power for the little they'd earn.
     const members = [HACKER("h1"), HACKER("h2"), FIGHTER("f1"), FIGHTER("f2")];
     const even = inputs(members, 1, 1);
@@ -326,6 +345,9 @@ describe("the rule (G4)", () => {
     const crew = gangWarfareCrew(even, basis);
     expect(crew.crew).toEqual(["f1", "f2"]);
     expect(crew.value).toBeGreaterThan(0);
+    // Weighed by power for the output forgone: a fighter at 300, which earns as little, comes after the ones at 5,000.
+    const mixed = inputs([HACKER("h1"), member("w1", { str: 300, def: 300, dex: 300, agi: 300 }), FIGHTER("f1")], 1, 1);
+    expect(gangWarfareCrew(mixed, gangWarfareBasis(mixed, "respect")).crew[0]).toBe("f1");
     // Excluded (the member G2 ascends) or a name the protocol can't carry: never on it.
     expect(gangWarfareCrew(even, basis, new Set(["f1"])).crew).toEqual(["f2"]);
     const long = inputs([...members.slice(0, 3), FIGHTER("x".repeat(65))], 1, 1);
@@ -336,10 +358,10 @@ describe("the rule (G4)", () => {
     const earner = inputs([member("h1", { hack: 100, cha: 50 }), hybrid], 1, 1);
     const earnerBasis = gangWarfareBasis(earner, "respect");
     expect(earnerBasis.output.get("x") ?? 0).toBeGreaterThan(10 * (earnerBasis.output.get("h1") ?? 0));
-    expect(gangWarfareCrew(earner, earnerBasis)).toEqual({ crew: [], value: 0 });
+    expect(gangWarfareCrew(earner, earnerBasis)).toMatchObject({ crew: [], value: 0 });
     // No warfare figures (an older Agent): none.
     const { warfare: _, ...older } = even;
-    expect(gangWarfareCrew(older, basis)).toEqual({ crew: [], value: 0 });
+    expect(gangWarfareCrew(older, basis)).toMatchObject({ crew: [], value: 0 });
   });
 
   test("the plan: the crew on Territory Warfare, engaged by the measure with it; none without the figures", () => {
@@ -408,8 +430,7 @@ describe("the rule (G4)", () => {
 
   test("the member G2 ascends is never on the crew", () => {
     // A fighter (combat 1,000) whose hacking converts enough, so G2 ascends it. The plan weighs the crew for the gang
-    // after it: there, unexcluded, the ascended fighter's power heads the order and no prefix pays; excluded, the
-    // hacker alone does.
+    // after it: there, unexcluded, the ascended fighter, its combat multipliers huge, would be the crew.
     const ready = {
       ...member("x", { str: 1_000, def: 1_000, dex: 1_000, agi: 1_000 }),
       hack: 400,
@@ -418,10 +439,9 @@ describe("the rule (G4)", () => {
     const given = inputs([ready, HACKER("h1")], 1, 1);
     const plan = planGang(given);
     expect(plan.ascend?.name).toBe("x");
-    expect(plan.warfare?.crew).toEqual(["h1"]);
+    expect(plan.warfare?.crew).toEqual([]);
     const after = { ...given, members: [{ ...gangMemberAscended(ready), task: ready.task }, HACKER("h1")] };
-    expect(gangWarfareCrew(after, gangWarfareBasis(after, "respect")).crew).toEqual([]);
-    expect(gangWarfareCrew(after, gangWarfareBasis(after, "respect"), new Set(["x"])).crew).toEqual(["h1"]);
+    expect(gangWarfareCrew(after, gangWarfareBasis(after, "respect")).crew).toEqual(["x"]);
   });
 
   test("a crew member doesn't ascend while warfare is engaged (G4's review): its power holds as weighed; off, it does", () => {
@@ -502,9 +522,11 @@ describe("clashes' power losses and the tail (G4's review)", () => {
       others = gangOthersAfterUpdate(others);
       unchecked = unchecked.map((each) => ({ ...each, power: each.power + gangOtherPowerGainPerUpdate(each) }));
     }
-    const most = Math.max(...others.map((each) => each.power));
+    // The ones still with territory, which the clashes are with.
+    const most = Math.max(...others.filter((each) => each.territory > 0.001).map((each) => each.power));
     const mostUnchecked = Math.max(...unchecked.map((each) => each.power));
-    // Measured on 2026-11-10: 3, 10, 10, 10, 313 and 313 (Speakers for the Dead and The Black Hand, ×5), against 2,592.
+    // Measured on 2026-11-10: the two ×5 gangs (Speakers for the Dead, The Black Hand) at 518 with 42.9% of the
+    // territory each, the other four with none left (Slum Snakes, out of the clashes, grows on to 702); unchecked, 2,592.
     console.log(
       `after a day: ${others.map((each) => each.power.toFixed(0)).join(", ")}; unchecked ${mostUnchecked.toFixed(0)}`,
     );
@@ -520,8 +542,8 @@ describe("clashes' power losses and the tail (G4's review)", () => {
   });
 });
 
-describe("when it would engage in BN2 (G4's review, from the model)", () => {
-  /** The others `hours` after the gang forms, each from 1, by their expected pace and clashes. */
+describe("whether it would engage in BN2 (PR #333's review, from the model)", () => {
+  /** The others `hours` after the gang forms, each from 1, by their expected pace and clashes with each other. */
   const othersAfterHours = (hours: number) => {
     let others = othersAt(1);
     for (let update = 0; update < hours * 180; update += 1) others = gangOthersAfterUpdate(others);
@@ -534,35 +556,112 @@ describe("when it would engage in BN2 (G4's review, from the model)", () => {
     return power;
   };
 
-  test("the break-even power: about 12 an hour after the gang forms, about 25 from a day on", () => {
-    // Measured on 2026-11-10: the others 3, 9, 9, 9, 31, 31 an hour on; 3, 10, 10, 10, 313, 313 a day on. Beating the
-    // four weak ones outweighs losing to the two strong.
-    expect(breakEven(othersAfterHours(1))).toBeCloseTo(11.5, 0);
-    expect(breakEven(othersAfterHours(24))).toBeCloseTo(25, 0);
+  test("the others: the four weak lose their territory to the two strong within about 12 hours", () => {
+    // Measured on 2026-11-10: an hour on, 3 to 33 power, the weak at 12.2% to 13.8%; 6 hours on, Slum Snakes at none and
+    // the other weak three at 5.5%, the strong at 293; 12 hours on, the weak at none, the strong at 487 with 42.9% each.
+    // So the clashes gain territory from a power of 11 an hour on, 22 six hours on, and 491 twelve hours on.
+    const at = (hours: number) => othersAfterHours(hours);
+    expect(at(6)[0]?.territory).toBeLessThan(0.001);
+    expect(
+      at(12)
+        .filter((each) => each.territory > 0.001)
+        .map((each) => each.faction),
+    ).toEqual(["Speakers for the Dead", "The Black Hand"]);
+    expect(breakEven(at(1))).toBeCloseTo(11, -1);
+    expect(breakEven(at(6))).toBeCloseTo(22, -1);
+    expect(breakEven(at(12))).toBeGreaterThan(400);
   });
 
-  test("seven hackers at hacking 300 against the others a day on: a crew of six, engaged once its power passes 25", () => {
-    const others = othersAfterHours(24);
-    const members = Array.from({ length: 7 }, (_, index) => member(`m${index}`, { hack: 300, cha: 75 }));
-    const at = (power: number) =>
-      planGang({
-        gang: { respect: 1_300, wantedLevel: 1, territory: 1 / 7 },
-        isHacking: true,
-        members,
-        softcap: 1,
-        warfare: { power, engaged: false, clashChance: 0, others },
-      }).warfare;
-    // Measured on 2026-11-10: six on it (the seventh works), gaining 0.015 × 1/7 × 6 × 380/95, 0.05 power an update,
-    // about 2.6 hours to 25 from 1. At 30 engaged: the territory's worth 5,053 respect an update against deaths
-    // costing 2,119 (about 0.03 deaths an update at defence 1, about 5 an hour; Territory Warfare trains defence, which
-    // the rule leaves out).
-    expect(at(1)).toMatchObject({ crew: ["m1", "m2", "m3", "m4", "m5", "m6"], engage: false });
-    const engaged = at(30);
-    expect(engaged?.engage).toBe(true);
-    expect(engaged?.measure.gainPerUpdate).toBeGreaterThan(engaged?.measure.deathCostPerUpdate ?? 0);
-    expect(engaged?.measure.deathsPerUpdate).toBeGreaterThan(0.02);
-    expect(engaged?.measure.deathsPerUpdate).toBeLessThan(0.04);
-    expect(engaged?.measure.gainPerUpdate).toBeCloseTo(5_053, -1);
-    expect(engaged?.measure.deathCostPerUpdate).toBeCloseTo(2_119, -1);
+  /**
+   * A member G2 reaches: ascended to a hacking multiplier of ×10 (points 200,000), 3,000 experience since (hacking 614;
+   * under the 5,000 G2's ascension needs, so none due), every other level 1 but defence at `def`.
+   */
+  const grown = (name: string, def = 1): GangMemberFigures => {
+    const figures = member(name, { def });
+    const hack = 10 * (32 * Math.log(3_000 + 534.5) - 200);
+    return { ...figures, hack: Math.floor(hack), hack_exp: 3_000, hack_asc_mult: 10, hack_asc_points: 200_000 };
+  };
+  const gang = (def: number, others: GangOtherGang[]): GangRuleInputs => ({
+    gang: { respect: 1_300, wantedLevel: 1, territory: 1 / 7 },
+    isHacking: true,
+    members: Array.from({ length: 7 }, (_, index) => grown(`m${index}`, def)),
+    softcap: 1,
+    warfare: { power: 1, engaged: false, clashChance: 0, others },
+  });
+  const crewAt = (def: number, others: GangOtherGang[]) => planGang(gang(def, others)).warfare?.crew.length;
+
+  test("the guard's own floor for one of them: defence about 100 when the gang forms, about 500 an hour on", () => {
+    // Measured on 2026-11-10: at defence 1 its deaths would cost 3.2e6 against its power's 1.7e5 when the gang forms;
+    // from 100 its power is worth more. An hour on (the strong gangs grown), 300 isn't enough, 500 is.
+    const guard = (def: number, others: GangOtherGang[]) => {
+      const given = { ...gang(1, others), members: [grown("m0", def), ...gang(1, others).members.slice(1)] };
+      return gangWarfareGuard(given, gangWarfareBasis(given, "respect"), "m0").joins;
+    };
+    const now = othersAt(1);
+    expect([1, 100].map((def) => guard(def, now))).toEqual([false, true]);
+    const hour = othersAfterHours(1);
+    expect([300, 500].map((def) => guard(def, hour))).toEqual([false, true]);
+  });
+
+  test("seven such hackers at defence 1: none on Territory Warfare, so never engaged; the guard's floor, computed", () => {
+    const now = othersAt(1);
+    expect(gangAscensionConvertsEnough(grown("m0"), true)).toBe(false);
+    expect(grown("m0").hack).toBe(614);
+    for (const others of [now, othersAfterHours(1), othersAfterHours(3)]) {
+      expect(planGang(gang(1, others)).warfare).toMatchObject({ crew: [], engage: false });
+    }
+    // With the crew's worth against the output it forgoes too, the defence the first on it needs (measured on
+    // 2026-11-10): about 2,000 when the gang forms, 3,000 an hour on, 7,000 three hours on, as the strong gangs grow
+    // (defence counts in power too). A hacking gang's training raises none of it: never engaged.
+    expect([1_000, 2_000].map((def) => crewAt(def, now))).toEqual([0, 1]);
+    const hour = othersAfterHours(1);
+    expect([2_000, 3_000].map((def) => crewAt(def, hour))).toEqual([0, 1]);
+    const three = othersAfterHours(3);
+    expect([5_000, 7_000].map((def) => crewAt(def, three))).toEqual([0, 1]);
+  });
+});
+
+describe("round 2 of PR #333's review: the ascension due, survival, the guard", () => {
+  const DAY = GANG_WARFARE_HORIZON_MS / 200;
+
+  test("the best output counts only an ascension G2 would make: none that converts too little", () => {
+    // Hacking 75 from 4,900 experience: an ascension the game allows (over 1,000), which would pay over a day, but
+    // under the 5,000 G2 waits for: as it is.
+    const near = { ...member("y"), hack: 75, hack_exp: 4_900 };
+    const given = inputs([near], 1, 1);
+    expect(gangAscensionConvertsEnough(near, true)).toBe(false);
+    const asIs = gangOutputOver(given, near, "respect", DAY);
+    expect(gangOutputOver(given, gangMemberAscended(near), "respect", DAY)).toBeGreaterThan(asIs);
+    expect(gangMemberBestOutputOver(given, near, "respect", DAY)).toBe(asIs);
+  });
+
+  test("the guard by hand: a hacker with its ascension due, at defence 1, would die for more than its power is worth", () => {
+    // A hacker as strong a fighter as the fighter but at defence 1: its power as much worth, its death far costlier.
+    const hybrid = { ...FIGHTER("h1", 1), hack: 400, hack_exp: expFor(400), cha: 100, cha_exp: expFor(100) };
+    const given = inputs([hybrid, HACKER("h2"), FIGHTER("f1")], 1, 1);
+    const basis = gangWarfareBasis(given, "respect");
+    const exposed = gangWarfareGuard(given, basis, "h1");
+    expect(exposed.powerWorth).toBeGreaterThan(0);
+    expect(exposed.deathCost).toBeGreaterThan(exposed.powerWorth);
+    expect(exposed.joins).toBe(false);
+    // The fighter earns nothing: its death costs little, and its power is worth much.
+    const fighter = gangWarfareGuard(given, basis, "f1");
+    expect(fighter.powerWorth).toBeGreaterThan(fighter.deathCost);
+    expect(fighter.joins).toBe(true);
+    expect(gangWarfareCrew(given, basis).crew).not.toContain("h1");
+  });
+
+  test("survival: a crew at defence 1 is expected to die off, so it forgoes less and costs at most about a death each", () => {
+    const fighter = FIGHTER("f1", 1);
+    const given = inputs([HACKER("h1"), fighter], 1, 1);
+    const basis = gangWarfareBasis(given, "respect");
+    const crew = gangWarfareCrew(given, basis);
+    expect(crew.crew).toEqual(["f1"]);
+    // About 0.0035 deaths an update while engaged (0.35 × 0.005 × 2 clashes, won): alive a small share of the day.
+    expect(crew.forgone).toBeLessThan((basis.output.get("f1") ?? 0) / 5);
+    // Its expected deaths' cost is its chance to die in the day × a death's cost (and the tail's share): at most one.
+    const death = (basis.deathCost.get("f1") ?? 0) * (1 + 49.5 / 4_320);
+    expect(crew.deathCost).toBeGreaterThan(0.5 * death);
+    expect(crew.deathCost).toBeLessThanOrEqual(1.01 * death);
   });
 });

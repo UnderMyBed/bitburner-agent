@@ -16,7 +16,8 @@
 //   for it, the worker buys it, and the report counts it, end to end.
 // - Territory warfare (G4): in the hour, none on Territory Warfare and never engaged (why, computed on its last
 //   reading: the others outgrow the whole gang's power); and a gang of 12 with eleven fighters made by harness edits,
-//   then the brain for 20 minutes: ten on Territory Warfare, engaged throughout, territory growing, a death counted.
+//   then the brain for 20 minutes: the eleven on Territory Warfare, engaged throughout, territory growing, two deaths
+//   counted.
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import {
   GANG_AUGMENTATION_HORIZON_MS,
@@ -201,7 +202,7 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
   // Measured on 2026-11-09 (seed 1): power 1.0 against 3.6 to 35.3; every member on it would gain 0.0301 an update,
   // under a tenth of Speakers for the Dead's 0.3159; the clashes now −2.76e-4 territory an update.
   expect(everyone).toBeLessThan(gangOtherPowerGainPerUpdate(fastest));
-  expect(gangWarfareCrew(withWarfare, basis)).toEqual({ crew: [], value: 0 });
+  expect(gangWarfareCrew(withWarfare, basis)).toMatchObject({ crew: [], value: 0 });
   expect(gangWarfareMeasure(withWarfare, basis, []).territoryPerUpdate).toBeLessThan(0);
   expect(notTheBatchersGrows(failures)).toEqual([]);
   expect(text).toContain("taken as BN1's");
@@ -455,20 +456,21 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   console.log(fresh.controller().gangView().line);
   const last = gangSnapshotOf(fresh.medium());
   if (last.kind !== "gang") throw new Error("no gang read");
-  // Measured on 2026-11-09, again on 2026-11-10 with the others' clash losses and the gang's own (seed 1): the same.
-  // The fighters on Territory Warfare from the brain's first plan (at equal powers, not engaged yet), the gang's power
-  // past the others' at the first territory update (10 × 2,200 × 0.015 × 1/7, about 47 an update, against their 1),
-  // engaged from then on: 19 min 30 s of it, territory 14.3% → 17.4% in 20 minutes, power 3,181. One fighter died
-  // (member-06; about 0.35 × 0.005 a clash at defence 1, 2 clashes an update: about 2.1 deaths expected among 10 over
-  // 60 updates); the brain recruited a member-06 again, which trains, and the ten others stayed. Expected 9.5%
-  // territory an hour at the end, the win chance 100% against each.
+  // Measured on 2026-11-10 (seed 1), with PR #333's second review's model (deaths priced with the ascension due,
+  // survival, the guard, the others' territory projected). The fighters on Territory Warfare from the brain's first
+  // plan (at equal powers, not engaged yet): they earn nothing, so their deaths cost little and the guard lets them
+  // on, defence 1 and all. The gang's power passes the others' at the first territory update (11 × 2,200 × 0.015 ×
+  // 1/7, about 52 an update, against their 1), and warfare is engaged from then on: 19 min 30 s of it, territory
+  // 14.3% → 17.3% in 20 minutes, power 3,044. Two fighters died (member-06, then member-02; about 0.35 × 0.005 a clash
+  // at defence 1, 2 clashes an update: about 2.3 deaths expected among 11 over 60 updates), each recruited again and
+  // put on Territory Warfare too, a recruit's death costing little. Expected 9.5% territory an hour at the end.
   expect(readings.every((each) => each.engaged)).toBe(true);
-  expect(readings.every((each) => each.crew === 10)).toBe(true);
+  expect(readings.every((each) => each.crew === 11)).toBe(true);
   expect(last.gang.territory).toBeGreaterThan(1 / 7 + 0.02);
   expect(section).toMatch(
-    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 1 death \(member-06\)\n/,
+    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 2 deaths \(member-06, member-02\)\n/,
   );
-  expect(fresh.controller().gangView().line).toMatch(/; warfare on: .*; 10 on Territory Warfare; 1 death seen; /);
+  expect(fresh.controller().gangView().line).toMatch(/; warfare on: .*; 11 on Territory Warfare; 2 deaths seen; /);
   expect(section).toContain(
     "territory warfare engaged while the rule's measure says it loses for 1 min or more:\n    none",
   );

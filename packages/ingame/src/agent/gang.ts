@@ -7,8 +7,9 @@
 //   mode: the members keep their tasks in the game, and a recruit can wait for the brain.
 // - Territory warfare (#332, G4): when the brain that ordered it goes (a disconnect, or a state with no gang, as while
 //   it holds), the worker runs once more, with warfare off and nothing else, so clashes don't run on with no brain to
-//   weigh them (their tail after it still does, `Gang.ts:210-216`); tried again each round until it reports. The tasks
-//   are left as they are, as G1's. A brain that gave no order (an older one) leaves the flag as it was.
+//   weigh them (their tail after it still does, `Gang.ts:210-216`); tried again each round until it reports, and owed
+//   until a run sets the flag: a brain that comes back first with no order (an older one) has its state run with
+//   warfare off. The tasks are left as they are, as G1's. A brain that gave no order leaves the flag as it was.
 import { deployedFilePath, GANG_WORKER_NAME, type GangReading, type GangState } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { createChangeLog, createRoundSchedule } from "./activity.ts";
@@ -52,7 +53,7 @@ export function createGangActivity(
       if (gang === null) {
         reading = null;
         letGo();
-      } else disengage = false;
+      }
       desired = gang === null ? null : structuredClone(gang);
       schedule.dueNow();
     },
@@ -69,15 +70,23 @@ export function createGangActivity(
       if (desired === null && !disengage) return;
       if (!schedule.takeRound()) return;
       const workerFile = deployedFilePath(deploymentId, GANG_WORKER_NAME);
-      const state = desired ?? GANG_DISENGAGE_STATE;
+      // A disengage still owed (its run failed, and a brain came back): kept until a run sets the flag. A brain that
+      // gives no order (an older one) has its state run with warfare off, so the flag doesn't stay engaged under it.
+      const state =
+        desired === null
+          ? GANG_DISENGAGE_STATE
+          : disengage && desired.warfare === null
+            ? { ...desired, warfare: GANG_DISENGAGE_STATE.warfare }
+            : desired;
       const workerRun = await workerRunner.runWorker(workerFile, [JSON.stringify(state)], deadlineMs);
       if (workerRun.outcome !== "reported") {
         logOutcome(`${whyNoReport(workerRun, workerFile)}; trying again next round`);
         return;
       }
+      // Every run that reports sets the flag when one is owed (the state's own order, or warfare off merged in): none now.
+      disengage = false;
       if (desired === null) {
         // The disengage, done: no reading kept, as no gang is managed.
-        disengage = false;
         logOutcome("territory warfare disengaged: the brain that ordered it has gone");
         return;
       }

@@ -881,11 +881,30 @@ export function gangDeathCost(
 }
 
 /**
+ * The member's best output over `cycles` (G4, PR #333's review): G2's `gangOutputOver` as it is, or, where G2's
+ * ascension would convert enough (`gangAscensionConvertsEnough`), the more of that and its ascended self's
+ * (`gangMemberAscended`): the ascension due, which territory's worth counts and a death destroys. The respect an
+ * ascension takes is left out: G2 weighs it, and it's the member's own earned respect, small beside the multipliers.
+ */
+export function gangMemberBestOutputOver(
+  inputs: GangRuleInputs,
+  member: GangMemberFigures,
+  objective: GangObjective,
+  cycles: number,
+): number {
+  const now = gangOutputOver(inputs, member, objective, cycles);
+  if (gangAscensionResult(member) === null || !gangAscensionConvertsEnough(member, inputs.isHacking)) return now;
+  return Math.max(now, gangOutputOver(inputs, gangMemberAscended(member), objective, cycles));
+}
+
+/**
  * Each member's output over the warfare horizon (G4), what a unit of territory adds to it, and its death's cost. The
  * territory's worth: the output at the gang's territory and a step more (`GANG_TERRITORY_STEP`), territory scaling
  * each task's respect, money and wanted (`formulas.ts:26-31`, `:44-54`, `:68-73`); G2's `gangOutputOver`, so a member
- * training gains it only once it works, as G2 would have it. That output has no ascension in the day, which would
- * raise it: territory's worth and a death's cost are both understated by it, mildly, on the cautious side.
+ * training gains it only once it works, as G2 would have it. Each the member's best over the day
+ * (`gangMemberBestOutputOver`): as it is, or ascended now where its ascension is due, so territory's worth, a death's
+ * cost (a death destroys the ascension due) and the output a crew member forgoes are all priced alike (PR #333's
+ * review). Later ascensions in the day are left out of all three alike.
  */
 export function gangWarfareBasis(
   inputs: GangRuleInputs,
@@ -900,11 +919,11 @@ export function gangWarfareBasis(
   const territoryValue = new Map<string, number>();
   const deathCost = new Map<string, number>();
   for (const member of inputs.members) {
-    const now = gangOutputOver(inputs, member, objective, cycles);
+    const now = gangMemberBestOutputOver(inputs, member, objective, cycles);
     output.set(member.name, now);
     territoryValue.set(
       member.name,
-      step > 0 ? Math.max(0, gangOutputOver(stepped, member, objective, cycles) - now) / step : 0,
+      step > 0 ? Math.max(0, gangMemberBestOutputOver(stepped, member, objective, cycles) - now) / step : 0,
     );
     deathCost.set(member.name, gangDeathCost(inputs, member, objective, cycles, now, recruitOutput));
   }
@@ -935,6 +954,11 @@ export interface GangWarfareMeasure {
   leastTerritoryPerUpdate: number;
   /** The least and most win chance against a gang with territory (`gangClashWinChance`); null with none. */
   winChances: { least: number; most: number } | null;
+  /**
+   * Each crew member's chance to die an update, and its death's cost (`gangDeathCost`) with the tail's share (× (1 +
+   * the tail's updates / the horizon's), as `tailCostPerUpdate` counts it), in the members' order.
+   */
+  crewDeaths: { name: string; perUpdate: number; cost: number }[];
 }
 
 /**
@@ -963,18 +987,22 @@ export function gangWarfareMeasure(
   const chances = contested.map((other) => gangClashWinChance(power, other.power));
   let deathsPerUpdate = 0;
   let deathCostPerUpdate = 0;
+  const crewDeaths: GangWarfareMeasure["crewDeaths"] = [];
+  const updates = (basis.cycles * GANG_CYCLE_MS) / GANG_TERRITORY_UPDATE_MS;
+  const tailShare = gangClashTailUpdates(1) / updates;
   for (const member of inputs.members) {
     if (!onCrew.has(member.name)) continue;
     const chance = chances.reduce(
       (sum, winChance) => sum + clashes * gangDeathChancePerClash(member.def, winChance),
       0,
     );
+    const cost = basis.deathCost.get(member.name) ?? 0;
     deathsPerUpdate += chance;
-    deathCostPerUpdate += chance * (basis.deathCost.get(member.name) ?? 0);
+    deathCostPerUpdate += chance * cost;
+    crewDeaths.push({ name: member.name, perUpdate: chance, cost: cost * (1 + tailShare) });
   }
   const gainPerUpdate = territoryPerUpdate * territoryValue;
-  const updates = (basis.cycles * GANG_CYCLE_MS) / GANG_TERRITORY_UPDATE_MS;
-  const tailCostPerUpdate = (deathCostPerUpdate * gangClashTailUpdates(1)) / updates;
+  const tailCostPerUpdate = deathCostPerUpdate * tailShare;
   const cost = deathCostPerUpdate + tailCostPerUpdate;
   return {
     territoryPerUpdate,
@@ -986,6 +1014,7 @@ export function gangWarfareMeasure(
     pays: territoryPerUpdate > 0 && gainPerUpdate > cost,
     leastTerritoryPerUpdate: territoryValue > 0 ? cost / territoryValue : Number.POSITIVE_INFINITY,
     winChances: chances.length === 0 ? null : { least: Math.min(...chances), most: Math.max(...chances) },
+    crewDeaths,
   };
 }
 
@@ -995,79 +1024,181 @@ export interface GangWarfareCrew {
   crew: string[];
   /** The clashes' net worth over the horizon with the crew, less with none, less the crew's own output; 0 with none. */
   value: number;
+  /** The output the crew forgoes over the horizon, each member's × the share of it it's expected alive. */
+  forgone: number;
+  /** The crew's expected deaths' cost over the horizon while engaged, survival in it: at most about a death each. */
+  deathCost: number;
+}
+
+/** A member's guard (G4, PR #333's review): its power's worth alone on the crew, and its own deaths' cost there. */
+export interface GangWarfareGuard {
+  powerWorth: number;
+  deathCost: number;
+  joins: boolean;
+}
+
+/** A crew projected over the horizon (G4): its clashes' net worth, their worth before deaths, and its members'. */
+interface CrewProjection {
+  /** The clashes' net worth: each update engaged, the gain less the surviving crew's deaths' cost, when positive. */
+  net: number;
+  /** The territory's worth alone, deaths aside, likewise. */
+  gain: number;
+  /** Each member's expected deaths' cost over the horizon, its tail's too, while engaged. */
+  deathCost: Map<string, number>;
+  /** The output the crew forgoes: each member's over the horizon × the share of it it's expected alive. */
+  forgone: number;
 }
 
 /**
  * Who goes on Territory Warfare (G4): of the members (but `exclude` and a name the protocol can't carry), sorted by
  * their power (`gangMemberPower`) for the output they'd forgo over the horizon (`GangWarfareBasis.output`), the prefix
- * worth most: the clashes' net worth over the horizon with it, less with none, less its output; none when no prefix is
- * worth more than nothing. The clashes' net worth: at each sixteenth of the horizon (its middle), the measure's gain
- * less its deaths' cost and its tail's (`gangWarfareMeasure`), when positive (the rule engages only then), territory
- * won valued for the horizon's time left. The powers, projected update by update from those read:
- * - the gang's: the crew's gain (`gangPowerGainPerUpdate`, `Gang.ts:362-369`), then, while the measure last said
- *   engage, 0.8% of it at each clash expected lost (`gangOwnPowerLossPerUpdate`, `Gang.ts:286`);
- * - each other's: its gain (`Gang.ts:191-204`), then 1% at each clash it's expected to lose to another of them
- *   (`gangOthersAfterUpdate`, `Gang.ts:243-260`).
- * Left out, each on the cautious side (each would raise the gang's power against theirs): Territory Warfare's own
- * experience (`GangMember.ts:155-210`), the territory the gang wins raising its power gain and lowering theirs, and the
- * 1% of power a gang loses at each clash it loses to the player's (`Gang.ts:243`, `:258`). A crew member doesn't
- * ascend while engaged (`gangAscensionToMake`), so its power holds as weighed; the crew is weighed again every plan.
+ * worth most: the clashes' net worth over the horizon with it, less with none, less the output it forgoes; none when no
+ * prefix is worth more than nothing. Projected update by update from the figures read:
+ * - the measure (`gangWarfareMeasure`), weighed again at each sixteenth's middle: engaged when it pays; each update
+ *   engaged, the gain less the deaths' cost and its tail's, of the members expected alive, when positive; territory
+ *   won valued for the time left;
+ * - each crew member alive with chance e^(−λt), λ its chance to die an update, t the updates engaged (PR #333's
+ *   review): its power's gain, its deaths' cost and the output it forgoes, each × that;
+ * - the gang's power: the surviving crew's gain (`gangPowerGainPerUpdate`, `Gang.ts:362-369`), then, while engaged,
+ *   0.8% at each clash expected lost (`gangOwnPowerLossPerUpdate`, `Gang.ts:286`);
+ * - the others' powers and territories (`gangOthersAfterUpdate`, `Gang.ts:191-269`): their gains, and their clashes
+ *   with each other, the weak losing power and territory to the strong.
+ * **The guard (PR #333's review):** a member is a candidate only when its own power's worth (the territory's worth over
+ * the horizon with it alone on the crew, less with none) beats its own expected deaths' cost there. So a member at
+ * low defence never fights: the floor is computed, not set.
+ * Left out, each named: Territory Warfare's own experience (it trains defence, which would lower the deaths) and the
+ * territory won raising the gang's power gain, both cautious; the 1% a gang loses at each clash it loses to the
+ * player's, cautious; the territory the gang takes from the others, left out of their projection, optimistic (it
+ * would shrink the weak gangs it comes from sooner), bounded as the measure reads the real territories every plan; and
+ * a dead member's recruit, valued at none on the crew and none in territory's worth.
  */
 export function gangWarfareCrew(
   inputs: GangRuleInputs,
   basis: GangWarfareBasis,
   exclude: ReadonlySet<string> = new Set(),
 ): GangWarfareCrew {
+  const projector = crewProjector(inputs, basis);
+  if (projector === null) return { crew: [], value: 0, forgone: 0, deathCost: 0 };
+  const { project, none } = projector;
+  const output = (name: string) => basis.output.get(name) ?? 0;
+  const guarded = inputs.members.filter(
+    (member) =>
+      !exclude.has(member.name) &&
+      member.name !== "" &&
+      member.name.length <= MAX_GANG_MEMBER_NAME_LENGTH &&
+      gangWarfareGuard(inputs, basis, member.name, projector).joins,
+  );
+  const candidates = guarded
+    .map((member) => ({ name: member.name, power: gangMemberPower(member), output: output(member.name) }))
+    .sort((a, b) => b.power * a.output - a.power * b.output || b.power - a.power);
+  let best: GangWarfareCrew = { crew: [], value: 0, forgone: 0, deathCost: 0 };
+  for (let size = 1; size <= candidates.length; size += 1) {
+    const crew = candidates.slice(0, size).map((each) => each.name);
+    const projection = project(crew);
+    const value = projection.net - none.net - projection.forgone;
+    if (value > best.value) {
+      const deathCost = [...projection.deathCost.values()].reduce((sum, each) => sum + each, 0);
+      best = { crew, value, forgone: projection.forgone, deathCost };
+    }
+  }
+  return best;
+}
+
+/**
+ * The guard (G4, PR #333's review): a member joins the crew only when its own power's worth (the territory's worth over
+ * the horizon with it alone on the crew, less with none, `crewProjector`) beats its own expected deaths' cost there. So
+ * a member whose death would cost much (its day's output, its ascension due) at low defence never fights: the floor is
+ * computed from the formulas, not set.
+ */
+export function gangWarfareGuard(
+  inputs: GangRuleInputs,
+  basis: GangWarfareBasis,
+  name: string,
+  projector = crewProjector(inputs, basis),
+): GangWarfareGuard {
+  if (projector === null) return { powerWorth: 0, deathCost: 0, joins: false };
+  // Engaged whenever the clashes gain territory: what its power wins, and what its deaths would cost then.
+  const alone = projector.project([name], true);
+  const powerWorth = alone.gain - projector.none.gain;
+  const deathCost = alone.deathCost.get(name) ?? 0;
+  return { powerWorth, deathCost, joins: powerWorth > deathCost };
+}
+
+/** The crew projector (G4): `gangWarfareCrew`'s projection of a crew over the horizon, and with none; null, no figures. */
+function crewProjector(
+  inputs: GangRuleInputs,
+  basis: GangWarfareBasis,
+): { project: (crew: readonly string[], onGain?: boolean) => CrewProjection; none: CrewProjection } | null {
   const warfare = inputs.warfare;
-  if (warfare === undefined) return { crew: [], value: 0 };
+  if (warfare === undefined) return null;
   const updates = Math.round((basis.cycles * GANG_CYCLE_MS) / GANG_TERRITORY_UPDATE_MS);
   const splits = GANG_HORIZON_SPLITS;
   const middles = Array.from({ length: splits }, (_, index) => Math.floor(((index + 0.5) * updates) / splits));
-  // The others' expected powers after each update, from those read.
+  // The others' expected powers and territories after each update, from those read.
   const othersAfter: GangOtherGang[][] = [warfare.others.map((each) => ({ ...each }))];
   for (let update = 1; update <= updates; update += 1) {
     othersAfter.push(gangOthersAfterUpdate(othersAfter[update - 1] as GangOtherGang[]));
   }
   const byName = new Map(inputs.members.map((member) => [member.name, member]));
-  const worth = (crew: readonly string[]) => {
-    const gain = gangPowerGainPerUpdate(
-      inputs.gang.territory,
-      crew.map((name) => byName.get(name) as GangMemberFigures),
+  const output = (name: string) => basis.output.get(name) ?? 0;
+  // `onGain`: engaged whenever the clashes gain territory, deaths aside (the guard's question); else by the measure.
+  const project = (crew: readonly string[], onGain = false): CrewProjection => {
+    const powers = crew.map((name) =>
+      gangPowerGainPerUpdate(inputs.gang.territory, [byName.get(name) as GangMemberFigures]),
     );
+    const alive = crew.map(() => 1);
+    const aliveSum = crew.map(() => 0);
+    const deathCost = new Map(crew.map((name) => [name, 0]));
     let power = warfare.power;
-    let engaged = gangWarfareMeasure(inputs, basis, crew, power, warfare.others).pays;
-    let total = 0;
+    // The measure, as last weighed: whether engaged, the territory's worth an update, each one's death rate and cost.
+    let engaged = false;
+    let gainNow = 0;
+    let rates = crew.map(() => 0);
+    let costs = crew.map(() => 0);
+    const weigh = (others: readonly GangOtherGang[]) => {
+      const at = gangWarfareMeasure(inputs, basis, crew, power, others);
+      const deaths = new Map(at.crewDeaths.map((each) => [each.name, each]));
+      engaged = onGain ? at.territoryPerUpdate > 0 : at.pays;
+      gainNow = at.territoryPerUpdate > 0 ? Math.max(0, at.gainPerUpdate) : 0;
+      rates = crew.map((name) => deaths.get(name)?.perUpdate ?? 0);
+      costs = crew.map((name) => deaths.get(name)?.cost ?? 0);
+    };
+    weigh(warfare.others);
+    let net = 0;
+    let gain = 0;
     let next = 0;
     for (let update = 0; update < updates; update += 1) {
-      const others = othersAfter[update] as GangOtherGang[];
       if (update === middles[next]) {
-        const at = gangWarfareMeasure(inputs, basis, crew, power, others);
-        engaged = at.pays;
-        const net = at.gainPerUpdate - at.deathCostPerUpdate - at.tailCostPerUpdate;
-        total += (Math.max(0, net) * (updates - update)) / splits;
+        weigh(othersAfter[update] as GangOtherGang[]);
         next += 1;
       }
+      // Engaged: the territory's worth and the surviving crew's deaths' cost this update, valued for the time left.
+      if (engaged) {
+        const left = (updates - update) / updates;
+        const each = crew.map((_, index) => (alive[index] ?? 0) * (rates[index] ?? 0) * (costs[index] ?? 0));
+        const cost = each.reduce((sum, one) => sum + one, 0);
+        net += Math.max(0, gainNow - cost) * left;
+        gain += gainNow * left;
+        crew.forEach((name, index) => {
+          deathCost.set(name, (deathCost.get(name) ?? 0) + (each[index] ?? 0) * left);
+        });
+      }
       // The gang's power first, then its clashes (`Gang.ts:184-269`).
-      power += gain;
-      if (engaged) power *= 1 - gangOwnPowerLossPerUpdate(power, othersAfter[update + 1] as GangOtherGang[]);
+      power += powers.reduce((sum, one, index) => sum + one * (alive[index] ?? 0), 0);
+      if (engaged) {
+        power *= 1 - gangOwnPowerLossPerUpdate(power, othersAfter[update + 1] as GangOtherGang[]);
+        rates.forEach((rate, index) => {
+          alive[index] = (alive[index] ?? 0) * Math.exp(-rate);
+        });
+      }
+      alive.forEach((one, index) => {
+        aliveSum[index] = (aliveSum[index] ?? 0) + one;
+      });
     }
-    return total;
+    const forgone = crew.reduce((sum, name, index) => sum + (output(name) * (aliveSum[index] ?? 0)) / updates, 0);
+    return { net, gain, deathCost, forgone };
   };
-  const output = (name: string) => basis.output.get(name) ?? 0;
-  const candidates = inputs.members
-    .filter(
-      (member) => !exclude.has(member.name) && member.name !== "" && member.name.length <= MAX_GANG_MEMBER_NAME_LENGTH,
-    )
-    .map((member) => ({ name: member.name, power: gangMemberPower(member), output: output(member.name) }))
-    .sort((a, b) => b.power * a.output - a.power * b.output || b.power - a.power);
-  const none = worth([]);
-  let best: GangWarfareCrew = { crew: [], value: 0 };
-  for (let size = 1; size <= candidates.length; size += 1) {
-    const crew = candidates.slice(0, size).map((each) => each.name);
-    const value = worth(crew) - none - crew.reduce((sum, name) => sum + output(name), 0);
-    if (value > best.value) best = { crew, value };
-  }
-  return best;
+  return { project, none: project([]) };
 }
 
 /** Territory warfare's plan (G4): the crew, whether to engage, and the measure behind it at the powers read. */
