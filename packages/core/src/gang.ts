@@ -711,6 +711,8 @@ export const GANG_DEATH_CHANCE_LOST = 0.01;
 export const GANG_DEATH_RESPECT_SHARE = 0.05;
 /** The clash chance's fall an update once warfare is disengaged (`Gang.ts:210-216`), from 1 while engaged. */
 export const GANG_CLASH_CHANCE_FALL_PER_UPDATE = 0.01;
+/** The least territory a clash moves (`Gang.ts:174-178`): 0.0001 × the power bonus, at least 1, × (rand + 0.5). */
+export const GANG_LEAST_TERRITORY_TAKEN = 0.5e-4;
 /** The power the player's gang keeps when it loses a clash (`Gang.ts:286`): 1/1.008, 0.8% less. */
 export const GANG_POWER_KEPT_LOSING = 1 / 1.008;
 /**
@@ -807,7 +809,9 @@ export function gangOthersAfterUpdate(others: readonly GangOtherGang[]): GangOth
     return {
       ...each,
       power: each.power * (1 - losses * (1 - GANG_OTHER_POWER_KEPT_LOSING)),
-      territory: Math.max(0, territory),
+      // Under the least a clash takes (0.0001 × 0.5, `Gang.ts:176`), as none: in the game it's gone in a clash, and a
+      // gang with none drops out of the clashes (`Gang.ts:219`).
+      territory: territory < GANG_LEAST_TERRITORY_TAKEN ? 0 : territory,
     };
   });
 }

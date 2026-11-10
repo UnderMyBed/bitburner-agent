@@ -16,8 +16,7 @@
 //   for it, the worker buys it, and the report counts it, end to end.
 // - Territory warfare (G4): in the hour, none on Territory Warfare and never engaged (why, computed on its last
 //   reading: the others outgrow the whole gang's power); and a gang of 12 with eleven fighters made by harness edits,
-//   then the brain for 20 minutes: the eleven on Territory Warfare, engaged throughout, territory growing, two deaths
-//   counted.
+//   then the brain for 20 minutes: ten on Territory Warfare, engaged throughout, territory growing, a death counted.
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import {
   GANG_AUGMENTATION_HORIZON_MS,
@@ -456,21 +455,23 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   console.log(fresh.controller().gangView().line);
   const last = gangSnapshotOf(fresh.medium());
   if (last.kind !== "gang") throw new Error("no gang read");
-  // Measured on 2026-11-10 (seed 1), with PR #333's second review's model (deaths priced with the ascension due,
-  // survival, the guard, the others' territory projected). The fighters on Territory Warfare from the brain's first
-  // plan (at equal powers, not engaged yet): they earn nothing, so their deaths cost little and the guard lets them
-  // on, defence 1 and all. The gang's power passes the others' at the first territory update (11 × 2,200 × 0.015 ×
-  // 1/7, about 52 an update, against their 1), and warfare is engaged from then on: 19 min 30 s of it, territory
-  // 14.3% → 17.3% in 20 minutes, power 3,044. Two fighters died (member-06, then member-02; about 0.35 × 0.005 a clash
-  // at defence 1, 2 clashes an update: about 2.3 deaths expected among 11 over 60 updates), each recruited again and
-  // put on Territory Warfare too, a recruit's death costing little. Expected 9.5% territory an hour at the end.
+  // Measured on 2026-11-10 (seed 1), with PR #333's third review's model (crew slots, the others dropping out at no
+  // territory). The fighters on Territory Warfare from the brain's first plan (at equal powers, not engaged yet): they
+  // earn nothing, so their deaths cost little, defence 1 and all. The gang's power passes the others' at the first
+  // territory update (11 × 2,200 × 0.015 × 1/7, about 52 an update, against their 1), and warfare is engaged from then
+  // on: 19 min 30 s of it, territory 14.3% → 17.4% in 20 minutes, power 3,181. One fighter died (member-06; about 0.35
+  // × 0.005 a clash at defence 1, 2 clashes an update: about 2.3 deaths expected among 11 over 60 updates); its recruit
+  // trains, as a slot's later deaths each cost the respect toll, and the ten others stayed. The dashboard expects
+  // about 111 deaths on the ten slots in a day engaged. Expected 9.5% territory an hour at the end.
   expect(readings.every((each) => each.engaged)).toBe(true);
-  expect(readings.every((each) => each.crew === 11)).toBe(true);
+  expect(readings.every((each) => each.crew === 10)).toBe(true);
   expect(last.gang.territory).toBeGreaterThan(1 / 7 + 0.02);
   expect(section).toMatch(
-    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 2 deaths \(member-06, member-02\)\n/,
+    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 1 death \(member-06\)\n/,
   );
-  expect(fresh.controller().gangView().line).toMatch(/; warfare on: .*; 11 on Territory Warfare; 2 deaths seen; /);
+  expect(fresh.controller().gangView().line).toMatch(
+    /; warfare on: .*; 10 on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 1 death seen; /,
+  );
   expect(section).toContain(
     "territory warfare engaged while the rule's measure says it loses for 1 min or more:\n    none",
   );

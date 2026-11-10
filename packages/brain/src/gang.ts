@@ -387,8 +387,11 @@ export function describeWarfare(warfare: GangWarfarePlan | null, gang: GangInfor
       : measure.territoryPerUpdate === 0
         ? `warfare off: the clashes would gain no territory (${chances})`
         : `warfare off: the clashes would lose territory (${chances})`;
-  const crew = warfare.crew.length === 0 ? "none" : String(warfare.crew.length);
-  return `${share}; ${state}; ${crew} on Territory Warfare; ${formatCount(deaths, "death")} seen`;
+  const crew =
+    warfare.crew.length === 0
+      ? "none on Territory Warfare"
+      : `${warfare.crew.length} on Territory Warfare (about ${warfare.deaths.toFixed(1)} deaths expected in a day engaged)`;
+  return `${share}; ${state}; ${crew}; ${formatCount(deaths, "death")} seen`;
 }
 
 /** "2 training, 3 on Phishing, 1 on justice (Ethical Hacking)": the plan's task mix. */

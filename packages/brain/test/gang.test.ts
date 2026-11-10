@@ -1107,7 +1107,7 @@ describe("territory warfare (G4)", () => {
     });
     expect(building.gang?.warfare).toEqual({ engage: false, leastTerritoryPerUpdate: 0 });
     expect(rule.view().line).toMatch(
-      /; territory 14\.3%, power 1\.0; warfare off: the clashes would gain no territory \(win chance 50%–50%\); 2 on Territory Warfare; 0 deaths seen$/,
+      /; territory 14\.3%, power 1\.0; warfare off: the clashes would gain no territory \(win chance 50%–50%\); 2 on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 0 deaths seen$/,
     );
     const strong = update(rule, warring(members, 50, 1));
     const plan = rule.view().plan;
@@ -1119,7 +1119,7 @@ describe("territory warfare (G4)", () => {
     const hourly = gangTerritoryPerUpdate(50, 1 / 7, others(1)) * (3_600_000 / GANG_TERRITORY_UPDATE_MS);
     expect(hourly).toBeCloseTo(0.0699, 4);
     expect(rule.view().line).toMatch(
-      /; warfare on: 7\.0% territory an hour expected \(win chance 98%–98%\); 2 on Territory Warfare; 0 deaths seen$/,
+      /; warfare on: 7\.0% territory an hour expected \(win chance 98%–98%\); 2 on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 0 deaths seen$/,
     );
     // An older Agent's reading: no order, the flag left alone.
     expect(update(rule, formed(members)).gang?.warfare).toBeNull();
@@ -1137,13 +1137,16 @@ describe("territory warfare (G4)", () => {
       winChances: { least: 0.6, most: 0.7 },
       tailCostPerUpdate: 0,
       crewDeaths: [],
+      recruitDeath: { perUpdate: 0, cost: 0 },
     };
-    expect(describeWarfare({ crew: ["a"], engage: false, measure }, NITESEC, 2)).toBe(
+    expect(describeWarfare({ crew: ["a"], engage: false, measure, deaths: 3.25 }, NITESEC, 2)).toBe(
       "territory 14.3%, power 1.0; warfare off: its deaths would cost more than the 1.8% territory an hour it'd gain " +
-        "is worth (win chance 60%–70%); 1 on Territory Warfare; 2 deaths seen",
+        "is worth (win chance 60%–70%); 1 on Territory Warfare (about 3.3 deaths expected in a day engaged); 2 deaths seen",
     );
     const alone = { ...measure, territoryPerUpdate: 0, winChances: null };
-    expect(describeWarfare({ crew: [], engage: false, measure: alone }, { ...NITESEC, territory: 1 }, 0)).toBe(
+    expect(
+      describeWarfare({ crew: [], engage: false, measure: alone, deaths: 0 }, { ...NITESEC, territory: 1 }, 0),
+    ).toBe(
       "territory 100.0%, power 1.0; warfare off: the clashes would gain no territory (no other gang has territory); none on " +
         "Territory Warfare; 0 deaths seen",
     );

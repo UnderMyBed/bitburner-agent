@@ -49,7 +49,6 @@ import {
   gangOutputOver,
   gangWarfareBasis,
   gangWarfareCrew,
-  gangWarfareGuard,
   gangWarfareMeasure,
   planGang,
 } from "../src/gang-rule.ts";
@@ -525,8 +524,9 @@ describe("clashes' power losses and the tail (G4's review)", () => {
     // The ones still with territory, which the clashes are with.
     const most = Math.max(...others.filter((each) => each.territory > 0.001).map((each) => each.power));
     const mostUnchecked = Math.max(...unchecked.map((each) => each.power));
-    // Measured on 2026-11-10: the two ×5 gangs (Speakers for the Dead, The Black Hand) at 518 with 42.9% of the
-    // territory each, the other four with none left (Slum Snakes, out of the clashes, grows on to 702); unchecked, 2,592.
+    // Measured on 2026-11-10: the two ×5 gangs (Speakers for the Dead, The Black Hand) at 207 with 42.9% of the
+    // territory each, the other four with none left, out of the clashes and growing unchecked (702, 565 ×3); 2,592
+    // with no clashes at all.
     console.log(
       `after a day: ${others.map((each) => each.power.toFixed(0)).join(", ")}; unchecked ${mostUnchecked.toFixed(0)}`,
     );
@@ -556,20 +556,24 @@ describe("whether it would engage in BN2 (PR #333's review, from the model)", ()
     return power;
   };
 
-  test("the others: the four weak lose their territory to the two strong within about 12 hours", () => {
-    // Measured on 2026-11-10: an hour on, 3 to 33 power, the weak at 12.2% to 13.8%; 6 hours on, Slum Snakes at none and
-    // the other weak three at 5.5%, the strong at 293; 12 hours on, the weak at none, the strong at 487 with 42.9% each.
-    // So the clashes gain territory from a power of 11 an hour on, 22 six hours on, and 491 twelve hours on.
+  test("the others: the four weak lose their territory to the two strong within about 9 hours, and drop out", () => {
+    // Measured on 2026-11-10 (PR #333's third review: under a clash's least take, none, so a gang drops out): an hour
+    // on, 3 to 33 power, the weak at 12.2% to 13.8%; 6 hours on, Slum Snakes at none, the other weak three at 5.5%, the
+    // strong at 293; 9 hours on, the weak at none, the strong at 262 with 42.9% each, clashing only each other now and
+    // settling at about 207. So the clashes gain territory from a power of 11 an hour on, 22 six hours on, 273 nine
+    // hours on and 214 from twelve.
     const at = (hours: number) => othersAfterHours(hours);
-    expect(at(6)[0]?.territory).toBeLessThan(0.001);
+    expect(at(6)[0]?.territory).toBe(0);
+    expect(at(9).filter((each) => each.territory === 0).length).toBe(4);
     expect(
-      at(12)
-        .filter((each) => each.territory > 0.001)
+      at(9)
+        .filter((each) => each.territory > 0)
         .map((each) => each.faction),
     ).toEqual(["Speakers for the Dead", "The Black Hand"]);
     expect(breakEven(at(1))).toBeCloseTo(11, -1);
     expect(breakEven(at(6))).toBeCloseTo(22, -1);
-    expect(breakEven(at(12))).toBeGreaterThan(400);
+    expect(breakEven(at(12))).toBeCloseTo(214, -1);
+    expect(at(24)[4]?.power).toBeCloseTo(207, -1);
   });
 
   /**
@@ -590,20 +594,7 @@ describe("whether it would engage in BN2 (PR #333's review, from the model)", ()
   });
   const crewAt = (def: number, others: GangOtherGang[]) => planGang(gang(def, others)).warfare?.crew.length;
 
-  test("the guard's own floor for one of them: defence about 100 when the gang forms, about 500 an hour on", () => {
-    // Measured on 2026-11-10: at defence 1 its deaths would cost 3.2e6 against its power's 1.7e5 when the gang forms;
-    // from 100 its power is worth more. An hour on (the strong gangs grown), 300 isn't enough, 500 is.
-    const guard = (def: number, others: GangOtherGang[]) => {
-      const given = { ...gang(1, others), members: [grown("m0", def), ...gang(1, others).members.slice(1)] };
-      return gangWarfareGuard(given, gangWarfareBasis(given, "respect"), "m0").joins;
-    };
-    const now = othersAt(1);
-    expect([1, 100].map((def) => guard(def, now))).toEqual([false, true]);
-    const hour = othersAfterHours(1);
-    expect([300, 500].map((def) => guard(def, hour))).toEqual([false, true]);
-  });
-
-  test("seven such hackers at defence 1: none on Territory Warfare, so never engaged; the guard's floor, computed", () => {
+  test("seven such hackers at defence 1: none on Territory Warfare, so never engaged; the defence it takes, computed", () => {
     const now = othersAt(1);
     expect(gangAscensionConvertsEnough(grown("m0"), true)).toBe(false);
     expect(grown("m0").hack).toBe(614);
@@ -617,11 +608,11 @@ describe("whether it would engage in BN2 (PR #333's review, from the model)", ()
     const hour = othersAfterHours(1);
     expect([2_000, 3_000].map((def) => crewAt(def, hour))).toEqual([0, 1]);
     const three = othersAfterHours(3);
-    expect([5_000, 7_000].map((def) => crewAt(def, three))).toEqual([0, 1]);
+    expect([5_000, 7_000].map((def) => (crewAt(def, three) ?? 0) > 0)).toEqual([false, true]);
   });
 });
 
-describe("round 2 of PR #333's review: the ascension due, survival, the guard", () => {
+describe("rounds 2 and 3 of PR #333's review: the ascension due, crew slots", () => {
   const DAY = GANG_WARFARE_HORIZON_MS / 200;
 
   test("the best output counts only an ascension G2 would make: none that converts too little", () => {
@@ -635,33 +626,33 @@ describe("round 2 of PR #333's review: the ascension due, survival, the guard", 
     expect(gangMemberBestOutputOver(given, near, "respect", DAY)).toBe(asIs);
   });
 
-  test("the guard by hand: a hacker with its ascension due, at defence 1, would die for more than its power is worth", () => {
-    // A hacker as strong a fighter as the fighter but at defence 1: its power as much worth, its death far costlier.
-    const hybrid = { ...FIGHTER("h1", 1), hack: 400, hack_exp: expFor(400), cha: 100, cha_exp: expFor(100) };
-    const given = inputs([hybrid, HACKER("h2"), FIGHTER("f1")], 1, 1);
-    const basis = gangWarfareBasis(given, "respect");
-    const exposed = gangWarfareGuard(given, basis, "h1");
-    expect(exposed.powerWorth).toBeGreaterThan(0);
-    expect(exposed.deathCost).toBeGreaterThan(exposed.powerWorth);
-    expect(exposed.joins).toBe(false);
-    // The fighter earns nothing: its death costs little, and its power is worth much.
-    const fighter = gangWarfareGuard(given, basis, "f1");
-    expect(fighter.powerWorth).toBeGreaterThan(fighter.deathCost);
-    expect(fighter.joins).toBe(true);
-    expect(gangWarfareCrew(given, basis).crew).not.toContain("h1");
-  });
-
-  test("survival: a crew at defence 1 is expected to die off, so it forgoes less and costs at most about a death each", () => {
-    const fighter = FIGHTER("f1", 1);
-    const given = inputs([HACKER("h1"), fighter], 1, 1);
+  test("crew slots (PR #333's third review): a slot at defence 1 dies λ × its time on the crew, its recruit rejoining", () => {
+    const given = inputs([HACKER("h1"), FIGHTER("f1", 1)], 1, 1);
     const basis = gangWarfareBasis(given, "respect");
     const crew = gangWarfareCrew(given, basis);
     expect(crew.crew).toEqual(["f1"]);
-    // About 0.0035 deaths an update while engaged (0.35 × 0.005 × 2 clashes, won): alive a small share of the day.
-    expect(crew.forgone).toBeLessThan((basis.output.get("f1") ?? 0) / 5);
-    // Its expected deaths' cost is its chance to die in the day × a death's cost (and the tail's share): at most one.
-    const death = (basis.deathCost.get("f1") ?? 0) * (1 + 49.5 / 4_320);
-    expect(crew.deathCost).toBeGreaterThan(0.5 * death);
-    expect(crew.deathCost).toBeLessThanOrEqual(1.01 * death);
+    // About 0.0035 deaths an update engaged (0.35 × 0.005 × 2 clashes, won): more than the one a member has, as each
+    // replacement dies too. Measured on 2026-11-10: about 3.7 in the day, as the recruits that take the slot have too
+    // little power to keep the clashes paying, so the gang disengages within about 1,000 updates.
+    expect(crew.deaths).toBeGreaterThan(2);
+    expect(crew.deaths).toBeLessThan(0.0036 * 4_320);
+    expect(planGang(given).warfare?.deaths).toBeCloseTo(crew.deaths, 9);
+    // A recruit's death: its own rate at defence 1, and its cost, the respect toll, the tail's share in it.
+    const measure = gangWarfareMeasure(given, basis, ["f1"]);
+    expect(measure.recruitDeath.perUpdate).toBeCloseTo(measure.crewDeaths[0]?.perUpdate ?? 0, 12);
+    expect(measure.recruitDeath.cost).toBeCloseTo(basis.recruitDeathCost * (1 + 49.5 / 4_320), 9);
+    expect(basis.recruitDeathCost).toBeGreaterThanOrEqual(0.05 * 1_000);
+    // The slot's later deaths, each the respect toll: a dearer toll is worth less.
+    const dearer = gangWarfareCrew(given, { ...basis, recruitDeathCost: basis.recruitDeathCost * 1_000 });
+    expect(dearer.value).toBeLessThan(crew.value);
+    // The output forgone, the member's × its time alive: a tenth more of it costs much less than a tenth, as the
+    // member at defence 1 is alive a small share of the day.
+    const extra = crew.value / 10;
+    const output = new Map(basis.output);
+    output.set("f1", (output.get("f1") ?? 0) + extra);
+    const costlier = gangWarfareCrew(given, { ...basis, output });
+    expect(costlier.crew).toEqual(["f1"]);
+    expect(crew.value - costlier.value).toBeGreaterThan(0);
+    expect(crew.value - costlier.value).toBeLessThan(extra / 2);
   });
 });
