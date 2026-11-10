@@ -3,8 +3,9 @@
 // the next purchase of the hacking programs (#136), home's RAM (#138) or a cloud server (#194), the next backdoor for
 // the hacker factions (#195, ./backdoors.ts), the next faction to join and the brain's faction work (#203,
 // ./factions.ts), the travel for invitations (#228, ./invitations.ts), the augmentations' purchases and install (#210,
-// ./augmentations.ts), and the owner's manual queue and work. Irreversible intents wait for their guard and a save
-// backup first (#147). Each state carries how long the Agent keeps it with the brain gone (`ttlMs`, safe mode, #160).
+// ./augmentations.ts), the gang in BN2 (#325, ./gang.ts), and the owner's manual queue and work. Irreversible
+// intents wait for their guard and a save backup first (#147). Each state carries how long the Agent keeps it with the
+// brain gone (`ttlMs`, safe mode, #160).
 // An install of augmentations (#164) or a destroy of the BitNode (#175) holds back what's queued after it, and leaves
 // the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
@@ -18,6 +19,7 @@ import {
   type FactionWorkType,
   type FastSnapshotData,
   factionReadingOf,
+  type GangState,
   type Intent,
   type IntentOutcome,
   intentId,
@@ -90,6 +92,7 @@ import {
   resetInfoOf,
   writeFactionWorkEnabled,
 } from "./factions.ts";
+import { GangRule, type GangView, withoutGangFaction } from "./gang.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type InvitationEvent, type InvitationInputs, InvitationRule, type InvitationView } from "./invitations.ts";
@@ -244,9 +247,18 @@ export interface IntentView {
   /**
    * The owner's manual queue, the brain's purchase rules, its backdoors (#195), its joins (#203), its travel for an
    * invitation (#228: Tian Di Hui's or its city group's), or its augmentations' purchases and install (#210), or its
-   * destroy (#215).
+   * destroy (#215), or its gang's forming (#325).
    */
-  source: "manual" | "purchase" | "backdoor" | "join" | "travel" | "augmentation" | "worldDaemon" | "bitNodeEnd";
+  source:
+    | "manual"
+    | "purchase"
+    | "backdoor"
+    | "join"
+    | "travel"
+    | "augmentation"
+    | "worldDaemon"
+    | "bitNodeEnd"
+    | "gang";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
@@ -308,7 +320,13 @@ export class DesiredStateController {
   /** The connected Agent's latest snapshots: forgotten when it disconnects, or another connects. */
   #staticData: StaticSnapshotData | null = null;
   #mediumData: MediumSnapshotData | null = null;
+  /**
+   * The slow snapshot the rules decide on: the connected Agent's (`#slowSnapshot`) with the gang's faction left out of
+   * the factions joined (#325, `withoutGangFaction`).
+   */
   #slowData: SlowSnapshotData | null = null;
+  /** The connected Agent's latest slow snapshot, as it came. */
+  #slowSnapshot: SlowSnapshotData | null = null;
   #fastData: FastSnapshotData | null = null;
   #desired: DesiredState | null = null;
   /**
@@ -356,6 +374,10 @@ export class DesiredStateController {
   #resetSent: ResetSentNote | null;
   /** The backdoors for the hacker factions (#195): the rule, and the one it asks for now, or null. */
   readonly #backdoors: BackdoorRule;
+  /** The gang (#325): its forming intent, and the desired state's gang. */
+  readonly #gang: GangRule;
+  #gangIntent: Intent | null = null;
+  #gangState: GangState | null = null;
   #backdoor: Intent | null = null;
   /** The joins and the brain's faction work (#203): the rule, the join it asks for now, the work it sends, or null. */
   readonly #factions: FactionRule;
@@ -422,6 +444,7 @@ export class DesiredStateController {
     this.#store = store;
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
+    this.#gang = new GangRule(log, store);
     this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event) });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
@@ -448,6 +471,7 @@ export class DesiredStateController {
         this.#mediumGameTimeMs = null;
         this.#fastGameTimeMs = null;
         this.#slowData = null;
+        this.#slowSnapshot = null;
         this.#slowGameTimeMs = null;
         this.#slowAtMs = null;
         this.#fastData = null;
@@ -489,12 +513,13 @@ export class DesiredStateController {
         this.#mediumGameTimeMs = event.snapshot.gameTimeMs;
         this.#gates.mediumSnapshot(this.#mediumData, this.#judgedQueue(), this.#staticData);
       } else if (event.type === "snapshotReceived" && event.snapshot.tier === "slow") {
-        this.#slowData = event.snapshot.data as SlowSnapshotData;
+        this.#slowSnapshot = event.snapshot.data as SlowSnapshotData;
+        this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.hiddenFactions());
         this.#slowGameTimeMs = event.snapshot.gameTimeMs;
         this.#slowAtMs = event.atMs;
         this.#logBitNodeAssumptions();
         // The stop at the BitNode's end (#303): a destroy's note read before the reset it shows drops it.
-        const reading = bitNodeReadingOf(this.#slowData, event.snapshot.gameTimeMs);
+        const reading = bitNodeReadingOf(this.#slowSnapshot, event.snapshot.gameTimeMs);
         if (reading !== null) {
           this.#bitNodeEnd.slowSnapshot(reading, {
             setting: readStopAtBitNodeEnd(this.#store),
@@ -759,6 +784,11 @@ export class DesiredStateController {
     return { ...this.#factions.view(), invitations: this.#invitations.view() };
   }
 
+  /** Where the gang stands (#325): the dashboard's line. */
+  gangView(): GangView {
+    return this.#gang.view();
+  }
+
   /** The brain's faction work's watch (#203): its faction, its stall's window, its newest reading; or null. */
   factionWorkStall(): FactionWorkStall | null {
     return this.#factions.stall();
@@ -802,6 +832,7 @@ export class DesiredStateController {
       ...fromRule(this.#join).map((intent) => ({ intent, source: "join" as const })),
       ...fromRule(this.#joinAlongside).map((intent) => ({ intent, source: "join" as const })),
       ...fromRule(this.#travel).map((intent) => ({ intent, source: "travel" as const })),
+      ...fromRule(this.#gangIntent).map((intent) => ({ intent, source: "gang" as const })),
     ].map(({ intent, source }, index) => ({
       id: intent.id,
       source,
@@ -848,8 +879,8 @@ export class DesiredStateController {
 
   /**
    * The rules' intents, in order, each only if the owner hasn't queued the same: the purchase, the augmentation purchase
-   * (#210), the backdoor (#195), the join (#203) and the one beside it (#269 review), and the travel for an invitation
-   * (#228).
+   * (#210), the backdoor (#195), the join (#203) and the one beside it (#269 review), the travel for an invitation
+   * (#228), and the gang's forming (#325).
    */
   #ruleIntents(): Intent[] {
     const manual = readManualIntents(this.#store);
@@ -860,6 +891,7 @@ export class DesiredStateController {
       this.#join,
       this.#joinAlongside,
       this.#travel,
+      this.#gangIntent,
     ];
     return rules.filter((intent): intent is Intent => intent !== null && !manual.some((each) => each.id === intent.id));
   }
@@ -1464,6 +1496,11 @@ export class DesiredStateController {
 
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
+    // The gang (#325) first: its faction, once formed, is left out of what the other rules see as joined.
+    const gang = this.#gang.update({ mediumData: this.#mediumData, slowData: this.#slowSnapshot });
+    this.#gangIntent = gang.intent;
+    this.#gangState = gang.gang;
+    this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.hiddenFactions());
     // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, and The Red Pill's. Not from
     // a health gone stale, or a batcher reported not running (#226's review).
     const shareBonus = shareBonusOf(
@@ -1585,8 +1622,12 @@ export class DesiredStateController {
     // (decision 37): sent only once that says whether the implant is in, so the focus never flips on a connect. None:
     // not managed.
     const work = this.#slowData === null ? null : this.workView().desired;
-    // Every state, so the Agent's safe mode keeps it (#160).
-    const workAndTtl = { ...(work === null ? {} : { work }), ttlMs: SAFE_MODE_TTL_MS };
+    // Every state, so the Agent's safe mode keeps it (#160). The gang (#325) with it: safe mode doesn't keep that.
+    const workAndTtl = {
+      ...(work === null ? {} : { work }),
+      ...(this.#gangState === null ? {} : { gang: this.#gangState }),
+      ttlMs: SAFE_MODE_TTL_MS,
+    };
     // Sharing (#224) goes with the batcher: none without it.
     this.#shareWhy = "the batcher isn't sent";
     if (!hackLoopEnabled) {

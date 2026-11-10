@@ -136,6 +136,8 @@ export interface DashboardStatus {
   share: ShareView | null;
   /** The stop at the BitNode's end (#303): its switch, off by default; null from a brain that doesn't give it. */
   stopAtBitNodeEnd: StopAtBitNodeEndView | null;
+  /** The gang (#325): the rule's one line, as the brain's log has it; null from a brain that doesn't give it. */
+  gang: { line: string } | null;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
@@ -206,6 +208,8 @@ export interface DashboardStatusOptions {
   share?: ShareView;
   /** The stop at the BitNode's end's view (#303), the controller's. */
   stopAtBitNodeEnd?: StopAtBitNodeEndView;
+  /** The gang's view (#325), the controller's. */
+  gang?: { line: string };
   /** This start's store thinning that failed (#283's review), for the `storeThinningFailed` alert; null or absent: none. */
   storeThinningFailure?: { atMs: number; failure: string } | null;
   /** The newest data backup's problem (#284), for the `dataBackupFailed` alert; null or absent: none. */
@@ -252,6 +256,7 @@ export function buildDashboardStatus({
   worldDaemonStall = null,
   share,
   stopAtBitNodeEnd,
+  gang,
   storeThinningFailure = null,
   dataBackupProblem = null,
   timeline,
@@ -424,6 +429,7 @@ export function buildDashboardStatus({
     worldDaemon: worldDaemon ?? null,
     share: share ?? null,
     stopAtBitNodeEnd: stopAtBitNodeEnd ?? null,
+    gang: gang === undefined ? null : { line: gang.line },
     intents,
     work,
     factions: slow

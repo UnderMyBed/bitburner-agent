@@ -46,6 +46,8 @@ describe("parseIntentRequest", () => {
     ["destroyBitNode", { nextBitNode: 12 }],
     ["destroyBitNode", { nextBitNode: 15 }],
     ["closeGame", {}],
+    ["createGang", { faction: "NiteSec" }],
+    ["createGang", { faction: "Slum Snakes" }],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,
@@ -66,6 +68,8 @@ describe("parseIntentRequest", () => {
     ["home RAM as text", { action: "upgradeHomeRam", args: { fromRam: "8", vendor: "CompuTek" } }],
     ["home RAM without a vendor", { action: "upgradeHomeRam", args: { fromRam: 8 } }],
     ["a city that isn't one", { action: "travel", args: { city: "Atlantis" } }],
+    ["a gang with a faction that has none", { action: "createGang", args: { faction: "CyberSec" } }],
+    ["a gang with a faction named in another case", { action: "createGang", args: { faction: "nitesec" } }],
     ["a faction that isn't one", { action: "joinFaction", args: { faction: "The Gibson" } }],
     ["a faction named in another case", { action: "joinFaction", args: { faction: "cybersec" } }],
     [
@@ -216,6 +220,12 @@ describe("isIrreversibleIntent", () => {
     expect(isIrreversibleIntent(intent({ action: "closeGame", args: {} }))).toBe(true);
     expect(resetsTheGame(intent({ action: "closeGame", args: {} }))).toBe(false);
     expect(intentId("closeGame", {})).toBe("closeGame()");
+  });
+
+  test("forming a gang is irreversible for the BitNode, and resets nothing (#325)", () => {
+    expect(isIrreversibleIntent(intent({ action: "createGang", args: { faction: "NiteSec" } }))).toBe(true);
+    expect(resetsTheGame(intent({ action: "createGang", args: { faction: "NiteSec" } }))).toBe(false);
+    expect(intentId("createGang", { faction: "NiteSec" })).toBe("createGang(NiteSec)");
   });
 
   test("an install and a destroy reset the game; nothing else does (#164, #175)", () => {

@@ -22,6 +22,7 @@ import {
   factionReadingOf,
   favorAfterInstall,
   favorToDonate,
+  gangFactionOf,
   isWorthInstalling,
   type JoinedFaction,
   type MediumSnapshotData,
@@ -253,7 +254,7 @@ export function heldBackOf(data: SlowSnapshotData, player: PlayerFigures): HeldB
     const sellers = (name: string) => joined.filter((faction) => shops.shops.get(faction.name)?.includes(name));
     const reached = (name: string) => sellers(name).some((faction) => faction.reputation >= (needed.get(name) ?? 0));
     const unlocked = (faction: JoinedFaction) =>
-      acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers);
+      acceptsDonations(faction.name, gangFactionOf(data)) && donationsUnlocked(faction.favor, multipliers);
     const donationTerms = donationTermsOf(
       joined,
       shops.shops,
@@ -463,6 +464,8 @@ interface Cycle extends CycleSpan {
   /** Each faction's favour as first seen in it: an install leaves every faction, so one shows once joined again. */
   favorSeen: Map<string, number>;
   lastJoined: JoinedFaction[] | null;
+  /** The gang's faction with them (#325): it takes no donations. */
+  lastGangFaction: string | null;
   judgements: Judgement[];
   medium: MediumPoint[];
   /** The fast snapshots' share bonuses, added up, and how many had a batcher health field (absent: older Agent). */
@@ -522,6 +525,7 @@ export class BitNodeCycles {
         chosenAtMs: this.#installChosenFrom(span.startMs),
         favorSeen: new Map(),
         lastJoined: null,
+        lastGangFaction: null,
         judgements: [],
         medium: [],
         shareSum: 0,
@@ -618,6 +622,7 @@ export class BitNodeCycles {
     if (state !== null) {
       for (const { name, favor } of state.joined) if (!cycle.favorSeen.has(name)) cycle.favorSeen.set(name, favor);
       cycle.lastJoined = state.joined;
+      cycle.lastGangFaction = gangFactionOf(data);
     }
     this.#slowMilestones(bitNode, cycle, atMs, data, state, ownedSF);
   }
@@ -659,7 +664,9 @@ export class BitNodeCycles {
       }
       for (const faction of state?.joined ?? []) {
         if (faction.name === DAEDALUS) bitNode.daedalusFirstFavor ??= faction.favor;
-        if (bitNode.donationsUnlocked.has(faction.name) || !acceptsDonations(faction.name, null)) continue;
+        if (bitNode.donationsUnlocked.has(faction.name) || !acceptsDonations(faction.name, gangFactionOf(data))) {
+          continue;
+        }
         // Favour changes only at an install: dated at the one that raised it, not at the join after it (#244 review).
         if (donationsUnlocked(faction.favor, multipliers)) {
           bitNode.donationsUnlocked.set(faction.name, {
@@ -1157,7 +1164,7 @@ export class BitNodeCycles {
    * at a destroy, favour is lost. "BitRunners 5 → 96; donations at 150", "Daedalus 150, donations unlocked".
    */
   #favourLine(cycle: Cycle, next: Cycle | undefined, destroyed: boolean): string {
-    const joined = cycle.lastJoined?.filter((faction) => acceptsDonations(faction.name, null));
+    const joined = cycle.lastJoined?.filter((faction) => acceptsDonations(faction.name, cycle.lastGangFaction));
     if (joined === undefined) return "not recorded (no faction state)";
     if (joined.length === 0) return "no joined faction taking donations";
     try {

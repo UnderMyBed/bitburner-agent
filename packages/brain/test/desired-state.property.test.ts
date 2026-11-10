@@ -69,11 +69,13 @@ const OWNER_INTENTS: Intent[] = [
   intentOf({ action: "installAugmentations", args: {} }),
   intentOf({ action: "destroyBitNode", args: { nextBitNode: 2 } }),
   intentOf({ action: "destroyBitNode", args: { nextBitNode: 3 } }),
+  // Forming a gang (#325): irreversible, its guard NiteSec joined.
+  intentOf({ action: "createGang", args: { faction: "NiteSec" } }),
 ];
 const OWNER_INTENTS_BY_ID = new Map(OWNER_INTENTS.map((each) => [each.id, each]));
 /** Whether `id` is an install's or a destroy's: the brain's own resets, when not the owner's (#210, #215). */
 const isBrainsReset = (id: string) => id === "installAugmentations()" || id.startsWith("destroyBitNode(");
-const JOINABLE = ["Sector-12", "Chongqing", "Aevum", "CyberSec"];
+const JOINABLE = ["Sector-12", "Chongqing", "Aevum", "CyberSec", "NiteSec"];
 /** Invitations the slow snapshot may carry, for the rules' joins (#203, #228): city factions and CyberSec. */
 const INVITABLE = ["Sector-12", "Aevum", "Chongqing", "New Tokyo", "CyberSec"];
 /** The rules' switches, off in a run with the rules off. The hack loop is off in every run, so intents go at once. */
@@ -274,6 +276,7 @@ async function play(
     if (id.startsWith("joinFaction(")) {
       return !(FACTION_ENEMIES[id.slice(12, -1)] ?? []).some((enemy) => snapshot.factions.includes(enemy));
     }
+    if (id.startsWith("createGang(")) return snapshot.factions.includes(id.slice(11, -1));
     if ([...ownerQueue, ...brainsResets()][0] !== id) return false;
     return !id.startsWith("destroyBitNode(") || snapshot.daemonReady;
   };
@@ -305,6 +308,9 @@ async function play(
       return enemy === undefined ? null : `its enemy ${enemy} is joined`;
     }
     if (irreversible.action === "destroyBitNode" && !latestMedium.daemonReady) return "w0r1d_d43m0n isn't ready";
+    if (irreversible.action === "createGang" && !latestMedium.factions.includes(irreversible.args.faction)) {
+      return `${irreversible.args.faction} isn't joined`;
+    }
     return null;
   };
   /**
@@ -576,7 +582,8 @@ async function play(
     // A stable game from here: guards holding, backups saved, every intent of the owner's done. The owner's queue
     // drains, at most one irreversible intent (or reset) a round.
     for (let round = 0; round < 25 && (ownerQueue.length > 0 || readManualIntents(store).length > 0); round += 1) {
-      for (let each = 0; each < 3; each += 1) medium({ factions: [], daemonReady: true });
+      // NiteSec joined, for the gang's guard (#325): it has no enemies, so no join's guard fails on it.
+      for (let each = 0; each < 3; each += 1) medium({ factions: ["NiteSec"], daemonReady: true });
       await answerBackups(true, { all: true });
       agentRound(() => "done", { inTheSteps: false });
     }

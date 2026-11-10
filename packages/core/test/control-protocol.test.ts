@@ -448,6 +448,44 @@ describe("work (#151)", () => {
   });
 });
 
+describe("the gang (#325)", () => {
+  const state = { protocolVersion: 1, type: "desiredState", hackLoop: { enabled: false, target: null, hosts: [] } };
+  const gangOf = (gang: unknown) => {
+    const parsed = parseBrainMessage(JSON.stringify({ ...state, intents: [], gang }));
+    return parsed.ok ? (parsed.message.type === "desiredState" ? parsed.message.gang : "not a state") : parsed.reason;
+  };
+
+  test("absent or null, no gang is managed: the message carries none", () => {
+    expect(gangOf(undefined)).toBeUndefined();
+    expect(gangOf(null)).toBeUndefined();
+  });
+
+  test("carried with its recruits and tasks, only its known fields", () => {
+    const gang = { recruit: ["member-04"], tasks: { "member-01": "Train Hacking", "member-04": "Ransomware" } };
+    expect(gangOf({ ...gang, extra: 1 })).toEqual(gang);
+    expect(gangOf({ recruit: [], tasks: {} })).toEqual({ recruit: [], tasks: {} });
+  });
+
+  test.each([
+    ["not an object", 3, "gang isn't an object"],
+    ["recruits that aren't a list", { recruit: "member-04", tasks: {} }, "gang.recruit isn't a list"],
+    ["more than 12 recruits", { recruit: Array.from({ length: 13 }, (_, i) => `m${i}`), tasks: {} }, "at most 12"],
+    ["an empty recruit's name", { recruit: [""], tasks: {} }, "gang.recruit isn't a list"],
+    ["a long recruit's name", { recruit: ["x".repeat(65)], tasks: {} }, "gang.recruit isn't a list"],
+    ["tasks that aren't an object", { recruit: [], tasks: [] }, "gang.tasks isn't an object"],
+    ["a task the game hasn't", { recruit: [], tasks: { "member-01": "Hack the Gibson" } }, "a task the game hasn't"],
+    ["a task named in another case", { recruit: [], tasks: { "member-01": "train hacking" } }, "the game hasn't"],
+  ])("refused: %s", (_, gang, reason) => {
+    expect(gangOf(gang)).toContain(reason);
+  });
+
+  test("while the brain holds, no gang is managed: none goes", () => {
+    const gang = { recruit: [], tasks: { "member-01": "Train Hacking" } };
+    const desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents: [], gang };
+    expect(desiredStateWhileHolding(desired, null)).toEqual({ hackLoop: desired.hackLoop, intents: [] });
+  });
+});
+
 describe("safe mode's ttlMs (#160)", () => {
   const state = {
     protocolVersion: 1,

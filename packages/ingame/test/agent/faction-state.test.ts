@@ -310,7 +310,7 @@ describe("the slow snapshot", () => {
     expect(deadlines[0]).toBeGreaterThanOrEqual(before + 2_000);
     expect(deadlines[0]).toBeLessThanOrEqual(performance.now() + 2_000);
     const slow = sent.find((message) => message.tier === "slow");
-    expect(slow?.data).toEqual({ ...SLOW_WORKER_DATA, factions: reading });
+    expect(slow?.data).toEqual({ ...SLOW_WORKER_DATA, factions: reading, gangFaction: null });
     // The next round: no slow snapshot, so no read.
     await snapshotter.takeRound(send);
     expect(order.filter((each) => each === "readFactions")).toHaveLength(1);

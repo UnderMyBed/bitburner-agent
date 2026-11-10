@@ -71,6 +71,8 @@ import {
   FactionWorkTimeline,
   SLOW_SNAPSHOT_GAP_MS,
 } from "./factions.ts";
+import { GangFactionCarry } from "./gang.ts";
+import { GangFold } from "./gang-report.ts";
 import {
   countsOf,
   DEFAULT_GAP_THRESHOLD_MS,
@@ -644,6 +646,8 @@ interface RunFacts extends RunWindow {
   augmentations: AugmentationTimeline;
   /** The hacking experience rate over the medium snapshots (#215), for the World Daemon's ETA. */
   worldDaemon: WorldDaemonFold;
+  /** The gang in BN2 (#325), from the slow and medium snapshots. */
+  gang: GangFold;
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
@@ -739,8 +743,13 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const cloudServers = new Set<string>();
     const factionState = new FactionStateFolding();
     const augmentations = new AugmentationTimeline();
-    for (const { atMs, gameTimeMs, data } of ofTier<SlowSnapshotData>("slow")) {
+    const gang = new GangFold();
+    // The gang's faction carried within each BitNode (#325): an Agent's first slow snapshot comes before its reading.
+    const gangFactions = new GangFactionCarry();
+    for (const { atMs, gameTimeMs, data: slowAsSent } of ofTier<SlowSnapshotData>("slow")) {
+      const data = gangFactions.of(slowAsSent);
       snapshotCount++;
+      gang.addSlow(atMs, data);
       hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;
@@ -794,6 +803,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       backdoors.addMedium(atMs, data);
       factionWork.addMedium(atMs, data);
       augmentations.addMedium(atMs, data);
+      gang.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
     const fastTimes: FastTime[] = [];
@@ -871,6 +881,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       factionWork,
       augmentations,
       worldDaemon,
+      gang,
       snapshotCount,
       playersServers,
       staticLast,
@@ -896,7 +907,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
  * last record (#308, `stopEndingWindow`). By default, section 3's busiest blocks (the intents, the cloud servers,
  * the augmentations, the dialogs, the faction work) and section 2's hack loop target are summarised; `verbose` (the
  * command's --verbose) lists each line instead (#245: run #3's 12.4 h was 3,270 lines, most of them those). Either way
- * the checks (sections 4 to 6), the failures, the warnings and the verdict are the same.
+ * the checks (sections 4 to 7), the failures, the warnings and the verdict are the same.
  */
 export function runReport(
   store: TelemetryStore,
@@ -973,6 +984,8 @@ export function runReport(
       // A batcher stuck on a poor target (#275), by section 5's medium snapshots' incomes and 2b's cycles.
       { incomes: facts.hacking.targetIncomes, cycleLabelAt: (atMs) => facts.cycles.cycleLabelAt(atMs) },
     ),
+    "",
+    ...facts.gang.section(failures, window.untilMs),
     "",
     failures.length > 0 ? "Verdict: FAIL" : warnings.length > 0 ? "Verdict: WARN" : "Verdict: PASS",
     ...failures.map((failure) => `  ${failure}`),

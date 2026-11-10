@@ -7,6 +7,7 @@
 import type { BatcherDeployReport, BatcherHealth } from "./batcher.ts";
 import type { SnapshotTier } from "./control-protocol.ts";
 import type { FactionStateReading } from "./faction-state.ts";
+import type { GangReading } from "./gang.ts";
 import type { IntentOutcome } from "./intents.ts";
 import type { WorkOutcome } from "./work.ts";
 
@@ -77,6 +78,12 @@ export interface SlowSnapshotData {
    */
   factions?: FactionStateReading;
   /**
+   * The gang's faction (#325), from the gang worker's last reading, added by the Agent with the faction state: null
+   * with no gang read (none formed, or none managed); absent from an older Agent. What the reports need to leave it
+   * out of the factions taking donations (core's `acceptsDonations`).
+   */
+  gangFaction?: string | null;
+  /**
    * `ns.getMoneySources().sinceInstall` (#196): money made (and spent, as negatives) by source since the last install,
    * which resets it (PlayerObjectGeneralMethods.ts:128). `hacking` is every hack's money. Absent from an older Agent.
    */
@@ -102,6 +109,11 @@ export interface MediumSnapshotData {
     moneyAvailable?: number;
     hackDifficulty?: number;
   }[];
+  /**
+   * The gang (#325), as the Agent's gang worker last read it (within 10 s), added by the Agent: null while the brain
+   * manages no gang, or before the worker's first reading; absent from an older Agent.
+   */
+  gang?: GangReading | null;
 }
 
 /** What the fast tier's worker reads: money, home's RAM, and the scripts running on home. */

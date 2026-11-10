@@ -242,6 +242,11 @@ const BUSY_STATUS: DashboardStatus = {
   },
   share: { enabled: true, asked: true, why: null, sharing: null },
   stopAtBitNodeEnd: { setting: "off" },
+  gang: {
+    line:
+      "Gang: NiteSec's, 5 members of 12 (2 training, 3 on Phishing); respect 1,234, wanted penalty 2.0% (above its " +
+      "floor 1.9%, bound 20%); $1,500/s",
+  },
   intents: [
     {
       id: "travel(Aevum)",
@@ -452,6 +457,8 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#values")).toContain(
     "Hacking income$2,049/s over the last 10 min: 5.1% of the batcher ceiling now, 4.0% of the ceiling",
   );
+  // The gang's line (#325), its "Gang: " in the row's name.
+  expect(textOf(document, "#values")).toContain("GangNiteSec's, 5 members of 12 (2 training, 3 on Phishing); respect");
   expect(textOf(document, "#gaps")).toContain("1800 fast snapshots");
   expect(textOf(document, "#gaps")).toContain("25 gaps, 500 s in all; the newest 1:");
   expect(textOf(document, "#gaps")).toContain("(100 s)");
@@ -617,6 +624,8 @@ test("a healthy brain, from the real builder: no alerts, no gaps", async () => {
   expect(textOf(document, "#values")).toContain(
     "Hacking income— (not two slow snapshots with the money sources in the last 10 min)",
   );
+  // From a builder given no gang's view (#325): a dash.
+  expect(textOf(document, "#values")).toContain("Gang—");
 });
 
 test("gave up, from the real builder: the Agent gone, a relaunch listed, and the switch offers Resume", async () => {

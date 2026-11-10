@@ -4,6 +4,7 @@
 // - fast, every round, always sent (the heartbeat), even when its worker can't run;
 // - medium every 5th round (10 s), slow every 30th (60 s), both in the first round after each welcome;
 // - static, once per Agent start, resent from memory after each welcome.
+// The medium snapshot also carries the gang's last reading (#325, ./gang.ts), at most 10 s old.
 // The slow snapshot also carries the faction state (#197), read after the slow worker (and static, in the welcome
 // round) by the Agent's reader (./faction-state.ts), given a second of the round at least, or the next round's; read or
 // not, it goes with the slow worker's data, saying why where it couldn't be read.
@@ -20,7 +21,9 @@ import {
   type FactionStateReading,
   type FastSnapshotData,
   type FastWorkerData,
+  type GangReading,
   type IntentOutcome,
+  type MediumSnapshotData,
   type RestartNote,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
@@ -80,6 +83,7 @@ export function createSnapshotter(
     dialogReport,
     takeRestartNote = () => null,
     refusedMessage = () => null,
+    gangReading = () => null,
     readFactions,
     factionsUnread = (problem) => ({ backend: "ui", state: null, problem }),
   }: {
@@ -103,6 +107,8 @@ export function createSnapshotter(
     takeRestartNote?: () => RestartNote | null;
     /** The brain's last message refused, while the Agent hasn't taken a desired state since (#194's review). */
     refusedMessage?: () => FastSnapshotData["refusedMessage"];
+    /** The gang's last reading (#325), for the medium snapshot: null while the brain manages none. */
+    gangReading?: () => GangReading | null;
     /** The faction state, read within the deadline, for each slow snapshot (#197). */
     readFactions: (deadlineMs: number) => Promise<FactionStateReading>;
     /** The reading for a slow snapshot sent unread, the round having had no time for the read again and again. */
@@ -225,7 +231,8 @@ export function createSnapshotter(
           slowReport = report;
           continue;
         }
-        send(snapshot(tier, report.gameTimeMs, report.data));
+        const mediumData: MediumSnapshotData = { ...(report.data as MediumSnapshotData), gang: gangReading() };
+        send(snapshot(tier, report.gameTimeMs, mediumData));
         roundsUntilDue[tier] = ROUNDS_BETWEEN[tier] - 1;
       }
 
@@ -249,7 +256,9 @@ export function createSnapshotter(
             ? await readFactions(roundEndsAtMs)
             : factionsUnread(noTimeToRead(roundsWaitingToRead));
           roundsWaitingToRead = 0;
-          lastSlowData = { ...(report.data as SlowSnapshotData), factions };
+          // The gang's faction (#325), from its worker's last reading: the reports leave it out of the donors.
+          const gangFaction = gangReading()?.gang?.faction ?? null;
+          lastSlowData = { ...(report.data as SlowSnapshotData), factions, gangFaction };
           send(snapshot("slow", report.gameTimeMs, lastSlowData));
           roundsUntilDue.slow = ROUNDS_BETWEEN.slow - 1;
         }
