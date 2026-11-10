@@ -749,7 +749,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     for (const { atMs, gameTimeMs, data: slowAsSent } of ofTier<SlowSnapshotData>("slow")) {
       const data = gangFactions.of(slowAsSent);
       snapshotCount++;
-      gang.addSlow(atMs, data);
+      gang.addSlow(atMs, data, gameTimeMs);
       hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;
@@ -757,6 +757,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       if (typeof lastAugReset === "number" && Number.isFinite(lastAugReset)) resetsMs.add(lastAugReset);
       factionState.add(atMs, data);
       cycles.addSlow(atMs, gameTimeMs, data);
+      worldDaemon.addSlow(gameTimeMs);
       const segment = segmentAt(cycles.bitNodes.length - 1);
       segment.slowFirst ??= data;
       segment.slowLast = data;
@@ -985,7 +986,7 @@ export function runReport(
       { incomes: facts.hacking.targetIncomes, cycleLabelAt: (atMs) => facts.cycles.cycleLabelAt(atMs) },
     ),
     "",
-    ...facts.gang.section(failures, window.untilMs),
+    ...facts.gang.section(failures, window.untilMs, facts.events),
     "",
     failures.length > 0 ? "Verdict: FAIL" : warnings.length > 0 ? "Verdict: WARN" : "Verdict: PASS",
     ...failures.map((failure) => `  ${failure}`),

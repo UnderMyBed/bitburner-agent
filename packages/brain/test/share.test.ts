@@ -125,7 +125,7 @@ describe("sharingConfigOf", () => {
       cores: {},
     });
     // In BN4 (#321) a hack thread takes a fifth, so the plan's share needs more threads: a larger peak to keep free.
-    const inBn4 = sharingConfigOf(config, data, { ScriptHackMoney: 0.2, HackExpGain: 0.4 });
+    const inBn4 = sharingConfigOf(config, data, { ...BN1_HACKING, ScriptHackMoney: 0.2, HackExpGain: 0.4 });
     expect(inBn4?.reserveGb).toBeGreaterThan(shareReserveGb(plan.peakRamGb, 0));
     // Home keeps 4 times the Agent's 8 GB free of share threads (#226's review); with Singularity, the most its largest
     // worker, the destroy's 33.9 GB at SF4.3, takes at the SF4 level owned beside that (#242's review): not all of

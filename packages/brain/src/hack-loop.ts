@@ -285,9 +285,8 @@ export const HACK_REGROW_ROUNDS = 2;
  * The player's multipliers are 1 where the snapshot doesn't say. None (absent) with no host; 1 each without the
  * target's minimum security, when a thread takes nothing, or when the inputs give no finite count (an infinite
  * multiplier, say, which the game can't produce). The BitNode's `ScriptHackMoney` is folded into `hacking_money`
- * (#321, `hacking`: core's `bitNodeHackingMultipliers`); its `ServerGrowthRate` is taken as 1 (core's
- * `growthLogPerThread`): in BN2, BN3 and BN11 that makes the counts up to 5x too generous, the unsafe side; to revisit
- * when those come to core. BN1, BN4 and BN5 are exact.
+ * (#321, `hacking`: core's `bitNodeHackingMultipliers`), and its `ServerGrowthRate` into `hacking_grow` (#334: 0.8 in
+ * BN2), so BN1, BN2, BN4 and BN5 are exact.
  */
 function hackThreadsOf(
   target: StaticServer,
@@ -318,7 +317,8 @@ function hackThreadsOf(
     typeof minDifficulty === "number"
       ? growthLogPerThread(
           { serverGrowth: serverGrowth ?? 0, hackDifficulty: minDifficulty + HACK_LOOP_SECURITY_MARGIN },
-          { mults: { hacking_grow: numberOr1(player.mults?.hacking_grow) } },
+          // The BitNode's `ServerGrowthRate` folded in (#334, `Server/formulas/grow.ts:22-28`): 0.8 in BN2.
+          { mults: { hacking_grow: numberOr1(player.mults?.hacking_grow) * hacking.ServerGrowthRate } },
         )
       : 0;
   const hostThreads = hostsWithRam.reduce((total, [, ram]) => total + Math.floor(ram / HACK_LOOP_RAM_BUDGET_GB), 0);

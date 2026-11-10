@@ -30,8 +30,10 @@ import {
   factionReadingOf,
   factionWorkChoice,
   favorAfterInstall,
+  gangSellsRedPill,
   type Intent,
   intentId,
+  type JoinedFaction,
   type MediumSnapshotData,
   NEURORECEPTOR_MANAGEMENT_IMPLANT,
   type SlowSnapshotData,
@@ -239,7 +241,13 @@ export function chooseFactionWork(
   {
     donations = true,
     held = null,
-  }: { donations?: boolean; held?: { faction: string; augmentation: string } | null } = {},
+    gang = null,
+  }: {
+    donations?: boolean;
+    held?: { faction: string; augmentation: string } | null;
+    /** The gang's faction (#334, `gangShopOf`): its shop "already reached", never worked for. */
+    gang?: JoinedFaction | null;
+  } = {},
 ): FactionWorkPlan {
   const waiting = (waitingFor: string, transient: boolean) => ({ choice: null, waitingFor, transient });
   const state: FactionState | null = factionReadingOf(slowData)?.state ?? null;
@@ -255,8 +263,13 @@ export function chooseFactionWork(
   if (working.length === 0) return waiting("a joined faction that offers work", false);
   // What core doesn't know (an augmentation, a BitNode: another game version) throws: no choice, saying so.
   try {
-    const conditions = { ...workConditionsOf(resetInfo, slowData, shareBonus), donations, ...(keep ? { keep } : {}) };
-    const count = countOf(state, resetInfo);
+    const conditions = {
+      ...workConditionsOf(resetInfo, slowData, shareBonus),
+      donations,
+      ...(keep ? { keep } : {}),
+      gang,
+    };
+    const count = countOf(state, resetInfo, gangSellsRedPill(gang?.name ?? null, resetInfo.currentNode));
     const choice = factionWorkChoice(person, state, resetInfo, conditions, count, held);
     if (choice === null) return waiting("an augmentation worth working for at the joined factions", false);
     return { choice, waitingFor: null, transient: false };
@@ -265,14 +278,22 @@ export function chooseFactionWork(
   }
 }
 
-/** Daedalus's count (#228) from the faction state and the reset info: core's `daedalusCountOf`. */
-export function countOf(state: FactionState, { currentNode, ownedAugs, ownedSF }: WorkResetInfo): DaedalusCount {
+/**
+ * Daedalus's count (#228) from the faction state and the reset info: core's `daedalusCountOf`; never short with The
+ * Red Pill sold elsewhere (#334, `redPillElsewhere`: the gang's faction in BN2).
+ */
+export function countOf(
+  state: FactionState,
+  { currentNode, ownedAugs, ownedSF }: WorkResetInfo,
+  redPillElsewhere = false,
+): DaedalusCount {
   return daedalusCountOf({
     currentNode,
     ownedSF,
     installed: ownedAugs,
     joined: state.joined,
     invitations: state.invitations,
+    redPillElsewhere,
   });
 }
 
@@ -357,6 +378,8 @@ export interface FactionInputs {
   cityGroup?: string | null;
   /** The augmentation an install is held for by work (#243 review, A6's `countHoldTarget`), worked for first. */
   countHoldTarget?: { faction: string; augmentation: string } | null;
+  /** The gang's faction (#334, `gangShopOf`), or null (absent: none): its shop counts as reached, never worked for. */
+  gangShop?: JoinedFaction | null;
 }
 
 const formatReputation = (reputation: number) => Math.round(reputation).toLocaleString("en-US");
@@ -552,6 +575,7 @@ export class FactionRule {
         : chooseFactionWork(mediumData, slowData, shareBonus, this.#sent ?? undefined, {
             donations: inputs.augmentationsEnabled ?? true,
             held: inputs.countHoldTarget ?? null,
+            gang: inputs.gangShop ?? null,
           });
     const notSent = !enabled
       ? "the brain's faction work is switched off"

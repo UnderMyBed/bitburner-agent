@@ -418,9 +418,9 @@ describe("chooseCloudServerPurchase: the largest that money allows and pays back
       next: null,
       waitingFor: "the Agent's slow snapshot (which BitNode)",
     });
-    expect(choose(medium(1e9), { slow: slowData(2) })).toMatchObject({
+    expect(choose(medium(1e9), { slow: slowData(3) })).toMatchObject({
       next: null,
-      waitingFor: "the cloud server prices in BitNode 2 (not known yet)",
+      waitingFor: "the cloud server prices in BitNode 3 (not known yet)",
     });
     expect(choose(medium(1e9), { income: null })).toMatchObject({
       next: null,

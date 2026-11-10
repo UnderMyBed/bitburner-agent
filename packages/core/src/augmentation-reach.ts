@@ -29,9 +29,10 @@ import type { Work } from "./work.ts";
 type OmitEach<Union, Key extends PropertyKey> = Union extends unknown ? Omit<Union, Key> : never;
 
 /**
- * What buying with donations needs now (#225): the joined factions taking donations with them unlocked (the gang's
- * isn't modelled, none in BN1), selling each of `wanted` (augmentations no joined seller's reputation reaches) and
- * NeuroFlux Governor, and the multipliers on a donation's reputation.
+ * What buying with donations needs now (#225): the joined factions taking donations with them unlocked (never the
+ * gang's, `gangFaction`, #334: the brain leaves it out of `joined` anyway, a report may not), selling each of `wanted`
+ * (augmentations no joined seller's reputation reaches) and NeuroFlux Governor, and the multipliers on a donation's
+ * reputation.
  */
 export function donationTermsOf(
   joined: readonly JoinedFaction[],
@@ -39,10 +40,10 @@ export function donationTermsOf(
   wanted: readonly string[],
   factionRep: number,
   multipliers: { FactionWorkRepGain: number; FavorToDonateToFaction: number },
+  gangFaction: string | null = null,
 ): DonationTerms {
-  // No gang is modelled (none in BN1): the gang's faction would take none.
   const donors = joined.filter(
-    (faction) => acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers),
+    (faction) => acceptsDonations(faction.name, gangFaction) && donationsUnlocked(faction.favor, multipliers),
   );
   const sellersOf = (name: string): DonationSeller[] =>
     donors

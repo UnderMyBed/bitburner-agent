@@ -48,10 +48,15 @@ const isNumber = (value: unknown): value is number => typeof value === "number" 
 
 /** Logged once while no slow snapshot has said the BitNode (#321): its hacking multipliers taken as BN1's meanwhile. */
 export const HACKING_MULTIPLIERS_UNREAD =
-  "hacking: no slow snapshot yet says the BitNode, so its ScriptHackMoney and HackExpGain are taken as BN1's (1) until one does";
+  "hacking: no slow snapshot yet says the BitNode, so its multipliers on hacking are taken as BN1's (1) until one does";
 
 /** BN1's hacking multipliers, the defaults (`BitNode/BitNodeMultipliers.ts`): 1 each. */
-export const BN1_HACKING: BitNodeHackingMultipliers = { ScriptHackMoney: 1, HackExpGain: 1 };
+export const BN1_HACKING: BitNodeHackingMultipliers = {
+  ScriptHackMoney: 1,
+  HackExpGain: 1,
+  ServerGrowthRate: 1,
+  HackingLevelMultiplier: 1,
+};
 
 /**
  * The hacking multipliers of `bitNode`, the slow snapshot's (#321, core's `bitNodeHackingMultipliers`), for the
@@ -67,8 +72,9 @@ export function bitNodeHackingOf(bitNode: unknown): { multipliers: BitNodeHackin
 
 /**
  * The player's hacking figures from the medium snapshot (the Agent's word), or null if any is missing; with the
- * BitNode's `ScriptHackMoney` folded into `hacking_money` (#321: `Hacking.ts:53-54` multiplies the two), so every
- * formula on the player is the game's in `hacking`'s BitNode.
+ * BitNode's `ScriptHackMoney` folded into `hacking_money` (#321: `Hacking.ts:53-54` multiplies the two) and its
+ * `ServerGrowthRate` into `hacking_grow` (#334: `Server/formulas/grow.ts:22-28` too), so every formula on the player
+ * is the game's in `hacking`'s BitNode.
  */
 export function hackingPlayerOf(player: unknown, hacking: BitNodeHackingMultipliers): HackingPlayer | null {
   const { skills, mults } = (player ?? {}) as { skills?: Record<string, unknown>; mults?: Record<string, unknown> };
@@ -76,7 +82,10 @@ export function hackingPlayerOf(player: unknown, hacking: BitNodeHackingMultipli
   const intelligence = skills?.intelligence;
   const multNames = ["hacking_chance", "hacking_speed", "hacking_money", "hacking_grow"] as const;
   if (!isNumber(level) || !isNumber(intelligence) || !multNames.every((name) => isNumber(mults?.[name]))) return null;
-  const folded = { hacking_money: (mults?.hacking_money as number) * hacking.ScriptHackMoney };
+  const folded = {
+    hacking_money: (mults?.hacking_money as number) * hacking.ScriptHackMoney,
+    hacking_grow: (mults?.hacking_grow as number) * hacking.ServerGrowthRate,
+  };
   return {
     skills: { hacking: level, intelligence },
     mults: {
@@ -90,7 +99,8 @@ export function hackingPlayerOf(player: unknown, hacking: BitNodeHackingMultipli
  * The player's multipliers a batcher config carries (#315): the formulas' four, and the level's and its exp's, with
  * which the batcher forecasts the level at each hack's landing; or null if any is missing from the medium snapshot.
  * `hacking_money` and `hacking_exp` with the BitNode's `ScriptHackMoney` and `HackExpGain` folded in (#321,
- * `Hacking.ts:37`, `:53-54`): the Agent's batcher sizes its hacks and forecasts its level with these.
+ * `Hacking.ts:37`, `:53-54`), `hacking_grow` its `ServerGrowthRate` and `hacking` its `HackingLevelMultiplier` (#334,
+ * `PersonObjects/Person.ts:60-63`): the Agent's batcher sizes its hacks and grows and forecasts its level with these.
  */
 export function batcherMultsOf(player: unknown, hacking: BitNodeHackingMultipliers): BatcherPlayerMults | null {
   const hackingPlayer = hackingPlayerOf(player, hacking);
@@ -98,7 +108,11 @@ export function batcherMultsOf(player: unknown, hacking: BitNodeHackingMultiplie
   const levelMult = mults?.hacking;
   const hackingExp = mults?.hacking_exp;
   if (hackingPlayer === null || !isNumber(levelMult) || !isNumber(hackingExp)) return null;
-  return { ...hackingPlayer.mults, hacking: levelMult, hacking_exp: hackingExp * hacking.HackExpGain };
+  return {
+    ...hackingPlayer.mults,
+    hacking: levelMult * hacking.HackingLevelMultiplier,
+    hacking_exp: hackingExp * hacking.HackExpGain,
+  };
 }
 
 /** A target's figures from the static snapshot, or null if any is missing. */

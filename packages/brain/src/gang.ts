@@ -18,12 +18,15 @@
 //   members on Territory Warfare gone between readings (only they can die, `Gang.ts:291-303`), on the dashboard.
 // - The gang's faction is left out of what the faction and augmentation rules see as joined (`withoutGangFaction`):
 //   the game offers no work or donations there (`Faction/ui/FactionRoot.tsx:97-99`, `:113`; Singularity's work and
-//   donation, `NetscriptFunctions/Singularity.ts:808-810`, `:934-935`), and its shop is nearly every augmentation
-//   (`Faction/FactionHelpers.tsx:172-202`), which core doesn't model yet (G5). In BN2, before the gang worker's first
+//   donation, `NetscriptFunctions/Singularity.ts:808-810`, `:934-935`). In BN2, before the gang worker's first
 //   reading (a brain just started), every gang faction is left out, so no work goes to one the gang may have.
+// - Its shop (#334, G5): nearly every augmentation, The Red Pill too in BN2 (`Faction/FactionHelpers.tsx:172-202`,
+//   core's `augmentationsSoldBy`). A6 and A8, and the World Daemon's path, get it apart (`gangShopOf`): its reputation
+//   as the slow snapshot reports it, which the gang's respect feeds (`Gang.ts:144-155`).
 // - No switch (#325): in BN2 the gang is the brain's to play; the owner can move members in the game, and the brain
 //   sets them back within 10 s.
 import {
+  factionReadingOf,
   GANG_ASCENSION_HORIZON_CAP_MS,
   GANG_EQUIPMENT_NAMES,
   GANG_FACTIONS,
@@ -47,6 +50,7 @@ import {
   gangTrainingTask,
   type Intent,
   intentId,
+  type JoinedFaction,
   MAX_GANG_MEMBER_NAME_LENGTH,
   type MediumSnapshotData,
   planGang,
@@ -201,7 +205,7 @@ function joinedFactionsOf(mediumData: MediumSnapshotData | null): string[] {
 /**
  * The slow snapshot with `hidden` (the gang's faction, `GangRule.hiddenFactions`) left out of the faction state's
  * joined factions (#325): what the faction, augmentation and World Daemon rules decide on. The game offers no work or
- * donations there, and its shop isn't modelled until G5. `slowData` itself is left as it is; null, or none of them
+ * donations there; its shop is A6's apart (#334, `gangShopOf`). `slowData` itself is left as it is; null, or none of them
  * joined, it's returned as it is.
  */
 export function withoutGangFaction(
@@ -216,6 +220,20 @@ export function withoutGangFaction(
     ...slowData,
     factions: { ...factions, state: { ...state, joined: state.joined.filter((each) => !hidden.includes(each.name)) } },
   };
+}
+
+/**
+ * The gang's faction as A6, A8 and the World Daemon's path see it (#334, G5): `faction`'s entry in the faction state of
+ * `slowData` as the Agent sent it (the gang's faction left in: not `withoutGangFaction`'s), its reputation the game's
+ * own. Null with no gang (`faction` null), or the faction state not showing it.
+ */
+export function gangShopOf(
+  slowData: SlowSnapshotData | null | undefined,
+  faction: string | null,
+): JoinedFaction | null {
+  if (faction === null) return null;
+  const joined = factionReadingOf(slowData)?.state?.joined ?? [];
+  return joined.find((each) => each.name === faction) ?? null;
 }
 
 /** Whether the protocol takes `name` as a member's (core's `parseGangState`): an owner's longer name is skipped. */
@@ -483,6 +501,11 @@ export class GangRule {
   /** The gang's faction, as the last reading showed it, or null: none formed, or none read. */
   gangFaction(): string | null {
     return this.#faction;
+  }
+
+  /** In BN2 with no reading yet that says whether there's a gang, or whose (#335's review). */
+  gangUnread(): boolean {
+    return this.#holding;
   }
 
   /**

@@ -10,12 +10,14 @@
 // (the switch off, or the stop didn't fire) is the owner's prompt (#308): a warning once w0r1d_d43m0n has been ready
 // (rooted at its level) 5 minutes, unbroken to its BitNode's last medium snapshot, else a line.
 import {
+  gangFactionOf,
   type MediumSnapshotData,
   type SlowSnapshotData,
   type StaticSnapshotData,
   WORLD_DAEMON,
 } from "@bitburner-agent/core";
 import { BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND } from "./bitnode-end.ts";
+import { gangShopOf } from "./gang.ts";
 import { formatDuration } from "./gap-report.ts";
 import { CITY_GROUP_CHOSEN_EVENT_KIND } from "./invitations.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
@@ -24,6 +26,7 @@ import {
   DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
   describeWorldDaemonPath,
   HackingExpRate,
+  sinceResetOf,
   WORLD_DAEMON_STALLED_AFTER_MS,
   WORLD_DAEMON_STALLED_EVENT_KIND,
   worldDaemonPath,
@@ -59,6 +62,13 @@ export class WorldDaemonFold {
   readonly #requirements: { atMs: number; level: number }[] = [];
   /** By BitNode: the run report's index of it (`BitNodeCycles.bitNodeIndexAt`). */
   readonly #readiness = new Map<number, Readiness>();
+  /** The last slow snapshot's game time (#334): the gang's faction's rate, since its install. */
+  #slowGameTimeMs: number | null = null;
+
+  /** A slow snapshot's game time, in order (#334). */
+  addSlow(gameTimeMs: number): void {
+    this.#slowGameTimeMs = gameTimeMs;
+  }
 
   /** A static snapshot, in order, the one before the window's first. */
   addStatic(atMs: number, data: StaticSnapshotData): void {
@@ -117,6 +127,9 @@ export class WorldDaemonFold {
           slowData: slowLast ?? null,
           expPerSecond: this.#exp.perSecond(),
           cityGroup,
+          // The Red Pill at the gang's faction in BN2 (#334), the slow snapshot carrying its name.
+          gangShop: gangShopOf(slowLast, gangFactionOf(slowLast)),
+          sinceResetMs: sinceResetOf(slowLast, this.#slowGameTimeMs),
         }),
       );
     } catch (error) {

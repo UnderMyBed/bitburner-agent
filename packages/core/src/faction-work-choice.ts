@@ -23,6 +23,7 @@ import {
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
+  gangSellsRedPill,
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
 } from "./augmentations.ts";
@@ -89,7 +90,7 @@ export function workTarget(
   donations = true,
 ): WorkTarget | null {
   const augmentation: WorkTarget = { reputation: augmentationReputation, reason: "augmentation" };
-  // No gang is modelled (none in BN1): the gang's faction would take none.
+  // The gang's faction never comes here: the brain leaves it out of the joined factions A5 sees (#325).
   if (!donations || !acceptsDonations(faction.name, null)) return augmentation;
   const unlock = reputationToUnlockDonations(faction.favor, { FavorToDonateToFaction: favorToDonateToFaction });
   if (unlock === 0) return null;
@@ -147,6 +148,11 @@ export interface WorkConditions {
    * times as much, so the share's bonus, which the work type gets only part of, doesn't flip it to and fro.
    */
   keep?: { faction: string; workType: FactionWorkType };
+  /**
+   * The gang's faction (#334), as the slow snapshot reports it, or null (absent: none). Never worked for (the game
+   * offers no work there); its shop counts in "already reached", and with it selling The Red Pill none is worked for.
+   */
+  gang?: JoinedFaction | null;
 }
 
 /** How much more another work type must earn to replace the one worked (#226's review). */
@@ -198,6 +204,7 @@ export interface WorkCandidate {
  * Donations (#225): not one a joined faction with donations unlocked sells (A6 buys its reputation), nor at such a
  * faction; and each at its faction's `workTarget`, not one already reached there.
  * `short` of Daedalus's count (#228): every augmentation core's `isWorthInstalling` counts then, whatever its value.
+ * `gang` (#334): the gang's faction, never a candidate, but one its reputation reaches in its shop is A6's to buy.
  */
 export function workCandidates(
   state: FactionState,
@@ -205,9 +212,10 @@ export function workCandidates(
   hackingLevel: number,
   donations = true,
   short = false,
+  gang: JoinedFaction | null = null,
 ): WorkCandidate[] {
   const { FavorToDonateToFaction } = augmentationBitNodeMultipliers(currentNode, ownedSF);
-  // No gang is modelled (none in BN1): the gang's faction would take none.
+  // The gang's faction never comes here: the brain leaves it out of the joined factions A5 sees (#325).
   const unlocked = (faction: JoinedFaction) =>
     donations &&
     acceptsDonations(faction.name, null) &&
@@ -218,7 +226,7 @@ export function workCandidates(
     sourceFile11Level: ownedSF["11"] ?? 0,
     bitNodeMultipliers: augmentationBitNodeMultipliers(currentNode, ownedSF),
   };
-  // A gang's faction isn't modelled (none in BN1): gangFaction null, so every shop is the faction's own list.
+  // The gang's faction never comes here (#325): every shop is the faction's own list; the gang's is A6's (#334).
   const shops = new Map<string, string[]>();
   for (const { name } of state.joined) {
     if (FACTION_NAMES.includes(name)) shops.set(name, augmentationsSoldBy(name, currentNode, null));
@@ -229,6 +237,7 @@ export function workCandidates(
   const joinedOf = (faction: string) =>
     state.joined.find((each) => each.name === faction) ?? { name: faction, reputation: 0, favor: 0 };
   const reputationOf = (faction: string) => joinedOf(faction).reputation;
+  const gangShop = gang === null ? [] : augmentationsSoldBy(gang.name, currentNode, gang.name);
   const candidates: WorkCandidate[] = [];
   for (const [faction, shop] of shops) {
     for (const augmentation of shop) {
@@ -239,6 +248,7 @@ export function workCandidates(
       if (!missing.every((prerequisite) => soldByJoined(prerequisite).length > 0)) continue;
       const reputationNeeded = augmentationCost(augmentation, purchaseState).reputation;
       if (soldByJoined(augmentation).some(([seller]) => reputationOf(seller) >= reputationNeeded)) continue;
+      if (gang !== null && gangShop.includes(augmentation) && gang.reputation >= reputationNeeded) continue;
       if (soldByJoined(augmentation).some(([seller]) => unlocked(joinedOf(seller)))) continue;
       const target = workTarget(reputationNeeded, joinedOf(faction), FavorToDonateToFaction, donations);
       if (target === null || reputationOf(faction) >= target.reputation) continue;
@@ -271,6 +281,8 @@ export function redPillWork(
   conditions: WorkConditions,
 ): FactionWorkChoice | null {
   if (Object.hasOwn(ownedAugs, THE_RED_PILL) || state.queuedAugmentations.includes(THE_RED_PILL)) return null;
+  // Sold by the gang's faction (#334): its reputation comes from the gang's respect, not work; none at Daedalus.
+  if (gangSellsRedPill(conditions.gang?.name ?? null, currentNode)) return null;
   const sellers = state.joined.filter(
     (faction) =>
       FACTION_NAMES.includes(faction.name) &&
@@ -362,9 +374,14 @@ export function bestCandidate(
 ): FactionWorkChoice | null {
   const rates = new Map(state.joined.map((faction) => [faction.name, bestWorkRate(person, faction, conditions)]));
   let best: (FactionWorkChoice & { score: number }) | null = null;
-  const all = workCandidates(state, resetInfo, person.skills.hacking, conditions.donations, count.short).filter(
-    (candidate) => rates.get(candidate.faction),
-  );
+  const all = workCandidates(
+    state,
+    resetInfo,
+    person.skills.hacking,
+    conditions.donations,
+    count.short,
+    conditions.gang ?? null,
+  ).filter((candidate) => rates.get(candidate.faction));
   const valued = all.filter((candidate) => candidate.value > 0);
   const forCount = valued.length === 0 && count.short;
   for (const candidate of forCount ? all : valued) {

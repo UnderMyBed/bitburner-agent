@@ -78,12 +78,11 @@ test("1 virtual hour from BN5.1 with SF1.3 and SF4.3: roots, batches, earns and 
   expect(text).toContain("  stuck intents (5 tries or more, not done at the last look):\n    none");
   expect(failures).toEqual([]);
   expect(lines.at(-1)).toBe("Verdict: PASS");
-  // The World Daemon's destroy, when it comes, would go into BN5 again (synthesis §3's row 8, BN5.2-3), past the rows
-  // the brain can't play yet.
+  // The World Daemon's destroy, when it comes, would go into BN2 (synthesis §3's row 5), playable since #334.
   expect(fresh.controller().worldDaemonView()).toMatchObject({
-    nextBitNode: 5,
+    nextBitNode: 2,
     replay: null,
-    skipped: "BN2, BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet",
+    skipped: null,
     stall: null,
   });
   // About 14 s locally; CI's runners are slower (over 30 s on 2026-11-09), so it gets its own bound.

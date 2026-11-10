@@ -136,10 +136,9 @@ export function percentMoneyHackedPerThread(
  * The log of the growth one thread's grow gives a server (#187): the game's `calculateServerGrowthLog` with 1 thread
  * on 1 core (grow.ts:8-28, Server/data/Constants.ts:7-8): `log1p(0.03 / security)`, at most `log1p(0.0035)`, x
  * growth/100 x hacking_grow x ServerGrowthRate. `threads` threads give `threads` times it. The BitNode's
- * `ServerGrowthRate` is taken as 1, until BitNode multipliers come to core: exact in BN1, but in BN2 (0.8), BN3 and
- * BN11 (0.2) and BN12 (falling with its level) it overestimates growth, up to 5x, which errs toward more hack threads,
- * the unsafe side (BitNode.tsx:579, 603, 893, 938). 0 for a server with no growth or a security of 0 or less (not a
- * game's server).
+ * `ServerGrowthRate` comes folded into `hacking_grow` (#334: the brain folds core's `bitNodeHackingMultipliers` in where
+ * it reads the player; 0.8 in BN2, BitNode.tsx:579), so exact in the BitNodes the brain plays. 0 for a server with no
+ * growth or a security of 0 or less (not a game's server).
  */
 export function growthLogPerThread(
   server: { serverGrowth: number; hackDifficulty: number },

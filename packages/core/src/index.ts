@@ -5,6 +5,8 @@ export {
   augmentationShops,
   type Endgame,
   type EndgameHold,
+  GANG_RED_PILL_HOLD_MS,
+  gangRedPillEtaMs,
   installJudgement,
 } from "./augmentation-decision.ts";
 export {
@@ -61,6 +63,7 @@ export {
   augmentationProblems,
   augmentationsSoldBy,
   BUY_AUGMENTATION_WORKER_NAME,
+  gangSellsRedPill,
   INSTALL_AUGMENTATIONS_WORKER_NAME,
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,

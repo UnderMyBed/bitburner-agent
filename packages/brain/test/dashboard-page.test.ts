@@ -971,8 +971,8 @@ test.each([
   ],
   [
     "into BN5 past the BitNodes the brain can't play yet (#323)",
-    { nextBitNode: 5, skipped: "BN2, BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet" },
-    "Destroying the BitNode (into BitNode 5; BN2, BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet): on",
+    { nextBitNode: 5, skipped: "BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet" },
+    "Destroying the BitNode (into BitNode 5; BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet): on",
   ],
   [
     "the owner's destroy queued: the brain's skips not said (#323)",

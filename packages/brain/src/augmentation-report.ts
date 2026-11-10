@@ -17,6 +17,7 @@ import {
   favorAfterInstall,
   favorToDonate,
   gangFactionOf,
+  gangSellsRedPill,
   installGains,
   isWorthInstalling,
   type MediumSnapshotData,
@@ -268,7 +269,7 @@ export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
     };
     const joined = state.joined.filter((faction) => FACTION_NAMES.includes(faction.name));
     const shops = new Map(
-      joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, null)]),
+      joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, gangFactionOf(data))]),
     );
     const owned = (name: string) =>
       Object.hasOwn(purchaseState.installed, name) || state.queuedAugmentations.includes(name);
@@ -278,6 +279,8 @@ export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
       installed: purchaseState.installed,
       joined: state.joined,
       invitations: state.invitations,
+      // Never short with The Red Pill at the gang's faction (#335's review), as A6 has it.
+      redPillElsewhere: gangSellsRedPill(gangFactionOf(data), currentNode),
     });
     const offers: DonationOffer[] = [];
     for (const name of new Set([...shops.values()].flat())) {

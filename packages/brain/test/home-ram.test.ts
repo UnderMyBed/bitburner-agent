@@ -68,12 +68,12 @@ describe("chooseHomeRamUpgrade", () => {
     });
   });
 
-  test("outside BN1, BN4 and BN5 the price isn't known yet: nothing, and the dashboard says why", () => {
-    expect(chooseHomeRamUpgrade(medium(8, { money: 1e12 }), slowData(2))).toEqual({
+  test("outside BN1, BN2, BN4 and BN5 the price isn't known yet: nothing, and the dashboard says why", () => {
+    expect(chooseHomeRamUpgrade(medium(8, { money: 1e12 }), slowData(3))).toEqual({
       ram: 8,
       next: null,
       price: null,
-      waitingFor: "the home RAM price in BitNode 2 (not known yet)",
+      waitingFor: "the home RAM price in BitNode 3 (not known yet)",
     });
   });
 

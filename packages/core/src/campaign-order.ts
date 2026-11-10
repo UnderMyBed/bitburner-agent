@@ -112,7 +112,7 @@ export function nextBitNodeOf({
 }
 
 /**
- * The skipped BitNodes in words (#323), runs with one reason together: "BN2, BN6, BN7 and BN3 skipped: no hacking
+ * The skipped BitNodes in words (#323), runs with one reason together: "BN6, BN7 and BN3 skipped: no hacking
  * multipliers or prices yet"; null with none. The brain's log line, the dashboard and the run report say it.
  */
 export function describeSkipped(skipped: readonly SkippedBitNode[]): string | null {

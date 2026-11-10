@@ -367,16 +367,50 @@ export function purchaseSequenceCost(
 /**
  * The augmentations `faction` sells, in the game's order (`Faction/Factions.ts:14-21`), less The Red Pill at Daedalus
  * in BN15 (`FactionHelpers.tsx:204-207`): there it's a darknet labyrinth's reward (`DarkNet/effects/labyrinth.ts:420-423`).
- * A gang's faction sells nearly all, drawn by a seeded RNG (`FactionHelpers.tsx:173-202`), which this doesn't model:
- * `gangFaction` is the player's gang's faction, or null, and asking for it throws.
+ * `gangFaction` is the player's gang's faction, or null: its shop is `gangShopOf`'s.
  */
 export function augmentationsSoldBy(faction: string, bitNode: number, gangFaction: string | null): string[] {
-  if (faction === gangFaction) throw new RangeError(`${faction} is the gang's faction: its shop isn't modelled`);
+  if (faction === gangFaction) return gangShopOf(faction, bitNode);
   return Object.keys(AUGMENTATIONS).filter(
     (name) =>
       AUGMENTATIONS[name]?.factions.includes(faction) &&
       !(bitNode === 15 && faction === "Daedalus" && name === THE_RED_PILL),
   );
+}
+
+/**
+ * Whether the gang's faction (`gangFaction`, null for none) sells The Red Pill in `bitNode` (#334): in BN2 only
+ * (`FactionHelpers.tsx:180-183`). Then Daedalus isn't needed for it: no count to reach, no invitation to wait for.
+ */
+export function gangSellsRedPill(gangFaction: string | null, bitNode: number): boolean {
+  return gangFaction !== null && gangShopOf(gangFaction, bitNode).includes(THE_RED_PILL);
+}
+
+/** The augmentation no gang's faction sells, though it isn't special (`FactionHelpers.tsx:178`). */
+const CONGRUITY_IMPLANT = "violet Congruity Implant";
+/**
+ * The BitNodes whose `GangUniqueAugs` is 1, the default (`BitNode/BitNodeMultipliers.ts:94`): BN1 and BN2 alone set no
+ * other (`BitNode/BitNode.tsx:572-597`; BN3 to BN15 set it under 1, `:623` to `:1115`).
+ */
+const EVERY_UNIQUE_AUGMENTATION_KEPT = [1, 2];
+
+/**
+ * A gang's faction's shop (#334, G5): `getFactionAugmentationsFiltered` (`Faction/FactionHelpers.tsx:172-202`), which
+ * Singularity's `getAugmentationsFromFaction` and the page read (`Singularity.ts:128-133`,
+ * `Faction/ui/AugmentationsPage.tsx:27`), in the game's order. Every augmentation not special and not the violet
+ * Congruity Implant (`:178`), so no NeuroFlux Governor; The Red Pill too in BN2 (`:180-183`), last. Then a seeded draw
+ * keeps each faction-unique one another faction sells with chance `GangUniqueAugs` (`:185-198`): 1 in BN1 and BN2, so
+ * there it's exact. Elsewhere this is what no draw drops, the augmentations more than one faction sells and the
+ * faction's own: cautious, never one the shop lacks.
+ */
+function gangShopOf(faction: string, bitNode: number): string[] {
+  const everyUnique = EVERY_UNIQUE_AUGMENTATION_KEPT.includes(bitNode);
+  const shop = Object.keys(AUGMENTATIONS).filter((name) => {
+    const data = AUGMENTATIONS[name] as AugmentationData;
+    if (data.isSpecial || name === CONGRUITY_IMPLANT) return false;
+    return everyUnique || data.factions.length > 1 || data.factions.includes(faction);
+  });
+  return bitNode === 2 ? [...shop, THE_RED_PILL] : shop;
 }
 
 /**

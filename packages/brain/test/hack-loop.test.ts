@@ -415,6 +415,24 @@ describe("planHackLoop (#184): the next target prepared while the current one ea
       expect(bn4.hackLoop.hackThreads).toEqual({ alpha: 26, bravo: 13, charlie: 6, delta: 6 });
     });
 
+    test("in BN2 (#334): a grow gives 0.8 of the growth (ServerGrowthRate), as a player with 0.8 of hacking_grow", () => {
+      const at = (mults: Record<string, number> = {}) => {
+        const data = medium(180, { zer0: ZER0_READY });
+        data.player = {
+          ...data.player,
+          mults: { ...(data.player.mults as Record<string, number>), ...mults },
+        } as MediumSnapshotData["player"];
+        return data;
+      };
+      const bn1 = planHackLoop(network, at(), BN1_HACKING, earningOn("n00dles")).hackLoop.hackThreads;
+      const bn2 = planHackLoop(network, at(), bitNodeHackingOf(2).multipliers, earningOn("n00dles")).hackLoop
+        .hackThreads;
+      const slower = planHackLoop(network, at({ hacking_grow: 0.8 }), BN1_HACKING, earningOn("n00dles")).hackLoop;
+      expect(bn2).toEqual(slower.hackThreads);
+      // At hacking 180, charlie's part of two rounds' growth is 4.3 threads' share in BN1, 3.5 in BN2: 4, then 2.
+      expect([bn1?.charlie, bn2?.charlie]).toEqual([4, 2]);
+    });
+
     test("n00dles (growth 3000) grows back from anything: every host hacks with all the threads its RAM holds", () => {
       // 1 - e^-5.3 of what it finds, 241 threads, so 128; alpha's 64 GB holds 26.
       expect(hackThreadsOf(network, medium(100), earningOn("n00dles"))).toEqual({

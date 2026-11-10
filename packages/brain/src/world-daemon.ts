@@ -3,7 +3,9 @@
 // reads the path from the snapshots for the dashboard and the run report, asks for the destroy once w0r1d_d43m0n is
 // ready, and fails loudly when a step the brain should finish in minutes hasn't.
 // - The path: Daedalus's requirements (core's `daedalusRequirements`), its join; The Red Pill's reputation at the
-//   joined seller (2.5m in BN1, `Augmentation/Augmentations.ts:1946-1953`), queued or installed; w0r1d_d43m0n,
+//   joined seller (2.5m in BN1, `Augmentation/Augmentations.ts:1946-1953`), queued or installed. In BN2 with a gang
+//   (#334, G5) its seller is the gang's faction (`FactionHelpers.tsx:180-183`), unless Daedalus has reached it, at
+//   the cycle's rate (core's `gangRedPillEtaMs`): no Daedalus needed; w0r1d_d43m0n,
 //   reachable once The Red Pill is installed (`Prestige.ts:174-182`), rooted (5 ports,
 //   `Server/data/servers.ts:1532-1539`: the hack loop's root worker), and the hacking level against its requirement
 //   (3000 × the BitNode's `WorldDaemonDifficulty`, `Server/ServerHelpers.ts:383-385`), with the ETA at the measured
@@ -30,6 +32,7 @@
 import {
   augmentationBitNodeMultipliers,
   augmentationCost,
+  augmentationsSoldBy,
   bitNodeUnplayableReason,
   CAMPAIGN_ORDER,
   DAEDALUS,
@@ -39,10 +42,13 @@ import {
   describeSkipped,
   type FactionState,
   factionReadingOf,
+  gangRedPillEtaMs,
+  gangSellsRedPill,
   hackingExpForLevel,
   type Intent,
   intentId,
   isBitNodeNumber,
+  type JoinedFaction,
   type MediumSnapshotData,
   type NextBitNode,
   nextBitNodeOf,
@@ -211,6 +217,12 @@ export function describeWorldDaemonSwitch(enabled: boolean, lastSlowData: unknow
   return next === null ? "on" : `on (${describeNextBitNode(next)})`;
 }
 
+/** The game's time since the last install (#334): `slowData`'s `lastAugReset` to `gameTimeMs`, or null unread. */
+export function sinceResetOf(slowData: SlowSnapshotData | null | undefined, gameTimeMs: number | null | undefined) {
+  const lastAugReset = slowData?.resetInfo?.lastAugReset;
+  return isFiniteNumber(lastAugReset) && isFiniteNumber(gameTimeMs) ? Math.max(0, gameTimeMs - lastAugReset) : null;
+}
+
 /** The path, as the snapshots show it (#215): each part null where the snapshots don't say. */
 export interface WorldDaemonPath {
   bitNode: number | null;
@@ -232,7 +244,14 @@ export interface WorldDaemonPath {
   redPill: {
     installed: boolean;
     queued: boolean;
-    /** Daedalus's reputation and what The Red Pill needs; the work's rate and ETA while short (A5's choice). */
+    /**
+     * Whose reputation `reputation` is: Daedalus's, or the gang's faction's where it sells it (#334), unless Daedalus
+     * has reached it; null with neither (Daedalus not joined, no gang selling it).
+     */
+    seller: string | null;
+    /** Whether `seller` is the gang's faction (#334): its rate the cycle's, not work's. */
+    gang: boolean;
+    /** The seller's reputation and what The Red Pill needs; the rate and ETA while short (A5's work's, or the gang's). */
     reputation: number | null;
     reputationNeeded: number | null;
     perSecond: number | null;
@@ -328,6 +347,8 @@ export function worldDaemonPath({
   expPerSecond,
   shareBonus = 1,
   cityGroup = null,
+  gangShop = null,
+  sinceResetMs = null,
 }: {
   staticData: StaticSnapshotData | null;
   mediumData: MediumSnapshotData | null;
@@ -336,6 +357,10 @@ export function worldDaemonPath({
   shareBonus?: number;
   /** The city group the brain chose this cycle (#228), for the reach; null for none. */
   cityGroup?: string | null;
+  /** The gang's faction (#334, the gang's `gangShopOf`), or null for none. */
+  gangShop?: JoinedFaction | null;
+  /** The game's time since the last install (#334), the gang's faction's rate; null unread. */
+  sinceResetMs?: number | null;
 }): WorldDaemonPath {
   const resetInfo = slowData === null ? null : resetInfoOf(slowData);
   const state: FactionState | null = slowData === null ? null : (factionReadingOf(slowData)?.state ?? null);
@@ -349,12 +374,14 @@ export function worldDaemonPath({
   };
   if (resetInfo !== null && !redPillInstalled) {
     const required = daedalusRequirements(resetInfo.currentNode, resetInfo.ownedSF);
+    // Never short with The Red Pill at the gang's faction (#335's review), as A6 has it.
     const count = daedalusCountOf({
       currentNode: resetInfo.currentNode,
       ownedSF: resetInfo.ownedSF,
       installed: resetInfo.ownedAugs,
       joined: state?.joined ?? [],
       invitations: state?.invitations ?? [],
+      redPillElsewhere: gangSellsRedPill(gangShop?.name ?? null, resetInfo.currentNode),
     });
     const augmentations = count.installed;
     const person = mediumData === null ? null : workingPersonOf(mediumData);
@@ -382,6 +409,17 @@ export function worldDaemonPath({
     };
     const queued = state?.queuedAugmentations.includes(THE_RED_PILL) ?? false;
     const daedalus = state?.joined.find((faction) => faction.name === DAEDALUS) ?? null;
+    // The gang's faction (#334): selling it (BN2), it's the route, as A6 and A5 have it, at the cycle's rate; Daedalus
+    // only once its reputation reaches it (#335's re-review), else its estimate and stall would be of work A5 won't do.
+    const gangSells =
+      gangShop !== null &&
+      augmentationsSoldBy(gangShop.name, resetInfo.currentNode, gangShop.name).includes(THE_RED_PILL);
+    const reputationNeeded = augmentationCost(THE_RED_PILL, {
+      installed: resetInfo.ownedAugs,
+      queued: state?.queuedAugmentations ?? [],
+      sourceFile11Level: resetInfo.ownedSF["11"] ?? 0,
+      bitNodeMultipliers: augmentationBitNodeMultipliers(resetInfo.currentNode, resetInfo.ownedSF),
+    }).reputation;
     // By work alone, to The Red Pill's own reputation (#225 review): A5's favour target for it isn't the path's ETA.
     const work =
       person === null || state === null || slowData === null
@@ -390,24 +428,40 @@ export function worldDaemonPath({
             ...workConditionsOf(resetInfo, slowData, shareBonus),
             donations: false,
           });
-    path.redPill = {
-      installed: false,
-      queued,
-      reputation: daedalus?.reputation ?? null,
-      reputationNeeded: augmentationCost(THE_RED_PILL, {
-        installed: resetInfo.ownedAugs,
-        queued: state?.queuedAugmentations ?? [],
-        sourceFile11Level: resetInfo.ownedSF["11"] ?? 0,
-        bitNodeMultipliers: augmentationBitNodeMultipliers(resetInfo.currentNode, resetInfo.ownedSF),
-      }).reputation,
-      perSecond: work?.reputationPerSecond ?? null,
-      etaSeconds: work?.etaSeconds ?? null,
-    };
+    if (gangShop !== null && gangSells && !(daedalus !== null && daedalus.reputation >= reputationNeeded)) {
+      const etaMs = gangRedPillEtaMs(gangShop.reputation, reputationNeeded, sinceResetMs);
+      path.redPill = {
+        installed: false,
+        queued,
+        seller: gangShop.name,
+        gang: true,
+        reputation: gangShop.reputation,
+        reputationNeeded,
+        perSecond:
+          sinceResetMs !== null && sinceResetMs > 0 && gangShop.reputation > 0
+            ? gangShop.reputation / (sinceResetMs / 1000)
+            : null,
+        etaSeconds: Number.isFinite(etaMs) ? etaMs / 1000 : null,
+      };
+    } else {
+      path.redPill = {
+        installed: false,
+        queued,
+        seller: daedalus === null ? null : DAEDALUS,
+        gang: false,
+        reputation: daedalus?.reputation ?? null,
+        reputationNeeded,
+        perSecond: work?.reputationPerSecond ?? null,
+        etaSeconds: work?.etaSeconds ?? null,
+      };
+    }
   }
   if (redPillInstalled) {
     path.redPill = {
       installed: true,
       queued: false,
+      seller: null,
+      gang: false,
       reputation: null,
       reputationNeeded: null,
       perSecond: null,
@@ -469,12 +523,16 @@ export function describeWorldDaemonPath(path: WorldDaemonPath): string[] {
       const needed = redPill.reputationNeeded;
       const reached = needed !== null && redPill.reputation >= needed;
       lines.push(
-        `${THE_RED_PILL}: Daedalus's reputation ${count(redPill.reputation)} of ${needed === null ? "?" : count(needed)}` +
+        `${THE_RED_PILL}: ${redPill.seller ?? DAEDALUS}'s${redPill.gang ? " (the gang's faction)" : ""} reputation ` +
+          `${count(redPill.reputation)} of ${needed === null ? "?" : count(needed)}` +
           (reached
             ? ", reached: to buy and install"
             : redPill.perSecond !== null && redPill.etaSeconds !== null
-              ? ` at ${redPill.perSecond.toFixed(1)}/s: about ${describeEta(redPill.etaSeconds)}`
-              : ", no work earning it"),
+              ? ` at ${redPill.perSecond.toFixed(1)}/s${redPill.gang ? " (the cycle's)" : ""}: about ` +
+                describeEta(redPill.etaSeconds)
+              : redPill.gang
+                ? ", none earned this cycle yet"
+                : ", no work earning it"),
       );
     }
   }
@@ -569,6 +627,12 @@ export interface WorldDaemonInputs {
   countFacts?: CountFacts | null;
   /** A6 asked for its install (#238 review, `AugmentationRule.installAskedFor`): an install with no facts is its. */
   augmentationsInstalling?: boolean;
+  /** The gang's faction (#334, the gang's `gangShopOf`), The Red Pill's seller in BN2; none when absent. */
+  gangShop?: JoinedFaction | null;
+  /** The game's time of the slow snapshot (its `gameTimeMs`), for the gang's faction's rate; none when absent. */
+  slowGameTimeMs?: number | null;
+  /** A6 holds installs for The Red Pill at the gang's faction (#335's review): its not rising stall; not when absent. */
+  redPillHeldAtGang?: boolean;
 }
 
 /** The World Daemon rule (#215), as the controller runs it. */
@@ -667,6 +731,9 @@ export class WorldDaemonRule {
     cityGroup = null,
     countFacts = null,
     augmentationsInstalling = false,
+    gangShop = null,
+    slowGameTimeMs = null,
+    redPillHeldAtGang = false,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
     if (slowData !== null) {
@@ -702,6 +769,8 @@ export class WorldDaemonRule {
         expPerSecond: this.#expRate.perSecond(),
         shareBonus,
         cityGroup,
+        gangShop,
+        sinceResetMs: sinceResetOf(slowData, slowGameTimeMs),
       });
     } catch (error) {
       this.#log(`world daemon: the snapshots as core knows the game: ${(error as Error).message}`);
@@ -709,7 +778,7 @@ export class WorldDaemonRule {
     }
     this.#path = path;
     this.#watchCount(path, slowData, nowMs ?? 0, countFacts, augmentationsInstalling);
-    this.#watch(path, nowMs ?? 0, enabled);
+    this.#watch(path, nowMs ?? 0, enabled, redPillHeldAtGang);
     const ready = path.daemon !== null && path.daemon.problem === null;
     if (enabled && ready && this.#asked === null && isFiniteNumber(lastNodeReset)) {
       // The slow snapshot's BitNode or Source-Files not read (#321): no destroy into a BitNode guessed; the destroy
@@ -804,7 +873,7 @@ export class WorldDaemonRule {
   }
 
   /** Each step that could be done, from when; one not done its `STALLED_AFTER_MS` on is stored and logged. */
-  #watch(path: WorldDaemonPath, nowMs: number, enabled: boolean): void {
+  #watch(path: WorldDaemonPath, nowMs: number, enabled: boolean, redPillHeldAtGang = false): void {
     const steps = new Map<StallStep, { detail: string; sinceMs?: number }>();
     const { daedalus, redPill, daemon } = path;
     if (this.#stuck !== null) {
@@ -823,8 +892,17 @@ export class WorldDaemonRule {
     if (redPill !== null && !redPill.installed && (redPill.queued || reached)) {
       steps.set("redPill", { detail: `${THE_RED_PILL} ${redPill.queued ? "queued" : "reached"}, not installed` });
     }
-    // Short at a joined Daedalus, A6 holds every install: its reputation not rising is loud (#215 review).
-    if (redPill !== null && !redPill.installed && !redPill.queued && !reached && redPill.reputation !== null) {
+    // Short at a joined Daedalus, A6 holds every install: its reputation not rising is loud (#215 review). At the gang's
+    // faction (#334) only while A6 holds for it (at most 20 min a cycle, #335's review): a gang's respect pauses while
+    // its members train, which holds nothing otherwise.
+    if (
+      redPill !== null &&
+      !redPill.installed &&
+      !redPill.queued &&
+      !reached &&
+      redPill.reputation !== null &&
+      (!redPill.gang || redPillHeldAtGang)
+    ) {
       const value = redPill.reputation;
       if (this.#reputation === null || value !== this.#reputation.value) {
         // Risen; or fallen (an install, a reload): watched afresh.
@@ -832,7 +910,7 @@ export class WorldDaemonRule {
       }
       steps.set("redPillReputation", {
         detail:
-          `${THE_RED_PILL}'s reputation at Daedalus not rising (${count(value)} of ` +
+          `${THE_RED_PILL}'s reputation at ${redPill.seller ?? DAEDALUS} not rising (${count(value)} of ` +
           `${count(redPill.reputationNeeded ?? 0)}): no install is chosen meanwhile, so nothing earning it stalls A6`,
         sinceMs: this.#reputation.risenAtMs,
       });

@@ -9,6 +9,7 @@ import {
   type AugmentationSet,
   affordableCounts,
   type CountedPurchases,
+  DAEDALUS_COUNT_HOLD_MS,
   type Donation,
   type DonationTerms,
   daedalusCountOf,
@@ -32,9 +33,14 @@ import { DAEDALUS, type DaedalusFigures, daedalusMissing, daedalusRequirements, 
 
 /** What the joined factions sell, and of it what a joined seller's reputation reaches, not owned. */
 export interface AugmentationShops {
-  /** The joined factions core knows, and each one's shop (`augmentationsSoldBy`). */
+  /**
+   * The joined factions core knows, and each one's shop (`augmentationsSoldBy`). The gang's faction (#334) is never in
+   * `joined`, where work and donations look (the game offers neither there), but its shop is in `shops`.
+   */
   joined: JoinedFaction[];
   shops: Map<string, string[]>;
+  /** The gang's faction whose shop is in `shops`, or null (no gang). */
+  gangFaction: string | null;
   /** Every augmentation they sell but NeuroFlux Governor, each once. */
   sold: string[];
   /** Of `sold`, those not owned whose reputation a joined seller has. */
@@ -46,16 +52,23 @@ export interface AugmentationShops {
   neuroFluxReputation: number;
 }
 
-/** The joined factions' shops (A6's, #210): `owned` is installed or in the queue the plan counts. */
+/**
+ * The joined factions' shops (A6's, #210): `owned` is installed or in the queue the plan counts. `gang` (#334) is the
+ * gang's faction as the slow snapshot reports it, its reputation the game's own (respect feeds it, `Gang.ts:144-155`),
+ * or null: its shop, nearly every augmentation (`augmentationsSoldBy`'s), joins the others; never `joined`.
+ */
 export function augmentationShops(
   joined: readonly JoinedFaction[],
   currentNode: number,
   state: AugmentationPurchaseState,
   owned: (name: string) => boolean,
+  gang: JoinedFaction | null = null,
 ): AugmentationShops {
-  const known = joined.filter((faction) => FACTION_NAMES.includes(faction.name));
+  const known = joined.filter((faction) => FACTION_NAMES.includes(faction.name) && faction.name !== gang?.name);
   const shops = new Map(known.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, null)]));
-  const reputationOf = (faction: string) => known.find((each) => each.name === faction)?.reputation ?? 0;
+  if (gang !== null) shops.set(gang.name, augmentationsSoldBy(gang.name, currentNode, gang.name));
+  const sellers = gang === null ? known : [...known, gang];
+  const reputationOf = (faction: string) => sellers.find((each) => each.name === faction)?.reputation ?? 0;
   const sellerOf = (augmentation: string): string | null => {
     const needed = augmentationCost(augmentation, state).reputation;
     let best: string | null = null;
@@ -78,12 +91,38 @@ export function augmentationShops(
   return {
     joined: known,
     shops,
+    gangFaction: gang?.name ?? null,
     sold,
     reached: sold.filter((name) => !owned(name) && sellerOf(name) !== null),
     sellerOf,
     reputationOf,
     neuroFluxReputation,
   };
+}
+
+/**
+ * The longest A8 holds installs for The Red Pill at the gang's faction in a cycle (#334): Daedalus's count hold's
+ * window (`DAEDALUS_COUNT_HOLD_MS`, 20 minutes), from the hold's first start, never restarted in the cycle (as
+ * `daedalusCountHold`'s). An install would lose the cycle's reputation there (`Faction/Faction.ts:77-85`); the gang,
+ * which earns it, stays (`Prestige.ts:133-146`). That window was sized from BN1's cycle of about 28 minutes (run #3's,
+ * `augmentation-plan.ts:583-589`); a cycle to The Red Pill's 2.5m at a gang is hours, so a hold that reaches it saves far
+ * more than the 20 minutes it costs at most.
+ */
+export const GANG_RED_PILL_HOLD_MS = DAEDALUS_COUNT_HOLD_MS;
+
+/**
+ * The time, ms, the gang's faction's `reputation` takes to reach `needed` at the cycle's rate (#334): its reputation
+ * over `sinceResetMs`, the game's time since the last install, which reset it to 0 (`Faction/Faction.ts:77-85`). The
+ * reputation is the game's own (respect feeds it, `Gang.ts:144-155`). An estimate, wrong either way: long where that
+ * time counts any while the game was closed or before the gang formed, or the gang's rate is rising (more members,
+ * ascensions), so no hold, and an install throws the reputation away (optimistic for the route); short where the rate
+ * is falling (training, ascensions, Territory Warfare, money tasks at 12), so a hold that doesn't reach it, which the
+ * window's cap bounds. 0 once reached; Infinity with none earned or the time unread.
+ */
+export function gangRedPillEtaMs(reputation: number, needed: number, sinceResetMs: number | null): number {
+  if (reputation >= needed) return 0;
+  if (sinceResetMs === null || !(sinceResetMs > 0) || !(reputation > 0)) return Number.POSITIVE_INFINITY;
+  return ((needed - reputation) / reputation) * sinceResetMs;
 }
 
 /** Why the endgame holds every install (the brain words each). */
@@ -94,8 +133,11 @@ export type EndgameHold =
   | { why: "redPillNotQueued" }
   /** The Red Pill's donation at `faction` (unlocked) for `amount`, more than the money. */
   | { why: "redPill"; donation: { faction: string; amount: number }; money: number }
-  /** The Red Pill's reputation short at its best seller: an install would lose it. */
-  | { why: "redPill"; seller: { faction: string; reputation: number; needed: number } }
+  /**
+   * The Red Pill's reputation short at its best seller: an install would lose it. At the gang's faction (#334), with
+   * `etaMs`, the time to it at the cycle's rate (`gangRedPillEtaMs`), within `GANG_RED_PILL_HOLD_MS`.
+   */
+  | { why: "redPill"; seller: { faction: string; reputation: number; needed: number; etaMs?: number } }
   /** Daedalus's invitation waiting on its money alone (what's missing, `daedalusMissing`'s words). */
   | { why: "daedalus"; missing: string[] };
 
@@ -113,6 +155,11 @@ export type Endgame =
  * - reported bought but not queued: a hold;
  * - a seller with donations unlocked (#225): its donation when the money covers it, else a hold reserving it;
  * - Daedalus's reputation this cycle unlocks its donations at the next install (`redPillTarget`): "Daedalus donations";
+ * - with the gang's faction selling it (#334, BN2), Daedalus isn't needed: no favour's install, no hold for Daedalus's
+ *   reputation or invitation; the gang's faction short, a hold only while its reputation reaches The Red Pill's within
+ *   `GANG_RED_PILL_HOLD_MS` at the cycle's rate (`gangRedPillEtaMs`, `sinceResetMs` the game's time since the last
+ *   install, null unread: no hold) and the cycle's hold there isn't over (`gangHoldOver`, the brain's: the window from
+ *   its first start, passed); else none;
  * - a seller joined, its reputation short: a hold (an install would lose it);
  * - Daedalus's invitation missing nothing but its money: a hold reserving the money;
  * - else none.
@@ -129,6 +176,8 @@ export function augmentationEndgame({
   currentNode,
   ownedSF,
   destroyWanted,
+  sinceResetMs = null,
+  gangHoldOver = false,
 }: {
   installed: Readonly<Record<string, number>>;
   /** What an install would install, and the queue the plan counts. */
@@ -143,6 +192,10 @@ export function augmentationEndgame({
   currentNode: number;
   ownedSF: Readonly<Record<string, number>>;
   destroyWanted: boolean;
+  /** The game's time since the last install, for the gang's faction's rate (#334); null or absent, unread. */
+  sinceResetMs?: number | null;
+  /** The cycle's hold at the gang's faction is over (#334): its window from its first start passed. Absent, not. */
+  gangHoldOver?: boolean;
 }): Endgame {
   if (Object.hasOwn(installed, THE_RED_PILL)) {
     return destroyWanted ? { kind: "hold", why: "destroy", reserve: 0 } : { kind: "none" };
@@ -153,15 +206,23 @@ export function augmentationEndgame({
   const sellers = [...shops.shops].filter(([, shop]) => shop.includes(THE_RED_PILL)).map(([faction]) => faction);
   if (sellers.some((faction) => shops.reputationOf(faction) >= needed)) return { kind: "redPill", donation: null };
   const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
+  // The gang's faction is never in `joined` (#334): it takes no donations, and isn't Daedalus.
   const sellerFactions = shops.joined.filter((faction) => sellers.includes(faction.name));
-  // No gang is modelled (none in BN1): the gang's faction would take none.
   const donor = sellerFactions.find(
-    (faction) => acceptsDonations(faction.name, null) && donationsUnlocked(faction.favor, multipliers),
+    (faction) => acceptsDonations(faction.name, shops.gangFaction) && donationsUnlocked(faction.favor, multipliers),
   );
   if (donor !== undefined) {
     const amount = donationToReach(needed - donor.reputation, factionRep, multipliers.FactionWorkRepGain);
     if (money >= amount) return { kind: "redPill", donation: { faction: donor.name, reputation: needed, amount } };
     return { kind: "hold", why: "redPill", reserve: amount, donation: { faction: donor.name, amount }, money };
+  }
+  // The gang's faction selling it (#334, BN2): Daedalus isn't needed, so only the gang's faction holds, briefly.
+  const gang = shops.gangFaction;
+  if (gang !== null && sellers.includes(gang)) {
+    const reputation = shops.reputationOf(gang);
+    const etaMs = gangRedPillEtaMs(reputation, needed, sinceResetMs);
+    if (gangHoldOver || !(etaMs <= GANG_RED_PILL_HOLD_MS)) return { kind: "none" };
+    return { kind: "hold", why: "redPill", reserve: 0, seller: { faction: gang, reputation, needed, etaMs } };
   }
   // Daedalus's favour (#225, legacy `autopilot.js:920-931`): its reputation this cycle unlocks its donations at the
   // next install, A5's target for it (`redPillTarget`: not once 90% of The Red Pill's is earned).

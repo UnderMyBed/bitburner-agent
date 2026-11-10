@@ -276,9 +276,10 @@ describe("the destroy", () => {
     expect(rule.view()).toMatchObject({ nextBitNode: 5, replay: null, skipped: null });
   });
 
-  test("past the BitNodes the brain can't play yet (#323): BN5.1 into BN5 again, the skipped logged and in the view", () => {
-    const skipped = "BN2, BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet";
-    expect(update({ slowData: slow({ currentNode: 5, ownedSF: { 1: 3, 4: 3 } }) })).toBe(true);
+  test("past the BitNodes the brain can't play yet (#323): BN2.3 into BN5 again, the skipped logged and in the view", () => {
+    const skipped = "BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet";
+    const bn23 = { currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } };
+    expect(update({ slowData: slow(bn23) })).toBe(true);
     expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(5));
     expect(rule.view()).toMatchObject({ nextBitNode: 5, replay: null, skipped });
     expect(lines).toEqual([
@@ -287,9 +288,10 @@ describe("the destroy", () => {
     ]);
     // A slow snapshot whose next is another BitNode (BN1, a replay, all the rest skipped): the asked-for BN5's skips
     // aren't that one's.
-    update({ slowData: slow({ currentNode: 5, ownedSF: { 1: 3, 4: 3, 5: 3 } }) });
+    update({ slowData: slow({ currentNode: 5, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 3 } }) });
     expect(rule.view()).toMatchObject({ nextBitNode: 5, replay: null, skipped: null });
-    expect(skippedOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3 } }, 5)).toBe(skipped);
+    expect(skippedOf(bn23, 5)).toBe(skipped);
+    // BN5.1 into BN2 (#334): nothing skipped.
     expect(skippedOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3 } }, 2)).toBeNull();
     expect(skippedOf({ currentNode: 4, ownedSF: { 1: 3, 4: 2 } }, 5)).toBeNull();
     expect(skippedOf(undefined, 5)).toBeNull();
@@ -310,8 +312,8 @@ describe("the destroy", () => {
     expect(worldDaemonDestroyInto("destroyBitNode(1)")).toBe(1);
     expect(worldDaemonDestroyInto("destroyBitNode(4)")).toBe(4);
     expect(worldDaemonDestroyInto("destroyBitNode(5)")).toBe(5);
-    // BN2 is in the order (#323), but the brain doesn't play it yet: a destroy into it is never the brain's.
-    expect(worldDaemonDestroyInto("destroyBitNode(2)")).toBeNull();
+    // BN2 played since #334; BN3 is in the order (#323), but the brain doesn't play it yet: never the brain's.
+    expect(worldDaemonDestroyInto("destroyBitNode(2)")).toBe(2);
     expect(worldDaemonDestroyInto("destroyBitNode(3)")).toBeNull();
     expect(worldDaemonDestroyInto("installAugmentations()")).toBeNull();
   });
@@ -423,19 +425,172 @@ describe("stalls", () => {
   });
 });
 
+describe("The Red Pill at the gang's faction (#334, G5)", () => {
+  const NITESEC = (reputation: number) => ({ name: "NiteSec", reputation, favor: 0 });
+  /** BN2, nothing installed (Daedalus's count far off), 1 h since the install. */
+  const bn2 = (fields: Parameters<typeof slow>[0] = {}) =>
+    slow({ ownedAugs: { [ONE]: 1 }, currentNode: 2, lastAugReset: 0, ...fields });
+  const HOUR = 60 * MINUTE;
+
+  test("the path: its seller the gang's faction, at the cycle's rate and ETA; no Daedalus needed; reached; queued", () => {
+    const path = (slowData: SlowSnapshotData, reputation: number, sinceResetMs: number | null = HOUR) =>
+      worldDaemonPath({
+        staticData: staticData(15_000),
+        mediumData: medium({ hacking: 500 }),
+        slowData,
+        expPerSecond: null,
+        gangShop: NITESEC(reputation),
+        sinceResetMs,
+      });
+    // 500,000 in an hour: 138.9 a second, the rest in 4 hours.
+    const short = path(bn2(), 500_000);
+    expect(short.redPill).toMatchObject({
+      seller: "NiteSec",
+      gang: true,
+      reputation: 500_000,
+      reputationNeeded: 2.5e6,
+    });
+    expect(short.redPill?.perSecond).toBeCloseTo(500_000 / 3600, 9);
+    expect(short.redPill?.etaSeconds).toBeCloseTo(4 * 3600, 6);
+    expect(describeWorldDaemonPath(short)[1]).toBe(
+      "The Red Pill: NiteSec's (the gang's faction) reputation 500,000 of 2,500,000 at 138.9/s (the cycle's): about " +
+        "4.0 h",
+    );
+    expect(describeWorldDaemonPath(path(bn2(), 0))[1]).toBe(
+      "The Red Pill: NiteSec's (the gang's faction) reputation 0 of 2,500,000, none earned this cycle yet",
+    );
+    expect(describeWorldDaemonPath(path(bn2(), 2.5e6))[1]).toBe(
+      "The Red Pill: NiteSec's (the gang's faction) reputation 2,500,000 of 2,500,000, reached: to buy and install",
+    );
+    expect(describeWorldDaemonPath(path(bn2({ queued: [RED_PILL] }), 2.5e6))[1]).toBe(
+      "The Red Pill: queued, to install",
+    );
+    // Daedalus joined with more (#335's re-review): still the gang's faction, A6's route there, unless Daedalus has
+    // reached it. Outside BN2 the gang's faction sells none (`FactionHelpers.tsx:180`).
+    expect(path(bn2({ daedalus: 600_000 }), 500_000).redPill).toMatchObject({ seller: "NiteSec", gang: true });
+    expect(path(bn2({ daedalus: 400_000 }), 500_000).redPill).toMatchObject({ seller: "NiteSec", gang: true });
+    expect(path(bn2({ daedalus: 2.5e6 }), 500_000).redPill).toMatchObject({ seller: "Daedalus", gang: false });
+    expect(path(bn2({ currentNode: 1 }), 2.5e6).redPill).toMatchObject({ seller: null, reputation: null });
+    // Daedalus's count never short with the gang's faction selling it (#335's review); without a gang, short.
+    expect(short.daedalus?.short).toBe(false);
+    const noGang = worldDaemonPath({
+      staticData: staticData(15_000),
+      mediumData: medium({ hacking: 500 }),
+      slowData: bn2(),
+      expPerSecond: null,
+    });
+    expect(noGang.daedalus?.short).toBe(true);
+  });
+
+  test("reached there and not installed 15 minutes on: the stall, a failure; its reputation pausing isn't one", () => {
+    const at = (reputation: number, nowMs: number) =>
+      update({
+        mediumData: medium({ hacking: 500 }),
+        slowData: bn2(),
+        gangShop: NITESEC(reputation),
+        slowGameTimeMs: HOUR,
+        nowMs,
+      });
+    // Short and not rising for an hour, A6 not holding for it: a gang's respect pauses while its members train.
+    at(1e6, 0);
+    at(1e6, 6 * RED_PILL_REPUTATION_STALLED_AFTER_MS);
+    expect(rule.stall()).toBeNull();
+    expect(rule.view().path?.redPill).toMatchObject({ seller: "NiteSec", reputation: 1e6 });
+    // At the cycle's rate, from the slow snapshot's game time: 1m in an hour, the rest in 1.5 h.
+    expect(rule.view().path?.redPill?.perSecond).toBeCloseTo(1e6 / 3600, 9);
+    expect(rule.view().path?.redPill?.etaSeconds).toBeCloseTo(1.5 * 3600, 6);
+    // Reached: 15 minutes for A6's whole commit, then the stall.
+    const reachedAt = HOUR;
+    at(2.5e6, reachedAt);
+    at(2.5e6, reachedAt + RED_PILL_INSTALL_STALLED_AFTER_MS - 1);
+    expect(rule.stall()).toBeNull();
+    at(2.5e6, reachedAt + RED_PILL_INSTALL_STALLED_AFTER_MS);
+    expect(rule.stall()).toMatchObject({ step: "redPill", detail: "The Red Pill reached, not installed" });
+    expect(events.map((event) => (event.type === "worldDaemonStalled" ? event.step : event.type))).toEqual(["redPill"]);
+  });
+
+  test("not rising at the gang's faction while held, Daedalus ahead and rising (#335's re-review): the gang's stall", () => {
+    // Daedalus at 2.45m and rising, the gang's faction flat at 2.4m with A6 holding there: the gang's is watched.
+    const at = (nowMs: number, daedalus: number) =>
+      update({
+        mediumData: medium({ hacking: 500 }),
+        slowData: bn2({ daedalus }),
+        gangShop: NITESEC(2.4e6),
+        slowGameTimeMs: HOUR,
+        redPillHeldAtGang: true,
+        nowMs,
+      });
+    at(0, 2.45e6);
+    expect(rule.view().path?.redPill).toMatchObject({ seller: "NiteSec", gang: true, reputation: 2.4e6 });
+    at(RED_PILL_REPUTATION_STALLED_AFTER_MS - 1, 2.46e6);
+    expect(rule.stall()).toBeNull();
+    at(RED_PILL_REPUTATION_STALLED_AFTER_MS, 2.47e6);
+    expect(rule.stall()).toMatchObject({
+      step: "redPillReputation",
+      detail: expect.stringContaining("The Red Pill's reputation at NiteSec not rising (2,400,000 of 2,500,000)"),
+    });
+  });
+
+  test("not rising while A6 holds installs for it (#335's review): the stall at 10 minutes, as at Daedalus", () => {
+    const at = (nowMs: number, redPillHeldAtGang = true) =>
+      update({
+        mediumData: medium({ hacking: 500 }),
+        slowData: bn2(),
+        gangShop: NITESEC(2.4e6),
+        slowGameTimeMs: HOUR,
+        redPillHeldAtGang,
+        nowMs,
+      });
+    at(0);
+    at(RED_PILL_REPUTATION_STALLED_AFTER_MS - 1);
+    expect(rule.stall()).toBeNull();
+    at(RED_PILL_REPUTATION_STALLED_AFTER_MS);
+    expect(rule.stall()).toMatchObject({
+      step: "redPillReputation",
+      detail:
+        "The Red Pill's reputation at NiteSec not rising (2,400,000 of 2,500,000): no install is chosen meanwhile, so " +
+        "nothing earning it stalls A6",
+    });
+  });
+});
+test("the run report's path (#334): the gang's faction from the window's last slow snapshot, at its game time's rate", () => {
+  const fold = new WorldDaemonFold();
+  fold.addSlow(60 * MINUTE);
+  const slowLast = {
+    ...slow({ ownedAugs: { [ONE]: 1 }, currentNode: 2 }),
+    gangFaction: "NiteSec",
+    factions: {
+      backend: "sim",
+      state: { joined: [{ name: "NiteSec", reputation: 500_000, favor: 0 }], invitations: [], queuedAugmentations: [] },
+      problem: null,
+    },
+  } as SlowSnapshotData;
+  const lines = fold.pathLines(
+    { staticLast: staticData(15_000), mediumLast: medium({ hacking: 500 }), slowLast },
+    [],
+    (ms) => `t${ms}`,
+  );
+  expect(lines).toContain(
+    "    The Red Pill: NiteSec's (the gang's faction) reputation 500,000 of 2,500,000 at 138.9/s (the cycle's): about " +
+      "4.0 h",
+  );
+});
+
 describe("a replay with nothing playable left in the campaign's order to gain (#311, #321, #323)", () => {
   const REPLAY =
-    "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 4 at 3, " +
+    "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
     "Source-File 5 at 3), but the run";
   const SKIPPED =
-    "BN2, BN6, BN7, BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
-  const CAPS = { 1: 3, 4: 3, 5: 3 };
+    "BN6, BN7, BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
+  const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
   const atCaps = { slowData: slow({ ownedSF: CAPS }) };
 
   test("replayOf: the brain's next BitNode with nothing left in the order, and only that", () => {
     expect(replayOf({ currentNode: 1, ownedSF: CAPS }, 1)).toBe(REPLAY);
     // BN5.3 destroyed: SF5 reaches 3 by it.
-    expect(replayOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3, 5: 2 } }, 1)).toBe(REPLAY);
+    expect(replayOf({ currentNode: 5, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 2 } }, 1)).toBe(REPLAY);
+    // BN5.3 destroyed with BN2 short: into BN2 (#334), no replay.
+    expect(replayOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3, 5: 2 } }, 2)).toBeNull();
     // BN4.3 destroyed with SF1 at 3 (#321's replay): BN5 is next now (#323).
     expect(replayOf({ currentNode: 4, ownedSF: { 1: 3, 4: 2 } }, 1)).toBeNull();
     expect(skippedOf({ currentNode: 1, ownedSF: CAPS }, 1)).toBe(SKIPPED);
@@ -499,8 +654,12 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 4, ownedSF: { 1: 3, 4: 2 } }))).toBe(
       "on (into BitNode 5)",
     );
+    // BN5.1 into BN2 (#334); BN2.3 into BN5 again, past the rest.
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 5, ownedSF: { 1: 3, 4: 3 } }))).toBe(
-      "on (into BitNode 5 (BN2, BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet))",
+      "on (into BitNode 2)",
+    );
+    expect(describeWorldDaemonSwitch(true, slow({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } }))).toBe(
+      "on (into BitNode 5 (BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet))",
     );
     expect(describeWorldDaemonSwitch(true, slow({ ownedSF: CAPS }))).toBe(
       `on (into BitNode 1 (${SKIPPED}), a replay (${REPLAY}))`,
@@ -516,7 +675,10 @@ describe("a restarted brain", () => {
     expect(rule.view()).toMatchObject({ destroying: true, nextBitNode: 4 });
     expect(update({ slowData: slow({ lastNodeReset: 0 }), mediumData: medium({ hacking: 1 }) })).toBe(true);
     // A slow snapshot whose next would be a replay into BN1: the restored destroy into BN4 isn't called one.
-    update({ slowData: slow({ lastNodeReset: 0, ownedSF: { 1: 3, 4: 3, 5: 3 } }), mediumData: medium({ hacking: 1 }) });
+    update({
+      slowData: slow({ lastNodeReset: 0, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 3 } }),
+      mediumData: medium({ hacking: 1 }),
+    });
     expect(rule.view()).toMatchObject({ destroying: true, nextBitNode: 4, replay: null });
     expect(
       update({ slowData: slow({ ownedAugs: {}, lastNodeReset: 5_000 }), mediumData: medium({ hacking: 1 }) }),

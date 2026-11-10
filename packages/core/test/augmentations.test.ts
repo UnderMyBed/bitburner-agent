@@ -275,9 +275,46 @@ describe("buying", () => {
     expect(augmentationsSoldBy("Daedalus", 15, null)).not.toContain("The Red Pill");
     expect(augmentationsSoldBy("Daedalus", 15, null).length).toBe(augmentationsSoldBy("Daedalus", 1, null).length - 1);
     expect(augmentationsSoldBy("Nobody", 1, null)).toEqual([]);
-    // A gang's faction sells by a seeded draw, which isn't modelled: asking throws rather than answer wrongly.
-    expect(() => augmentationsSoldBy("Slum Snakes", 2, "Slum Snakes")).toThrow(/gang's faction/);
+    // Another faction's shop is its own, whatever the gang's.
     expect(augmentationsSoldBy("CyberSec", 2, "Slum Snakes")).toEqual(augmentationsSoldBy("CyberSec", 2, null));
+  });
+
+  test("a gang's faction's shop (#334): every augmentation not special nor the Congruity Implant, The Red Pill in BN2", () => {
+    const helpers = readFileSync(
+      new URL("../../../vendor/bitburner-src/src/Faction/FactionHelpers.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(helpers).toContain(
+      "augs = augs.filter((a) => !a.isSpecial && a.name !== AugmentationName.CongruityImplant);",
+    );
+    expect(helpers).toContain(
+      "    if (Player.bitNodeN === 2) {\n      // TRP is not available outside of BN2 for Gangs\n" +
+        "      augs.push(Augmentations[AugmentationName.TheRedPill]);",
+    );
+    expect(helpers).toContain("      if (a.factions.length > 1) {\n        return true;");
+    expect(helpers).toContain("      if (faction.augmentations.includes(a.name)) {\n        return true;");
+    expect(helpers).toContain("      return rng() >= 1 - currentNodeMults.GangUniqueAugs;");
+    const names = Object.keys(AUGMENTATIONS);
+    const sold = names.filter((name) => !AUGMENTATIONS[name]?.isSpecial && name !== "violet Congruity Implant");
+    // BN2: GangUniqueAugs 1, so the draw keeps all: 97, then The Red Pill. No NeuroFlux Governor (it's special).
+    const bn2 = augmentationsSoldBy("NiteSec", 2, "NiteSec");
+    expect(bn2).toEqual([...sold, "The Red Pill"]);
+    expect(bn2).toHaveLength(98);
+    expect(bn2).not.toContain(NEUROFLUX_GOVERNOR);
+    expect(augmentationsSoldBy("Slum Snakes", 2, "Slum Snakes")).toEqual(bn2);
+    // BN1 (a gang there needs SF2): the same, but The Red Pill.
+    expect(augmentationsSoldBy("NiteSec", 1, "NiteSec")).toEqual(sold);
+    // Elsewhere, the draw's: what it can't drop, the shared ones and the faction's own; another's unique one left out.
+    const bn4 = augmentationsSoldBy("NiteSec", 4, "NiteSec");
+    const factionsOf = (name: string) => AUGMENTATIONS[name]?.factions ?? [];
+    expect(bn4).toEqual(sold.filter((name) => factionsOf(name).length > 1 || factionsOf(name).includes("NiteSec")));
+    const othersUnique = sold.find((name) => factionsOf(name).length === 1 && !factionsOf(name).includes("NiteSec"));
+    const ownUnique = sold.find((name) => factionsOf(name).length === 1 && factionsOf(name).includes("NiteSec"));
+    expect(othersUnique).toBeDefined();
+    expect(ownUnique).toBeDefined();
+    expect(bn4).not.toContain(othersUnique);
+    expect(bn4).toContain(ownUnique);
+    expect(bn4).not.toContain("The Red Pill");
   });
 });
 

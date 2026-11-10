@@ -282,6 +282,32 @@ describe("chooseFactionWork", () => {
     expect(chooseFactionWork(player(55), genOne).choice?.augmentation).toBe("Cranial Signal Processors - Gen II");
   });
 
+  test("the gang's faction's shop (#335's review): what its reputation reaches isn't worked for; no Red Pill work", () => {
+    const medium = player(2_600);
+    const nitesec = (reputation: number) => ({ name: "NiteSec", reputation, favor: 0 });
+    // BN2, CyberSec at 0: its five to work for, the best first. The gang's faction at 1m reaches them all.
+    const joined = { CyberSec: 0, Daedalus: 100_000 };
+    const without = chooseFactionWork(medium, slow({ joined: { CyberSec: 0 }, currentNode: 2 }));
+    expect(without.choice?.faction).toBe("CyberSec");
+    const reached = chooseFactionWork(medium, slow({ joined: { CyberSec: 0 }, currentNode: 2 }), 1, undefined, {
+      gang: nitesec(1e6),
+    });
+    expect(reached.choice).toBeNull();
+    // At 0 there it reaches none: CyberSec's work as before, never the gang's faction's.
+    const none = chooseFactionWork(medium, slow({ joined: { CyberSec: 0 }, currentNode: 2 }), 1, undefined, {
+      gang: nitesec(0),
+    });
+    expect(none.choice?.augmentation).toBe(without.choice?.augmentation);
+    // Daedalus joined in BN2: The Red Pill worked for there without a gang; with one selling it, never.
+    expect(chooseFactionWork(medium, slow({ joined, currentNode: 2 })).choice?.augmentation).toBe("The Red Pill");
+    const withGang = chooseFactionWork(medium, slow({ joined, currentNode: 2 }), 1, undefined, { gang: nitesec(0) });
+    expect(withGang.choice?.augmentation).not.toBe("The Red Pill");
+    // Netburners sells nothing with a hacking value: worked for Daedalus's count without a gang, not with its route.
+    const netburners = slow({ joined: { Netburners: 0 }, currentNode: 2 });
+    expect(chooseFactionWork(medium, netburners).choice?.faction).toBe("Netburners");
+    expect(chooseFactionWork(medium, netburners, 1, undefined, { gang: nitesec(0) }).choice).toBeNull();
+  });
+
   test("The Red Pill first once Daedalus is joined (#215): its best work, ahead of any hacking value", () => {
     // CyberSec at 0 has Neurotrainer I to work for; Daedalus at 100k is worked to what unlocks its donations at the
     // next install (#225): 462,491, The Red Pill's 2.5m being more than 10% past it.

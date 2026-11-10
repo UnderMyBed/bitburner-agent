@@ -14,6 +14,7 @@ import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import type { Simulation, SimulationOptions } from "@bitburner-agent/sim";
 import { useSimulations } from "@bitburner-agent/sim/test-helpers";
 import { afterAll, afterEach, beforeAll, expect } from "vitest";
+import { writeAugmentationsEnabled } from "../../src/augmentations.ts";
 import { BATCHER_ENABLED_SETTING } from "../../src/batcher.ts";
 import type { DesiredStateController } from "../../src/desired-state.ts";
 import { readInGameBuild } from "../../src/in-game-build.ts";
@@ -72,6 +73,7 @@ export function useFreshStarts() {
     fixture = { kind: "new", tutorial: "skipped" },
     seed = 1,
     batcher = true,
+    augmentations = true,
   }: {
     withDesiredState: boolean;
     beforeAgent?: (fresh: FreshGame) => Promise<void>;
@@ -83,6 +85,11 @@ export function useFreshStarts() {
      * which it would otherwise replace on the hosts.
      */
     batcher?: boolean;
+    /**
+     * The Augmentations switch (A6, #210), as the owner left it: on by default; off for a suite about something an
+     * install chosen would hold every dollar from (#334: a gang's faction's reputation buys augmentations).
+     */
+    augmentations?: boolean;
   }) {
     const simulation = await start({
       seed,
@@ -97,6 +104,7 @@ export function useFreshStarts() {
     const store = TelemetryStore.open(path.join(dataDirectory, "telemetry.sqlite"));
     openStores.push(store);
     if (!batcher) store.setSetting(BATCHER_ENABLED_SETTING, "false");
+    if (!augmentations) writeAugmentationsEnabled(store, false);
     const data = { store, brainRelease: "fresh-start-test", dataDirectory };
     const brain = startBrainInSimulation(game, { build, data, withDesiredState });
     await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);

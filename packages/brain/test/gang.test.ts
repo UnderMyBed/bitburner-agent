@@ -65,7 +65,7 @@ import {
 } from "../src/gang-report.ts";
 import { snapshotGuardFailure } from "../src/irreversible-gate.ts";
 import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
-import { TelemetryStore } from "../src/telemetry-store.ts";
+import { type StoredEvent, TelemetryStore } from "../src/telemetry-store.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const MINUTE = 60_000;
@@ -408,7 +408,7 @@ describe("the run report's section", () => {
 
   test("outside BN2: no gang played, nothing judged", () => {
     expect(fold([withGang(NONE)], 1)).toEqual({
-      text: "7. The gang (#325, ascension G2, equipment G3, territory G4; played in BN2 only for now)\n  not in BN2 in the window: no gang played",
+      text: "7. The gang (#325, ascension G2, equipment G3, territory G4, its faction's shop G5; played in BN2 only for now)\n  not in BN2 in the window: no gang played",
       failures: [],
     });
   });
@@ -426,6 +426,81 @@ describe("the run report's section", () => {
     expect(text).toContain(
       "wanted penalty 50.0% → 6.3%, above its floor at most 3.1% (the bound then 33.3%, at 3 members)",
     );
+  });
+
+  test("the gang's faction (#334): its reputation, what was bought there, and The Red Pill's route", () => {
+    const gang = new GangFold();
+    const slow = (queued: string[], ownedAugs: Record<string, number> = {}): SlowSnapshotData => ({
+      ...slowData(2),
+      resetInfo: { ...slowData(2).resetInfo, ownedAugs },
+      gangFaction: "NiteSec",
+      factions: {
+        backend: "sim",
+        state: {
+          joined: [{ name: "NiteSec", reputation: 123_456.7, favor: 12.34 }],
+          invitations: [],
+          queuedAugmentations: queued,
+        },
+        problem: null,
+      },
+    });
+    gang.addSlow(0, slow([]));
+    gang.addMedium(10_000, withGang(formed([])));
+    const bought = (augmentation: string, faction = "NiteSec"): StoredEvent => ({
+      atMs: 20_000,
+      kind: "augmentationBought",
+      detail: { augmentation, faction, level: 1, price: 1 },
+    });
+    const events = [bought("BitWire", "CyberSec"), bought("Augmented Targeting I"), bought("Neurotrainer II")];
+    const text = gang.section([], 30_000, events).join("\n");
+    expect(text).toContain(
+      "\n  the gang's faction (#334), its shop nearly every augmentation: NiteSec, reputation 123,457, favour 12.3 at " +
+        "the window's last slow snapshot; bought there in the window: 2 (Augmented Targeting I, Neurotrainer II)\n" +
+        "  the gang's faction's reputation by hour, at its slow snapshots: hour 1 123,457 → 123,457\n" +
+        "  The Red Pill's route: from NiteSec, the gang's faction, no Daedalus needed in BN2; its reputation 123,457 of " +
+        "2,500,000, its estimate unread (no game time) (section 3's path fails if it's reached and not installed)\n",
+    );
+    // By hour, and the estimate at the cycle's rate from the snapshot's game time (#335's review): 123,457 in 10
+    // minutes since the install, the rest in 192.5 min (formatDuration: 3 h 12 min).
+    const timed = new GangFold();
+    for (const [atMs, reputation] of [
+      [0, 1_000],
+      [1_800_000, 5_000],
+      [3_600_000, 9_000],
+      [5_400_000, 123_456.7],
+    ] as const) {
+      const each = slow([]);
+      const state = each.factions?.state;
+      if (!state) throw new Error("no state");
+      timed.addSlow(
+        atMs,
+        {
+          ...each,
+          factions: { ...each.factions, state: { ...state, joined: [{ name: "NiteSec", reputation, favor: 0 }] } },
+        } as SlowSnapshotData,
+        600_000,
+      );
+    }
+    timed.addMedium(10_000, withGang(formed([])));
+    const timedText = timed.section([], 30_000).join("\n");
+    expect(timedText).toContain(
+      "  the gang's faction's reputation by hour, at its slow snapshots: hour 1 1,000 → 5,000; hour 2 9,000 → 123,457\n",
+    );
+    expect(timedText).toContain(
+      "; its reputation 123,457 of 2,500,000, about 3 h 12 min more at the cycle's rate (section 3's path fails",
+    );
+    const routeOf = (each: GangFold, events: StoredEvent[] = []) =>
+      each.section([], 30_000, events).find((line) => line.startsWith("  The Red Pill's route"));
+    expect(routeOf(gang, [bought("The Red Pill")])).toMatch(/; bought$/);
+    gang.addSlow(20_000, slow(["The Red Pill"]));
+    expect(routeOf(gang)).toMatch(/; queued, to install$/);
+    gang.addSlow(25_000, slow([], { "The Red Pill": 1 }));
+    expect(routeOf(gang)).toMatch(/; installed$/);
+    // No slow snapshot showing the gang's faction: said.
+    const unshown = new GangFold();
+    unshown.addSlow(0, slowData(2));
+    unshown.addMedium(10_000, withGang(formed([])));
+    expect(unshown.section([], 30_000)).toContain("  the gang's faction: not shown by a slow snapshot in the window");
   });
 
   test("a gang faction joined and no gang formed for 5 min fails; under it, it doesn't", () => {
@@ -611,11 +686,13 @@ describe("the controller (#325)", () => {
   let directory: string;
   let store: TelemetryStore;
   let channel: ControlChannel;
+  let clock: ManualClock;
   let sequenceNumber = 0;
   beforeEach(() => {
     directory = mkdtempSync(path.join(os.tmpdir(), "gang-"));
     store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
-    channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+    clock = new ManualClock();
+    channel = new ControlChannel({ token: TOKEN, clock });
     channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
   });
   afterEach(() => {
@@ -640,7 +717,7 @@ describe("the controller (#325)", () => {
         game: { version: "3.0.1", versionNumber: 51, commit: "3162fd2", platform: "Steam" },
       }),
     );
-    const send = (tier: SnapshotTier, data: unknown) =>
+    const send = (tier: SnapshotTier, data: unknown, gameTimeMs = 1_000) =>
       connection.receive(
         encodeControlMessage({
           protocolVersion: CONTROL_PROTOCOL_VERSION,
@@ -648,7 +725,7 @@ describe("the controller (#325)", () => {
           agentSessionId: "session-1",
           tier,
           sequenceNumber: ++sequenceNumber,
-          gameTimeMs: 1_000,
+          gameTimeMs,
           data,
         }),
       );
@@ -709,6 +786,110 @@ describe("the controller (#325)", () => {
     expect(controller.gangView().line).toMatch(/^Gang: NiteSec's, 0 members of 12/);
   });
 
+  test("its shop (#334): A6 buys The Red Pill there at its reputation, the World Daemon's path names it; no work", () => {
+    const { controller, send, last } = connected();
+    // NiteSec, the gang's faction, at The Red Pill's 2.5m (a harness edit's figure), as the slow snapshot reports it.
+    const slow = niteSecSlow(2);
+    const state = slow.factions?.state;
+    if (!state) throw new Error("no faction state");
+    send("slow", {
+      ...slow,
+      factions: { ...slow.factions, state: { ...state, joined: [{ name: "NiteSec", reputation: 2.5e6, favor: 0 }] } },
+    });
+    const data = niteSecMedium(formed([]));
+    data.player = { ...data.player, money: 0 } as MediumSnapshotData["player"];
+    send("medium", data);
+    expect(last()?.intents.map((each) => each.id)).toContain(
+      intentId("purchaseAugmentation", { faction: "NiteSec", augmentation: "The Red Pill", level: 1 }),
+    );
+    expect(controller.augmentationsView().asking).toBe("buying The Red Pill from NiteSec");
+    expect(controller.worldDaemonView().lines).toContain(
+      "The Red Pill: NiteSec's (the gang's faction) reputation 2,500,000 of 2,500,000, reached: to buy and install",
+    );
+    // Still no work there: the game offers none.
+    expect(last()?.work).toBeUndefined();
+  });
+
+  test("A5 at the controller (#335's review): what the gang's faction's reputation reaches isn't worked for elsewhere", () => {
+    const { send, last } = connected();
+    const slow = niteSecSlow(2);
+    const state = slow.factions?.state;
+    if (!state) throw new Error("no faction state");
+    const withNiteSec = (reputation: number) => ({
+      ...slow,
+      factions: {
+        ...slow.factions,
+        state: {
+          ...state,
+          joined: [
+            { name: "CyberSec", reputation: 0, favor: 0 },
+            { name: "NiteSec", reputation, favor: 0 },
+          ],
+        },
+      },
+    });
+    send("slow", withNiteSec(0));
+    send("medium", niteSecMedium(formed([])));
+    expect(last()?.work).toMatchObject({ kind: "faction", faction: "CyberSec" });
+    // At 1m the gang's faction reaches all CyberSec sells: none to work for.
+    send("slow", withNiteSec(1e6));
+    send("medium", niteSecMedium(formed([])));
+    expect(last()?.work).toBeUndefined();
+  });
+
+  test("a commit for The Red Pill with the gang unread (#335's review): it waits for the reading", () => {
+    const { controller, send } = connected();
+    store.setSetting("augmentations.cycle", JSON.stringify({ lastAugReset: 0, reason: "The Red Pill" }));
+    send("slow", niteSecSlow(2));
+    send("medium", niteSecMedium(undefined));
+    expect(controller.augmentationsView().waitingFor).toBe(
+      "the gang's first reading, for The Red Pill's seller, before the install",
+    );
+  });
+
+  test("A8's hold there (#335's review): the reputation flat near 2.5m, held 20 min online, its stall at 10, the rate said", () => {
+    const { controller, send } = connected();
+    const slow = niteSecSlow(2);
+    const state = slow.factions?.state;
+    if (!state) throw new Error("no faction state");
+    const at2400k = {
+      ...slow,
+      factions: { ...slow.factions, state: { ...state, joined: [{ name: "NiteSec", reputation: 2.4e6, favor: 0 }] } },
+    };
+    const data = niteSecMedium(formed([]));
+    data.player = { ...data.player, money: 0 } as MediumSnapshotData["player"];
+    // An hour since the install (lastAugReset 0), then a minute a step: the slow snapshot's game time, the rate's.
+    let gameTimeMs = 3_600_000;
+    const step = () => {
+      clock.advance(60_000);
+      gameTimeMs += 60_000;
+      send("slow", at2400k, gameTimeMs);
+      send("medium", data, gameTimeMs);
+    };
+    send("slow", at2400k, gameTimeMs);
+    send("medium", data, gameTimeMs);
+    const held = () =>
+      (controller.augmentationsView().waitingFor ?? "").startsWith("The Red Pill: NiteSec's reputation");
+    expect(held()).toBe(true);
+    // Daedalus's count doesn't count with The Red Pill at the gang's faction: never short of it.
+    expect(controller.augmentationsView().progress?.short).toBeNull();
+    // 2.4m in an hour: 666.7 a second, the rest in 150 s at it ("3 min").
+    expect(controller.worldDaemonView().lines).toContain(
+      "The Red Pill: NiteSec's (the gang's faction) reputation 2,400,000 of 2,500,000 at 666.7/s (the cycle's): about " +
+        "3 min",
+    );
+    const stalledAt: number[] = [];
+    for (let minute = 1; minute <= 25; minute += 1) {
+      step();
+      expect(held(), `minute ${minute}`).toBe(minute < 20);
+      const stall = controller.worldDaemonView().stall;
+      if (stall?.step === "redPillReputation") stalledAt.push(minute);
+      if (minute === 10) expect(stall?.detail).toContain("The Red Pill's reputation at NiteSec not rising");
+    }
+    // Not rising while held: the stall from 10 minutes, as Daedalus's, to the hold's end at 20, never restarted.
+    expect(stalledAt).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+  });
+
   test("the exclusion lifts outside BN2: a BN2 gang's faction is worked for again in BN4", () => {
     const { send, last } = connected();
     send("slow", niteSecSlow(2));
@@ -753,7 +934,9 @@ describe("the controller (#325)", () => {
     expect(last()?.gang?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 4.5e13 }]);
     // The holds: the travel for an invitation's (a city faction's money requirement, #228) and, on top, the TOR
     // router going out this round, $200,000.
-    expect(last()?.intents.map((each) => each.id)).toEqual(["buyTor(Alpha Enterprises)"]);
+    // And (#335's review) a city group's travel: Daedalus's count no longer counts in BN2 with a gang, so the group
+    // is chosen by hacking value, Chongqing's.
+    expect(last()?.intents.map((each) => each.id)).toEqual(["buyTor(Alpha Enterprises)", "travel(Chongqing)"]);
     const invitation = controller.invitationsView().hold;
     expect(invitation).toBeGreaterThan(0);
     expect(last()?.gang?.keepMoney).toBe(invitation + 200_000);
@@ -776,8 +959,8 @@ describe("the controller (#325)", () => {
     });
   });
 
-  test("equipment (G3): Daedalus's $100b, held from home RAM, held from gang equipment too", () => {
-    const { send, last } = connected();
+  test("equipment (G3) and A8 (#334): Daedalus's $100b isn't held in BN2 with a gang: its faction sells The Red Pill", () => {
+    const { controller, send, last } = connected();
     const thirty = Object.fromEntries(
       AUGMENTATION_NAMES.filter((name) => name !== "The Red Pill" && name !== "NeuroFlux Governor")
         .slice(0, 30)
@@ -792,9 +975,13 @@ describe("the controller (#325)", () => {
       skills: { ...(data.player?.skills as object), hacking: 2600 },
     } as MediumSnapshotData["player"];
     send("medium", data);
-    // The most of the holds, Daedalus's, and the TOR router going out on top.
+    // Daedalus's invitation wants only its money: before #334, A8 held its $100b, from home RAM and gang equipment
+    // too. With the gang's faction selling The Red Pill, Daedalus isn't needed: no hold. The most of the holds is the
+    // invitation's travel, with the TOR router going out on top.
     expect(last()?.intents.map((each) => each.id)).toContain("buyTor(Alpha Enterprises)");
-    expect(last()?.gang?.keepMoney).toBe(100e9 + 200_000);
+    expect(controller.augmentationsView().waitingFor ?? "").not.toContain("Daedalus's invitation");
+    expect(controller.augmentationReserve()).toBeLessThan(100e9);
+    expect(last()?.gang?.keepMoney).toBe(controller.invitationsView().hold + 200_000);
   });
 
   test("territory warfare (G4): the crew's tasks and the order sent in the desired state, engaged once stronger", () => {

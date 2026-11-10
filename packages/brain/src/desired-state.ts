@@ -20,11 +20,13 @@ import {
   type FastSnapshotData,
   factionReadingOf,
   type GangState,
+  gangSellsRedPill,
   type Intent,
   type IntentOutcome,
   intentId,
   isBitNodeNumber,
   isIrreversibleIntent,
+  type JoinedFaction,
   MAX_INTENTS,
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
@@ -98,6 +100,7 @@ import {
   type GangView,
   gangMoneyHoldOf,
   gangPurchasesSpokenFor,
+  gangShopOf,
   withoutGangFaction,
 } from "./gang.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
@@ -334,6 +337,8 @@ export class DesiredStateController {
    * the factions joined (#325, `withoutGangFaction`).
    */
   #slowData: SlowSnapshotData | null = null;
+  /** The gang's faction as A6, A5, the World Daemon and the invitations see it (#334, `gangShopOf`), or null. */
+  #gangShop: JoinedFaction | null = null;
   /** The connected Agent's latest slow snapshot, as it came. */
   #slowSnapshot: SlowSnapshotData | null = null;
   #fastData: FastSnapshotData | null = null;
@@ -1328,7 +1333,7 @@ export class DesiredStateController {
 
   /**
    * What the brain takes as BN1's in the BitNode the slow snapshot shows (#321, core's `bitNodeAssumptions`): a line
-   * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1, BN4 or BN5.
+   * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1, BN2, BN4 or BN5.
    */
   #logBitNodeAssumptions(): void {
     const currentNode = this.#slowData?.resetInfo?.currentNode;
@@ -1540,7 +1545,8 @@ export class DesiredStateController {
     try {
       return {
         state,
-        count: countOf(state, resetInfo),
+        // Never short with The Red Pill at the gang's faction (#335's review): no travel for Daedalus's count.
+        count: countOf(state, resetInfo, gangSellsRedPill(this.#gangShop?.name ?? null, resetInfo.currentNode)),
         currentNode: resetInfo.currentNode,
         lastAugReset,
         installed: resetInfo.ownedAugs,
@@ -1565,6 +1571,10 @@ export class DesiredStateController {
     this.#gangIntent = gang.intent;
     this.#gangState = gang.gang;
     this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.hiddenFactions());
+    // The gang's faction's shop (#334), apart: A6 buys there, and A8's The Red Pill is sold there in BN2.
+    const gangShop = gangShopOf(this.#slowSnapshot, this.#gang.gangFaction());
+    // The same for the invitations' count (#335's re-review), which reads it from `#invitationInputs`.
+    this.#gangShop = gangShop;
     // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, and The Red Pill's. Not from
     // a health gone stale, or a batcher reported not running (#226's review).
     const shareBonus = shareBonusOf(
@@ -1588,6 +1598,8 @@ export class DesiredStateController {
       destroyWanted: readWorldDaemonEnabled(this.#store),
       // Who works for a faction while an install is held for Daedalus's count (#243 review): A5 under the hold.
       holdWork: { owners: readOwnersWork(this.#store), brainWorks: readFactionWorkEnabled(this.#store) },
+      gangShop,
+      gangUnread: this.#gang.gangUnread(),
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;
@@ -1606,6 +1618,11 @@ export class DesiredStateController {
       // A6's commit's facts while short (#238): an install that added none to the count is judged on them.
       countFacts: this.#augmentations.countFacts(),
       augmentationsInstalling: this.#augmentations.installAskedFor(),
+      // The Red Pill's seller in BN2 with a gang (#334), and the game's time for its rate.
+      gangShop,
+      slowGameTimeMs: this.#slowGameTimeMs,
+      // A6 holding installs for it there (#335's review): the reputation not rising is then loud.
+      redPillHeldAtGang: this.#augmentations.redPillHeldAtGang(),
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({
@@ -1652,6 +1669,8 @@ export class DesiredStateController {
       cityGroup: this.#invitations.view().cityGroup,
       // An install held for Daedalus's count by work (#243 review): its augmentation's seller, worked for first.
       countHoldTarget: this.#augmentations.countHoldTarget(),
+      // The gang's faction's shop (#335's review): what its reputation reaches isn't worked for.
+      gangShop,
     });
     this.#join = factions.join;
     this.#joinAlongside = factions.joinAlongside;
