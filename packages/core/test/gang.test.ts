@@ -32,6 +32,7 @@ import {
   gangLostShare,
   gangLostShareBound,
   gangTrains,
+  gangWantedFalls,
   planGang,
 } from "../src/gang-rule.ts";
 
@@ -279,35 +280,57 @@ describe("the rule", () => {
     expect(planGang(inputs([], START)).recruit).toEqual(["member-01", "member-02", "member-03"]);
   });
 
-  test("wanted control: the weakest working members to justice while the lost share is over k/N and wanted rises", () => {
+  test("over the bound: members to justice until the wanted level falls, the weakest working first, then training", () => {
     const gang = { respect: 10, wantedLevel: 100, territory: 1 / 7 };
     expect(gangLostShare(gang)).toBeCloseTo(99 / 110, 15);
     expect(gangLostShareBound(3)).toBeCloseTo(1 / 3, 15);
     const three = [member("member-01", { hack: 300 }), member("member-02", { hack: 200 }), member("member-03")];
     const plan = planGang(inputs(three, gang));
-    // member-03 trains; of the working two, the weaker goes to Ethical Hacking, which lowers wanted most for it; then
-    // the wanted level falls, so member-01 keeps working.
+    // member-03 trains. member-02, the weaker, goes first; the wanted level still rises with member-01 on its Plant
+    // Virus, so member-01 goes too, and with both on Ethical Hacking, which lowers wanted most for each, it falls.
     expect(plan.assignments.map((each) => [each.name, each.task, each.role])).toEqual([
-      ["member-01", "Phishing", "working"],
+      ["member-01", "Ethical Hacking", "justice"],
       ["member-02", "Ethical Hacking", "justice"],
       ["member-03", "Train Hacking", "training"],
     ]);
+    const tasks = plan.assignments.map((each) => each.task);
+    expect(gangWantedFalls(gang, three, tasks)).toBe(true);
+    expect(gangWantedFalls(gang, three, ["Plant Virus", ...tasks.slice(1)])).toBe(false);
+    // All training: one of them to justice, its decay alone enough (the wanted level otherwise stays put).
+    const recruits = ["member-01", "member-02", "member-03"].map((name) => member(name));
+    const held = planGang(inputs(recruits, { respect: 1, wantedLevel: 20, territory: 1 / 7 }));
+    expect(held.assignments.map((each) => each.role)).toEqual(["justice", "training", "training"]);
     // A combat gang's justice is Vigilante Justice.
     const fighters = [member("member-01", { str: 300, def: 300, dex: 300, agi: 300, cha: 300 }), member("member-02")];
     const combat = planGang(inputs(fighters, gang, false));
     expect(combat.assignments[0]).toMatchObject({ task: "Vigilante Justice", role: "justice" });
   });
 
-  test("wanted control stops at the k-th member whose cost, k/N, the lost share doesn't cover, wanted still rising", () => {
-    // (12 − 1) / (10 + 12) = 0.5: over 1/3, under 2/3. Cyberterrorism's wanted keeps rising after one on justice.
-    const gang = { respect: 10, wantedLevel: 12, territory: 1 / 7 };
-    const three = ["member-01", "member-02", "member-03"].map((name) => member(name, { hack: 800 }));
-    const plan = planGang(inputs(three, gang));
-    expect(plan.assignments.map((each) => each.role).sort()).toEqual(["justice", "working", "working"]);
-    expect(plan.assignments.filter((each) => each.role === "working").map((each) => each.task)).toEqual([
-      "Cyberterrorism",
-      "Cyberterrorism",
-    ]);
+  test("hysteresis: on justice until the share is under half the bound, the same members, none flipping at the bound", () => {
+    // Respect 1,000; the wanted level that makes each share, (W − 1) / (1,000 + W).
+    const at = (share: number) => ({
+      respect: 1_000,
+      wantedLevel: (1_000 * share + 1) / (1 - share),
+      territory: 1 / 7,
+    });
+    const levels = [300, 250, 200];
+    let tasks = ["Plant Virus", "Plant Virus", "DDoS Attacks"];
+    const roles: string[][] = [];
+    // Up over the bound (1/3), then about it, then down through half of it (1/6).
+    for (const share of [0.4, 0.34, 0.32, 0.35, 0.31, 0.2, 0.17, 0.16, 0.1]) {
+      const members = levels.map((hack, index) => ({
+        ...member(`member-0${index + 1}`, { hack }),
+        task: tasks[index] as string,
+      }));
+      const plan = planGang(inputs(members, at(share)));
+      tasks = plan.assignments.map((each) => each.task);
+      roles.push(plan.assignments.map((each) => each.role));
+    }
+    const twoOnJustice = ["working", "justice", "justice"];
+    expect(roles).toEqual([...Array(7).fill(twoOnJustice), ...Array(2).fill(["working", "working", "working"])]);
+    // Between half the bound and the bound, none goes to justice anew.
+    const working = levels.map((hack, index) => ({ ...member(`member-0${index + 1}`, { hack }), task: "Plant Virus" }));
+    expect(planGang(inputs(working, at(0.32))).assignments.every((each) => each.role === "working")).toBe(true);
   });
 
   test("the justice task that lowers a member's wanted most: Vigilante Justice for a hacking gang's fighter", () => {

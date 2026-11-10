@@ -6,7 +6,6 @@
 import {
   type AugmentationPurchaseState,
   acceptsDonations,
-  gangFactionOf,
   augmentationBitNodeMultipliers,
   augmentationBuyOrder,
   augmentationCost,
@@ -23,6 +22,7 @@ import {
   factionReadingOf,
   favorAfterInstall,
   favorToDonate,
+  gangFactionOf,
   isWorthInstalling,
   type JoinedFaction,
   type MediumSnapshotData,

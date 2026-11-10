@@ -5,7 +5,6 @@
 // never showed, and donations unused (one within reach for 30 minutes online with the brain counting none).
 import {
   acceptsDonations,
-  gangFactionOf,
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
@@ -17,6 +16,7 @@ import {
   factionReadingOf,
   favorAfterInstall,
   favorToDonate,
+  gangFactionOf,
   installGains,
   isWorthInstalling,
   type MediumSnapshotData,
@@ -288,7 +288,8 @@ export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
       if (sellers.some((faction) => faction.reputation >= reputation)) continue;
       // The gang's faction takes none (#325, `Singularity.ts:934-935`).
       const donors = sellers.filter(
-        (faction) => acceptsDonations(faction.name, gangFactionOf(data)) && donationsUnlocked(faction.favor, multipliers),
+        (faction) =>
+          acceptsDonations(faction.name, gangFactionOf(data)) && donationsUnlocked(faction.favor, multipliers),
       );
       const donor = donors.reduce<(typeof donors)[number] | null>(
         (best, each) => (best === null || each.reputation > best.reputation ? each : best),

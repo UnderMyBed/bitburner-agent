@@ -903,7 +903,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
  * last record (#308, `stopEndingWindow`). By default, section 3's busiest blocks (the intents, the cloud servers,
  * the augmentations, the dialogs, the faction work) and section 2's hack loop target are summarised; `verbose` (the
  * command's --verbose) lists each line instead (#245: run #3's 12.4 h was 3,270 lines, most of them those). Either way
- * the checks (sections 4 to 6), the failures, the warnings and the verdict are the same.
+ * the checks (sections 4 to 7), the failures, the warnings and the verdict are the same.
  */
 export function runReport(
   store: TelemetryStore,

@@ -10,6 +10,7 @@ import {
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
+  GANG_FACTIONS,
   GANG_STATS,
   type GangInformation,
   type GangMemberReading,
@@ -17,10 +18,12 @@ import {
   type Intent,
   intentId,
   type MediumSnapshotData,
+  parseGangState,
   type SlowSnapshotData,
   type SnapshotTier,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { donationStatus } from "../src/augmentation-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { GangRule, gangSnapshotOf, withoutGangFaction } from "../src/gang.ts";
 import {
@@ -180,16 +183,20 @@ describe("the gang faction left out of the factions joined", () => {
   };
 
   test("with a gang: its faction goes, the rest stays; the slow snapshot itself untouched", () => {
-    const without = withoutGangFaction(slow, "NiteSec");
+    const without = withoutGangFaction(slow, ["NiteSec"]);
     expect(without?.factions?.state?.joined.map((each) => each.name)).toEqual(["CyberSec"]);
     expect(without?.resetInfo).toBe(slow.resetInfo);
     expect(slow.factions.state.joined).toHaveLength(2);
   });
 
   test("with none, or a faction not joined, or no snapshot: as it is", () => {
-    expect(withoutGangFaction(slow, null)).toBe(slow);
-    expect(withoutGangFaction(slow, "The Black Hand")).toBe(slow);
-    expect(withoutGangFaction(null, "NiteSec")).toBeNull();
+    expect(withoutGangFaction(slow, [])).toBe(slow);
+    expect(withoutGangFaction(slow, ["The Black Hand"])).toBe(slow);
+    expect(withoutGangFaction(null, ["NiteSec"])).toBeNull();
+    // Every gang faction held out (BN2 before the first reading): the others stay.
+    expect(withoutGangFaction(slow, GANG_FACTIONS)?.factions?.state?.joined.map((each) => each.name)).toEqual([
+      "CyberSec",
+    ]);
   });
 });
 
@@ -237,7 +244,9 @@ describe("the run report's section", () => {
     expect(failures).toEqual([]);
     expect(text).toContain("  formed: with NiteSec, first seen 1970-01-01T00:00:10.000Z");
     expect(text).toMatch(/\n {4}hour 1: 0 → 3 members; respect 1 → 30 \(2\.90\/s\); \$25\/s on average; /);
-    expect(text).toContain("wanted penalty 50.0% → 6.3%, above its floor at most 3.1% (bound 33.3%)");
+    expect(text).toContain(
+      "wanted penalty 50.0% → 6.3%, above its floor at most 3.1% (the bound then 33.3%, at 3 members)",
+    );
   });
 
   test("a gang faction joined and no gang formed for 5 min fails; under it, it doesn't", () => {
@@ -262,15 +271,20 @@ describe("the run report's section", () => {
     ]);
   });
 
-  test("the wanted penalty over the rule's bound for 23 min fails", () => {
+  test("the wanted penalty over the rule's bound, wanted not falling, for 23 min fails; falling, it doesn't", () => {
     const three = [member("member-01"), member("member-02"), member("member-03")];
-    // (4 − 1) / (4 + 4) = 37.5%, just over 1/3; 4 respect, short of the fourth recruit.
+    // (4 − 1) / (4 + 4) = 37.5%, just over 1/3; 4 respect, short of the fourth recruit; the game's rate 0: not falling.
     const wanted = withGang(formed(three, { respect: 4, wantedLevel: 4, wantedPenalty: 0.5 }));
+    // Falling (the rule's justice members at work), however long it takes: no failure.
+    const falling = withGang(
+      formed(three, { respect: 4, wantedLevel: 4, wantedPenalty: 0.5, wantedLevelGainRate: -1e-4 }),
+    );
+    expect(fold(repeat(falling, 2 * steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([]);
     expect(fold(repeat(wanted, steps(GANG_WANTED_OVER_BOUND_MS) - 1)).failures).toEqual([]);
     const { failures } = fold(repeat(wanted, steps(GANG_WANTED_OVER_BOUND_MS)));
     expect(failures).toHaveLength(1);
     expect(failures[0]).toMatch(
-      /^the wanted penalty over the rule's bound for 23 min 10 s, from .* \(37\.5% over 33\.3%, wanted 4\)$/,
+      /^the wanted penalty over the rule's bound, not falling, for 23 min 10 s, from .* \(37\.5% over 33\.3%, wanted 4, not falling\)$/,
     );
   });
 
@@ -282,6 +296,15 @@ describe("the run report's section", () => {
     const unread = withGang({ gang: null, members: [], problems: ["the gang state isn't one to do"] });
     expect(fold(repeat(unread, steps(GANG_UNREAD_WITHIN_MS))).failures[0]).toContain(
       "(the gang state isn't one to do)",
+    );
+  });
+
+  test("the gang's faction takes no donations in the reports: the slow snapshot's gangFaction (#325's review)", () => {
+    const favoured = { reputation: 0, favor: 200 };
+    expect(donationStatus("NiteSec", favoured, slowData(2))).toBe("; donations unlocked");
+    expect(donationStatus("NiteSec", favoured, { ...slowData(2), gangFaction: "NiteSec" })).toBe("");
+    expect(donationStatus("CyberSec", favoured, { ...slowData(2), gangFaction: "NiteSec" })).toBe(
+      "; donations unlocked",
     );
   });
 
@@ -388,13 +411,37 @@ describe("the controller (#325)", () => {
   test("formed: its recruits and tasks sent, and the gang's faction gets none of the brain's faction work", () => {
     const { controller, send, last } = connected();
     send("slow", niteSecSlow(2));
-    // Before the gang shows, NiteSec is a faction like any: the brain works for it.
+    // Before the gang worker's first reading (a brain just started), every gang faction is held out: no work there.
     send("medium", niteSecMedium(undefined));
+    expect(last()?.work).toBeUndefined();
+    // None formed: NiteSec is a faction like any, and the brain works for it.
+    send("medium", niteSecMedium(NONE));
     expect(last()?.work).toMatchObject({ kind: "faction", faction: "NiteSec" });
     send("medium", niteSecMedium(formed([])));
     expect(last()?.gang?.recruit).toEqual(["member-01", "member-02", "member-03"]);
     expect(last()?.work).toBeUndefined();
     expect(controller.gangView().line).toMatch(/^Gang: NiteSec's, 0 members of 12/);
+  });
+
+  test("the exclusion lifts outside BN2: a BN2 gang's faction is worked for again in BN4", () => {
+    const { send, last } = connected();
+    send("slow", niteSecSlow(2));
+    send("medium", niteSecMedium(formed([])));
+    expect(last()?.work).toBeUndefined();
+    // Destroyed into BN4: NiteSec joined again, a faction like any.
+    send("slow", niteSecSlow(4));
+    send("medium", niteSecMedium(undefined));
+    expect(last()?.gang).toBeUndefined();
+    expect(last()?.work).toMatchObject({ kind: "faction", faction: "NiteSec" });
+  });
+
+  test("a member the owner named past what the protocol takes is left as it is, the rest set", () => {
+    const { send, last } = connected();
+    send("slow", niteSecSlow(2));
+    send("medium", niteSecMedium(formed([member("x".repeat(65)), member("member-01")])));
+    // Two members: one free recruit left, member-02.
+    expect(Object.keys(last()?.gang?.tasks ?? {})).toEqual(["member-01", "member-02"]);
+    expect(parseGangState(last()?.gang)).toMatchObject({ ok: true });
   });
 
   test("outside BN2: no gang in the state, nothing logged of it", () => {

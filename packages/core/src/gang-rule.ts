@@ -200,7 +200,10 @@ function bestJustice(inputs: GangRuleInputs, member: GangMemberFigures): { task:
 export function gangWantedFalls(gang: GangFigures, members: readonly GangMemberFigures[], tasks: string[]): boolean {
   const justice = tasks.filter(isGangJusticeTask).length;
   const decay = (gang.wantedLevel * GANG_JUSTICE_DECAY_PER_PROCESS * justice) / GANG_CYCLES_PER_PROCESS;
-  const gains = members.reduce((sum, member, index) => sum + gangWantedPerCycle(gang, member, gangTask(tasks[index] as string)), 0);
+  const gains = members.reduce(
+    (sum, member, index) => sum + gangWantedPerCycle(gang, member, gangTask(tasks[index] as string)),
+    0,
+  );
   return gains - decay < 0;
 }
 

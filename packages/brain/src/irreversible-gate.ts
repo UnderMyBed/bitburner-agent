@@ -89,7 +89,7 @@ const newGate = (): Gate => ({
  *   the BitNode's `WorldDaemonDifficulty` (`Server/ServerHelpers.ts:383-385`), fixed for the BitNode. The game also
  *   allows a destroy with every Black Op done (`NetscriptFunctions/Singularity.ts:1176-1186`); the guard doesn't count
  *   that route, the conservative direction.
- * - Forming a gang (#325): its faction joined, as the game requires (`Gang/helpers.ts:20-22`).
+ * - Forming a gang (#325): its faction joined, as the game requires (`Gang/helpers.ts:22-24`).
  */
 export function guardFailure(
   intent: Intent,

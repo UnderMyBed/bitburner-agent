@@ -30,8 +30,8 @@ const GANGS = [
   { respect: 2e6, wantedLevel: 3, territory: 1 },
 ];
 /**
- * Members' levels: a weak hacker, a strong one, a fighter, one with every stat moved, and one just past Cyberterrorism's
- * difficulty, whose wanted the game caps at 100 a cycle.
+ * Members' levels: a weak hacker, a strong one, a fighter, one with every stat moved, and one just past
+ * Cyberterrorism's difficulty, whose wanted the game caps at 100 a cycle.
  */
 const LEVELS = [
   { hack: 158, str: 1, def: 1, dex: 1, agi: 1, cha: 1 },

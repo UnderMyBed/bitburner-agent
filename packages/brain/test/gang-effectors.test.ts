@@ -9,6 +9,7 @@ import {
   type Intent,
   intentId,
   type MediumSnapshotData,
+  type SlowSnapshotData,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { type FreshGame, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
@@ -89,8 +90,9 @@ test("the gang worker: recruits and tasks done, read into the medium snapshot; w
   expect(fresh.medium()?.gang).toEqual({ gang: null, members: [], problems: [] });
 
   expect(await triedOnce(fresh, createGang("NiteSec"))).toMatchObject({ done: true });
-  // Five asked for, with the respect for the three free ones: the fourth refused, and none after it tried. A task for a name not a member is
-  // skipped; one the gang's kind hasn't (Terrorism, a combat gang's) refused, the member's task left as it was.
+  // Five asked for, with the respect for the three free ones: the fourth refused, and none after it tried. A task for a
+  // name not a member is skipped; one the gang's kind hasn't (Terrorism, a combat gang's) refused, the member's task
+  // left as it was.
   fresh.brain.channel.setDesiredState(
     state({
       recruit: ["a", "b", "c", "d", "e"],
@@ -111,6 +113,8 @@ test("the gang worker: recruits and tasks done, read into the medium snapshot; w
   ]);
   // The member's figures, as the brain's rule reads them.
   expect(reading?.members[0]).toMatchObject({ hack: 1, hack_exp: 0, hack_mult: 1, hack_asc_mult: 1, earnedRespect: 0 });
+  // The slow snapshot carries the gang's faction, for the reports' donors (#325's review).
+  await fresh.game.runUntil(() => fresh.latest<SlowSnapshotData>("slow")?.gangFaction === "NiteSec", 70_000);
   // None wanted: nothing read, the medium snapshot's gang null.
   fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
   await fresh.game.run(12_000);
