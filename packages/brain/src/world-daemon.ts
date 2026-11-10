@@ -4,7 +4,7 @@
 // ready, and fails loudly when a step the brain should finish in minutes hasn't.
 // - The path: Daedalus's requirements (core's `daedalusRequirements`), its join; The Red Pill's reputation at the
 //   joined seller (2.5m in BN1, `Augmentation/Augmentations.ts:1946-1953`), queued or installed. In BN2 with a gang
-//   (#334, G5) its seller is the gang's faction (`FactionHelpers.tsx:180-183`) where it has the most reputation, at
+//   (#334, G5) its seller is the gang's faction (`FactionHelpers.tsx:180-183`), unless Daedalus has reached it, at
 //   the cycle's rate (core's `gangRedPillEtaMs`): no Daedalus needed; w0r1d_d43m0n,
 //   reachable once The Red Pill is installed (`Prestige.ts:174-182`), rooted (5 ports,
 //   `Server/data/servers.ts:1532-1539`: the hack loop's root worker), and the hacking level against its requirement
@@ -245,8 +245,8 @@ export interface WorldDaemonPath {
     installed: boolean;
     queued: boolean;
     /**
-     * Whose reputation `reputation` is: Daedalus's, or the gang's faction's (#334), the seller with the most; null with
-     * neither (Daedalus not joined, no gang selling it).
+     * Whose reputation `reputation` is: Daedalus's, or the gang's faction's where it sells it (#334), unless Daedalus
+     * has reached it; null with neither (Daedalus not joined, no gang selling it).
      */
     seller: string | null;
     /** Whether `seller` is the gang's faction (#334): its rate the cycle's, not work's. */
@@ -409,7 +409,8 @@ export function worldDaemonPath({
     };
     const queued = state?.queuedAugmentations.includes(THE_RED_PILL) ?? false;
     const daedalus = state?.joined.find((faction) => faction.name === DAEDALUS) ?? null;
-    // The gang's faction (#334): a seller in BN2, the one with the most reputation, at the cycle's rate.
+    // The gang's faction (#334): selling it (BN2), it's the route, as A6 and A5 have it, at the cycle's rate; Daedalus
+    // only once its reputation reaches it (#335's re-review), else its estimate and stall would be of work A5 won't do.
     const gangSells =
       gangShop !== null &&
       augmentationsSoldBy(gangShop.name, resetInfo.currentNode, gangShop.name).includes(THE_RED_PILL);
@@ -427,7 +428,7 @@ export function worldDaemonPath({
             ...workConditionsOf(resetInfo, slowData, shareBonus),
             donations: false,
           });
-    if (gangShop !== null && gangSells && (daedalus === null || gangShop.reputation >= daedalus.reputation)) {
+    if (gangShop !== null && gangSells && !(daedalus !== null && daedalus.reputation >= reputationNeeded)) {
       const etaMs = gangRedPillEtaMs(gangShop.reputation, reputationNeeded, sinceResetMs);
       path.redPill = {
         installed: false,

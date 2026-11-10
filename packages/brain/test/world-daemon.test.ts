@@ -465,9 +465,11 @@ describe("The Red Pill at the gang's faction (#334, G5)", () => {
     expect(describeWorldDaemonPath(path(bn2({ queued: [RED_PILL] }), 2.5e6))[1]).toBe(
       "The Red Pill: queued, to install",
     );
-    // Daedalus joined with more: its, as before. Outside BN2 the gang's faction sells none (`FactionHelpers.tsx:180`).
-    expect(path(bn2({ daedalus: 600_000 }), 500_000).redPill).toMatchObject({ seller: "Daedalus", gang: false });
+    // Daedalus joined with more (#335's re-review): still the gang's faction, A6's route there, unless Daedalus has
+    // reached it. Outside BN2 the gang's faction sells none (`FactionHelpers.tsx:180`).
+    expect(path(bn2({ daedalus: 600_000 }), 500_000).redPill).toMatchObject({ seller: "NiteSec", gang: true });
     expect(path(bn2({ daedalus: 400_000 }), 500_000).redPill).toMatchObject({ seller: "NiteSec", gang: true });
+    expect(path(bn2({ daedalus: 2.5e6 }), 500_000).redPill).toMatchObject({ seller: "Daedalus", gang: false });
     expect(path(bn2({ currentNode: 1 }), 2.5e6).redPill).toMatchObject({ seller: null, reputation: null });
     // Daedalus's count never short with the gang's faction selling it (#335's review); without a gang, short.
     expect(short.daedalus?.short).toBe(false);
@@ -505,6 +507,28 @@ describe("The Red Pill at the gang's faction (#334, G5)", () => {
     at(2.5e6, reachedAt + RED_PILL_INSTALL_STALLED_AFTER_MS);
     expect(rule.stall()).toMatchObject({ step: "redPill", detail: "The Red Pill reached, not installed" });
     expect(events.map((event) => (event.type === "worldDaemonStalled" ? event.step : event.type))).toEqual(["redPill"]);
+  });
+
+  test("not rising at the gang's faction while held, Daedalus ahead and rising (#335's re-review): the gang's stall", () => {
+    // Daedalus at 2.45m and rising, the gang's faction flat at 2.4m with A6 holding there: the gang's is watched.
+    const at = (nowMs: number, daedalus: number) =>
+      update({
+        mediumData: medium({ hacking: 500 }),
+        slowData: bn2({ daedalus }),
+        gangShop: NITESEC(2.4e6),
+        slowGameTimeMs: HOUR,
+        redPillHeldAtGang: true,
+        nowMs,
+      });
+    at(0, 2.45e6);
+    expect(rule.view().path?.redPill).toMatchObject({ seller: "NiteSec", gang: true, reputation: 2.4e6 });
+    at(RED_PILL_REPUTATION_STALLED_AFTER_MS - 1, 2.46e6);
+    expect(rule.stall()).toBeNull();
+    at(RED_PILL_REPUTATION_STALLED_AFTER_MS, 2.47e6);
+    expect(rule.stall()).toMatchObject({
+      step: "redPillReputation",
+      detail: expect.stringContaining("The Red Pill's reputation at NiteSec not rising (2,400,000 of 2,500,000)"),
+    });
   });
 
   test("not rising while A6 holds installs for it (#335's review): the stall at 10 minutes, as at Daedalus", () => {

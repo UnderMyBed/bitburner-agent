@@ -26,6 +26,7 @@ import {
   intentId,
   isBitNodeNumber,
   isIrreversibleIntent,
+  type JoinedFaction,
   MAX_INTENTS,
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
@@ -336,6 +337,8 @@ export class DesiredStateController {
    * the factions joined (#325, `withoutGangFaction`).
    */
   #slowData: SlowSnapshotData | null = null;
+  /** The gang's faction as A6, A5, the World Daemon and the invitations see it (#334, `gangShopOf`), or null. */
+  #gangShop: JoinedFaction | null = null;
   /** The connected Agent's latest slow snapshot, as it came. */
   #slowSnapshot: SlowSnapshotData | null = null;
   #fastData: FastSnapshotData | null = null;
@@ -1543,7 +1546,7 @@ export class DesiredStateController {
       return {
         state,
         // Never short with The Red Pill at the gang's faction (#335's review): no travel for Daedalus's count.
-        count: countOf(state, resetInfo, gangSellsRedPill(this.#gang.gangFaction(), resetInfo.currentNode)),
+        count: countOf(state, resetInfo, gangSellsRedPill(this.#gangShop?.name ?? null, resetInfo.currentNode)),
         currentNode: resetInfo.currentNode,
         lastAugReset,
         installed: resetInfo.ownedAugs,
@@ -1570,6 +1573,8 @@ export class DesiredStateController {
     this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.hiddenFactions());
     // The gang's faction's shop (#334), apart: A6 buys there, and A8's The Red Pill is sold there in BN2.
     const gangShop = gangShopOf(this.#slowSnapshot, this.#gang.gangFaction());
+    // The same for the invitations' count (#335's re-review), which reads it from `#invitationInputs`.
+    this.#gangShop = gangShop;
     // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, and The Red Pill's. Not from
     // a health gone stale, or a batcher reported not running (#226's review).
     const shareBonus = shareBonusOf(

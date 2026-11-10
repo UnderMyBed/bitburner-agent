@@ -607,16 +607,21 @@ export interface GangRedPillHold {
   sinceOnlineMs: number;
 }
 
-/** The hold as stored, or null (none, or not the brain's writing). */
+/** The hold as stored, or null for none; a value the brain didn't write fails, as the count hold's does. */
 export function readGangRedPillHold(store: TelemetryStore): GangRedPillHold | null {
   const value = store.getSetting(AUGMENTATION_GANG_RED_PILL_HOLD_SETTING);
   if (value === null) return null;
+  let hold: Partial<Record<keyof GangRedPillHold, unknown>> | null;
   try {
-    const { lastAugReset, sinceOnlineMs } = JSON.parse(value) as Partial<GangRedPillHold>;
-    return isFiniteNumber(lastAugReset) && isFiniteNumber(sinceOnlineMs) ? { lastAugReset, sinceOnlineMs } : null;
+    hold = JSON.parse(value) as typeof hold;
   } catch {
-    return null;
+    throw new Error(`the store's ${AUGMENTATION_GANG_RED_PILL_HOLD_SETTING} isn't JSON`);
   }
+  const { lastAugReset, sinceOnlineMs } = hold ?? {};
+  if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(sinceOnlineMs) || sinceOnlineMs < 0) {
+    throw new Error(`the store's ${AUGMENTATION_GANG_RED_PILL_HOLD_SETTING} isn't a hold the brain wrote`);
+  }
+  return { lastAugReset, sinceOnlineMs };
 }
 
 function writeGangRedPillHold(store: TelemetryStore, hold: GangRedPillHold): void {

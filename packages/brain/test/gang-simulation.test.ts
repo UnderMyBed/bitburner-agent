@@ -36,6 +36,7 @@ import {
   gangWarfareBasis,
   gangWarfareCrew,
   gangWarfareMeasure,
+  isWorthInstalling,
   planGangEquipment,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
@@ -380,10 +381,14 @@ test("equipment (G3) end to end: a member boosted far past an hour's play, on Mo
     beforeAgent: boostedGang,
   });
   await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
+  const lastAugReset = () => fresh.latest<SlowSnapshotData>("slow")?.resetInfo?.lastAugReset;
+  const before = lastAugReset();
   await fresh.game.runUntil(() => {
     const reading = gangSnapshotOf(fresh.medium());
     return reading.kind === "gang" && (reading.members[0]?.augmentations ?? []).length > 0;
   }, 3 * 60_000);
+  // No install before the equipment came (#335's re-review): the same cycle.
+  expect(lastAugReset()).toBe(before);
   // A minute more: the report's next readings, and nothing stuck.
   await fresh.game.run(60_000);
   const last = gangSnapshotOf(fresh.medium());
@@ -402,6 +407,17 @@ test("equipment (G3) end to end: a member boosted far past an hour's play, on Mo
   }
   expect(last.members[0]?.hack_mult).toBeGreaterThan(1);
   expect(section).toMatch(/\n {4}hour 1: .*; [1-9]\d* equipment bought for \$[\d,]+ \(/);
+  // A6 bought at the gang's faction meanwhile, augmentations with a hacking value only, and installed none.
+  const boughtByA6 = fresh.data.store
+    .eventsInWindow({ environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() })
+    .filter((event) => event.kind === "augmentationBought")
+    .map((event) => event.detail as { augmentation: string; faction: string });
+  console.log(`A6: ${boughtByA6.length} bought, at ${[...new Set(boughtByA6.map((each) => each.faction))].join(", ")}`);
+  expect(boughtByA6.length).toBeGreaterThan(0);
+  expect(boughtByA6.every((each) => each.faction === "NiteSec" && isWorthInstalling(each.augmentation, false))).toBe(
+    true,
+  );
+  expect(lastAugReset()).toBe(before);
   expect(section).toContain("equipment the rule buys, with the money free, not bought for 1 min or more:\n    none");
   expect(section).toContain("  problems the gang worker reported, as first seen:\n    none\n");
   expect(failures).toEqual([]);

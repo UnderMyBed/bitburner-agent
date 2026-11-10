@@ -43,6 +43,7 @@ import {
   readAugmentationCycle,
   readAugmentationsEnabled,
   readCountHold,
+  readGangRedPillHold,
   readOnlineClock,
 } from "../src/augmentations.ts";
 import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
@@ -1511,6 +1512,15 @@ describe("the gang's faction's shop (#334, G5)", () => {
       at(next);
       expect(heldNow(), `the next cycle's minute ${minute}`).toBe(minute < 20);
     }
+  });
+
+  test("the hold's start as stored (#335's re-review): one the brain didn't write fails, as the count hold's does", () => {
+    store.setSetting("augmentations.gangRedPillHold", "not json");
+    expect(() => readGangRedPillHold(store)).toThrow("isn't JSON");
+    store.setSetting("augmentations.gangRedPillHold", JSON.stringify({ lastAugReset: 0 }));
+    expect(() => readGangRedPillHold(store)).toThrow("isn't a hold the brain wrote");
+    store.setSetting("augmentations.gangRedPillHold", JSON.stringify({ lastAugReset: 0, sinceOnlineMs: 60_000 }));
+    expect(readGangRedPillHold(store)).toEqual({ lastAugReset: 0, sinceOnlineMs: 60_000 });
   });
 
   test("the hold's start is the cycle's (#335's review): one stored for an earlier cycle starts none here", () => {
