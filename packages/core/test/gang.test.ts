@@ -37,11 +37,13 @@ import {
 } from "../src/gang.ts";
 import {
   GANG_ASCENSION_HORIZON_CAP_MS,
+  GANG_ASCENSION_MOST_LEFT_OUT,
   GANG_MEMBER_NAMES,
   GANG_TRAINING_STEP_MS,
   GANG_WANTED_RECOVERY_MS,
   type GangRuleInputs,
   gangAscensionAppraisal,
+  gangAscensionConvertsEnough,
   gangAscensionCost,
   gangAscensionToMake,
   gangBestWork,
@@ -416,19 +418,13 @@ describe("the rule", () => {
       // The member that ascends (G2), under the bound and off justice, recorded as such: it trains after.
       roles.push(plan.assignments.map((each) => (each.name === plan.ascend?.name ? "ascending" : each.role)));
     }
-    // The justice members as in G1; the working one ascends (G2) at each share under the bound, never over it (0.4,
-    // 0.34, 0.35): these members' levels are all experience, never ascended, so it pays each time.
+    // The justice members as in G1. The working one ascends (G2) only under the bound with the plan's recruits, 1/7
+    // (respect 1,000 recruits four more of 3, #328's review): at 0.1, its levels all experience, never ascended.
     const twoOnJustice = ["working", "justice", "justice"];
-    const ascendingBeside = ["ascending", "justice", "justice"];
     expect(roles).toEqual([
-      twoOnJustice,
-      twoOnJustice,
-      ascendingBeside,
-      twoOnJustice,
-      ascendingBeside,
-      ascendingBeside,
-      ascendingBeside,
-      ...Array(2).fill(["ascending", "working", "working"]),
+      ...Array(7).fill(twoOnJustice),
+      ["working", "working", "working"],
+      ["ascending", "working", "working"],
     ]);
     // Between half the bound and the bound, none goes to justice anew; and one the owner put there, not the rule, is
     // the rule's to move back to work.
@@ -458,11 +454,9 @@ describe("the rule", () => {
     // 199 / 1,200 = 0.17, under 1/3.
     const three = ["member-01", "member-02", "member-03"].map((name) => member(name, { hack: 300 }));
     const plan = planGang(inputs(three, gang));
-    // One ascends (G2), under the bound: it trains; the others work.
-    const others = plan.assignments.filter((each) => each.name !== plan.ascend?.name);
-    expect(plan.ascend).not.toBeNull();
-    expect(others.length).toBe(2);
-    expect(others.every((each) => each.role === "working")).toBe(true);
+    expect(plan.assignments.every((each) => each.role === "working")).toBe(true);
+    // Nor an ascension (G2): 0.17 is over the bound with the four recruits respect 1,000 makes, 1/7.
+    expect(plan.ascend).toBeNull();
   });
 });
 
@@ -627,6 +621,25 @@ describe("ascension (G2)", () => {
     expect(workedFor(nextMs - GANG_TRAINING_STEP_MS)?.pays).toBe(false);
   });
 
+  test("it converts enough: a training stat's 5,000 experience, ×√2 at the first, √(1 + 4,000 / P) after (#328's review)", () => {
+    expect(GANG_ASCENSION_MOST_LEFT_OUT).toBe(0.2);
+    const at = (hack_exp: number, hack_asc_points = 0) => ({ ...member("a"), hack_exp, hack_asc_points });
+    expect(gangAscensionConvertsEnough(at(4_999), true)).toBe(false);
+    expect(gangAscensionConvertsEnough(at(5_000), true)).toBe(true);
+    expect(gangAscensionResult(at(5_000))?.hack).toBeCloseTo(Math.SQRT2, 12);
+    expect(gangAscensionResult(at(5_000, 8_000))?.hack).toBeCloseTo(Math.sqrt(1 + 4_000 / 8_000), 12);
+    // Only the stats the gang's training trains: charisma's for neither; strength's for a combat gang's.
+    expect(gangAscensionConvertsEnough({ ...member("a"), cha_exp: 9_000 }, true)).toBe(false);
+    expect(gangAscensionConvertsEnough({ ...member("a"), str_exp: 5_000 }, false)).toBe(true);
+    expect(gangAscensionConvertsEnough({ ...member("a"), str_exp: 5_000 }, true)).toBe(false);
+    // With money the objective and the member alone, the cost is 0: over a day, 4,999 gains, but doesn't pay.
+    const appraise = (hack_exp: number) =>
+      gangAscensionAppraisal(inputs([at(hack_exp)]), at(hack_exp), "money", GANG_ASCENSION_HORIZON_CAP_MS);
+    expect(appraise(4_999)).toMatchObject({ convertsEnough: false, pays: false, cost: 0 });
+    expect(appraise(4_999)?.gain).toBeGreaterThan(0);
+    expect(appraise(5_000)).toMatchObject({ convertsEnough: true, pays: true });
+  });
+
   test("training's horizon is the time to the next ascension: a recruit that can't ascend trains, as with a day", () => {
     const recruit = member("member-01");
     const plan = planGang(inputs([recruit]));
@@ -665,12 +678,33 @@ describe("ascension (G2)", () => {
     // On justice: skipped, the other considered.
     const onJustice = [{ ...ready, task: "Ethical Hacking" }, trained("member-02", 30, "Phishing")];
     expect(gangAscensionToMake(inputs(onJustice), "respect")?.name).toBe("member-02");
-    // Its earned respect would take the share over the bound: respect 1,000, wanted 300, share 0.23 of 1/2; after
-    // losing 800 respect, 299 / 500 = 0.6.
-    const holding = [{ ...ready, earnedRespect: 800 }, trained("member-02", 5, "Ransomware")];
-    const wanted = { respect: 1_000, wantedLevel: 300, territory: 1 / 7 };
-    expect(gangLostShare(wanted)).toBeLessThan(0.5);
+    // Its earned respect would take the share over the bound, and nothing else holds it (#328's review): 7 members,
+    // so none to recruit at respect 1,000 (log5 1,000 + 3 = 7) and the bound 1/7; the share 0.1 now, after losing 500
+    // respect 111.2 / 612.2 = 0.18. It pays, and recruits allowed stay 0.
+    const fillers = ["member-02", "member-03", "member-04", "member-05", "member-06", "member-07"];
+    const holding = [{ ...ready, earnedRespect: 500 }, ...fillers.map((name) => trained(name, 5, "Ransomware"))];
+    const wanted = { respect: 1_000, wantedLevel: (100 + 1) / 0.9, territory: 1 / 7 };
+    expect(gangLostShare(wanted)).toBeCloseTo(0.1, 12);
+    expect(gangRecruitsAllowed(500, 7)).toBe(0);
+    expect(gangAscensionAppraisal(inputs(holding, wanted), holding[0] as GangMemberFigures, "respect")?.pays).toBe(
+      true,
+    );
     expect(gangAscensionToMake(inputs(holding, wanted), "respect")).toBeNull();
+    expect(gangAscensionToMake(inputs([ready, ...holding.slice(1)], wanted), "respect")?.name).toBe("member-01");
+    // The bound with the plan's recruits (#328's review): two members and respect 1,000 recruit five, so 1/7, not 1/2.
+    // The share 0.2 is under 1/2 but over 1/7: none; at 0.1, it ascends.
+    const atShare = (share: number) => ({
+      respect: 1_000,
+      wantedLevel: (1_000 * share + 1) / (1 - share),
+      territory: 1 / 7,
+    });
+    expect(gangRecruitsAllowed(1_000, 2)).toBe(5);
+    expect(gangAscensionToMake(inputs(two, atShare(0.2)), "respect")).toBeNull();
+    expect(gangAscensionToMake(inputs(two, atShare(0.1)), "respect")?.name).toBe("member-01");
+    // A name the protocol can't carry (an owner's, over 64 characters) is never picked, so it holds back no other.
+    const longName = { ...trained("x".repeat(65), 40, "Phishing") };
+    expect(gangAscensionToMake(inputs([longName, ready]), "respect")?.name).toBe("member-01");
+    expect(gangAscensionToMake(inputs([longName]), "respect")).toBeNull();
     // Respect 130 lets the gang recruit three more of 3 (at 5, 25 and 125); 10 lost leaves 120, two; 4 lost, three.
     const three = [{ ...ready, earnedRespect: 10 }, trained("member-02", 5), trained("member-03", 5)];
     const recruiting = { respect: 130, wantedLevel: 1, territory: 1 / 7 };

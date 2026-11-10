@@ -148,6 +148,7 @@ describe("the rule", () => {
     const grown = formed([member("member-01", 300), member("member-02", 40), member("member-03", 120)], {
       respect: 1_000,
       wantedPenalty: 0.999,
+      moneyGainRate: 10,
     });
     // member-01 ascends (G2): its levels are all experience, never ascended; it trains after. Its points as read go
     // with the order, the worker's guard.
@@ -166,6 +167,8 @@ describe("the rule", () => {
     });
     expect(rule.view().line).toMatch(/^Gang: NiteSec's, 3 members of 12 \(2 training, 1 on Phishing\);/);
     expect(rule.view().line).toMatch(/; ascending member-01 \(multipliers up to ×\d+\.\d\d, 0 respect lost\)$/);
+    // The money a second, 10 a 200 ms cycle, in dollars (#328's review: the "$" was lost once).
+    expect(rule.view().line).toContain("; $50/s; ascending member-01");
   });
 
   test("the hysteresis across updates: the rule's own justice members kept in the band, an owner's moved back", () => {
@@ -458,6 +461,13 @@ describe("the run report's section", () => {
     const paced = fold([...repeat(both, 3), ...repeat(firstMade, 4), ...repeat(secondMade, 3)]);
     expect(paced.failures).toEqual([]);
     expect(paced.text).toContain("; 2 ascensions (member-01 ×");
+  });
+
+  test("an owner's member named past what the protocol takes is never an ascension due (#328's review)", () => {
+    const longName = { ...member("x".repeat(65), 300, "Plant Virus"), earnedRespect: 0 };
+    const reading = withGang(formed([longName, member("member-02"), member("member-03")], { respect: 4 }));
+    const { failures } = fold(repeat(reading, steps(GANG_ASCEND_WITHIN_MS) * 2));
+    expect(failures).toEqual([]);
   });
 
   test("the gang unread in BN2 for 5 min fails: no reading, or the worker's problem", () => {

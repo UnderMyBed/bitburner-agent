@@ -460,6 +460,7 @@ export {
 } from "./gang.ts";
 export {
   GANG_ASCENSION_HORIZON_CAP_MS,
+  GANG_ASCENSION_MOST_LEFT_OUT,
   GANG_HORIZON_SPLITS,
   GANG_JUSTICE_RELEASE,
   GANG_MEMBER_NAMES,
@@ -472,6 +473,7 @@ export {
   type GangRole,
   type GangRuleInputs,
   gangAscensionAppraisal,
+  gangAscensionConvertsEnough,
   gangAscensionCost,
   gangAscensionToMake,
   gangBestWork,

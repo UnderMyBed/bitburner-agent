@@ -326,7 +326,7 @@ export class GangRule {
       `Gang: ${gang.faction}'s, ${formatCount(members.length, "member")} of 12 (${describeTaskMix(plan)}); ` +
       `respect ${Math.round(gang.respect).toLocaleString("en-US")}, wanted penalty ${percent(1 - gang.wantedPenalty)}` +
       ` (above its floor ${percent(plan.lostShare)}, bound ${percent(plan.bound)}); ` +
-      `${Math.round(gang.moneyGainRate * 5).toLocaleString("en-US")}/s; ${describeAscension(plan)}`;
+      `$${Math.round(gang.moneyGainRate * 5).toLocaleString("en-US")}/s; ${describeAscension(plan)}`;
     return this.#decide({ stage: "managed", line, plan }, null, { recruit: plan.recruit, ascend, tasks });
   }
 

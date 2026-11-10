@@ -72,16 +72,19 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
   expect(text).toMatch(/\n {4}createGang\(NiteSec\): done after 1 try \(ui\); /);
   expect(createGang === undefined || createGang.done).toBe(true);
   expect(section).toMatch(/\n {2}formed: with NiteSec, first seen 2026-01-01T00:0[12]:/);
-  // Measured on 2026-11-09 (seed 1), with G2's ascensions: formed 1 min 25 s in; the first three trained 5 min, worked,
-  // and ascended at 23 min (×1.45 each, 60 respect each), 15 ascensions in the hour, the multipliers up to ×1.53. At
-  // the hour 7 members, as G1's, and 656 respect (G1: 911), the ascensions' respect taken; by 2 hours (measured once,
-  // not in CI) 3,840 against G1's 3,514, 0.90/s in the second hour against 0.73. The penalty 9.8% at the hour, at most
-  // 18.0% above its floor, briefly over the bound of 16.7%, and back in time.
-  expect(section).toMatch(/\n {4}hour 1: 0 → 7 members; respect 1 → (5[5-9]\d|[67]\d\d) \(0\.1\d\/s\); /);
+  // Measured on 2026-11-09 (seed 1), with G2's ascensions and #328's review (the 5,000-experience floor, the bound with
+  // the plan's recruits): formed 1 min 25 s in; the first three trained 5 min, worked, and ascended at about 23 min
+  // (×1.48 each, 50 respect each); 14 ascensions in the hour, ×1.39 to ×1.55. At the hour 7 members, as G1's, and
+  // 1,348 respect (G1: 911). The penalty 13.9% at the hour, at most 18.7% above its floor, briefly over the bound of
+  // 16.7%, and back in time.
+  expect(section).toMatch(/\n {4}hour 1: 0 → 7 members; respect 1 → 1,[0-6]\d\d \(0\.[2-4]\d\/s\); /);
   expect(section).toMatch(/; wanted penalty 50\.0% → \d+\.\d%, above its floor at most \d+\.\d% \(the bound then /);
   const ascensions = /; (\d+) ascensions? \(((member-\d\d ×\d\.\d\d, [\d,]+ respect(; )?)+)\)\n/.exec(section);
   expect(Number(ascensions?.[1])).toBeGreaterThanOrEqual(5);
   expect(ascensions?.[2]).toMatch(/^member-01 ×1\.\d\d, \d+ respect; /);
+  // None small: the floor is ×√2 at a first ascension, √(1 + 4,000 / P) after, ×1.38 or more at an hour's points.
+  const gains = [...(ascensions?.[2] ?? "").matchAll(/×(\d\.\d\d)/g)].map((match) => Number(match[1]));
+  expect(Math.min(...gains)).toBeGreaterThanOrEqual(1.38);
   const final = gangSnapshotOf(fresh.medium() as MediumSnapshotData);
   expect(final.kind).toBe("gang");
   if (final.kind !== "gang") return;

@@ -34,6 +34,7 @@
  *   names free, each set to train at once.
  */
 import {
+  GANG_ASCENSION_EXP_LEFT_OUT,
   GANG_BONUS_CYCLES_PER_PROCESS,
   GANG_CYCLE_MS,
   GANG_CYCLES_PER_PROCESS,
@@ -55,6 +56,7 @@ import {
   gangTask,
   gangTasksFor,
   gangWantedPerCycle,
+  MAX_GANG_MEMBER_NAME_LENGTH,
   TRAIN_COMBAT_TASK,
   TRAIN_HACKING_TASK,
 } from "./gang.ts";
@@ -66,6 +68,13 @@ import {
 export const GANG_ASCENSION_HORIZON_CAP_MS = 24 * 60 * 60_000;
 /** The shares of a horizon a member's training is tried for, the rest worked (`gangOutputOver`): sixteenths. */
 export const GANG_HORIZON_SPLITS = 16;
+/**
+ * The most of what an ascension converts that the 1,000 experience it leaves out may be (#328's review): a fifth. So a
+ * training stat's experience of 5,000 or more: at the first ascension ×√2 or more (√(4,000 / 2,000)), after it
+ * √(1 + 4,000 / P) or more with P points already (`formulas.ts:75-81`). A floor under the rule's own measure, so a
+ * later change to the objective or the horizon can't let small ascensions through.
+ */
+export const GANG_ASCENSION_MOST_LEFT_OUT = 0.2;
 /** The step of training the rule weighs against working: a minute. */
 export const GANG_TRAINING_STEP_MS = 60_000;
 /** The share of the bound under which members on justice go back to work (#325's review): half, the hysteresis. */
@@ -253,8 +262,8 @@ export function gangOutputOver(
  * How long the member's cycle has run, since its recruit or last ascension (G2), read from what the game keeps of it
  * (the reading has no clock): its training time, the training stats' experience over training's pace now
  * (`gangExpPerCycle`), and its working time, its earned respect (reset by an ascension, `GangMember.ts:315-316`) over
- * its best work's respect a cycle at the gang's penalty now. Both are estimates: work's own experience, time on
- * justice and the penalty's swings are left out.
+ * its best work's respect a cycle at the gang's penalty now. Approximate, not a bound either way: work's own
+ * experience counts as training time, and time on justice and the penalty's swings are left out.
  */
 export function gangCycleSoFarMs(inputs: GangRuleInputs, member: GangMemberFigures): number {
   const training = gangTask(gangTrainingTask(inputs.isHacking));
@@ -289,6 +298,9 @@ export interface GangAscensionAppraisal {
   gain: number;
   /** The respect lost (under the respect objective) and the penalty's toll on the others (`gangAscensionCost`). */
   cost: number;
+  /** Whether it converts enough: a training stat's experience 5,000 or more (`gangAscensionConvertsEnough`). */
+  convertsEnough: boolean;
+  /** It converts enough, and the gain beats the cost. */
   pays: boolean;
 }
 
@@ -333,11 +345,27 @@ export function gangAscensionCost(
 }
 
 /**
+ * Whether the 1,000 experience an ascension leaves out is at most a fifth of what it converts (#328's review,
+ * `GANG_ASCENSION_MOST_LEFT_OUT`): a stat the gang's training task trains has 5,000 experience or more.
+ */
+export function gangAscensionConvertsEnough(member: GangMemberFigures, isHacking: boolean): boolean {
+  const training = gangTask(gangTrainingTask(isHacking));
+  return GANG_STATS.some(
+    (stat) =>
+      training[`${stat}Weight`] > 0 &&
+      member[`${stat}_exp`] >= GANG_ASCENSION_EXP_LEFT_OUT / GANG_ASCENSION_MOST_LEFT_OUT,
+  );
+}
+
+/**
  * Whether ascending the member pays (G2): over the horizon, its ascended self's best output (`gangMemberAscended`,
  * with its bigger multipliers it trains faster, `GangMember.ts:155-210`, and its levels go higher for the same
  * experience, `:70-79`) less its own as it is, beats the cost (`gangAscensionCost`); the retraining's time is in the
  * gain, as the ascended member starts from level 1. Null when the game wouldn't ascend it. The horizon: the member's
- * cycle so far, the next taken as long (`gangCycleSoFarMs`); its next would be longer, as its multipliers grow.
+ * cycle so far, the next taken as long (`gangCycleSoFarMs`); its next would be longer, as its multipliers grow. The
+ * ascended member's own output is valued at the gang's respect after the ascension (#328's review): scored with no
+ * wanted penalty, as G1 scores work, the respect doesn't move it today. And it pays only if it converts enough
+ * (`gangAscensionConvertsEnough`), so the time to the next ascension waits for that too.
  */
 export function gangAscensionAppraisal(
   inputs: GangRuleInputs,
@@ -348,11 +376,21 @@ export function gangAscensionAppraisal(
   const result = gangAscensionResult(member);
   if (result === null) return null;
   const cycles = horizonMs / GANG_CYCLE_MS;
+  const after = { ...inputs, gang: { ...inputs.gang, respect: Math.max(1, inputs.gang.respect - result.respect) } };
   const gain =
-    gangOutputOver(inputs, gangMemberAscended(member), objective, cycles) -
+    gangOutputOver(after, gangMemberAscended(member), objective, cycles) -
     gangOutputOver(inputs, member, objective, cycles);
   const cost = gangAscensionCost(inputs, member, objective, cycles);
-  return { name: member.name, result, horizonMs, gain, cost, pays: gain > 0 && gain > cost };
+  const convertsEnough = gangAscensionConvertsEnough(member, inputs.isHacking);
+  return {
+    name: member.name,
+    result,
+    horizonMs,
+    gain,
+    cost,
+    convertsEnough,
+    pays: convertsEnough && gain > cost && gain > 0,
+  };
 }
 
 /**
@@ -392,17 +430,20 @@ export function gangTimeToAscensionMs(
 /**
  * The member to ascend now, if any (G2): of those whose ascension pays (`gangAscensionAppraisal`), the one that gains
  * the most over its cost; one at a time, so each is judged on the gang's respect as the last left it. None that would
- * leave the penalty's share above its floor (`gangLostShare`) over the bound, so none while it's over already, when
- * wanted control puts members on justice (the respect lost only raises it); no member on justice (its justice would
- * start again from level 1); and none that would leave fewer recruits allowed than now (`gangRecruitsAllowed`): the
- * respect a recruit due needs.
+ * leave the penalty's share above its floor (`gangLostShare`) over the bound with the recruits the plan makes too,
+ * 1/(N + recruits) (#328's review: the plan recruits them before the worker ascends), so none while it's over
+ * already, when wanted control puts members on justice (the respect lost only raises it); no member on justice (its
+ * justice would start again from level 1); none that would leave fewer recruits allowed than now
+ * (`gangRecruitsAllowed`): the respect a recruit due needs; and none whose name the protocol can't carry (over 64
+ * characters, an owner's), which the brain could never order, so it would hold back every other.
  */
 export function gangAscensionToMake(inputs: GangRuleInputs, objective: GangObjective): GangAscensionAppraisal | null {
   const { gang, members } = inputs;
-  const bound = gangLostShareBound(members.length);
   const recruitsNow = gangRecruitsAllowed(gang.respect, members.length);
+  const bound = gangLostShareBound(members.length + recruitsNow);
   let best: GangAscensionAppraisal | null = null;
   for (const member of members) {
+    if (member.name === "" || member.name.length > MAX_GANG_MEMBER_NAME_LENGTH) continue;
     if (isGangJusticeTask(member.task)) continue;
     const respect = Math.max(1, gang.respect - member.earnedRespect);
     if (gangLostShare({ respect, wantedLevel: gang.wantedLevel }) > bound) continue;
