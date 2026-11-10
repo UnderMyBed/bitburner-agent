@@ -89,7 +89,7 @@ export function workTarget(
   donations = true,
 ): WorkTarget | null {
   const augmentation: WorkTarget = { reputation: augmentationReputation, reason: "augmentation" };
-  // No gang is modelled (none in BN1): the gang's faction would take none.
+  // The gang's faction never comes here: the brain leaves it out of the joined factions A5 sees (#325).
   if (!donations || !acceptsDonations(faction.name, null)) return augmentation;
   const unlock = reputationToUnlockDonations(faction.favor, { FavorToDonateToFaction: favorToDonateToFaction });
   if (unlock === 0) return null;
@@ -207,7 +207,7 @@ export function workCandidates(
   short = false,
 ): WorkCandidate[] {
   const { FavorToDonateToFaction } = augmentationBitNodeMultipliers(currentNode, ownedSF);
-  // No gang is modelled (none in BN1): the gang's faction would take none.
+  // The gang's faction never comes here: the brain leaves it out of the joined factions A5 sees (#325).
   const unlocked = (faction: JoinedFaction) =>
     donations &&
     acceptsDonations(faction.name, null) &&
@@ -218,7 +218,7 @@ export function workCandidates(
     sourceFile11Level: ownedSF["11"] ?? 0,
     bitNodeMultipliers: augmentationBitNodeMultipliers(currentNode, ownedSF),
   };
-  // A gang's faction isn't modelled (none in BN1): gangFaction null, so every shop is the faction's own list.
+  // The gang's faction never comes here (#325): every shop is the faction's own list; the gang's is A6's (#334).
   const shops = new Map<string, string[]>();
   for (const { name } of state.joined) {
     if (FACTION_NAMES.includes(name)) shops.set(name, augmentationsSoldBy(name, currentNode, null));

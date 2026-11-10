@@ -210,7 +210,7 @@ function shopsOf(data: SlowSnapshotData): Shops | null {
     augmentationCost(NEUROFLUX_GOVERNOR, purchaseState);
     const joined = state.joined.filter((faction) => FACTION_NAMES.includes(faction.name));
     const shops = new Map(
-      joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, null)]),
+      joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, gangFactionOf(data))]),
     );
     const { short } = daedalusCountOf({
       currentNode,
@@ -261,6 +261,7 @@ export function heldBackOf(data: SlowSnapshotData, player: PlayerFigures): HeldB
       unowned.filter((name) => !reached(name)),
       player.factionRep,
       multipliers,
+      gangFactionOf(data),
     );
     // Its donation, where no joined seller's reputation reaches it: at the seller taking donations with the most.
     const donation = (name: string): DonationNeed | null => {

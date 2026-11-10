@@ -216,8 +216,17 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
       known(hackingCeiling(staticData(), medium(150, rooted), 1)).incomePerSecond,
     );
     // A BitNode core has none for: BN1's (its bitNodeAssumptions line says so in the run report).
-    expect(hackingCeiling(staticData(), medium(150, rooted), 2)).toEqual(
+    expect(hackingCeiling(staticData(), medium(150, rooted), 3)).toEqual(
       hackingCeiling(staticData(), medium(150, rooted), 1),
+    );
+  });
+
+  test("in BN2 (#334): its ServerGrowthRate 0.8 folded into hacking_grow, as a player with 0.8 of it", () => {
+    const rooted = { n00dles: true, foodnstuff: true, zer0: true };
+    const bn2 = known(hackingCeiling(staticData(), medium(150, rooted), 2));
+    expect(bn2).toEqual(known(hackingCeiling(staticData(), medium(150, rooted, { mults: { hacking_grow: 0.8 } }), 1)));
+    expect(bn2.incomePerSecond).toBeLessThan(
+      known(hackingCeiling(staticData(), medium(150, rooted), 1)).incomePerSecond,
     );
   });
 

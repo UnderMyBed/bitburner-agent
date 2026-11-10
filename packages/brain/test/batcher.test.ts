@@ -299,7 +299,7 @@ describe("batcherMultsOf (#315)", () => {
     const mults = { hacking_chance: 1.1, hacking_speed: 1.2, hacking_money: 2.5, hacking_grow: 1.4 };
     const player = { skills: { hacking: 100, intelligence: 0 }, mults: { ...mults, hacking: 3.4, hacking_exp: 2.5 } };
     const bn4 = bitNodeHackingOf(4);
-    expect(bn4).toEqual({ multipliers: { ScriptHackMoney: 0.2, HackExpGain: 0.4 }, known: true });
+    expect(bn4).toEqual({ multipliers: { ...BN1_HACKING, ScriptHackMoney: 0.2, HackExpGain: 0.4 }, known: true });
     expect(batcherMultsOf(player, bn4.multipliers)).toEqual({
       ...mults,
       hacking_money: 0.5,
@@ -311,9 +311,40 @@ describe("batcherMultsOf (#315)", () => {
       mults: { ...mults, hacking_money: 0.5 },
     });
     // A BitNode core has none for, and none read: BN1's, said known false (the controller logs it).
-    expect(bitNodeHackingOf(2)).toEqual({ multipliers: BN1_HACKING, known: false });
+    expect(bitNodeHackingOf(3)).toEqual({ multipliers: BN1_HACKING, known: false });
     expect(bitNodeHackingOf(undefined)).toEqual({ multipliers: BN1_HACKING, known: false });
     expect(bitNodeHackingOf(1)).toEqual({ multipliers: BN1_HACKING, known: true });
+  });
+
+  test("BN2's ServerGrowthRate and HackingLevelMultiplier folded into hacking_grow and hacking (#334)", () => {
+    const mults = { hacking_chance: 1.1, hacking_speed: 1.2, hacking_money: 2.5, hacking_grow: 1.5 };
+    const player = { skills: { hacking: 100, intelligence: 0 }, mults: { ...mults, hacking: 3, hacking_exp: 2.5 } };
+    const bn2 = bitNodeHackingOf(2);
+    expect(bn2).toEqual({
+      multipliers: { ...BN1_HACKING, ServerGrowthRate: 0.8, HackingLevelMultiplier: 0.8 },
+      known: true,
+    });
+    // 1.5 × 0.8 and 3 × 0.8: the grow's growth (`grow.ts:22-28`) and the level (`Person.ts:60-63`) as the game has them.
+    expect(batcherMultsOf(player, bn2.multipliers)).toEqual({
+      ...mults,
+      hacking_grow: 1.2000000000000002,
+      hacking: 2.4000000000000004,
+      hacking_exp: 2.5,
+    });
+    expect(hackingPlayerOf(player, bn2.multipliers)?.mults).toEqual({ ...mults, hacking_grow: 1.2000000000000002 });
+    // The plan the Agent runs carries them.
+    const data = medium(50, { n00dles: true, foodnstuff: true });
+    const inBn1 = planBatcher(network, data, BN1_HACKING, "n00dles", ["n00dles", "foodnstuff"]);
+    const inBn2 = planBatcher(network, data, bn2.multipliers, "n00dles", ["n00dles", "foodnstuff"]);
+    if (inBn1.batcher === null || inBn2.batcher === null) throw new Error("no plan");
+    expect(inBn2.batcher.config.player.mults.hacking_grow).toBeCloseTo(
+      0.8 * inBn1.batcher.config.player.mults.hacking_grow,
+      12,
+    );
+    expect(inBn2.batcher.config.player.mults.hacking).toBeCloseTo(
+      0.8 * (inBn1.batcher.config.player.mults.hacking ?? 0),
+      12,
+    );
   });
 
   test("in BN4 the plan hacks 5 times the share a thread for the same take: the hack threads planned rise", () => {

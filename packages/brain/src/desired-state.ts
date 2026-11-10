@@ -98,6 +98,7 @@ import {
   type GangView,
   gangMoneyHoldOf,
   gangPurchasesSpokenFor,
+  gangShopOf,
   withoutGangFaction,
 } from "./gang.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
@@ -1328,7 +1329,7 @@ export class DesiredStateController {
 
   /**
    * What the brain takes as BN1's in the BitNode the slow snapshot shows (#321, core's `bitNodeAssumptions`): a line
-   * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1, BN4 or BN5.
+   * each, once per BitNode this brain sees, the known risks of playing it with BN1's rules. None in BN1, BN2, BN4 or BN5.
    */
   #logBitNodeAssumptions(): void {
     const currentNode = this.#slowData?.resetInfo?.currentNode;
@@ -1565,6 +1566,8 @@ export class DesiredStateController {
     this.#gangIntent = gang.intent;
     this.#gangState = gang.gang;
     this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.hiddenFactions());
+    // The gang's faction's shop (#334), apart: A6 buys there, and A8's The Red Pill is sold there in BN2.
+    const gangShop = gangShopOf(this.#slowSnapshot, this.#gang.gangFaction());
     // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, and The Red Pill's. Not from
     // a health gone stale, or a batcher reported not running (#226's review).
     const shareBonus = shareBonusOf(
@@ -1588,6 +1591,7 @@ export class DesiredStateController {
       destroyWanted: readWorldDaemonEnabled(this.#store),
       // Who works for a faction while an install is held for Daedalus's count (#243 review): A5 under the hold.
       holdWork: { owners: readOwnersWork(this.#store), brainWorks: readFactionWorkEnabled(this.#store) },
+      gangShop,
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;
@@ -1606,6 +1610,9 @@ export class DesiredStateController {
       // A6's commit's facts while short (#238): an install that added none to the count is judged on them.
       countFacts: this.#augmentations.countFacts(),
       augmentationsInstalling: this.#augmentations.installAskedFor(),
+      // The Red Pill's seller in BN2 with a gang (#334), and the game's time for its rate.
+      gangShop,
+      slowGameTimeMs: this.#slowGameTimeMs,
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({

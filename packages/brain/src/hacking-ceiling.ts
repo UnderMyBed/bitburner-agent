@@ -51,7 +51,8 @@ const isNumber = (value: unknown): value is number => typeof value === "number" 
 
 /**
  * The player's skills and multipliers the formulas read, or the first missing (the snapshot is the Agent's word), in
- * `bitNode`, the slow snapshot's: its `ScriptHackMoney` folded into `hacking_money` (#321, `Hacking.ts:53-54`; core's
+ * `bitNode`, the slow snapshot's: its `ScriptHackMoney` folded into `hacking_money` (#321, `Hacking.ts:53-54`) and its
+ * `ServerGrowthRate` into `hacking_grow` (#334, `Server/formulas/grow.ts:22-28`; core's
  * `bitNodeHackingMultipliers`, BN1's in a BitNode it hasn't them for, which the run report lists). No BitNode read
  * (no slow snapshot then) is a ceiling unknown, never BN1's.
  */
@@ -64,10 +65,14 @@ function hackingPlayerOf(player: unknown, bitNode: number | null): HackingPlayer
     if (!isNumber(mults?.[mult])) return `the medium snapshot's player has no mults.${mult}`;
   }
   if (bitNode === null) return "no slow snapshot says the BitNode (its hacking multipliers)";
-  const { ScriptHackMoney } = bitNodeHackingOf(bitNode).multipliers;
+  const { ScriptHackMoney, ServerGrowthRate } = bitNodeHackingOf(bitNode).multipliers;
   return {
     skills,
-    mults: { ...mults, hacking_money: (mults?.hacking_money as number) * ScriptHackMoney },
+    mults: {
+      ...mults,
+      hacking_money: (mults?.hacking_money as number) * ScriptHackMoney,
+      hacking_grow: (mults?.hacking_grow as number) * ServerGrowthRate,
+    },
   } as unknown as HackingPlayer;
 }
 

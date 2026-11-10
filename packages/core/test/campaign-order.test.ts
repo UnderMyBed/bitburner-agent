@@ -16,12 +16,12 @@ const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
 
 const NO_DATA = "no hacking multipliers or prices yet";
-/** Every BitNode the order holds that the brain can't play yet, in the order's sequence. */
-const UNPLAYABLE = [2, 6, 7, 3, 9, 11, 8, 15, 10, 13, 14, 12];
+/** Every BitNode the order holds that the brain can't play yet, in the order's sequence (BN2 playable since #334). */
+const UNPLAYABLE = [6, 7, 3, 9, 11, 8, 15, 10, 13, 14, 12];
 const REPLAY =
-  "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 4 at 3, " +
-  "Source-File 5 at 3), but the run";
-const CAPS = { 1: 3, 4: 3, 5: 3 };
+  "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, " +
+  "Source-File 4 at 3, Source-File 5 at 3), but the run";
+const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
 const skippedAll = UNPLAYABLE.map((bitNode) => ({ bitNode, reason: NO_DATA }));
 /** Every BitNode playable: the order as it'll be once the brain plays them all. */
 const allPlayable = () => null;
@@ -79,8 +79,8 @@ test("a destroy raises its own Source-File a level, to the top but for BN12's, a
   expect(sourceFilesAfterDestroy(12, { 12: 7 })).toEqual({ 12: 8 });
 });
 
-test("playable: BN1, BN4 and BN5, whose hacking multipliers and prices core has; the rest say what's missing", () => {
-  expect([1, 4, 5].map(bitNodeUnplayableReason)).toEqual([null, null, null]);
+test("playable: BN1, BN2, BN4 and BN5, whose hacking multipliers and prices core has; the rest say what's missing", () => {
+  expect([1, 2, 4, 5].map(bitNodeUnplayableReason)).toEqual([null, null, null, null]);
   expect(UNPLAYABLE.map(bitNodeUnplayableReason)).toEqual(UNPLAYABLE.map(() => NO_DATA));
 });
 
@@ -95,50 +95,42 @@ test.each([
   ["BN1.2 with SF4.3 (the legacy baseline's)", 1, { 1: 1, 4: 3 }, 1],
   ["BN4.3 after BN1.4 (#321's replay): into BN5", 4, { 1: 3, 4: 2 }, 5],
   ["BN1.3 with SF4.3: into BN5", 1, { 1: 2, 4: 3 }, 5],
-  ["another BitNode, the order short", 2, { 1: 3 }, 4],
+  // #334: BN2 playable, BN5.1 goes into it, synthesis §3's row 5, three times.
+  ["BN5.1: into BN2", 5, { 1: 3, 4: 3 }, 2],
+  ["BN2.1: into BN2 again", 2, { 1: 3, 4: 3, 5: 1 }, 2],
+  ["BN2.2: into BN2 again", 2, { 1: 3, 4: 3, 5: 1, 2: 1 }, 2],
+  ["another BitNode, the order short", 3, { 1: 3 }, 4],
 ])("%s: into the BitNode given, nothing skipped before it", (_name, currentNode, ownedSF, next) => {
   expect(nextBitNodeOf({ currentNode, ownedSF })).toEqual({ bitNode: next, replay: null, skipped: [] });
 });
 
-test("skipping: past BN5 ×1, the unplayable rows before BN5.2-3 are skipped, each said with why", () => {
-  // BN5.1 destroyed: BN2, BN6, BN7 and BN3 come first, and the brain plays none, so BN5 again, row 8's.
-  const skipped = [2, 6, 7, 3].map((bitNode) => ({ bitNode, reason: NO_DATA }));
-  expect(nextBitNodeOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3 } })).toEqual({ bitNode: 5, replay: null, skipped });
-  expect(nextBitNodeOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3, 5: 1 } })).toEqual({
+test("skipping: past BN2 ×3, the unplayable rows before BN5.2-3 are skipped, each said with why", () => {
+  // BN2.3 destroyed: BN6, BN7 and BN3 come first, and the brain plays none, so BN5 again, row 8's.
+  const skipped = [6, 7, 3].map((bitNode) => ({ bitNode, reason: NO_DATA }));
+  expect(nextBitNodeOf({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } })).toEqual({
     bitNode: 5,
     replay: null,
     skipped,
   });
-  expect(describeSkipped(skipped)).toBe(`BN2, BN6, BN7 and BN3 skipped: ${NO_DATA}`);
-  // An unplayable BitNode already at its level has nothing to gain: never said as skipped (a save with SF2.3).
+  expect(describeSkipped(skipped)).toBe(`BN6, BN7 and BN3 skipped: ${NO_DATA}`);
+  // A save with SF2.3 already: BN5.1 has nothing to gain in BN2, never said as skipped.
   expect(nextBitNodeOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3, 2: 3 } })).toEqual({
     bitNode: 5,
     replay: null,
-    skipped: [6, 7, 3].map((bitNode) => ({ bitNode, reason: NO_DATA })),
+    skipped,
   });
-  // Once BN2 is playable (the gangs slice), BN5.1 goes into it; a Source-File at its level is never skipped.
-  const unplayable = (bitNode: number) => (bitNode === 2 ? null : bitNodeUnplayableReason(bitNode));
-  expect(nextBitNodeOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3 }, unplayable })).toEqual({
+  // Without BN5's data, BN4.3 skips it into BN2, BN5 said.
+  const noBn5 = (bitNode: number) => (bitNode === 5 ? "no prices yet" : bitNodeUnplayableReason(bitNode));
+  expect(nextBitNodeOf({ currentNode: 4, ownedSF: { 1: 3, 4: 2 }, unplayable: noBn5 })).toEqual({
     bitNode: 2,
     replay: null,
-    skipped: [],
+    skipped: [{ bitNode: 5, reason: "no prices yet" }],
   });
-  expect(nextBitNodeOf({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 }, unplayable })).toEqual({
-    bitNode: 5,
-    replay: null,
-    skipped: [6, 7, 3].map((bitNode) => ({ bitNode, reason: NO_DATA })),
-  });
-  // Without BN5's data, BN4.3 skips it: a replay, BN5 said first.
-  const noBn5 = (bitNode: number) => (bitNode === 5 ? "no prices yet" : bitNodeUnplayableReason(bitNode));
-  const next = nextBitNodeOf({ currentNode: 4, ownedSF: { 1: 3, 4: 2 }, unplayable: noBn5 });
+  // And with BN2 at its level too, a replay: each skipped once, though BN5 is in two rows; runs said together.
+  const next = nextBitNodeOf({ currentNode: 4, ownedSF: { 1: 3, 2: 3, 4: 2 }, unplayable: noBn5 });
   expect(next.bitNode).toBe(1);
-  // Each once, though BN5 is in two rows.
   expect(next.skipped.map((each) => each.bitNode)).toEqual([5, ...UNPLAYABLE]);
-  expect(next.skipped.slice(0, 2)).toEqual([
-    { bitNode: 5, reason: "no prices yet" },
-    { bitNode: 2, reason: NO_DATA },
-  ]);
-  expect(describeSkipped(next.skipped.slice(0, 3))).toBe(`BN5 skipped: no prices yet; BN2 and BN6 skipped: ${NO_DATA}`);
+  expect(describeSkipped(next.skipped.slice(0, 3))).toBe(`BN5 skipped: no prices yet; BN6 and BN7 skipped: ${NO_DATA}`);
   expect(describeSkipped([])).toBeNull();
 });
 
@@ -173,12 +165,14 @@ test("nothing playable left to gain: BN1 again, a replay saying why and what was
     [4, CAPS],
     [5, CAPS],
     // BN5.3 destroyed: SF5 reaches 3 by this destroy.
-    [5, { 1: 3, 4: 3, 5: 2 }],
+    [5, { 1: 3, 2: 3, 4: 3, 5: 2 }],
+    // BN2.3 destroyed after BN5.3: SF2 reaches 3 by this destroy.
+    [2, { 1: 3, 2: 2, 4: 3, 5: 3 }],
     [2, CAPS],
   ] as const) {
     expect(nextBitNodeOf({ currentNode, ownedSF })).toEqual({ bitNode: 1, replay: REPLAY, skipped: skippedAll });
   }
   expect(describeSkipped(skippedAll)).toBe(
-    `BN2, BN6, BN7, BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: ${NO_DATA}`,
+    `BN6, BN7, BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: ${NO_DATA}`,
   );
 });

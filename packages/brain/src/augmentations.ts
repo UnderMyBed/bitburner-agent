@@ -79,6 +79,7 @@ import {
   type Intent,
   installJudgement,
   intentId,
+  type JoinedFaction,
   type MediumSnapshotData,
   NEUROFLUX_GOVERNOR,
   purchaseSequenceCost,
@@ -410,6 +411,11 @@ export interface AugmentationInputs {
    * Absent, A5 does (its switch on, no owner's work).
    */
   holdWork?: HoldWork;
+  /**
+   * The gang's faction (#334, G5: the gang rule's `gangShopOf`), its reputation as the slow snapshot reports it, or
+   * null (absent) with no gang. `slowData` leaves it out of the joined factions; its shop joins the others here.
+   */
+  gangShop?: JoinedFaction | null;
 }
 
 /** What the rule asks of the controller. */
@@ -1066,6 +1072,7 @@ export class AugmentationRule {
         destroyWanted,
         countHeldBefore,
         holdWork,
+        gangShop: inputs.gangShop ?? null,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -1322,6 +1329,7 @@ export class AugmentationRule {
     destroyWanted,
     countHeldBefore,
     holdWork,
+    gangShop,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -1335,6 +1343,7 @@ export class AugmentationRule {
     destroyWanted: boolean;
     countHeldBefore: CountHoldView | null;
     holdWork: HoldWork;
+    gangShop: JoinedFaction | null;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -1359,8 +1368,8 @@ export class AugmentationRule {
       bitNodeMultipliers: augmentationBitNodeMultipliers(currentNode, ownedSF),
     };
     const owned = (name: string) => Object.hasOwn(ownedAugs, name) || queue.includes(name);
-    // The joined factions' shops and what's reached: core's (#260), the fast model's too.
-    const shopsView = augmentationShops(state.joined, currentNode, purchaseState, owned);
+    // The joined factions' shops and what's reached: core's (#260), the fast model's too; the gang's faction's (#334).
+    const shopsView = augmentationShops(state.joined, currentNode, purchaseState, owned, gangShop);
     const { joined, shops, sold, reached, sellerOf, reputationOf } = shopsView;
     const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
     const money = player.money - this.#spent.reduce((sum, each) => sum + each.price, 0);
@@ -1402,6 +1411,8 @@ export class AugmentationRule {
         queue,
         shops: shopsView,
         destroyWanted,
+        // The game's time since the last install (#334): the gang's faction's rate.
+        sinceResetMs: slowGameTimeMs === null ? null : Math.max(0, slowGameTimeMs - resetInfo.lastAugReset),
       });
       // The Red Pill's donation first (#225 review): the counts are budgeted without its money.
       const redPillAmount = endgame0.kind === "redPill" ? (endgame0.donation?.amount ?? 0) : 0;
@@ -1867,12 +1878,23 @@ export class AugmentationRule {
       // Daedalus's path chosen (a joined seller of The Red Pill, not installed): never an install without it (#215
       // review). Reported bought and never queued (`augmentationNotQueued`, alerted), the cycle is called off, and
       // `#endgame` holds the next; not bought yet (its reputation fell short), it waits. But for "Daedalus donations"
-      // (#225 review): that install is for Daedalus's favour, without The Red Pill.
-      const redPillSold = [...shops.values()].some((shop) => shop.includes(THE_RED_PILL));
+      // (#225 review): that install is for Daedalus's favour, without The Red Pill. The gang's faction (#334) holds
+      // only The Red Pill's own install: `#endgame` lets an ordinary one go once the window's passed, and the gang stays.
+      const redPillSold = [...shops].some(
+        ([faction, shop]) =>
+          shop.includes(THE_RED_PILL) && (faction !== shopsView.gangFaction || note?.reason === "The Red Pill"),
+      );
       const forFavour = note?.reason === "Daedalus donations";
       if (redPillSold && !forFavour && !Object.hasOwn(ownedAugs, THE_RED_PILL) && !installable.includes(THE_RED_PILL)) {
         if (queue.includes(THE_RED_PILL)) {
           this.#callOff(atMs, `${THE_RED_PILL} reported bought but never queued: no install without it`);
+          return this.#ask(null, { committed: false, reserve: 0, waitingFor: null });
+        }
+        // Committed for it, and no seller's reputation reaches it now (#334): a stale reading's, say, as forming a gang
+        // resets its faction's to 0 (`PlayerObjectGangMethods.ts:67`). Called off, so `#endgame` judges afresh, never
+        // waiting on a purchase that can't come.
+        if (note?.reason === "The Red Pill" && redPillSeller === null) {
+          this.#callOff(atMs, `${THE_RED_PILL}'s reputation short at every seller now: no install without it`);
           return this.#ask(null, { committed: false, reserve: 0, waitingFor: null });
         }
         return this.#ask(null, {
@@ -1934,6 +1956,7 @@ export class AugmentationRule {
     queue,
     shops,
     destroyWanted,
+    sinceResetMs,
   }: {
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
     player: NonNullable<ReturnType<typeof playerOf>>;
@@ -1943,6 +1966,7 @@ export class AugmentationRule {
     queue: string[];
     shops: AugmentationShops;
     destroyWanted: boolean;
+    sinceResetMs: number | null;
   }): Endgame {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // The decision is core's (#260), the fast model's too; the words are the brain's.
@@ -1958,6 +1982,7 @@ export class AugmentationRule {
       currentNode,
       ownedSF,
       destroyWanted,
+      sinceResetMs,
     });
     if (endgame.kind !== "hold") return endgame;
     const count = (value: number) => Math.floor(value).toLocaleString("en-US");
@@ -1990,7 +2015,12 @@ export class AugmentationRule {
           : hold(
               "redPill",
               `${THE_RED_PILL}: ${endgame.seller.faction}'s reputation ${count(endgame.seller.reputation)} of ` +
-                `${count(endgame.seller.needed)} (an install now would lose it)`,
+                `${count(endgame.seller.needed)}` +
+                // The gang's faction (#334): held only while it comes within the window.
+                (endgame.seller.etaMs === undefined
+                  ? ""
+                  : `, about ${formatEta(endgame.seller.etaMs)} more at the cycle's rate (the gang's faction)`) +
+                " (an install now would lose it)",
             );
       case "daedalus":
         return hold(

@@ -5,6 +5,8 @@ export {
   augmentationShops,
   type Endgame,
   type EndgameHold,
+  GANG_RED_PILL_HOLD_MS,
+  gangRedPillEtaMs,
   installJudgement,
 } from "./augmentation-decision.ts";
 export {

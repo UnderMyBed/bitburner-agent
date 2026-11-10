@@ -17,8 +17,12 @@
 // - Territory warfare (G4): in the hour, none on Territory Warfare and never engaged (why, computed on its last
 //   reading: the others outgrow the whole gang's power); and a gang of 12 with eleven fighters made by harness edits,
 //   then the brain for 20 minutes: ten on Territory Warfare, engaged throughout, territory growing, a death counted.
-import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
+// - BN2's win route (G5, #334): BN2 played with its own multipliers, so the hour's batcher stays in step with no
+//   allowance; and the gang's faction, its reputation set to The Red Pill's 2.5m and $10b given (harness edits, as
+//   no short run earns either): A6 buys there, augmentations its own shop lacks, The Red Pill last, and installs.
+import type { FastSnapshotData, MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";
 import {
+  augmentationsSoldBy,
   GANG_AUGMENTATION_HORIZON_MS,
   GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
   gangBestWork,
@@ -53,14 +57,6 @@ function reportOf(fresh: Awaited<ReturnType<typeof freshStartOf>>) {
   const { text, failures } = runReport(fresh.data.store, window, { verbose: true });
   return { text, failures, section: text.slice(text.indexOf("7. The gang"), text.indexOf("Verdict")) };
 }
-
-/**
- * The report's failures but one: the batcher out of step on n00dles from a grow shortfall, BN2's grows short of its
- * plan. The brain plans BN2's hacking with BN1's multipliers (core's `bitNodeAssumptions`), and BN2's ServerGrowthRate
- * is 0.8 (`BitNode/BitNode.tsx:579`): BN2's tables, G5's (#324), not the gang's.
- */
-const notTheBatchersGrows = (failures: string[]) =>
-  failures.filter((failure) => !/^batcher out of step: .* on n00dles, .*; its cause: a grow shortfall, /.test(failure));
 
 test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSec, recruits, trains and works; the report passes", async () => {
   const fresh = await freshStartOf({
@@ -203,8 +199,15 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
   expect(everyone).toBeLessThan(gangOtherPowerGainPerUpdate(fastest));
   expect(gangWarfareCrew(withWarfare, basis)).toMatchObject({ crew: [], value: 0 });
   expect(gangWarfareMeasure(withWarfare, basis, []).territoryPerUpdate).toBeLessThan(0);
-  expect(notTheBatchersGrows(failures)).toEqual([]);
-  expect(text).toContain("taken as BN1's");
+  expect(failures).toEqual([]);
+  // BN2 played (#334, G5): its multipliers core's, none taken as BN1's; the batcher's grows planned at its
+  // ServerGrowthRate 0.8, in step, G1's allowance gone. Measured on 2026-11-10 (seed 1): 888 batches on n00dles then
+  // harakiri-sushi, none short, the money full at all 845 looks after a grow; home RAM bought, BN2's price known.
+  expect(text).not.toContain("taken as BN1's");
+  const batcher = text.slice(text.indexOf("6. The batcher"), text.indexOf("7. The gang"));
+  expect(batcher).toMatch(/\n {4}hour 1: .*; [1-9]\d* batches, \d+ hack parts landed .*, 0 short, /);
+  expect(batcher).toMatch(/\n {2}money after each batch's grow \(#234\): full at all [1-9]\d* looks/);
+  expect(batcher).toContain("  desyncs: none\n");
 }, 120_000);
 
 /** The owner's own gang, NiteSec's: three members trained 4 minutes, then a minute on DDoS Attacks. */
@@ -248,7 +251,7 @@ test("wanted control end to end: a gang left far over the bound, then the brain:
   expect(last.gang.wantedLevelGainRate).toBeLessThan(0);
   expect(section).toContain("  formed: with NiteSec, before the window");
   expect(section).toContain(`${WANTED_CHECK} or more:\n    none`);
-  expect(notTheBatchersGrows(failures)).toEqual([]);
+  expect(failures).toEqual([]);
 }, 120_000);
 
 /**
@@ -333,7 +336,7 @@ test("equipment (G3): a grown gang and $10b, then the brain for 45 minutes: none
   expect(augmentation.gain).toBeGreaterThan(0);
   expect(Number.isFinite(augmentation.paybackMs)).toBe(true);
   expect(augmentation.paybackMs).toBeGreaterThan(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
-  expect(notTheBatchersGrows(failures)).toEqual([]);
+  expect(failures).toEqual([]);
 }, 120_000);
 
 /**
@@ -368,7 +371,15 @@ async function boostedGang(game: FreshGame) {
 }
 
 test("equipment (G3) end to end: a member boosted far past an hour's play, on Money Laundering in a gang of 12: the rule orders, the worker buys, the report counts it", async () => {
-  const fresh = await freshStartOf({ withDesiredState: true, fixture: BN2, beforeAgent: boostedGang });
+  // A6 off (#334): the boosted member's respect gives the gang's faction, now a shop, reputation fast. Measured on
+  // 2026-11-10 (seed 1), A6 on: 15 affordable within a minute, a quick install chosen, buying there, which holds
+  // every dollar, gang equipment's too (G3's hold), and no augmentation reached member-01 in 3 minutes.
+  const fresh = await freshStartOf({
+    withDesiredState: true,
+    fixture: BN2,
+    beforeAgent: boostedGang,
+    augmentations: false,
+  });
   await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
   await fresh.game.runUntil(() => {
     const reading = gangSnapshotOf(fresh.medium());
@@ -394,7 +405,7 @@ test("equipment (G3) end to end: a member boosted far past an hour's play, on Mo
   expect(section).toMatch(/\n {4}hour 1: .*; [1-9]\d* equipment bought for \$[\d,]+ \(/);
   expect(section).toContain("equipment the rule buys, with the money free, not bought for 1 min or more:\n    none");
   expect(section).toContain("  problems the gang worker reported, as first seen:\n    none\n");
-  expect(notTheBatchersGrows(failures)).toEqual([]);
+  expect(failures).toEqual([]);
 }, 120_000);
 
 /**
@@ -477,5 +488,54 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   );
   expect(section).toContain("territory warfare off while the rule's measure says it pays for 1 min or more:\n    none");
   expect(section).toContain("  problems the gang worker reported, as first seen:\n    none\n");
-  expect(notTheBatchersGrows(failures)).toEqual([]);
+  expect(failures).toEqual([]);
+}, 120_000);
+
+test("BN2's win route (G5): the gang's faction at The Red Pill's reputation, then $10b: bought there, The Red Pill last, installed", async () => {
+  const fresh = await freshStartOf({
+    withDesiredState: true,
+    fixture: BN2,
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
+      await withoutSimEffectors(game);
+    },
+  });
+  await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 5 * 60_000);
+  // Formed (which zeroes the faction's reputation, `PlayerObjectGangMethods.ts:67`): then NiteSec at The Red Pill's
+  // 2.5m and $10b, harness edits (an hour's gang earns its faction about 18, `Gang.ts:152-155`).
+  await fresh.simulation.diagnostics.joinFactionWithReputation("NiteSec", 2.5e6);
+  await fresh.simulation.diagnostics.setMoney(1e10);
+  const slow = () => fresh.latest<SlowSnapshotData>("slow");
+  await fresh.game.runUntil(() => Object.hasOwn(slow()?.resetInfo?.ownedAugs ?? {}, "The Red Pill"), 10 * 60_000);
+  // Two minutes more: the reset game's readings, the gang still there, and nothing stuck.
+  await fresh.game.run(2 * 60_000);
+  const { text, failures, section } = reportOf(fresh);
+  const bought = fresh.data.store
+    .eventsInWindow({ environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() })
+    .filter((event) => event.kind === "augmentationBought")
+    .map((event) => event.detail as { augmentation: string; faction: string });
+  console.log(bought.map((each) => `${each.augmentation} (${each.faction})`).join(", "));
+  console.log(section);
+  console.log(
+    text.slice(text.indexOf("the path to the World Daemon"), text.indexOf("the path to the World Daemon") + 600),
+  );
+  // Measured on 2026-11-10 (seed 1): formed 1 min 25 s in; then 7 bought from NiteSec in under 4 minutes (ECorp
+  // HVMind Implant first, ECorp's own, and DataJack, Neuregen Gene Modification, Neural-Retention Enhancement, Social
+  // Negotiation Assistant (S.N.A), Neurotrainer I), The Red Pill last, and installed: its favour 233.1 after.
+  // Bought from the gang's faction, some only its shop sells there (not NiteSec's own), The Red Pill last; installed.
+  expect(bought.length).toBeGreaterThan(1);
+  expect(bought.every((each) => each.faction === "NiteSec")).toBe(true);
+  expect(bought.at(-1)?.augmentation).toBe("The Red Pill");
+  const own = augmentationsSoldBy("NiteSec", 2, null);
+  expect(bought.some((each) => !own.includes(each.augmentation))).toBe(true);
+  for (const { augmentation } of bought)
+    expect(slow()?.resetInfo?.ownedAugs, augmentation).toHaveProperty([augmentation]);
+  // The gang stays through the install (`Prestige.ts:133-146`), its faction joined again.
+  expect(gangSnapshotOf(fresh.medium()).kind).toBe("gang");
+  expect(section).toMatch(
+    /\n {2}The Red Pill's route: from NiteSec, the gang's faction, no Daedalus needed in BN2; installed\n/,
+  );
+  expect(section).toMatch(/; bought there in the window: \d+ \(/);
+  expect(text).toContain("    The Red Pill: installed\n");
+  expect(failures).toEqual([]);
 }, 120_000);

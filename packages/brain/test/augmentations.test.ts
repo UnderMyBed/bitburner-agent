@@ -1411,6 +1411,96 @@ describe("The Red Pill and Daedalus first (#215)", () => {
   });
 });
 
+describe("the gang's faction's shop (#334, G5)", () => {
+  const RED_PILL = "The Red Pill";
+  /** BN2, CyberSec joined (the gang's faction NiteSec left out, as the controller's `withoutGangFaction` has it). */
+  const bn2 = (fields: Parameters<typeof slow>[0] = {}) =>
+    slow({ joined: [{ name: "CyberSec", reputation: 18_750, favor: 0 }], currentNode: 2, ...fields });
+  const gang = (reputation: number) => ({ gangShop: { name: "NiteSec", reputation, favor: 0 } });
+
+  test("The Red Pill reached there: the install chosen for it, the set bought there and The Red Pill last", () => {
+    // $1b: what the money covers, CyberSec's and the gang's faction's; NiteSec has the most reputation for each.
+    const ask = update({ slowData: bn2(), mediumData: medium({ money: 1e9 }), ...gang(2.5e6) });
+    expect(readAugmentationCycle(store)).toMatchObject({ reason: "The Red Pill" });
+    expect(ask.intent?.action).toBe("purchaseAugmentation");
+    expect(ask.intent?.args).toMatchObject({ faction: "NiteSec" });
+    const set = rule.view().set.map((each) => each.augmentation);
+    expect(set.length).toBeGreaterThan(1);
+    // Some only the gang's faction sells of the two (Augmented Targeting I, say: not CyberSec's, not NiteSec's own).
+    expect(set.some((name) => !augmentationsSoldBy("CyberSec", 2, null).includes(name))).toBe(true);
+    expect(set.some((name) => !augmentationsSoldBy("NiteSec", 2, null).includes(name))).toBe(true);
+    // With no money, The Red Pill alone ($0), from the gang's faction, then the install once it shows queued.
+    store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+    rule = newRule();
+    const redPill = update({ slowData: bn2(), mediumData: medium({ money: 0 }), ...gang(2.5e6) });
+    expect(redPill.intent).toEqual(purchaseIntent("NiteSec", RED_PILL, 1));
+    expect(rule.view().asking).toBe("buying The Red Pill from NiteSec");
+    update({
+      slowData: bn2(),
+      mediumData: medium({ money: 0 }),
+      doneIds: new Set([redPill.intent?.id as string]),
+      ...gang(2.5e6),
+    });
+    gameTimeMs += MINUTE;
+    expect(update({ slowData: bn2({ queued: [RED_PILL] }), mediumData: medium({ money: 0 }), ...gang(0) })).toEqual({
+      intent: null,
+      install: true,
+      committed: true,
+    });
+  });
+
+  test("short there: held while it comes within 20 minutes at the cycle's rate, not beyond; never a money hold", () => {
+    // 7 h since the install (the game's time), 2.4m of 2.5m: the rest in 17.5 min at the cycle's rate. Held.
+    const why =
+      "The Red Pill: NiteSec's reputation 2,400,000 of 2,500,000, about 18 min more at the cycle's rate (the gang's " +
+      "faction) (an install now would lose it)";
+    update({ slowData: bn2(), mediumData: medium({ money: 1e12 }), ...gang(2.4e6) });
+    expect(rule.view()).toMatchObject({ waitingFor: why, reserve: 0, progress: { countdown: null, held: why } });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(lines).toEqual([`augmentations: no install, waiting for ${why}`]);
+    // 2m: the rest in 1.75 h, beyond the window: not held, the count rule's turn (its countdown under way).
+    update({ slowData: bn2(), mediumData: medium({ money: 1e12 }), ...gang(2e6) });
+    expect(rule.view().waitingFor ?? "").not.toContain(RED_PILL);
+    expect(rule.view().progress?.held).toBeNull();
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    // Daedalus's invitation met but its money (thirty installed, hacking 2,600): no $100b held, the gang's faction
+    // sells The Red Pill.
+    const thirty = Object.fromEntries(
+      AUGMENTATION_NAMES.filter((name) => ![...FIVE, NFG, RED_PILL].includes(name))
+        .slice(0, 30)
+        .map((name) => [name, 1]),
+    );
+    update({ slowData: bn2({ ownedAugs: thirty }), mediumData: medium({ hacking: 2600, money: 50e9 }), ...gang(2e6) });
+    expect(rule.daedalusHold()).toBe(0);
+    // Without the gang, as before: held for Daedalus's money.
+    update({ slowData: bn2({ ownedAugs: thirty }), mediumData: medium({ hacking: 2600, money: 50e9 }) });
+    expect(rule.daedalusHold()).toBe(100e9);
+  });
+
+  test("committed for an ordinary install, The Red Pill short there: the install goes ahead; for its own, it waits", () => {
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    const ordinary = update({ slowData: bn2({ queued: [...FIVE] }), mediumData: medium({ money: 0 }), ...gang(1e6) });
+    expect(ordinary).toEqual({ intent: null, install: true, committed: true });
+    // A cycle committed for The Red Pill that no seller's reputation reaches now (a stale reading's, as forming a gang
+    // resets its faction's to 0): called off, never an install without it, and judged afresh.
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0, reason: "The Red Pill" }));
+    rule = newRule();
+    lines.length = 0;
+    const forIt = update({ slowData: bn2({ queued: [...FIVE] }), mediumData: medium({ money: 0 }), ...gang(1e6) });
+    expect(forIt).toEqual({ intent: null, install: false, committed: false });
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(lines).toContain(
+      "augmentations: the install cycle is called off: The Red Pill's reputation short at every seller now: no " +
+        "install without it",
+    );
+    // Reached there, the same cycle buys it.
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0, reason: "The Red Pill" }));
+    rule = newRule();
+    const reached = update({ slowData: bn2({ queued: [...FIVE] }), mediumData: medium({ money: 0 }), ...gang(2.5e6) });
+    expect(reached.intent).toEqual(purchaseIntent("NiteSec", RED_PILL, 1));
+  });
+});
+
 describe("donations (#225)", () => {
   /** CyberSec at 5,000 with its donations unlocked: Gen I and Gen II by one donation, to Gen II's 18,750. */
   const UNLOCKED = [{ name: "CyberSec", reputation: 5_000, favor: 150 }];

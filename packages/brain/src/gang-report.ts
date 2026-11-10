@@ -17,12 +17,16 @@
 // - territory warfare (#332, G4) engaged while the rule's own measure (core's `gangWarfareMeasure`, with the members
 //   on Territory Warfare as read) says the clashes lose, or off while it says they pay, for over
 //   `GANG_WARFARE_WITHIN_MS`.
+// The gang's faction (#334, G5): its reputation and favour at the window's last slow snapshot, the augmentations A6
+// bought there in the window (its `augmentationBought` events), and The Red Pill's route there in BN2. Its stall (reached
+// there, not installed within 15 minutes) is the World Daemon's, section 3's path and failures.
 // The ascensions themselves (G2) are seen as a member's ascension points rising between readings (core's
 // `gangAscensionPointsOf`), each with its largest multiplier gain and the respect it had earned, by hour; the
 // equipment bought (G3) as an item new in a member's lists, its cost the discounted one at the reading before; the
 // deaths (G4) as a member on Territory Warfare at the reading before gone (`gangDeathsBetween`). Clashes won and lost
 // aren't read: the game counts neither; the territory and power by hour show what they came to.
 import {
+  factionReadingOf,
   GANG_CYCLE_MS,
   GANG_EQUIPMENT,
   GANG_FACTIONS,
@@ -39,6 +43,7 @@ import {
   gangEquipment,
   gangEquipmentCost,
   gangEquipmentCostMultOf,
+  gangFactionOf,
   gangInBonusTime,
   gangLostShare,
   gangLostShareBound,
@@ -55,17 +60,21 @@ import {
   planGangEquipment,
   type SlowSnapshotData,
   TERRITORY_WARFARE_TASK,
+  THE_RED_PILL,
 } from "@bitburner-agent/core";
+import { AUGMENTATION_BOUGHT_EVENT_KIND } from "./augmentations.ts";
 import {
   bitNodeOfSlow,
   describeTaskMix,
   GANG_BITNODE,
   gangDeathsBetween,
+  gangShopOf,
   gangSnapshotOf,
   gangWarfareFiguresOf,
   topAscensionGain,
 } from "./gang.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
+import type { StoredEvent } from "./telemetry-store.ts";
 
 /**
  * How long a gang faction may be joined with no gang formed: 5 minutes. The gate holds the intent for 2 medium
@@ -211,11 +220,14 @@ export class GangFold {
   #lastCostMult: number | null = null;
   /** Each member at the reading before, by name: its ascension points rising says it ascended. */
   #lastMembers = new Map<string, GangMemberReading>();
+  /** The window's last slow snapshot in BN2 (#334), the gang's faction carried: its reputation, The Red Pill's route. */
+  #lastSlow: SlowSnapshotData | null = null;
 
-  /** A slow snapshot: the BitNode from then on. */
+  /** A slow snapshot: the BitNode from then on; in BN2, the last, for the gang's faction (#334). */
   addSlow(atMs: number, data: SlowSnapshotData): void {
     const bitNode = bitNodeOfSlow(data);
     if (bitNode !== null) this.#bitNodes.push({ atMs, bitNode });
+    if (bitNode === GANG_BITNODE) this.#lastSlow = data;
   }
 
   /** The BitNode at `atMs`: the last slow snapshot's by then, or the first one's after, with none before. */
@@ -399,9 +411,45 @@ export class GangFold {
     });
   }
 
-  /** The section's lines, its failures added to `failures`. */
-  section(failures: string[], windowEndMs: number): string[] {
-    const lines = ["7. The gang (#325, ascension G2, equipment G3, territory G4; played in BN2 only for now)"];
+  /**
+   * The gang's faction's lines (#334): its reputation and favour, the augmentations bought there in the window
+   * (`events`), and The Red Pill's route; none before a slow snapshot shows the gang's faction.
+   */
+  #factionLines(events: readonly StoredEvent[]): string[] {
+    const slow = this.#lastSlow;
+    const faction = gangFactionOf(slow);
+    if (slow === null || faction === null) return ["  the gang's faction: not shown by a slow snapshot in the window"];
+    const shop = gangShopOf(slow, faction);
+    const bought = events
+      .filter((event) => event.kind === AUGMENTATION_BOUGHT_EVENT_KIND)
+      .map((event) => event.detail as { augmentation?: unknown; faction?: unknown })
+      .filter((detail) => detail.faction === faction && typeof detail.augmentation === "string")
+      .map((detail) => detail.augmentation as string);
+    const installed = Object.hasOwn(slow.resetInfo?.ownedAugs ?? {}, THE_RED_PILL);
+    const queued = factionReadingOf(slow)?.state?.queuedAugmentations.includes(THE_RED_PILL) ?? false;
+    return [
+      `  the gang's faction (#334), its shop nearly every augmentation: ${faction}, ` +
+        (shop === null
+          ? "not in the faction state"
+          : `reputation ${whole(shop.reputation)}, favour ${shop.favor.toFixed(1)}`) +
+        " at the window's last slow snapshot; bought there in the window: " +
+        (bought.length === 0 ? "none" : `${bought.length} (${bought.join(", ")})`),
+      `  The Red Pill's route: from ${faction}, the gang's faction, no Daedalus needed in BN2; ` +
+        (installed
+          ? "installed"
+          : queued
+            ? "queued, to install"
+            : bought.includes(THE_RED_PILL)
+              ? "bought"
+              : "its reputation and ETA in section 3's path, which fails if it's reached and not installed"),
+    ];
+  }
+
+  /** The section's lines, its failures added to `failures`; `events` the window's, for the gang's faction (#334). */
+  section(failures: string[], windowEndMs: number, events: readonly StoredEvent[] = []): string[] {
+    const lines = [
+      "7. The gang (#325, ascension G2, equipment G3, territory G4, its faction's shop G5; played in BN2 only for now)",
+    ];
     if (this.#mediumInBitNode2 === 0) {
       lines.push("  not in BN2 in the window: no gang played");
       return lines;
@@ -421,6 +469,7 @@ export class GangFold {
           ? `  formed: with ${this.#formed.faction}, before the window`
           : `  formed: with ${this.#formed.faction}, first seen ${formatIsoTime(this.#formed.atMs)}`,
       );
+      lines.push(...this.#factionLines(events));
     }
     if (first !== undefined) {
       lines.push(`  by hour, from ${formatIsoTime(first.atMs)}:`);

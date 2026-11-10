@@ -5,10 +5,14 @@
 // `respectForNextRecruit`, every BitNode's `GangSoftcap` against the engine's multipliers, and (#328, G2) the ascension
 // result and the member after it against `getAscensionResult` and `ascendMember`; (#330, G3) every upgrade against the
 // equipment getters, a purchase against `purchaseEquipment`, and an ascension keeping an augmentation; (#332, G4) the
-// power an update gives the members on Territory Warfare, and the win chance against `getChanceToWinClash`. In BN2
+// power an update gives the members on Territory Warfare, and the win chance against `getChanceToWinClash`; (#334, G5)
+// the gang's faction's shop against `getAugmentationsFromFaction`, and the BitNode multipliers core has. In BN2
 // (softcap 1), where the brain plays gangs.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
+  augmentationsSoldBy,
+  bitNodeHackingMultipliers,
+  bitNodePriceMultipliers,
   GANG_EQUIPMENT,
   GANG_STATS,
   GANG_TASKS,
@@ -32,6 +36,7 @@ import {
   gangTask,
   gangWantedPenaltyOf,
   gangWantedPerCycle,
+  playableBitNodes,
 } from "@bitburner-agent/core";
 import { runScript, useSimulations } from "@bitburner-agent/sim/test-helpers";
 import { expect, test } from "vitest";
@@ -397,3 +402,39 @@ for (let update = 0; update < 30; update += 1) {
     expect(gangClashWinChance(read.gang.power, read.all[faction]?.power as number), faction).toBeCloseTo(chance, 12);
   }
 }, 60_000);
+
+test("the gang's faction's shop (#334, G5): core's augmentationsSoldBy is the engine's getAugmentationsFromFaction", async () => {
+  const sim = await start({
+    seed: 1,
+    epochMs: Date.UTC(2026, 0, 1),
+    fixture: { kind: "bitnode", n: 2, sourceFiles: { 1: 3, 4: 3 } },
+  });
+  await sim.diagnostics.setHomeRam(128);
+  await sim.diagnostics.joinFactionWithReputation("NiteSec", 0);
+  await sim.diagnostics.joinFactionWithReputation("CyberSec", 0);
+  // Singularity (SF4.3) reads the shop the page shows (`Singularity.ts:128-133`), before the gang and after it.
+  const { out } = await runScript(
+    sim,
+    `const shop = (faction) => ns.singularity.getAugmentationsFromFaction(faction);
+out({ before: shop("NiteSec") });
+ns.gang.createGang("NiteSec");
+out({ after: shop("NiteSec"), cyberSec: shop("CyberSec") });`,
+  );
+  const [{ before }, { after, cyberSec }] = out as [{ before: string[] }, { after: string[]; cyberSec: string[] }];
+  expect(before).toEqual(augmentationsSoldBy("NiteSec", 2, null));
+  // The gang's: 97 and The Red Pill, in the game's order; another faction's, its own still.
+  expect(after).toEqual(augmentationsSoldBy("NiteSec", 2, "NiteSec"));
+  expect(after).toHaveLength(98);
+  expect(after.at(-1)).toBe("The Red Pill");
+  expect(cyberSec).toEqual(augmentationsSoldBy("CyberSec", 2, "NiteSec"));
+}, 60_000);
+
+test("the BitNode multipliers core has (#321, #323, #334) are the engine's, BN2's among them", async () => {
+  const sim = await start({ seed: 1, epochMs: Date.UTC(2026, 0, 1), fixture: { kind: "new", tutorial: "skipped" } });
+  expect(playableBitNodes()).toEqual([1, 2, 4, 5]);
+  for (const bitNode of playableBitNodes()) {
+    const engine = (await sim.diagnostics.bitNodeMultipliers(bitNode, 1)) as Record<string, number>;
+    const ours = { ...bitNodeHackingMultipliers(bitNode), ...bitNodePriceMultipliers(bitNode) };
+    for (const [name, value] of Object.entries(ours)) expect(value, `BN${bitNode}'s ${name}`).toBe(engine[name]);
+  }
+});

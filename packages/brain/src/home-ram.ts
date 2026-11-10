@@ -40,7 +40,7 @@ export interface HomeRamPlan {
 
 /**
  * The next upgrade: home's RAM doubled, if the player's money covers it, at the tech vendor in the player's city. The
- * price is known in BN1, BN4 and BN5 only so far (#321, #323), so the BitNode comes from the slow snapshot (null until
+ * price is known in BN1, BN2, BN4 and BN5 only so far (#321, #323, #334), so the BitNode comes from the slow snapshot (null until
  * the Agent sends one).
  * Snapshot data comes from the game, so nothing in it is taken on trust: a home RAM that can't be read is no upgrade.
  */
@@ -64,7 +64,7 @@ export function chooseHomeRamUpgrade(mediumData: MediumSnapshotData, slowData: S
   const currentNode = resetInfo?.currentNode;
   const multipliers = typeof currentNode === "number" ? bitNodePriceMultipliers(currentNode) : null;
   if (multipliers === null) return plan(`the home RAM price in BitNode ${String(currentNode)} (not known yet)`);
-  // `HomeComputerRamCost` last, as the game multiplies it (`PlayerObjectServerMethods.ts:38`): 1 in BN1, BN4 and BN5.
+  // `HomeComputerRamCost` last, as the game multiplies it (`PlayerObjectServerMethods.ts:38`): 1 in BN1, BN2, BN4 and BN5.
   const price = homeRamUpgradePrice(ram) * multipliers.HomeComputerRamCost;
   const money = typeof mediumData.player?.money === "number" ? mediumData.player.money : 0;
   if (money < price) {

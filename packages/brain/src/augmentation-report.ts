@@ -268,7 +268,7 @@ export function donationOffersOf(data: SlowSnapshotData): DonationOffer[] {
     };
     const joined = state.joined.filter((faction) => FACTION_NAMES.includes(faction.name));
     const shops = new Map(
-      joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, null)]),
+      joined.map((faction) => [faction.name, augmentationsSoldBy(faction.name, currentNode, gangFactionOf(data))]),
     );
     const owned = (name: string) =>
       Object.hasOwn(purchaseState.installed, name) || state.queuedAugmentations.includes(name);

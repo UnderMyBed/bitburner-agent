@@ -3,9 +3,9 @@
  * its plan on some RAM, its timing, where its threads go, the bounds a batch in step keeps its target within, the
  * waves that prepare a target, and the checks on its landings. Pure, so the brain (A7c) plans with the same functions
  * the in-game batcher (`entries/batcher.ts`) runs. Design and plan: #204; the Agent runs it in #205, the brain chooses
- * in #206. BitNode multipliers as in hacking-ceiling.ts: `ScriptHackMoney` and `HackExpGain` folded into the player's
- * `hacking_money` and `hacking_exp` by the brain (#321, core's `bitNodeHackingMultipliers`), the rest taken as 1: exact
- * in BN1, BN4 and BN5.
+ * in #206. BitNode multipliers as in hacking-ceiling.ts: `ScriptHackMoney`, `HackExpGain`, `ServerGrowthRate` and
+ * `HackingLevelMultiplier` folded into the player's `hacking_money`, `hacking_exp`, `hacking_grow` and `hacking` by the
+ * brain (#321, #334, core's `bitNodeHackingMultipliers`), the rest taken as 1: exact in BN1, BN2, BN4 and BN5.
  */
 import { deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts";
 import { growthLogPerThread, percentMoneyHackedPerThread } from "./hack-loop.ts";
@@ -317,8 +317,8 @@ export function hackThreadsAtLaunch(
 
 /**
  * The hacking level at `exp` hacking exp, `mult` the player's hacking multiplier: the game's `calculateSkill`
- * (PersonObjects/formulas/skill.ts:7-15; Person.ts:60 passes it `mults.hacking`), BitNode multipliers taken as 1: the
- * snapshots don't carry them, and outside BN1 a `HackingLevelMultiplier` under 1 makes this err high, the safe side.
+ * (PersonObjects/formulas/skill.ts:7-15; Person.ts:60-63 passes it `mults.hacking` × `HackingLevelMultiplier`): the
+ * brain folds the BitNode's in (#334, core's `bitNodeHackingMultipliers`; 0.8 in BN2), as the snapshots don't carry it.
  */
 export function hackingLevelOfExp(exp: number, mult: number): number {
   if (mult === 0) return 1;

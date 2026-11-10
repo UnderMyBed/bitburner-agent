@@ -3,10 +3,11 @@
  * from the game's formulas, by any hacker and by a batcher, so "how good is our hacking" is a number: what hacking
  * earned, against these times the RAM. Shared by the brain (the dashboard, the run report) and, later, the batcher
  * (A7), which is scored on the batcher's.
- * The BitNode's `ScriptHackMoney` comes folded into the player's `hacking_money` (#321: the brain folds core's
- * `bitNodeHackingMultipliers` in where it reads the player), so the ceilings are exact in BN1, BN4 and BN5. Its other
- * multipliers are taken as 1: elsewhere `ScriptHackMoneyGain`, `ServerGrowthRate` and `HackingSpeedMultiplier` are at
- * most 1 (BitNode.tsx), so this errs high, the safe side for a ceiling, but for BN11's `ServerWeakenRate` of 2
+ * The BitNode's `ScriptHackMoney` and `ServerGrowthRate` come folded into the player's `hacking_money` and
+ * `hacking_grow` (#321, #334: the brain folds core's `bitNodeHackingMultipliers` in where it reads the player), so the
+ * ceilings are exact in BN1, BN2, BN4 and BN5. Its other multipliers are taken as 1: elsewhere `ScriptHackMoneyGain`
+ * and `HackingSpeedMultiplier` are at most 1, and `ServerGrowthRate` too outside the BitNodes the brain plays
+ * (BitNode.tsx), so this errs high, the safe side for a ceiling, but for BN11's `ServerWeakenRate` of 2
  * (BitNode.tsx:896), where it errs low.
  */
 import { growthLogPerThread, percentMoneyHackedPerThread } from "./hack-loop.ts";
