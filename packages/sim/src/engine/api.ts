@@ -74,6 +74,10 @@ export interface EngineApi {
   gainHackingExp(exp: number): void;
   /** Gives the player charisma experience, through the game's own gain. A harness edit, for test scenarios (#155). */
   gainCharismaExp(exp: number): void;
+  /** Sets a gang member's experience and ascension points, its levels from them. A harness edit, for tests (#330). */
+  setGangMemberFigures(name: string, figures: Record<string, number>): void;
+  /** Sets the player's gang's respect. A harness edit, for tests (#330). */
+  setGangRespect(respect: number): void;
   /** Queues `augmentation`, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
   queueAugmentation(augmentation: string): void;
   /** The page the game's Router is on. */
@@ -163,6 +167,8 @@ const API_FUNCTIONS = {
   giveInstalledAugmentation: true,
   gainHackingExp: true,
   gainCharismaExp: true,
+  setGangMemberFigures: true,
+  setGangRespect: true,
   queueAugmentation: true,
   bitNodeMultipliers: true,
   gameData: true,

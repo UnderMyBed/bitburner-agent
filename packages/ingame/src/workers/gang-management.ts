@@ -6,16 +6,24 @@
 // - Then the ascensions (#328, G2), each member named while its ascension points are still the brain's reading
 //   (core's `gangAscensionOrderStands`): the worker runs again on the same state 10 s later, and must not ascend it
 //   twice. One the game refuses (`NetscriptFunctions/Gang.ts:284-290`: nothing when it can't ascend) is a problem.
+// - Then the purchases (#330, G3), each while the order stands: the member still one, its ascension points still the
+//   brain's reading (an ascension since would lose the item, `GangMember.ts:308-319`), the item not owned (the game
+//   refuses it, `:355-356`), and the money less its cost (core's table × the gang's `equipmentCostMult`, `Gang.ts:
+//   429-434`) at the state's `keepMoney` or more: the brain's holds for its other spending (none spent with null). A
+//   stale order is skipped, not a problem: the brain's next reading, 10 s on, orders afresh. One the game refuses is.
 // - Then the tasks, each member named, every time: setting a member's task again changes nothing in the game
 //   (`GangMember.ts:91-98`), and the owner may have moved it. A name that isn't a member is skipped; a task the
 //   gang's kind hasn't, or one the game refuses, is a problem, and that member's task is left as it was.
-// - Then the reading: the gang's information, and each member's, in the game's order.
-// RAM (`Netscript/RamCostGenerator.ts:271-298`): `gang.ascendMember` 4 GB, `gang.getGangInformation`,
-// `gang.getMemberInformation`, `gang.recruitMember` and `gang.setMemberTask` 2 GB each, `gang.getMemberNames` 1 GB;
-// `gang.inGang`, `gang.getTaskNames` and `gang.getBonusTime` nothing. Nothing here may be named like an NS function
+// - Then the reading: the gang's information, and each member's with its upgrades and augmentations, in the game's
+//   order, and the `keepMoney` it was given, for the run report.
+// RAM (`Netscript/RamCostGenerator.ts:271-298`): `gang.ascendMember` and `gang.purchaseEquipment` 4 GB each,
+// `gang.getGangInformation`, `gang.getMemberInformation`, `gang.recruitMember` and `gang.setMemberTask` 2 GB each,
+// `gang.getMemberNames` 1 GB, `getServerMoneyAvailable` 0.1 GB (on home, the player's money); `gang.inGang`,
+// `gang.getTaskNames` and `gang.getBonusTime` nothing. Nothing here may be named like an NS function
 // (packages/ingame/README.md, "RAM"): the gang information's recruit threshold isn't read, as its property is named
 // like one (1 GB); the brain computes it (core's `gangRecruitsAllowed`). The game's ascension result (2 GB) isn't
-// asked for either: core computes it from the points read (`gangAscensionResult`), checked in the parity suite.
+// asked for either: core computes it from the points read (`gangAscensionResult`), checked in the parity suite. Nor
+// the equipment getters (2 GB each): core's table (`GANG_EQUIPMENT`), checked against them in the parity suite.
 import {
   GANG_STATS,
   type GangInformation,
@@ -24,6 +32,9 @@ import {
   type GangState,
   gangAscensionOrderStands,
   gangAscensionPointsOf,
+  gangEquipment,
+  gangEquipmentCost,
+  gangMemberOwns,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 
@@ -46,6 +57,22 @@ export function gangManagement(ns: NS, state: GangState): GangReading {
     if (!gangAscensionOrderStands(order, points)) continue;
     if (ns.gang.ascendMember(order.name) === undefined) problems.push(`the game didn't ascend ${order.name}`);
   }
+  const { keepMoney } = state;
+  if (state.buy.length > 0 && keepMoney !== null) {
+    const { equipmentCostMult } = ns.gang.getGangInformation();
+    for (const order of state.buy) {
+      if (!memberNames.has(order.name)) continue;
+      const member = ns.gang.getMemberInformation(order.name);
+      if (!gangAscensionOrderStands(order, gangAscensionPointsOf(member))) continue;
+      if (gangMemberOwns(member, order.equipment)) continue;
+      const cost = gangEquipmentCost(gangEquipment(order.equipment), equipmentCostMult);
+      // Negated, so a cost not a number (an older game's multiplier gone) buys nothing.
+      if (!(ns.getServerMoneyAvailable("home") - cost >= keepMoney)) continue;
+      if (!ns.gang.purchaseEquipment(order.name, order.equipment)) {
+        problems.push(`the game didn't buy ${order.equipment} for ${order.name}`);
+      }
+    }
+  }
   // The game answers true for a task this gang's kind hasn't, having left the member Unassigned
   // (`NetscriptFunctions/Gang.ts:200-207`): such a task is refused here, before it's set.
   const taskNames = ns.gang.getTaskNames();
@@ -66,6 +93,7 @@ export function gangManagement(ns: NS, state: GangState): GangReading {
     moneyGainRate: information.moneyGainRate,
     wantedLevelGainRate: information.wantedLevelGainRate,
     power: information.power,
+    equipmentCostMult: information.equipmentCostMult,
     bonusTimeMs: ns.gang.getBonusTime(),
   };
   const members = ns.gang.getMemberNames().map((name) => {
@@ -83,7 +111,9 @@ export function gangManagement(ns: NS, state: GangState): GangReading {
         reading[key] = figures[key];
       }
     }
+    // The equipment lists (G3), copies.
+    for (const key of ["upgrades", "augmentations"]) reading[key] = [...(figures[key] as unknown as string[])];
     return reading as unknown as GangMemberReading;
   });
-  return { gang, members, problems };
+  return { gang, members, problems, keepMoney };
 }

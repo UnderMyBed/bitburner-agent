@@ -1,12 +1,13 @@
 // The gang's effectors in the simulator (#325): the `createGang` intent through the simulator's own effector and
 // through its home worker (`create-gang.js`, the NS API alone, so the `ui` backend's in any game), each refusing what
 // the game refuses; and the Agent's gang worker (`gang.js`) doing the desired state's recruits and tasks, its reading
-// in the medium snapshot, what the game refused among its problems; and its ascensions (#328, G2). In BN2, NiteSec
-// joined by a harness edit.
+// in the medium snapshot, what the game refused among its problems; its ascensions (#328, G2) and its purchases of
+// equipment (#330, G3). In BN2, NiteSec joined by a harness edit.
 import {
   type DesiredState,
   type FastSnapshotData,
   type GangState,
+  gangEquipmentDiscount,
   type Intent,
   intentId,
   type MediumSnapshotData,
@@ -24,6 +25,10 @@ const createGang = (faction: string): Intent => ({
 });
 const BN2 = { kind: "bitnode", n: 2, sourceFiles: { 1: 3 } } as const;
 const joinNiteSec = ({ simulation }: FreshGame) => simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
+
+/** A gang state, its purchases (G3) none unless given. */
+type GangOrders = Omit<GangState, "buy" | "keepMoney"> & Partial<Pick<GangState, "buy" | "keepMoney">>;
+const orders = (gang: GangOrders): GangState => ({ buy: [], keepMoney: null, ...gang });
 
 type Fresh = Awaited<ReturnType<typeof freshStart>>;
 /** The latest fast snapshot's outcome of `id`. */
@@ -84,7 +89,7 @@ test("forming a gang (its worker): the simulator's effectors taken away, through
 
 test("the gang worker: recruits and tasks done, read into the medium snapshot; what the game refuses, a problem", async () => {
   const fresh = await freshStart({ withDesiredState: false, fixture: BN2, beforeAgent: joinNiteSec });
-  const state = (gang: GangState): DesiredState => ({ hackLoop: HACK_LOOP_OFF, intents: [], gang });
+  const state = (gang: GangOrders): DesiredState => ({ hackLoop: HACK_LOOP_OFF, intents: [], gang: orders(gang) });
   // No gang yet: read as none, nothing done.
   fresh.brain.channel.setDesiredState(state({ recruit: ["a"], ascend: [], tasks: { a: "Ransomware" } }));
   await fresh.game.run(12_000);
@@ -128,7 +133,7 @@ test("the gang worker: recruits and tasks done, read into the medium snapshot; w
 
 test("the gang worker's ascensions (G2): made while the order's points stand, once; one the game can't, a problem", async () => {
   const fresh = await freshStart({ withDesiredState: false, fixture: BN2, beforeAgent: joinNiteSec });
-  const state = (gang: GangState): DesiredState => ({ hackLoop: HACK_LOOP_OFF, intents: [], gang });
+  const state = (gang: GangOrders): DesiredState => ({ hackLoop: HACK_LOOP_OFF, intents: [], gang: orders(gang) });
   expect(await triedOnce(fresh, createGang("NiteSec"))).toMatchObject({ done: true });
   // Three recruits: two trained 3 minutes (1,850 hacking experience, past the 1,000 an ascension leaves out), one
   // left unassigned (none).
@@ -165,4 +170,68 @@ test("the gang worker's ascensions (G2): made while the order's points stand, on
   const points = a?.hack_asc_points;
   await fresh.game.run(25_000);
   expect((fresh.medium() as MediumSnapshotData).gang?.members[0]?.hack_asc_points).toBe(points);
+});
+
+test("the gang worker's purchases (G3): bought while the order stands, once; owned, money under keepMoney, gone or ascended, skipped", async () => {
+  const fresh = await freshStart({ withDesiredState: false, fixture: BN2, beforeAgent: joinNiteSec });
+  const state = (gang: GangOrders): DesiredState => ({ hackLoop: HACK_LOOP_OFF, intents: [], gang: orders(gang) });
+  expect(await triedOnce(fresh, createGang("NiteSec"))).toMatchObject({ done: true });
+  const tasks = { a: "Train Hacking", b: "Train Hacking", c: "Train Hacking" };
+  fresh.brain.channel.setDesiredState(state({ recruit: ["a", "b", "c"], ascend: [], tasks }));
+  await fresh.game.runUntil(() => (fresh.medium()?.gang?.members.length ?? 0) === 3, 30_000);
+  const before = (fresh.medium() as MediumSnapshotData).gang;
+  // Read: none owned, and the gang's cost multiplier, 1 / the discount (core's).
+  expect(before?.members.map(({ upgrades, augmentations }) => [upgrades, augmentations])).toEqual([
+    [[], []],
+    [[], []],
+    [[], []],
+  ]);
+  const costMult = before?.gang?.equipmentCostMult as number;
+  expect(costMult).toBeCloseTo(1 / gangEquipmentDiscount(before?.gang as { respect: number; power: number }), 12);
+  expect(before?.keepMoney).toBeNull();
+  await fresh.simulation.diagnostics.setMoney(1e9);
+  // b's order first, as if b had ascended since the brain read it (its points 0, not 5): skipped, though the money
+  // covers it. Then a's rootkit stands; a's BitWire ($5b) is over the money; zed isn't a member; and c's Baseball Bat
+  // would take the money, after a's rootkit, under keepMoney.
+  const nuke = 5e6 * costMult;
+  const buy = [
+    { name: "b", equipment: "NUKE Rootkit", pointsBefore: 5 },
+    { name: "a", equipment: "NUKE Rootkit", pointsBefore: 0 },
+    { name: "a", equipment: "BitWire", pointsBefore: 0 },
+    { name: "zed", equipment: "NUKE Rootkit", pointsBefore: 0 },
+    { name: "c", equipment: "Baseball Bat", pointsBefore: 0 },
+  ];
+  const keepMoney = 1e9 - nuke - 0.5e6;
+  fresh.brain.channel.setDesiredState(state({ recruit: [], ascend: [], tasks, buy, keepMoney }));
+  await fresh.game.runUntil(() => (fresh.medium()?.gang?.members[0]?.upgrades ?? []).length > 0, 30_000);
+  const reading = (fresh.medium() as MediumSnapshotData).gang;
+  expect(reading?.members.map(({ name, upgrades, augmentations }) => [name, upgrades, augmentations])).toEqual([
+    ["a", ["NUKE Rootkit"], []],
+    ["b", [], []],
+    ["c", [], []],
+  ]);
+  expect(reading?.members[0]?.hack_mult).toBeCloseTo(1.05, 12);
+  expect(reading?.problems).toEqual([]);
+  expect(reading?.keepMoney).toBe(keepMoney);
+  // The money: the rootkit's discounted cost, as core has it.
+  expect(fresh.money()).toBeCloseTo(1e9 - nuke, 0);
+  // $2b, the same state: a owns its rootkit now, so it isn't bought again (the game would refuse it, a problem);
+  // c's bat is bought now, its cost above keepMoney; a's BitWire still over the money; b's order still stale.
+  await fresh.simulation.diagnostics.setMoney(2e9);
+  await fresh.game.run(25_000);
+  const again = (fresh.medium() as MediumSnapshotData).gang;
+  expect(again?.members.map(({ name, upgrades }) => [name, upgrades])).toEqual([
+    ["a", ["NUKE Rootkit"]],
+    ["b", []],
+    ["c", ["Baseball Bat"]],
+  ]);
+  expect(again?.problems).toEqual([]);
+  const money = fresh.money();
+  expect(money).toBeCloseTo(2e9 - 1e6 * costMult, 0);
+  // keepMoney null: none spent, whatever the money.
+  const standing = [{ name: "b", equipment: "NUKE Rootkit", pointsBefore: 0 }];
+  fresh.brain.channel.setDesiredState(state({ recruit: [], ascend: [], tasks, buy: standing, keepMoney: null }));
+  await fresh.game.run(25_000);
+  expect((fresh.medium() as MediumSnapshotData).gang?.members[1]?.upgrades).toEqual([]);
+  expect(fresh.money()).toBe(money);
 });

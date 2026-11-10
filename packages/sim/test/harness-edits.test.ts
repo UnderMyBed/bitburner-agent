@@ -1,6 +1,7 @@
 // The diagnostics' harness edits (#145, #149, #151, #155, #162, #164): state a test sets up that no player could,
 // checked in the game's own save. `setMoney`, `joinFactionWithReputation`, `employWithReputation`,
-// `giveInstalledAugmentation`, `gainHackingExp`, `gainCharismaExp` and `queueAugmentation`.
+// `giveInstalledAugmentation`, `gainHackingExp`, `gainCharismaExp`, `queueAugmentation` and (#330)
+// `setGangMemberFigures` and `setGangRespect`.
 import { expect, test } from "vitest";
 import type { Simulation } from "../src/simulation.ts";
 import { decodeSave } from "./helpers/save-diff.ts";
@@ -113,4 +114,34 @@ test("employWithReputation (#155): the job held and the company's reputation, as
   await expect(sim.diagnostics.employWithReputation("Noodle Bar", "IT Intern", 0)).rejects.toThrow(/offers no job/);
   await expect(sim.diagnostics.employWithReputation("Noodle Bar", "Waiter", -1)).rejects.toThrow(/reputation/);
   expect((await saved(sim)).player.jobs).toEqual({ "Carmichael Security": "IT Intern" });
+});
+
+test("setGangMemberFigures and setGangRespect (#330): the member's figures and levels, the respect; others refused", async () => {
+  const sim = await start({
+    seed: 1,
+    epochMs: Date.UTC(2026, 0, 1),
+    fixture: { kind: "bitnode", n: 2, sourceFiles: {} },
+  });
+  await expect(sim.diagnostics.setGangRespect(1)).rejects.toThrow(/no gang/);
+  await expect(sim.diagnostics.setGangMemberFigures("a", { hack_exp: 1 })).rejects.toThrow(/no gang member a/);
+  await sim.diagnostics.joinFactionWithReputation("NiteSec", 0);
+  await sim.writeFile(
+    "home",
+    "form.js",
+    'export async function main(ns) { ns.gang.createGang("NiteSec"); ns.gang.recruitMember("a"); }',
+  );
+  expect((await sim.run("home", "form.js")).error).toBeUndefined();
+  await sim.diagnostics.setGangMemberFigures("a", { hack_exp: 1e6, hack_asc_points: 8e6 });
+  const { player } = await saved(sim);
+  const member = player.gang.data.members[0].data;
+  expect(member).toMatchObject({ name: "a", hack_exp: 1e6, hack_asc_points: 8e6 });
+  // Its level, as the game's process sets it (`GangMember.ts:70-85`): ×√(8e6 / 2,000) on 32 ln(1e6 + 534.5) − 200.
+  expect(member.hack).toBe(Math.floor(Math.sqrt(8e6 / 2000) * (32 * Math.log(1e6 + 534.5) - 200)));
+  await expect(sim.diagnostics.setGangMemberFigures("b", { hack_exp: 1 })).rejects.toThrow(/no gang member b/);
+  await expect(sim.diagnostics.setGangMemberFigures("a", { hack: 1 })).rejects.toThrow(/isn't a gang member figure/);
+  await expect(sim.diagnostics.setGangMemberFigures("a", { hack_exp: -1 })).rejects.toThrow(/finite and 0 or more/);
+  // setGangRespect: the gang's respect, as saved; a negative one refused.
+  await sim.diagnostics.setGangRespect(2e6);
+  expect((await saved(sim)).player.gang.data.respect).toBe(2e6);
+  await expect(sim.diagnostics.setGangRespect(-1)).rejects.toThrow(/finite and 0 or more/);
 });

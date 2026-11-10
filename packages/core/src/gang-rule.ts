@@ -1,7 +1,7 @@
 /**
  * The brain's gang rule (#325, slice G1 of #324): who is recruited and each member's task, from the game's formulas
- * (./gang.ts), and when a member ascends (#328, G2). "A gang that grows", not optimal play: no equipment (G3) or
- * territory (G4) yet.
+ * (./gang.ts), when a member ascends (#328, G2), and what equipment it's bought (#330, G3). "A gang that grows", not
+ * optimal play: no territory (G4) yet.
  * - **The objective:** while recruiting matters (under 12 members), respect less wanted level, a cycle, the respect
  *   taken with no wanted penalty. The penalty, respect / (respect + wanted) (`Gang.ts:357-359`), scales what the gang
  *   earns: with R its respect a cycle before the penalty and W its wanted, both stocks grow until respect × penalty +
@@ -32,24 +32,36 @@
  *   every 10 s; one the owner put there is the rule's to move.
  * - **Recruits:** as many as the respect allows (`Gang.ts:325-334`), named `member-01` to `member-12`, the first
  *   names free, each set to train at once.
+ * - **Equipment (G3):** an upgrade is bought for a member when the money its task earns gains more than the upgrade's
+ *   discounted cost (`Gang.ts:407-434`) over a horizon, and pays it back within 15 minutes (`gangEquipmentAppraisal`):
+ *   none for a member training or on a task that earns no money. Lost on ascension (weapons, armour, vehicles,
+ *   rootkits, `GangMember.ts:308-319`): while it works, over the time to its next ascension (G2's). Augmentations,
+ *   kept: over a day (`GANG_AUGMENTATION_HORIZON_MS`). One a member a plan, the best payback first, within the money
+ *   the brain leaves free (`planGangEquipment`).
  */
 import {
   GANG_ASCENSION_EXP_LEFT_OUT,
   GANG_BONUS_CYCLES_PER_PROCESS,
   GANG_CYCLE_MS,
   GANG_CYCLES_PER_PROCESS,
+  GANG_EQUIPMENT,
   GANG_JUSTICE_DECAY_PER_PROCESS,
   GANG_MOST_MEMBERS,
   GANG_STATS,
   GANG_TASK_NAMES,
   type GangAscensionResult,
+  type GangEquipment,
   type GangFigures,
   type GangMemberFigures,
   type GangTask,
   gangAscensionResult,
+  gangEquipmentCost,
+  gangEquipmentKept,
   gangExpPerCycle,
   gangMemberAfter,
   gangMemberAscended,
+  gangMemberEquipped,
+  gangMemberOwns,
   gangMoneyPerCycle,
   gangRecruitsAllowed,
   gangRespectPerCycle,
@@ -571,4 +583,185 @@ export function planGang(given: GangRuleInputs): GangPlan {
     gangRecruitsAllowed(given.gang.respect, members.length),
   );
   return { objective, assignments, recruit, lostShare, bound, ascend };
+}
+
+/**
+ * The longest an upgrade may take to pay for itself (G3, #330's review), from the money its member's task earns: 15
+ * minutes, the cloud servers' payback limit (the brain's `CLOUD_SERVER_PAYBACK_LIMIT_MS`, a test checks). Gang
+ * equipment spends only money above what cloud servers leave alone (A6's set, held for an install within 15 minutes'
+ * more income, `AUGMENTATION_RESERVE_LOOKAHEAD_MS`; a program or home RAM within a minute's), so it follows the cloud
+ * servers' rule too: a purchase that has its money back within 15 minutes. Like a cloud server's, one can delay home
+ * RAM by about that long; an upgrade paying back slower could delay the install by more than A6's reserve allows
+ * (#330's review: a $10b augmentation bought 25 min before an install the reserve doesn't hold yet).
+ */
+export const GANG_EQUIPMENT_PAYBACK_LIMIT_MS = 15 * 60_000;
+
+/**
+ * The horizon an augmentation's gain is counted over (G3, #330): a day, `GANG_ASCENSION_HORIZON_CAP_MS`, the longest
+ * the rule forecasts a member, and so at least any lost item's (the time to the next ascension). Augmentations are kept
+ * through ascensions (`GangMember.ts:308-319`) and installs (`Prestige.ts:133-147` cuts only the ascension points), so
+ * they pay for longer; the gain past a day isn't counted, nor the member's growth in it: both undercount, the
+ * cautious side.
+ */
+export const GANG_AUGMENTATION_HORIZON_MS = GANG_ASCENSION_HORIZON_CAP_MS;
+
+/** What an upgrade would give a member over its horizon (G3), and what it costs, in dollars. */
+export interface GangEquipmentAppraisal {
+  /** The member's name. */
+  name: string;
+  equipment: string;
+  /** An augmentation, kept on ascension; else lost at the member's next. */
+  kept: boolean;
+  /** Its cost now, with the gang's discount (`gangEquipmentCost`). */
+  cost: number;
+  /** The time its gain is counted over: the time to the member's next ascension, or a day for an augmentation. */
+  horizonMs: number;
+  /** The money the member's task earns over the horizon with it less without it, at the gang's figures now. */
+  gain: number;
+  /** The gain beats the cost. */
+  pays: boolean;
+  /** The time it takes to pay for itself from that money, ms; Infinity with no gain. */
+  paybackMs: number;
+}
+
+/** The stats the gang's work and training tasks weigh: an upgrade on none of them gains nothing. */
+function weighedStats(isHacking: boolean): Set<string> {
+  const tasks = [...workTasks(isHacking), gangTask(gangTrainingTask(isHacking))];
+  return new Set(GANG_STATS.filter((stat) => tasks.some((each) => each[`${stat}Weight`] > 0)));
+}
+
+/**
+ * The money `task` earns the member over `horizonMs` (`formulas.ts:56-73`, the gang's figures now, its wanted penalty
+ * in them): none on a task that earns none (training, justice, a respect task such as Cyberterrorism), or one the
+ * game hasn't.
+ */
+function moneyOver(inputs: GangRuleInputs, member: GangMemberFigures, task: string, horizonMs: number): number {
+  const cycles = horizonMs / GANG_CYCLE_MS;
+  if (!(cycles > 0) || !GANG_TASK_NAMES.includes(task)) return 0;
+  return cycles * gangMoneyPerCycle(inputs.gang, member, gangTask(task), inputs.softcap);
+}
+
+/**
+ * Whether the upgrade pays the member back within `horizonMs` (G3): over it, the money `task` (the plan's for it) earns
+ * the member with the upgrade (`gangMemberEquipped`: higher levels, `GangMember.ts:343-350`) less without it, beats its
+ * cost now (`costMult`, the gang's `equipmentCostMult`, `Gang.ts:407-434`). Dollars against dollars, the money that
+ * comes back (#330's re-review): a member training, on justice or on a task that earns none (most respect tasks: DDoS
+ * Attacks, Plant Virus, Cyberterrorism) gains nothing, so nothing is bought for it. Under 12 members that's most of
+ * them; with 12, the money objective, members work the tasks that earn it. Respect's own worth is left out: the
+ * cautious side.
+ */
+export function gangEquipmentAppraisal(
+  inputs: GangRuleInputs,
+  member: GangMemberFigures,
+  item: GangEquipment,
+  horizonMs: number,
+  costMult: number,
+  task = member.task,
+  without = moneyOver(inputs, member, task, horizonMs),
+): GangEquipmentAppraisal {
+  const gain = moneyOver(inputs, gangMemberEquipped(member, item), task, horizonMs) - without;
+  const cost = gangEquipmentCost(item, costMult);
+  return {
+    name: member.name,
+    equipment: item.name,
+    kept: gangEquipmentKept(item),
+    cost,
+    horizonMs,
+    gain,
+    pays: gain > cost && gain > 0,
+    paybackMs: gain > 0 ? (cost / gain) * horizonMs : Number.POSITIVE_INFINITY,
+  };
+}
+
+/** The equipment to buy now (G3), and what pays whatever the money. */
+export interface GangEquipmentPlan {
+  /** The money the purchases may spend: what the brain leaves free. */
+  budget: number;
+  /** Each member's upgrade that pays back soonest for its cost (the most gain a dollar), best first; one a member. */
+  paying: GangEquipmentAppraisal[];
+  /** Those of them the budget covers, best first, in order: the purchases to make now. */
+  buy: GangEquipmentAppraisal[];
+}
+
+/**
+ * The equipment to buy now (G3, #330), by `plan` (`planGang`'s, on the same inputs), within `budget` dollars, at the
+ * gang's `costMult`:
+ * - **lost on ascension** (weapons, armour, vehicles, rootkits, `GangMember.ts:308-319`): over the time to the
+ *   member's next ascension, G2's forecast working from now (`gangTimeToAscensionMs`, the plan's `nextAscensionMs`, at
+ *   most a day): what its task earns until the item is lost. Only once its ascension converts enough
+ *   (`gangAscensionConvertsEnough`, a training stat's 5,000 experience, under which G2 never ascends it): before that
+ *   the forecast leaves out the training that soon brings it. A member training earns nothing, and G2's forecast for
+ *   it isn't when it ascends: in the BN2 hour's run, valued over it, rootkits were bought for members it gave 7 h,
+ *   which ascended within the hour, before they paid back (#330). G2 has it work before it ascends (it trains while a
+ *   minute's training pays within that time, `gangTrains`), when its task's money may buy one. None for the member
+ *   the plan ascends, nor one whose ascension is due (0, held); a member whose ascension is close gets none, as
+ *   nothing pays back in so short a time.
+ * - **augmentations:** over `GANG_AUGMENTATION_HORIZON_MS`, a day, and only one paid back before the member's next
+ *   ascension too (G2's forecast, as above; none with it due): after it the member trains from level 1, earning no
+ *   money (`GangMember.ts:321-323`), and the members on a money task are often those about to ascend (#330's third
+ *   review).
+ * - **Each valued at the plan's task for the member** (`gangEquipmentAppraisal`): the money that task earns, so none
+ *   for one training, on justice or on a task earning none, augmentations included (#330's re-review).
+ * - A member `plan` has no assignment for (the run report's, which reads the tasks): its task as read, its forecast
+ *   worked out here, only for one with a lost item that pays over a day (the most any forecast gives it, the gain
+ *   growing with the time).
+ * - Only an upgrade that pays for itself within `GANG_EQUIPMENT_PAYBACK_LIMIT_MS`, 15 minutes, the cloud servers' rule.
+ * - A lost item's lasting value is left out: the faster training its multiplier gives (`GangMember.ts:141-150`) raises
+ *   the experience the next ascension converts, which outlives the item. Left out, it errs on the cautious side.
+ * - Of each member's upgrades not owned that pay (`gangEquipmentAppraisal`), the one with the most gain for its cost;
+ *   one a member a plan, so the next plan (10 s on) values the next upgrade on the member with this one. Then, best
+ *   first, those the budget covers. None for a name the protocol can't carry (an owner's, over 64 characters).
+ */
+export function planGangEquipment(
+  inputs: GangRuleInputs,
+  plan: Pick<GangPlan, "assignments" | "ascend">,
+  { budget, costMult }: { budget: number; costMult: number },
+): GangEquipmentPlan {
+  const weighed = weighedStats(inputs.isHacking);
+  const relevant = GANG_EQUIPMENT.filter((item) => Object.keys(item.mults).some((stat) => weighed.has(stat)));
+  const objective = gangObjectiveOf(inputs.members.length);
+  const paying: GangEquipmentAppraisal[] = [];
+  for (const member of inputs.members) {
+    if (member.name === "" || member.name.length > MAX_GANG_MEMBER_NAME_LENGTH) continue;
+    if (member.name === plan.ascend?.name) continue;
+    const assignment = plan.assignments.find((each) => each.name === member.name);
+    const task = assignment?.task ?? member.task;
+    const withoutOver = new Map<number, number>();
+    const appraise = (item: GangEquipment, horizonMs: number) => {
+      if (!withoutOver.has(horizonMs)) withoutOver.set(horizonMs, moneyOver(inputs, member, task, horizonMs));
+      const without = withoutOver.get(horizonMs) as number;
+      return gangEquipmentAppraisal(inputs, member, item, horizonMs, costMult, task, without);
+    };
+    const forecast = gangAscensionConvertsEnough(member, inputs.isHacking);
+    let lostHorizonMs: number | null = null;
+    const lostHorizon = () => {
+      lostHorizonMs ??= Math.max(0, assignment?.nextAscensionMs ?? gangTimeToAscensionMs(inputs, member, objective));
+      return lostHorizonMs;
+    };
+    let best: GangEquipmentAppraisal | null = null;
+    for (const item of relevant) {
+      if (gangMemberOwns(member, item.name)) continue;
+      let appraisal: GangEquipmentAppraisal;
+      if (gangEquipmentKept(item)) {
+        appraisal = appraise(item, GANG_AUGMENTATION_HORIZON_MS);
+        // Paid back before the next ascension, after which the member trains and earns none (#330's third review).
+        if (appraisal.pays && appraisal.paybackMs > lostHorizon()) continue;
+      } else {
+        if (!forecast || !appraise(item, GANG_ASCENSION_HORIZON_CAP_MS).pays || lostHorizon() === 0) continue;
+        appraisal = appraise(item, lostHorizon());
+      }
+      if (!appraisal.pays || appraisal.paybackMs > GANG_EQUIPMENT_PAYBACK_LIMIT_MS) continue;
+      if (best === null || appraisal.gain / appraisal.cost > best.gain / best.cost) best = appraisal;
+    }
+    if (best !== null) paying.push(best);
+  }
+  paying.sort((a, b) => b.gain / b.cost - a.gain / a.cost);
+  const buy: GangEquipmentAppraisal[] = [];
+  let left = budget;
+  for (const each of paying) {
+    if (each.cost > left) continue;
+    buy.push(each);
+    left -= each.cost;
+  }
+  return { budget, paying, buy };
 }

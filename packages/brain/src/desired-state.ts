@@ -92,7 +92,14 @@ import {
   resetInfoOf,
   writeFactionWorkEnabled,
 } from "./factions.ts";
-import { GangRule, type GangView, withoutGangFaction } from "./gang.ts";
+import {
+  type GangMoneyHold,
+  GangRule,
+  type GangView,
+  gangMoneyHoldOf,
+  gangPurchasesSpokenFor,
+  withoutGangFaction,
+} from "./gang.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type InvitationEvent, type InvitationInputs, InvitationRule, type InvitationView } from "./invitations.ts";
@@ -285,6 +292,8 @@ export type AddedIntent = { ok: true; intent: Intent } | { ok: false; reason: st
  * - Then a cloud server (#194, ./cloud-servers.ts), only while neither of those is being bought, and with the hack loop
  *   on (they only run it). While the cheaper of the two waits for money, its price is held back from cloud servers if
  *   the hack loop's income would cover it within `CLOUD_SERVER_RESERVE_HORIZON_MS`.
+ * - Gang equipment last (#330, G3, ./gang.ts): only from money above every hold cloud servers and home RAM keep, this
+ *   round's purchase and the cloud server waiting for money (`#gangEquipmentHold`), sent as the gang's `keepMoney`.
  * - Intents go in order: the owner's manual queue first, as added, then the brain's install of augmentations (#210,
  *   ./augmentations.ts) behind it, then the purchase, then the augmentation purchase (#210), then the backdoor (#195),
  *   asked for until the connected Agent reports it done, then the join (#203). A manual intent leaves the queue once
@@ -696,6 +705,14 @@ export class DesiredStateController {
   }
 
   /**
+   * The money gang equipment leaves alone now (#330, `#gangEquipmentHold`), as the last update's plans have it: the
+   * dashboard's figure behind the gang's "waiting for money above …", in any BitNode (only BN2's gang spends above it).
+   */
+  gangEquipmentHold(): GangMoneyHold {
+    return this.#gangEquipmentHold();
+  }
+
+  /**
    * The money held back for augmentations (#210, the rule's `reserve()`): Infinity once an install is chosen; in the
    * install's countdown, what the counted purchases cost (#222); before it, that only for an install the count rule
    * would choose with `AUGMENTATION_RESERVE_LOOKAHEAD_MS` more income, else 0; Daedalus's $100b while it holds for its
@@ -1092,9 +1109,10 @@ export class DesiredStateController {
    * The money held back from cloud servers (#194): the price of the program or home RAM upgrade bought next (the
    * cheaper, among those switched on) while it waits for money, if the hack loop's income (`perSecond`) would cover
    * what's still short of it within `CLOUD_SERVER_RESERVE_HORIZON_MS`; else none. Or the augmentations' (#210), the
-   * money of the set the money will cover within that horizon, where that's more.
+   * money of the set the money will cover within that horizon, where that's more. `leaveOutNearlyAffordable` (gang
+   * equipment's, #330): without the program or home RAM, when it goes out this round, held at its price instead.
    */
-  #reserveForOtherPurchase(perSecond: number): MoneyReserve | null {
+  #reserveForOtherPurchase(perSecond: number, leaveOutNearlyAffordable = false): MoneyReserve | null {
     const waiting: MoneyReserve[] = [];
     const programs = this.#programsPlan;
     if (readProgramsEnabled(this.#store) && programs !== null && programs.price !== null) {
@@ -1108,8 +1126,8 @@ export class DesiredStateController {
     const cheaper = waiting.sort((a, b) => a.amount - b.amount)[0];
     const money = this.#mediumData?.player?.money;
     const shortfall = (cheaper?.amount ?? 0) - (typeof money === "number" ? money : 0);
-    const other =
-      cheaper !== undefined && shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000 ? cheaper : null;
+    const nearly = shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000;
+    const other = !leaveOutNearlyAffordable && cheaper !== undefined && nearly ? cheaper : null;
     const augmentations = this.#augmentations.reserve();
     const invitation = this.#invitations.hold();
     if (invitation > Math.max(augmentations, other?.amount ?? 0)) {
@@ -1118,6 +1136,60 @@ export class DesiredStateController {
     return augmentations > (other?.amount ?? 0)
       ? { amount: augmentations, forWhat: "the augmentations to buy before the install" }
       : other;
+  }
+
+  /**
+   * The money gang equipment leaves alone (G3, #330): it's the brain's last purchase. The most of every hold the brain
+   * keeps for its other spending: what cloud servers leave alone (`#reserveForOtherPurchase`: the program or home RAM
+   * upgrade a minute's income from its price, A6's augmentation reserve, Infinity once an install is chosen, an
+   * invitation's money), and Daedalus's invitation's, the install countdown's and The Red Pill's donation's, as home
+   * RAM keeps them. Then, on top, the price of this round's purchase (`#purchase`), and the cloud server that pays back
+   * and waits for money (`awaitingMoney`): neither is starved.
+   */
+  #gangEquipmentHold(): GangMoneyHold {
+    const purchase = this.#purchase;
+    // A program or home RAM going out this round is the one the reserve holds (the cheaper, affordable): held once, at
+    // its price, below (#330's re-review).
+    const goingOut = purchase !== null && ["buyTor", "buyProgram", "upgradeHomeRam"].includes(purchase.action);
+    const reserve = this.#reserveForOtherPurchase(this.#income.rate()?.perSecond ?? 0, goingOut);
+    const reserves = [...(reserve === null ? [] : [reserve]), ...this.#homeRamHolds()];
+    const purchases = gangPurchasesSpokenFor({
+      purchase: purchase === null ? null : { intent: purchase, forWhat: describePurchase(purchase) },
+      prices: {
+        programs: this.#programsPlan?.price,
+        homeRam: this.#homeRamPlan?.price,
+        cloudServer: this.#cloudServersPlan?.next?.price,
+      },
+      cloud: {
+        awaiting: this.#cloudServersPlan?.awaitingMoney,
+        enabled: readCloudServersEnabled(this.#store),
+        hackLoop: readHackLoopEnabled(this.#store),
+        committed: this.#augmentationsCommitted,
+        problem: this.#cloudServerProblem !== null,
+      },
+    });
+    return gangMoneyHoldOf(reserves, purchases);
+  }
+
+  /** The countdown, or an install held for Daedalus's count (#243): the install's minutes off. */
+  #countdownWords(): string {
+    return this.#augmentations.countdownUnderWay()
+      ? "the augmentations' install countdown"
+      : "the augmentations' install, held for Daedalus's count";
+  }
+
+  /**
+   * The holds home RAM buys above (the most of them): Daedalus's $100b for its invitation (#215 review), the install
+   * countdown's money (#222), The Red Pill's donation's (#225 review) and an invitation's (#228). Gang equipment (#330)
+   * keeps them too.
+   */
+  #homeRamHolds(): MoneyReserve[] {
+    return [
+      { amount: this.#augmentations.daedalusHold(), forWhat: "Daedalus's invitation" },
+      { amount: this.#augmentations.countdownReserve(), forWhat: this.#countdownWords() },
+      { amount: this.#augmentations.redPillHold(), forWhat: "The Red Pill's donation" },
+      { amount: this.#invitations.hold(), forWhat: "an invitation travelled for" },
+    ];
   }
 
   /** The next program or home RAM upgrade, as an intent: one at a time, cheapest first, among those switched on. */
@@ -1147,12 +1219,8 @@ export class DesiredStateController {
     }
     // Daedalus's $100b held for its invitation (#215 review), or the money the install's countdown holds (#222): home
     // RAM only with the money above it.
-    const daedalusHold = this.#augmentations.daedalusHold();
     const countdownHold = this.#augmentations.countdownReserve();
-    // The countdown, or an install held for Daedalus's count (#243): the install's minutes off.
-    const countdownWords = this.#augmentations.countdownUnderWay()
-      ? "the augmentations' install countdown"
-      : "the augmentations' install, held for Daedalus's count";
+    const countdownWords = this.#countdownWords();
     // In the countdown, programs are bought no more: they're lost at the install, minutes off.
     if (countdownHold > 0 && programsNext !== null) {
       this.#waitingFor.programs = `${countdownWords} (programs are lost at the install)`;
@@ -1162,13 +1230,9 @@ export class DesiredStateController {
     // too.
     const redPillHold = this.#augmentations.redPillHold();
     const invitationHold = this.#invitations.hold();
-    const holds: [number, string][] = [
-      [daedalusHold, "Daedalus's invitation"],
-      [countdownHold, countdownWords],
-      [redPillHold, "The Red Pill's donation"],
-      [invitationHold, "an invitation travelled for"],
-    ];
-    const [hold, heldFor] = holds.reduce((most, each) => (each[0] > most[0] ? each : most));
+    const { amount: hold, forWhat: heldFor } = this.#homeRamHolds().reduce((most, each) =>
+      each.amount > most.amount ? each : most,
+    );
     const playerMoney = this.#mediumData?.player?.money;
     const [programsHold, programsHeldFor] =
       redPillHold >= invitationHold
@@ -1559,6 +1623,13 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
     });
     this.#purchase = this.#choosePurchase();
+    // Gang equipment (G3, #330), the last purchase: from the money above every hold, this round's purchase and the
+    // cloud server waiting for money (`#gangEquipmentHold`).
+    const playerMoney = this.#mediumData?.player?.money;
+    this.#gangState = this.#gang.equip({
+      money: typeof playerMoney === "number" ? playerMoney : null,
+      hold: this.#gangEquipmentHold(),
+    });
     this.#backdoor = this.#backdoors.intent({
       staticData: this.#staticData,
       mediumData: this.#mediumData,

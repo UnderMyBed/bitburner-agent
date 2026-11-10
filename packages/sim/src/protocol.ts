@@ -504,6 +504,14 @@ export interface HostMethods {
    */
   "diagnostics.gainHackingExp"(params: { exp: number }): void;
   /**
+   * Sets a gang member's experience and ascension points (`hack_exp`, `hack_asc_points` and the other stats', each
+   * finite and 0 or more), then its levels from them, for test scenarios (#330). A harness edit, not something a player
+   * can do. No gang, no such member, or another field throws.
+   */
+  "diagnostics.setGangMemberFigures"(params: { name: string; figures: Record<string, number> }): void;
+  /** Sets the player's gang's respect (finite, 0 or more), for test scenarios (#330). A harness edit. No gang throws. */
+  "diagnostics.setGangRespect"(params: { respect: number }): void;
+  /**
    * Gives the player charisma experience (finite, 0 or more) through the game's own `gainCharismaExp`, which sets the
    * skill from it, for test scenarios that need a job's required charisma (#155). A harness edit.
    */

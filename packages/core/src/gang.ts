@@ -1,10 +1,11 @@
 /**
- * Gangs (#325, slice G1 of the gangs epic #324; ascension, #328, G2): the game's gang facts and formulas, and the
- * brain's rule for a gang that grows: which faction it's formed with, who is recruited, who ascends, and each member's
- * task. Paths are `vendor/bitburner-src/src/`'s. The formulas are the game's own (`Gang/formulas/formulas.ts`,
- * `Gang/GangMember.ts`), checked against the engine's `ns.formulas.gang` and `getTaskStats` in the brain's parity
- * suite (`gang-parity.test.ts`). In-game code bundles the protocol's part (the worker names, `GANG_TASK_NAMES`), so no
- * name here is an NS function's (packages/ingame/README.md, "RAM"): `gangRespectPerCycle`, never `respectGain`.
+ * Gangs (#325, slice G1 of the gangs epic #324; ascension, #328, G2; equipment, #330, G3): the game's gang facts and
+ * formulas, and the brain's rule for a gang that grows: which faction it's formed with, who is recruited, who ascends,
+ * each member's task, and its equipment. Paths are `vendor/bitburner-src/src/`'s. The formulas are the game's own
+ * (`Gang/formulas/formulas.ts`, `Gang/GangMember.ts`), checked against the engine's `ns.formulas.gang` and
+ * `getTaskStats` in the brain's parity suite (`gang-parity.test.ts`). In-game code bundles the protocol's part (the
+ * worker names, `GANG_TASK_NAMES`), so no name here is an NS function's (packages/ingame/README.md, "RAM"):
+ * `gangRespectPerCycle`, never `respectGain`.
  */
 
 /** The factions a gang can be formed with, in the game's order (`Gang/data/Constants.ts:18-26`). */
@@ -369,6 +370,12 @@ export interface GangMemberFigures {
   dex_asc_points: number;
   agi_asc_points: number;
   cha_asc_points: number;
+  /**
+   * The member's upgrades lost on ascension, and its augmentations, kept (G3, `GangMember.ts:63-64`, `:308-319`), by
+   * name. Absent from an older Agent's reading: none.
+   */
+  upgrades?: readonly string[];
+  augmentations?: readonly string[];
 }
 
 type MemberLevels = Pick<GangMemberFigures, GangStat>;
@@ -517,19 +524,137 @@ export function gangAscensionResult(member: GangMemberFigures): GangAscensionRes
 
 /**
  * The member after an ascension (`GangMember.ts:298-320`): each stat's points gained, its experience 0, its levels
- * recomputed, no respect earned. The equipment multipliers go back to 1: the upgrades are lost and the augmentations
- * kept, which the brain doesn't read until G3 (#324), so a member with augmentations comes out stronger than this.
+ * recomputed, no respect earned. Its upgrades are lost and its equipment multipliers set back to 1, then its
+ * augmentations applied again (G3, #330: `:308-319`), so G2's appraisal counts what they keep.
  */
 export function gangMemberAscended(member: GangMemberFigures): GangMemberFigures {
-  const after = { ...member, earnedRespect: 0 };
+  const augmentations = member.augmentations ?? [];
+  const after: GangMemberFigures = { ...member, earnedRespect: 0, upgrades: [], augmentations: [...augmentations] };
   for (const stat of GANG_STATS) {
     const points = member[`${stat}_asc_points`] + gangAscensionPointsGain(member[`${stat}_exp`]);
-    const mult = gangAscensionMult(points);
+    const ascMult = gangAscensionMult(points);
+    const mult = augmentations.reduce((product, name) => product * (gangEquipment(name).mults[stat] ?? 1), 1);
     after[`${stat}_asc_points`] = points;
-    after[`${stat}_asc_mult`] = mult;
-    after[`${stat}_mult`] = 1;
+    after[`${stat}_asc_mult`] = ascMult;
+    after[`${stat}_mult`] = mult;
     after[`${stat}_exp`] = 0;
-    after[stat] = gangSkillLevel(0, mult);
+    after[stat] = gangSkillLevel(0, mult * ascMult);
+  }
+  return after;
+}
+
+/** An upgrade's type, as `ns.gang.getEquipmentType` names it (`Gang/GangMemberUpgrade.ts:51-66`). */
+export type GangEquipmentType = "Weapon" | "Armor" | "Vehicle" | "Rootkit" | "Augmentation";
+
+/** An upgrade (G3): its name, its cost before the discount, its type, and its multipliers on the member's stats. */
+export interface GangEquipment {
+  name: string;
+  cost: number;
+  type: GangEquipmentType;
+  mults: Readonly<Partial<Record<GangStat, number>>>;
+}
+
+const equipment = (
+  type: GangEquipmentType,
+  name: string,
+  cost: number,
+  mults: Partial<Record<GangStat, number>>,
+): GangEquipment => ({ name, cost, type, mults });
+
+/**
+ * Every upgrade (G3, #330), in the game's order (`Gang/data/upgrades.ts:34-227`). Typed from the source; the parity
+ * suite checks each against the engine's `getEquipmentNames`, `getEquipmentType`, `getEquipmentStats` and
+ * `getEquipmentCost`, so a game bump that changes one fails CI.
+ */
+export const GANG_EQUIPMENT: readonly GangEquipment[] = [
+  equipment("Weapon", "Baseball Bat", 1e6, { str: 1.04, def: 1.04 }),
+  equipment("Weapon", "Katana", 12e6, { str: 1.08, def: 1.08, dex: 1.08 }),
+  equipment("Weapon", "Malorian-3516", 25e6, { str: 1.1, def: 1.1, dex: 1.1, agi: 1.1 }),
+  equipment("Weapon", "Hansen-HA7", 50e6, { str: 1.12, def: 1.1, agi: 1.1 }),
+  equipment("Weapon", "Arasaka-HJSH18", 60e6, { str: 1.2, def: 1.15 }),
+  equipment("Weapon", "Militech-M251s", 100e6, { str: 1.25, def: 1.2 }),
+  equipment("Weapon", "Nokota-D5", 150e6, { str: 1.3, def: 1.25 }),
+  equipment("Weapon", "Techtronika-SPT32", 225e6, { str: 1.3, dex: 1.25, agi: 1.3 }),
+  equipment("Armor", "Bulletproof Vest", 2e6, { def: 1.04 }),
+  equipment("Armor", "Full Body Armor", 5e6, { def: 1.08 }),
+  equipment("Armor", "Liquid Body Armor", 25e6, { def: 1.15, agi: 1.15 }),
+  equipment("Armor", "Graphene Plating Armor", 40e6, { def: 1.2 }),
+  equipment("Vehicle", "Herrera Outlaw GTS", 3e6, { agi: 1.04, cha: 1.04 }),
+  equipment("Vehicle", "Yaiba ASM-R250 Muramasa", 9e6, { agi: 1.08, cha: 1.08 }),
+  equipment("Vehicle", "Rayfield Caliburn", 18e6, { agi: 1.12, cha: 1.12 }),
+  equipment("Vehicle", "Quadra Sport R-7", 30e6, { agi: 1.16, cha: 1.16 }),
+  equipment("Rootkit", "NUKE Rootkit", 5e6, { hack: 1.05 }),
+  equipment("Rootkit", "Soulstealer Rootkit", 25e6, { hack: 1.1 }),
+  equipment("Rootkit", "Demon Rootkit", 75e6, { hack: 1.15 }),
+  equipment("Rootkit", "Hmap Node", 40e6, { hack: 1.12 }),
+  equipment("Rootkit", "Jack the Ripper", 75e6, { hack: 1.15 }),
+  equipment("Augmentation", "Bionic Arms", 10e9, { str: 1.3, dex: 1.3 }),
+  equipment("Augmentation", "Bionic Legs", 10e9, { agi: 1.6 }),
+  equipment("Augmentation", "Bionic Spine", 15e9, { str: 1.15, def: 1.15, dex: 1.15, agi: 1.15 }),
+  equipment("Augmentation", "BrachiBlades", 20e9, { str: 1.4, def: 1.4 }),
+  equipment("Augmentation", "Nanofiber Weave", 12e9, { str: 1.2, def: 1.2 }),
+  equipment("Augmentation", "Synthetic Heart", 25e9, { str: 1.5, agi: 1.5 }),
+  equipment("Augmentation", "Synfibril Muscle", 15e9, { str: 1.3, def: 1.3 }),
+  equipment("Augmentation", "BitWire", 5e9, { hack: 1.05 }),
+  equipment("Augmentation", "Neuralstimulator", 10e9, { hack: 1.15 }),
+  equipment("Augmentation", "DataJack", 7.5e9, { hack: 1.1 }),
+  equipment("Augmentation", "Graphene Bone Lacings", 50e9, { str: 1.7, def: 1.7 }),
+];
+
+/** Every upgrade's name, the game's order. */
+export const GANG_EQUIPMENT_NAMES: readonly string[] = GANG_EQUIPMENT.map((each) => each.name);
+
+/** An upgrade by name; throws for one the game hasn't. */
+export function gangEquipment(name: string): GangEquipment {
+  const found = GANG_EQUIPMENT.find((each) => each.name === name);
+  if (found === undefined) throw new RangeError(`${name} isn't gang equipment`);
+  return found;
+}
+
+/** Whether an ascension keeps the upgrade: an augmentation (`GangMember.ts:308-319`); the rest are lost. */
+export function gangEquipmentKept(item: Pick<GangEquipment, "type">): boolean {
+  return item.type === "Augmentation";
+}
+
+/**
+ * The discount on equipment (`Gang.ts:407-416`): max(1, respect^0.01 + respect / 5e6 + power^0.01 + power / 1e6 − 1),
+ * power the gang's (`Gang.ts:90-92`). A cost is the upgrade's over it (`:429-434`); `getGangInformation` gives its
+ * inverse, `equipmentCostMult` (`NetscriptFunctions/Gang.ts:102`).
+ */
+export function gangEquipmentDiscount({ respect, power }: { respect: number; power: number }): number {
+  return Math.max(1, respect ** 0.01 + respect / 5e6 + power ** 0.01 + power / 1e6 - 1);
+}
+
+/** What the upgrade costs now: its cost × the gang's `equipmentCostMult` (1 / `gangEquipmentDiscount`). */
+export function gangEquipmentCost(item: Pick<GangEquipment, "cost">, costMult: number): number {
+  return item.cost * costMult;
+}
+
+/** The gang's `equipmentCostMult` as read, or, from an older Agent, 1 / the discount from its respect and power. */
+export function gangEquipmentCostMultOf(
+  gang: Pick<GangInformation, "respect" | "power" | "equipmentCostMult">,
+): number {
+  return gang.equipmentCostMult ?? 1 / gangEquipmentDiscount(gang);
+}
+
+/** Whether the member has the upgrade: the game refuses one owned (`GangMember.ts:355-356`). */
+export function gangMemberOwns(member: Pick<GangMemberFigures, "upgrades" | "augmentations">, name: string): boolean {
+  return (member.upgrades ?? []).includes(name) || (member.augmentations ?? []).includes(name);
+}
+
+/**
+ * The member with the upgrade (`GangMember.ts:343-367`): its multipliers × the upgrade's, its levels as the gang's next
+ * process recomputes them (`Gang.ts:274-279`), and the upgrade in its list.
+ */
+export function gangMemberEquipped(member: GangMemberFigures, item: GangEquipment): GangMemberFigures {
+  const after: GangMemberFigures = gangEquipmentKept(item)
+    ? { ...member, augmentations: [...(member.augmentations ?? []), item.name] }
+    : { ...member, upgrades: [...(member.upgrades ?? []), item.name] };
+  for (const stat of GANG_STATS) {
+    const factor = item.mults[stat];
+    if (factor === undefined) continue;
+    after[`${stat}_mult`] = member[`${stat}_mult`] * factor;
+    after[stat] = gangSkillLevel(member[`${stat}_exp`], after[`${stat}_mult`] * member[`${stat}_asc_mult`]);
   }
   return after;
 }
@@ -598,6 +723,21 @@ export interface GangState {
   ascend: GangAscensionOrder[];
   /** Tasks by member name (a recruit's too); a member not named keeps its task. */
   tasks: Record<string, string>;
+  /**
+   * Equipment to buy (G3, #330), after the ascensions and before the tasks: each while the member's ascension points
+   * are still `pointsBefore` (it hasn't ascended since the brain read it), it hasn't the item, and the money less the
+   * item's cost stays at `keepMoney` or more. Absent from an older brain: none.
+   */
+  buy: GangPurchaseOrder[];
+  /** The money the purchases leave alone (G3): the brain's holds for its other spending; null, none spent. */
+  keepMoney: number | null;
+}
+
+/** An upgrade to buy for a member (G3), with its ascension points when the brain read it. */
+export interface GangPurchaseOrder {
+  name: string;
+  equipment: string;
+  pointsBefore: number;
 }
 
 /** A member to ascend (G2), with its ascension points when the brain read it. */
@@ -631,12 +771,13 @@ export const MAX_GANG_MEMBER_NAME_LENGTH = 64;
 
 /**
  * A desired state's `gang` (#325): none when absent or null; else at most 12 recruits' names, at most 12 members to
- * ascend (G2; absent, none), and the game's tasks.
+ * ascend (G2; absent, none), the game's tasks, and at most 12 purchases of the game's equipment with the money to keep
+ * (G3; absent, none, and null).
  */
 export function parseGangState(value: unknown): { ok: true; gang: GangState | null } | { ok: false; reason: string } {
   if (value === undefined || value === null) return { ok: true, gang: null };
   if (typeof value !== "object" || Array.isArray(value)) return { ok: false, reason: "gang isn't an object" };
-  const { recruit, ascend = [], tasks } = value as Record<string, unknown>;
+  const { recruit, ascend = [], tasks, buy = [], keepMoney = null } = value as Record<string, unknown>;
   const isName = (name: unknown): name is string =>
     typeof name === "string" && name !== "" && name.length <= MAX_GANG_MEMBER_NAME_LENGTH;
   if (!Array.isArray(recruit) || recruit.length > GANG_MOST_MEMBERS || !recruit.every(isName)) {
@@ -651,6 +792,17 @@ export function parseGangState(value: unknown): { ok: true; gang: GangState | nu
     (order as GangAscensionOrder).pointsBefore >= 0;
   if (!Array.isArray(ascend) || ascend.length > GANG_MOST_MEMBERS || !ascend.every(isOrder)) {
     return { ok: false, reason: `gang.ascend isn't a list of at most ${GANG_MOST_MEMBERS} members and their points` };
+  }
+  const isPurchase = (order: unknown): order is GangPurchaseOrder =>
+    isOrder(order) && GANG_EQUIPMENT_NAMES.includes((order as GangPurchaseOrder).equipment);
+  if (!Array.isArray(buy) || buy.length > GANG_MOST_MEMBERS || !buy.every(isPurchase)) {
+    return {
+      ok: false,
+      reason: `gang.buy isn't a list of at most ${GANG_MOST_MEMBERS} members, the game's equipment and their points`,
+    };
+  }
+  if (keepMoney !== null && !(typeof keepMoney === "number" && Number.isFinite(keepMoney) && keepMoney >= 0)) {
+    return { ok: false, reason: "gang.keepMoney isn't null or an amount of money" };
   }
   if (typeof tasks !== "object" || tasks === null || Array.isArray(tasks)) {
     return { ok: false, reason: "gang.tasks isn't an object" };
@@ -669,11 +821,16 @@ export function parseGangState(value: unknown): { ok: true; gang: GangState | nu
       recruit: [...recruit],
       ascend: ascend.map(({ name, pointsBefore }) => ({ name, pointsBefore })),
       tasks: Object.fromEntries(entries) as Record<string, string>,
+      buy: buy.map(({ name, equipment, pointsBefore }) => ({ name, equipment, pointsBefore })),
+      keepMoney,
     },
   };
 }
 
-/** The gang as `ns.gang.getGangInformation` gives it, but its recruit threshold and equipment (#325). */
+/**
+ * The gang as `ns.gang.getGangInformation` gives it (#325), but its recruit threshold and territory warfare's figures;
+ * its equipment cost multiplier since G3.
+ */
 export interface GangInformation extends Pick<GangFigures, "respect" | "wantedLevel" | "territory"> {
   faction: string;
   isHacking: boolean;
@@ -684,6 +841,11 @@ export interface GangInformation extends Pick<GangFigures, "respect" | "wantedLe
   moneyGainRate: number;
   wantedLevelGainRate: number;
   power: number;
+  /**
+   * 1 / the equipment discount (G3, `NetscriptFunctions/Gang.ts:102`, core's `gangEquipmentDiscount`): an upgrade's
+   * cost now is its cost × this. Absent from an older Agent: the brain computes it from the respect and power.
+   */
+  equipmentCostMult?: number;
   /**
    * `ns.gang.getBonusTime()` (#325's review): the stored cycles' time, ms; over 2 s, bonus time, the gang processing 25
    * cycles a call (`gangInBonusTime`, `GANG_BONUS_CYCLES_PER_PROCESS`). Absent from an older Agent.
@@ -707,4 +869,9 @@ export interface GangReading {
   gang: GangInformation | null;
   members: GangMemberReading[];
   problems: string[];
+  /**
+   * The money the worker's purchases left alone (G3): the state's `keepMoney`, for the run report's check; null, none
+   * spent. Absent from an older Agent.
+   */
+  keepMoney?: number | null;
 }
