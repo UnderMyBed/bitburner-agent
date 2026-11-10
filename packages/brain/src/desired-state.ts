@@ -20,6 +20,7 @@ import {
   type FastSnapshotData,
   factionReadingOf,
   type GangState,
+  gangSellsRedPill,
   type Intent,
   type IntentOutcome,
   intentId,
@@ -1541,7 +1542,8 @@ export class DesiredStateController {
     try {
       return {
         state,
-        count: countOf(state, resetInfo),
+        // Never short with The Red Pill at the gang's faction (#335's review): no travel for Daedalus's count.
+        count: countOf(state, resetInfo, gangSellsRedPill(this.#gang.gangFaction(), resetInfo.currentNode)),
         currentNode: resetInfo.currentNode,
         lastAugReset,
         installed: resetInfo.ownedAugs,
@@ -1592,6 +1594,7 @@ export class DesiredStateController {
       // Who works for a faction while an install is held for Daedalus's count (#243 review): A5 under the hold.
       holdWork: { owners: readOwnersWork(this.#store), brainWorks: readFactionWorkEnabled(this.#store) },
       gangShop,
+      gangUnread: this.#gang.gangUnread(),
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;
@@ -1613,6 +1616,8 @@ export class DesiredStateController {
       // The Red Pill's seller in BN2 with a gang (#334), and the game's time for its rate.
       gangShop,
       slowGameTimeMs: this.#slowGameTimeMs,
+      // A6 holding installs for it there (#335's review): the reputation not rising is then loud.
+      redPillHeldAtGang: this.#augmentations.redPillHeldAtGang(),
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({
@@ -1659,6 +1664,8 @@ export class DesiredStateController {
       cityGroup: this.#invitations.view().cityGroup,
       // An install held for Daedalus's count by work (#243 review): its augmentation's seller, worked for first.
       countHoldTarget: this.#augmentations.countHoldTarget(),
+      // The gang's faction's shop (#335's review): what its reputation reaches isn't worked for.
+      gangShop,
     });
     this.#join = factions.join;
     this.#joinAlongside = factions.joinAlongside;

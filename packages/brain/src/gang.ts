@@ -503,6 +503,11 @@ export class GangRule {
     return this.#faction;
   }
 
+  /** In BN2 with no reading yet that says whether there's a gang, or whose (#335's review). */
+  gangUnread(): boolean {
+    return this.#holding;
+  }
+
   /**
    * The factions the other rules mustn't see as joined (`withoutGangFaction`): the gang's; in BN2 before a reading
    * says whether there's one, every gang faction; else none.

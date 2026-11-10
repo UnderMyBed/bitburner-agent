@@ -194,8 +194,8 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
       `${gangOtherPowerGainPerUpdate(fastest).toFixed(4)}; the clashes ` +
       `${gangWarfareMeasure(withWarfare, basis, []).territoryPerUpdate.toExponential(2)} territory an update`,
   );
-  // Measured on 2026-11-09 (seed 1): power 1.0 against 3.6 to 35.3; every member on it would gain 0.0301 an update,
-  // under a tenth of Speakers for the Dead's 0.3159; the clashes now −2.76e-4 territory an update.
+  // Measured on 2026-11-10 (seed 1, after #335's review): power 1.0 against 3.3 to 37.9; every member on it would gain
+  // 0.0301 an update, under a tenth of The Black Hand's 0.3255; the clashes now −2.75e-4 territory an update.
   expect(everyone).toBeLessThan(gangOtherPowerGainPerUpdate(fastest));
   expect(gangWarfareCrew(withWarfare, basis)).toMatchObject({ crew: [], value: 0 });
   expect(gangWarfareMeasure(withWarfare, basis, []).territoryPerUpdate).toBeLessThan(0);
@@ -305,9 +305,9 @@ test("equipment (G3): a grown gang and $10b, then the brain for 45 minutes: none
   console.log(`working at (30 s steps): ${working.join(", ")}`);
   console.log([...equipmentLines].join(" | "));
   console.log(section);
-  // Measured on 2026-11-09 (seed 1): the three, ×9.4 and 172 hacking from the owner, trained 40 minutes (G2: a minute's
+  // Measured on 2026-11-10 (seed 1, after #335's review): the three, ×9.4 and 172 hacking from the owner, trained 40 minutes (G2: a minute's
   // training pays within the day to its next ascension, the cap), worked under 5 minutes, and two ascended (×1.56),
-  // the respect recruiting four. No lost item pays back within a working stretch so short, nor an augmentation within
+  // the respect recruiting five. No lost item pays back within a working stretch so short, nor an augmentation within
   // a day: none is bought, with $10b free, and the report's check, on the same readings, passes.
   expect(section).toMatch(/\n {4}hour 1: 3 → \d+ members; .*; [1-9]\d* ascensions? \(.*\); no equipment bought; /);
   expect(section).toContain("equipment the rule buys, with the money free, not bought for 1 min or more:\n    none");
@@ -315,8 +315,8 @@ test("equipment (G3): a grown gang and $10b, then the brain for 45 minutes: none
   expect(last.members.every((each) => (each.upgrades ?? []).length === 0)).toBe(true);
   // Why, computed on the last reading: the strongest on a respect task (earning none), and even on its best money
   // task, the best augmentation for hacking, Neuralstimulator, pays back far slower than 15 minutes (measured on
-  // 2026-11-09: member-03, hacking 1,868, on Cyberterrorism; on Money Laundering it gains $2.1b a day for its $9.2b
-  // at the gang's discount, paid back in 105 h 11 min).
+  // 2026-11-10: member-03, hacking 1,819, on Cyberterrorism; on Money Laundering it gains $2.1b a day for its $9.2b
+  // at the gang's discount, paid back in 107 h 4 min).
   const inputs = { gang: last.gang, isHacking: true, members: last.members, softcap: 1 };
   const strongest = last.members.reduce((top, each) => (each.hack > top.hack ? each : top));
   const best = gangBestWork(inputs, strongest, "money").task.name;
@@ -371,14 +371,13 @@ async function boostedGang(game: FreshGame) {
 }
 
 test("equipment (G3) end to end: a member boosted far past an hour's play, on Money Laundering in a gang of 12: the rule orders, the worker buys, the report counts it", async () => {
-  // A6 off (#334): the boosted member's respect gives the gang's faction, now a shop, reputation fast. Measured on
-  // 2026-11-10 (seed 1), A6 on: 15 affordable within a minute, a quick install chosen, buying there, which holds
-  // every dollar, gang equipment's too (G3's hold), and no augmentation reached member-01 in 3 minutes.
+  // A6 on, as on Steam (#335's review). Measured on 2026-11-10 (seed 1): with Daedalus's count not counting (The Red
+  // Pill at the gang's faction), A6 buys 12 augmentations with a hacking value at NiteSec in the window, and the rule's
+  // equipment for member-01 still comes within the 3 minutes.
   const fresh = await freshStartOf({
     withDesiredState: true,
     fixture: BN2,
     beforeAgent: boostedGang,
-    augmentations: false,
   });
   await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
   await fresh.game.runUntil(() => {
@@ -470,10 +469,10 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   // territory). The fighters on Territory Warfare from the brain's first plan (at equal powers, not engaged yet): they
   // earn nothing, so their deaths cost little, defence 1 and all. The gang's power passes the others' at the first
   // territory update (11 × 2,200 × 0.015 × 1/7, about 52 an update, against their 1), and warfare is engaged from then
-  // on: 19 min 30 s of it, territory 14.3% → 17.4% in 20 minutes, power 3,181. One fighter died (member-06; about 0.35
+  // on: 19 min 30 s of it, territory 14.3% → 16.9% in 20 minutes, power 3,059 (2026-11-10, after #335's review). One fighter died (member-06; about 0.35
   // × 0.005 a clash at defence 1, 2 clashes an update: about 2.3 deaths expected among 11 over 60 updates); its recruit
   // trains, as a slot's later deaths each cost the respect toll, and the ten others stayed. The dashboard expects
-  // about 111 deaths on the ten slots in a day engaged. Expected 9.5% territory an hour at the end.
+  // about 111 deaths on the ten slots in a day engaged. Expected 9.4% territory an hour at the end.
   expect(readings.every((each) => each.engaged)).toBe(true);
   expect(readings.every((each) => each.crew === 10)).toBe(true);
   expect(last.gang.territory).toBeGreaterThan(1 / 7 + 0.02);

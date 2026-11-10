@@ -1453,7 +1453,7 @@ describe("the gang's faction's shop (#334, G5)", () => {
     // 7 h since the install (the game's time), 2.4m of 2.5m: the rest in 17.5 min at the cycle's rate. Held.
     const why =
       "The Red Pill: NiteSec's reputation 2,400,000 of 2,500,000, about 18 min more at the cycle's rate (the gang's " +
-      "faction) (an install now would lose it)";
+      "faction; held 0 s of at most 20 min) (an install now would lose it)";
     update({ slowData: bn2(), mediumData: medium({ money: 1e12 }), ...gang(2.4e6) });
     expect(rule.view()).toMatchObject({ waitingFor: why, reserve: 0, progress: { countdown: null, held: why } });
     expect(readAugmentationCycle(store)).toBeNull();
@@ -1477,6 +1477,84 @@ describe("the gang's faction's shop (#334, G5)", () => {
     expect(rule.daedalusHold()).toBe(100e9);
   });
 
+  test("the hold there (#335's review): from its first start, 20 minutes online at most, never restarted in the cycle", () => {
+    // 2.4m and flat: at 7 h and on, the rest always within 20 minutes at the cycle's rate, so an estimate alone holds.
+    const at = (lastAugReset = 0) =>
+      update({ slowData: bn2({ lastAugReset }), mediumData: medium({ money: 1e12 }), ...gang(2.4e6) });
+    const heldNow = () => (rule.view().progress?.held ?? "").startsWith("The Red Pill: NiteSec's reputation");
+    at();
+    expect(heldNow()).toBe(true);
+    for (let minute = 1; minute < 20; minute += 1) {
+      gameTimeMs += MINUTE;
+      at();
+      expect(heldNow(), `minute ${minute}`).toBe(true);
+    }
+    expect(rule.view().progress?.held).toContain("held 19 min of at most 20 min");
+    gameTimeMs += MINUTE;
+    at();
+    expect(heldNow()).toBe(false);
+    // Never restarted in the cycle, a restarted brain's too (the store keeps its start).
+    rule = newRule();
+    for (let minute = 1; minute <= 5; minute += 1) {
+      gameTimeMs += MINUTE;
+      at();
+      expect(heldNow(), `minute ${20 + minute}`).toBe(false);
+    }
+    // The next cycle's hold starts afresh, from its own start: held to its minute 19, not at 20.
+    store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+    rule = newRule();
+    const next = gameTimeMs - 7 * HOUR;
+    at(next);
+    expect(heldNow()).toBe(true);
+    for (let minute = 1; minute <= 20; minute += 1) {
+      gameTimeMs += MINUTE;
+      at(next);
+      expect(heldNow(), `the next cycle's minute ${minute}`).toBe(minute < 20);
+    }
+  });
+
+  test("the hold's start is the cycle's (#335's review): one stored for an earlier cycle starts none here", () => {
+    // An earlier cycle's hold, started 5 minutes into it, kept in the store.
+    store.setSetting("augmentations.gangRedPillHold", JSON.stringify({ lastAugReset: -1, sinceOnlineMs: 5 * MINUTE }));
+    const at = () => update({ slowData: bn2(), mediumData: medium({ money: 1e12 }), ...gang(2.4e6) });
+    const heldNow = () => (rule.view().progress?.held ?? "").startsWith("The Red Pill: NiteSec's reputation");
+    at();
+    for (let minute = 1; minute <= 22; minute += 1) {
+      gameTimeMs += MINUTE;
+      at();
+      expect(heldNow(), `minute ${minute}`).toBe(minute < 20);
+    }
+  });
+
+  test("Daedalus's count doesn't count with The Red Pill there (#335's review): only what's worth hacking is bought", () => {
+    // Nothing installed, Daedalus nowhere: short of its count without a gang, so any augmentation would count.
+    const set = (withGang: boolean) => {
+      store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+      rule = newRule();
+      update({ slowData: bn2(), mediumData: medium({ money: 1e12 }), ...(withGang ? gang(2e6) : {}) });
+      return rule.view().set.map((each) => each.augmentation);
+    };
+    const theirs = set(true);
+    expect(theirs.length).toBeGreaterThan(0);
+    expect(
+      theirs.every((name) => isWorthInstalling(name, false)),
+      theirs.join(", "),
+    ).toBe(true);
+    expect(rule.view().progress?.short).toBeNull();
+    // And Daedalus joined, short of The Red Pill's reputation: no hold for it (the gang's faction is the route).
+    update({
+      slowData: bn2({
+        joined: [
+          { name: "CyberSec", reputation: 18_750, favor: 0 },
+          { name: "Daedalus", reputation: 1_000, favor: 0 },
+        ],
+      }),
+      mediumData: medium({ money: 1e12 }),
+      ...gang(1e6),
+    });
+    expect(rule.view().waitingFor ?? "").not.toContain("Daedalus's reputation");
+  });
+
   test("committed for an ordinary install, The Red Pill short there: the install goes ahead; for its own, it waits", () => {
     store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
     const ordinary = update({ slowData: bn2({ queued: [...FIVE] }), mediumData: medium({ money: 0 }), ...gang(1e6) });
@@ -1493,6 +1571,13 @@ describe("the gang's faction's shop (#334, G5)", () => {
       "augmentations: the install cycle is called off: The Red Pill's reputation short at every seller now: no " +
         "install without it",
     );
+    // A brain restarted in BN2 before the gang's first reading (#335's review): no seller seen yet, but no call-off.
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0, reason: "The Red Pill" }));
+    rule = newRule();
+    const unread = update({ slowData: bn2({ queued: [...FIVE] }), mediumData: medium({ money: 0 }), gangUnread: true });
+    expect(unread).toEqual({ intent: null, install: false, committed: true });
+    expect(rule.view().waitingFor).toBe("the gang's first reading, for The Red Pill's seller, before the install");
+    expect(readAugmentationCycle(store)).not.toBeNull();
     // Reached there, the same cycle buys it.
     store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0, reason: "The Red Pill" }));
     rule = newRule();

@@ -469,6 +469,15 @@ describe("The Red Pill at the gang's faction (#334, G5)", () => {
     expect(path(bn2({ daedalus: 600_000 }), 500_000).redPill).toMatchObject({ seller: "Daedalus", gang: false });
     expect(path(bn2({ daedalus: 400_000 }), 500_000).redPill).toMatchObject({ seller: "NiteSec", gang: true });
     expect(path(bn2({ currentNode: 1 }), 2.5e6).redPill).toMatchObject({ seller: null, reputation: null });
+    // Daedalus's count never short with the gang's faction selling it (#335's review); without a gang, short.
+    expect(short.daedalus?.short).toBe(false);
+    const noGang = worldDaemonPath({
+      staticData: staticData(15_000),
+      mediumData: medium({ hacking: 500 }),
+      slowData: bn2(),
+      expPerSecond: null,
+    });
+    expect(noGang.daedalus?.short).toBe(true);
   });
 
   test("reached there and not installed 15 minutes on: the stall, a failure; its reputation pausing isn't one", () => {
@@ -480,7 +489,7 @@ describe("The Red Pill at the gang's faction (#334, G5)", () => {
         slowGameTimeMs: HOUR,
         nowMs,
       });
-    // Short and not rising for an hour: a gang's respect pauses while its members train; A6 holds only while it rises.
+    // Short and not rising for an hour, A6 not holding for it: a gang's respect pauses while its members train.
     at(1e6, 0);
     at(1e6, 6 * RED_PILL_REPUTATION_STALLED_AFTER_MS);
     expect(rule.stall()).toBeNull();
@@ -496,6 +505,28 @@ describe("The Red Pill at the gang's faction (#334, G5)", () => {
     at(2.5e6, reachedAt + RED_PILL_INSTALL_STALLED_AFTER_MS);
     expect(rule.stall()).toMatchObject({ step: "redPill", detail: "The Red Pill reached, not installed" });
     expect(events.map((event) => (event.type === "worldDaemonStalled" ? event.step : event.type))).toEqual(["redPill"]);
+  });
+
+  test("not rising while A6 holds installs for it (#335's review): the stall at 10 minutes, as at Daedalus", () => {
+    const at = (nowMs: number, redPillHeldAtGang = true) =>
+      update({
+        mediumData: medium({ hacking: 500 }),
+        slowData: bn2(),
+        gangShop: NITESEC(2.4e6),
+        slowGameTimeMs: HOUR,
+        redPillHeldAtGang,
+        nowMs,
+      });
+    at(0);
+    at(RED_PILL_REPUTATION_STALLED_AFTER_MS - 1);
+    expect(rule.stall()).toBeNull();
+    at(RED_PILL_REPUTATION_STALLED_AFTER_MS);
+    expect(rule.stall()).toMatchObject({
+      step: "redPillReputation",
+      detail:
+        "The Red Pill's reputation at NiteSec not rising (2,400,000 of 2,500,000): no install is chosen meanwhile, so " +
+        "nothing earning it stalls A6",
+    });
   });
 });
 test("the run report's path (#334): the gang's faction from the window's last slow snapshot, at its game time's rate", () => {

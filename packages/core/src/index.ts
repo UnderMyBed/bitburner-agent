@@ -63,6 +63,7 @@ export {
   augmentationProblems,
   augmentationsSoldBy,
   BUY_AUGMENTATION_WORKER_NAME,
+  gangSellsRedPill,
   INSTALL_AUGMENTATIONS_WORKER_NAME,
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,

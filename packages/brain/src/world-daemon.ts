@@ -43,6 +43,7 @@ import {
   type FactionState,
   factionReadingOf,
   gangRedPillEtaMs,
+  gangSellsRedPill,
   hackingExpForLevel,
   type Intent,
   intentId,
@@ -373,12 +374,14 @@ export function worldDaemonPath({
   };
   if (resetInfo !== null && !redPillInstalled) {
     const required = daedalusRequirements(resetInfo.currentNode, resetInfo.ownedSF);
+    // Never short with The Red Pill at the gang's faction (#335's review), as A6 has it.
     const count = daedalusCountOf({
       currentNode: resetInfo.currentNode,
       ownedSF: resetInfo.ownedSF,
       installed: resetInfo.ownedAugs,
       joined: state?.joined ?? [],
       invitations: state?.invitations ?? [],
+      redPillElsewhere: gangSellsRedPill(gangShop?.name ?? null, resetInfo.currentNode),
     });
     const augmentations = count.installed;
     const person = mediumData === null ? null : workingPersonOf(mediumData);
@@ -627,6 +630,8 @@ export interface WorldDaemonInputs {
   gangShop?: JoinedFaction | null;
   /** The game's time of the slow snapshot (its `gameTimeMs`), for the gang's faction's rate; none when absent. */
   slowGameTimeMs?: number | null;
+  /** A6 holds installs for The Red Pill at the gang's faction (#335's review): its not rising stall; not when absent. */
+  redPillHeldAtGang?: boolean;
 }
 
 /** The World Daemon rule (#215), as the controller runs it. */
@@ -727,6 +732,7 @@ export class WorldDaemonRule {
     augmentationsInstalling = false,
     gangShop = null,
     slowGameTimeMs = null,
+    redPillHeldAtGang = false,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
     if (slowData !== null) {
@@ -771,7 +777,7 @@ export class WorldDaemonRule {
     }
     this.#path = path;
     this.#watchCount(path, slowData, nowMs ?? 0, countFacts, augmentationsInstalling);
-    this.#watch(path, nowMs ?? 0, enabled);
+    this.#watch(path, nowMs ?? 0, enabled, redPillHeldAtGang);
     const ready = path.daemon !== null && path.daemon.problem === null;
     if (enabled && ready && this.#asked === null && isFiniteNumber(lastNodeReset)) {
       // The slow snapshot's BitNode or Source-Files not read (#321): no destroy into a BitNode guessed; the destroy
@@ -866,7 +872,7 @@ export class WorldDaemonRule {
   }
 
   /** Each step that could be done, from when; one not done its `STALLED_AFTER_MS` on is stored and logged. */
-  #watch(path: WorldDaemonPath, nowMs: number, enabled: boolean): void {
+  #watch(path: WorldDaemonPath, nowMs: number, enabled: boolean, redPillHeldAtGang = false): void {
     const steps = new Map<StallStep, { detail: string; sinceMs?: number }>();
     const { daedalus, redPill, daemon } = path;
     if (this.#stuck !== null) {
@@ -885,15 +891,16 @@ export class WorldDaemonRule {
     if (redPill !== null && !redPill.installed && (redPill.queued || reached)) {
       steps.set("redPill", { detail: `${THE_RED_PILL} ${redPill.queued ? "queued" : "reached"}, not installed` });
     }
-    // Short at a joined Daedalus, A6 holds every install: its reputation not rising is loud (#215 review). Not at the
-    // gang's faction (#334): A6 holds there only while it rises, and a gang's respect pauses while its members train.
+    // Short at a joined Daedalus, A6 holds every install: its reputation not rising is loud (#215 review). At the gang's
+    // faction (#334) only while A6 holds for it (at most 20 min a cycle, #335's review): a gang's respect pauses while
+    // its members train, which holds nothing otherwise.
     if (
       redPill !== null &&
       !redPill.installed &&
       !redPill.queued &&
       !reached &&
       redPill.reputation !== null &&
-      !redPill.gang
+      (!redPill.gang || redPillHeldAtGang)
     ) {
       const value = redPill.reputation;
       if (this.#reputation === null || value !== this.#reputation.value) {
@@ -902,7 +909,7 @@ export class WorldDaemonRule {
       }
       steps.set("redPillReputation", {
         detail:
-          `${THE_RED_PILL}'s reputation at Daedalus not rising (${count(value)} of ` +
+          `${THE_RED_PILL}'s reputation at ${redPill.seller ?? DAEDALUS} not rising (${count(value)} of ` +
           `${count(redPill.reputationNeeded ?? 0)}): no install is chosen meanwhile, so nothing earning it stalls A6`,
         sinceMs: this.#reputation.risenAtMs,
       });

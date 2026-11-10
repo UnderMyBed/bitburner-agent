@@ -378,6 +378,14 @@ export function augmentationsSoldBy(faction: string, bitNode: number, gangFactio
   );
 }
 
+/**
+ * Whether the gang's faction (`gangFaction`, null for none) sells The Red Pill in `bitNode` (#334): in BN2 only
+ * (`FactionHelpers.tsx:180-183`). Then Daedalus isn't needed for it: no count to reach, no invitation to wait for.
+ */
+export function gangSellsRedPill(gangFaction: string | null, bitNode: number): boolean {
+  return gangFaction !== null && gangShopOf(gangFaction, bitNode).includes(THE_RED_PILL);
+}
+
 /** The augmentation no gang's faction sells, though it isn't special (`FactionHelpers.tsx:178`). */
 const CONGRUITY_IMPLANT = "violet Congruity Implant";
 /**

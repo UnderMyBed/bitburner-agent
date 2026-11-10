@@ -749,7 +749,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     for (const { atMs, gameTimeMs, data: slowAsSent } of ofTier<SlowSnapshotData>("slow")) {
       const data = gangFactions.of(slowAsSent);
       snapshotCount++;
-      gang.addSlow(atMs, data);
+      gang.addSlow(atMs, data, gameTimeMs);
       hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;

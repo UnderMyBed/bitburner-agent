@@ -8,6 +8,7 @@ import {
   AUGMENTATION_NAMES,
   augmentationsSoldBy,
   type FactionStateReading,
+  isWorthInstalling,
   type JoinedFaction,
   type MediumSnapshotData,
   NEUROFLUX_GOVERNOR,
@@ -746,6 +747,23 @@ describe("the gang's faction's shop in the reports (#334): the slow snapshot's g
     // Neurotrainer I: CyberSec's and Aevum's, not NiteSec's own; the gang's shop sells it, at 1m reached.
     expect(offered(null)).toContain("Neurotrainer I at CyberSec");
     expect(offered("NiteSec")).not.toContain("Neurotrainer I at CyberSec");
+  });
+
+  test("Daedalus's count not counting with the gang's route (#335's review): only what has a hacking value", () => {
+    // BN2, Sector-12 joined with donations unlocked and reached: its one with a hacking value owned already.
+    const bn2 = (gangFaction: string | null, reputation: number, ownedAugs: Record<string, number> = {}) => {
+      const data = withGang([{ name: "Sector-12", reputation, favor: 200 }], gangFaction);
+      return { ...data, resetInfo: { ...data.resetInfo, currentNode: 2, ownedAugs } };
+    };
+    const offers = (gangFaction: string | null) =>
+      donationOffersOf(bn2(gangFaction, 0)).map((each) => each.augmentation);
+    expect(offers(null).some((name) => !isWorthInstalling(name, false))).toBe(true);
+    expect(offers("NiteSec").length).toBeGreaterThan(0);
+    expect(offers("NiteSec").every((name) => isWorthInstalling(name, false))).toBe(true);
+    const hacking = augmentationsSoldBy("Sector-12", 2, null).filter((name) => isWorthInstalling(name, false));
+    const owned = Object.fromEntries(hacking.map((name) => [name, 1]));
+    expect(heldBackOf(bn2("NiteSec", 1e6, owned), { money: 1e12, factionRep: 1 })).toBe("factions");
+    expect(heldBackOf(bn2(null, 1e6, owned), { money: 1e12, factionRep: 1 })).not.toBe("factions");
   });
 
   test("heldBackOf: the gang's shop counted, at its reputation", () => {

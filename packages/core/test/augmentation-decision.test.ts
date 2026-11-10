@@ -8,8 +8,12 @@ import {
   gangRedPillEtaMs,
   installJudgement,
 } from "../src/augmentation-decision.ts";
-import { chooseAugmentationsToBuy } from "../src/augmentation-plan.ts";
-import { type AugmentationPurchaseState, augmentationBitNodeMultipliers } from "../src/augmentations.ts";
+import { chooseAugmentationsToBuy, daedalusCountOf } from "../src/augmentation-plan.ts";
+import {
+  type AugmentationPurchaseState,
+  augmentationBitNodeMultipliers,
+  gangSellsRedPill,
+} from "../src/augmentations.ts";
 
 const bitNode = augmentationBitNodeMultipliers(1, {});
 const stateOf = (installed: Record<string, number>, queued: string[] = []): AugmentationPurchaseState => ({
@@ -118,6 +122,16 @@ test("the gang's faction's shop (#334): in the shops, never joined; its reputati
   expect(without.sellerOf("Augmented Targeting I")).toBeNull();
 });
 
+test("Daedalus's count with The Red Pill at the gang's faction (#335's review): never short, so no any-augmentation", () => {
+  expect(gangSellsRedPill("NiteSec", 2)).toBe(true);
+  expect(gangSellsRedPill("NiteSec", 1)).toBe(false);
+  expect(gangSellsRedPill(null, 2)).toBe(false);
+  const count = (redPillElsewhere: boolean) =>
+    daedalusCountOf({ currentNode: 2, ownedSF: {}, installed: {}, joined: [], invitations: [], redPillElsewhere });
+  expect(count(false).short).toBe(true);
+  expect(count(true)).toEqual({ installed: 0, required: 30, short: false });
+});
+
 test("gangRedPillEtaMs (#334): the reputation still needed at the cycle's average rate; never with none earned", () => {
   // 500,000 in 20 minutes: 2,000,000 more at 25,000 a minute, 80 minutes.
   expect(gangRedPillEtaMs(500_000, 2.5e6, 20 * 60_000)).toBeCloseTo(80 * 60_000, 6);
@@ -137,7 +151,12 @@ test("A8 with the gang's faction (#334): reached, its install; short, held only 
       .sold.slice(0, 30)
       .map((name) => [name, 1]),
   );
-  const endgame = (reputation: number, sinceResetMs: number | null, daedalus: number | null = null) =>
+  const endgame = (
+    reputation: number,
+    sinceResetMs: number | null,
+    daedalus: number | null = null,
+    gangHoldOver = false,
+  ) =>
     augmentationEndgame({
       installed,
       installable: [],
@@ -157,6 +176,7 @@ test("A8 with the gang's faction (#334): reached, its install; short, held only 
       ownedSF: { 1: 3 },
       destroyWanted: true,
       sinceResetMs,
+      gangHoldOver,
     });
   expect(endgame(2.5e6, 60_000)).toEqual({ kind: "redPill", donation: null });
   // 2m in 60 minutes: the rest in 15 minutes, within 20: held, the time said.
@@ -171,11 +191,13 @@ test("A8 with the gang's faction (#334): reached, its install; short, held only 
   // Not held, and no hold for Daedalus's money: the gang's faction sells it, so its invitation isn't needed.
   expect(endgame(1e6, 3_600_000)).toEqual({ kind: "none" });
   expect(endgame(1e6, null)).toEqual({ kind: "none" });
-  // Daedalus joined, short too: its hold, as ever (an install would lose its reputation).
-  expect(endgame(1e6, 3_600_000, 1000)).toMatchObject({
-    kind: "hold",
-    seller: { faction: "Daedalus", reputation: 1000, needed: 2.5e6 },
-  });
+  // The cycle's hold there over (#335's review, the brain's anchor): none, though within the window.
+  expect(endgame(2e6, 3_600_000, null, true)).toEqual({ kind: "none" });
+  // Daedalus joined, short too: no hold for it, the gang's faction the route (#335's review); the gang's own, within.
+  expect(endgame(1e6, 3_600_000, 1000)).toEqual({ kind: "none" });
+  expect(endgame(2e6, 3_600_000, 1000)).toMatchObject({ kind: "hold", seller: { faction: "NiteSec" } });
+  // Nor Daedalus's favour's install: 462,491 there would unlock its donations at the next install, without a gang.
+  expect(endgame(1e6, 3_600_000, 462_491)).toEqual({ kind: "none" });
   // Reached at either: the install.
   expect(endgame(1e6, 3_600_000, 2.5e6)).toEqual({ kind: "redPill", donation: null });
 });

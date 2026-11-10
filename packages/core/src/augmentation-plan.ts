@@ -58,7 +58,8 @@ export interface DaedalusCount {
   /**
    * Short of it: Daedalus neither joined nor invited, and fewer installed than required
    * (`Faction/FactionJoinCondition.ts:130`, `p.augmentations.length >= n`). Then any augmentation is worth installing
-   * (`isWorthInstalling(name, true)`).
+   * (`isWorthInstalling(name, true)`). Never with The Red Pill sold elsewhere (#334, `redPillElsewhere`: the gang's
+   * faction in BN2, core's `gangSellsRedPill`): Daedalus isn't needed then.
    */
   short: boolean;
 }
@@ -70,17 +71,20 @@ export function daedalusCountOf({
   installed,
   joined,
   invitations,
+  redPillElsewhere = false,
 }: {
   currentNode: number;
   ownedSF: Readonly<Record<string, number>>;
   installed: Readonly<Record<string, number>>;
   joined: readonly { name: string }[];
   invitations: readonly string[];
+  /** The Red Pill sold by the gang's faction (#334, core's `gangSellsRedPill`): never short. Absent, not. */
+  redPillElsewhere?: boolean;
 }): DaedalusCount {
   const count = Object.keys(installed).length;
   const required = daedalusAugmentationsRequired(currentNode, ownedSF);
   const met = joined.some((faction) => faction.name === DAEDALUS) || invitations.includes(DAEDALUS);
-  return { installed: count, required, short: !met && count < required };
+  return { installed: count, required, short: !met && !redPillElsewhere && count < required };
 }
 
 /** The multipliers an install brings, each the product over `names` (each NeuroFlux Governor copy listed counts). */

@@ -73,6 +73,8 @@ import {
   type FactionState,
   factionReadingKind,
   factionReadingOf,
+  GANG_RED_PILL_HOLD_MS,
+  gangSellsRedPill,
   type HoldWork,
   INSTALL_COUNTDOWN_MS,
   type InstallReason,
@@ -416,6 +418,11 @@ export interface AugmentationInputs {
    * null (absent) with no gang. `slowData` leaves it out of the joined factions; its shop joins the others here.
    */
   gangShop?: JoinedFaction | null;
+  /**
+   * In BN2 with no gang reading yet (#335's review, the gang rule's `gangUnread`): whether there's a gang, and its
+   * shop, unknown. A commit for The Red Pill isn't called off for want of a seller meanwhile. Absent, read.
+   */
+  gangUnread?: boolean;
 }
 
 /** What the rule asks of the controller. */
@@ -589,6 +596,31 @@ export function formatEta(ms: number | null): string {
   if (ms < 60_000) return `${Math.round(ms / 1000)} s`;
   if (ms < 3_600_000) return `${Math.round(ms / 60_000)} min`;
   return `${(ms / 3_600_000).toFixed(1)} h`;
+}
+
+/** The store's setting with the cycle's hold for The Red Pill at the gang's faction (#335's review), as JSON. */
+export const AUGMENTATION_GANG_RED_PILL_HOLD_SETTING = "augmentations.gangRedPillHold";
+
+/** The cycle's hold at the gang's faction: the cycle (`lastAugReset`) and the online time it first started at. */
+export interface GangRedPillHold {
+  lastAugReset: number;
+  sinceOnlineMs: number;
+}
+
+/** The hold as stored, or null (none, or not the brain's writing). */
+export function readGangRedPillHold(store: TelemetryStore): GangRedPillHold | null {
+  const value = store.getSetting(AUGMENTATION_GANG_RED_PILL_HOLD_SETTING);
+  if (value === null) return null;
+  try {
+    const { lastAugReset, sinceOnlineMs } = JSON.parse(value) as Partial<GangRedPillHold>;
+    return isFiniteNumber(lastAugReset) && isFiniteNumber(sinceOnlineMs) ? { lastAugReset, sinceOnlineMs } : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeGangRedPillHold(store: TelemetryStore, hold: GangRedPillHold): void {
+  store.setSetting(AUGMENTATION_GANG_RED_PILL_HOLD_SETTING, JSON.stringify(hold));
 }
 
 /** A countdown's time in seconds, rounded (#222): "90 s", "83 s". */
@@ -842,6 +874,8 @@ export class AugmentationRule {
   #installing = false;
   /** Why no install is chosen on The Red Pill's way (#215), as last logged: logged as it starts. */
   #holding: HoldReason | null = null;
+  /** The last decision held installs for The Red Pill at the gang's faction (#335's review): the World Daemon's stall. */
+  #redPillHeldAtGang = false;
   /** The install held for Daedalus's count (#243), as last decided, or null: logged as it starts and ends. */
   #countHeld: CountHoldView | null = null;
   /** This update logged the hold's end (#243 review): `update` logs one on any other path. */
@@ -955,6 +989,11 @@ export class AugmentationRule {
     return readAugmentationCycle(this.#store)?.countFacts ?? null;
   }
 
+  /** The last decision held installs for The Red Pill at the gang's faction (#335's review): its stall's to watch. */
+  redPillHeldAtGang(): boolean {
+    return this.#redPillHeldAtGang;
+  }
+
   /** An install reported done that the next slow snapshot didn't show reset, until a reset (#213 re-review). */
   installNotReset(): { atMs: number; queued: string[] } | null {
     return this.#installNotReset === null ? null : { ...this.#installNotReset };
@@ -1009,6 +1048,7 @@ export class AugmentationRule {
     const { enabled, homeRamEnabled, destroyWanted } = inputs;
     const holdWork = inputs.holdWork ?? { owners: null, brainWorks: true };
     this.#daedalusHold = 0;
+    this.#redPillHeldAtGang = false;
     this.#redPillHold = 0;
     this.#enabled = enabled;
     const atMs = nowMs ?? 0;
@@ -1073,6 +1113,7 @@ export class AugmentationRule {
         countHeldBefore,
         holdWork,
         gangShop: inputs.gangShop ?? null,
+        gangUnread: inputs.gangUnread ?? false,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -1330,6 +1371,7 @@ export class AugmentationRule {
     countHeldBefore,
     holdWork,
     gangShop,
+    gangUnread,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -1344,6 +1386,7 @@ export class AugmentationRule {
     countHeldBefore: CountHoldView | null;
     holdWork: HoldWork;
     gangShop: JoinedFaction | null;
+    gangUnread: boolean;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -1375,12 +1418,14 @@ export class AugmentationRule {
     const money = player.money - this.#spent.reduce((sum, each) => sum + each.price, 0);
     const hackingLevel = player.person.skills.hacking;
     // Short of Daedalus's count (#228): any augmentation counts.
+    // With The Red Pill at the gang's faction (#334, BN2), Daedalus isn't needed: never short of its count.
     const count = daedalusCountOf({
       currentNode,
       ownedSF,
       installed: ownedAugs,
       joined: state.joined,
       invitations: state.invitations,
+      redPillElsewhere: gangSellsRedPill(gangShop?.name ?? null, currentNode),
     });
     const short = count.short;
     const cycle = readAugmentationCycle(this.#store);
@@ -1413,6 +1458,7 @@ export class AugmentationRule {
         destroyWanted,
         // The game's time since the last install (#334): the gang's faction's rate.
         sinceResetMs: slowGameTimeMs === null ? null : Math.max(0, slowGameTimeMs - resetInfo.lastAugReset),
+        onlineMs: this.#onlineClock?.lastAugReset === resetInfo.lastAugReset ? this.#onlineClock.onlineMs : 0,
       });
       // The Red Pill's donation first (#225 review): the counts are budgeted without its money.
       const redPillAmount = endgame0.kind === "redPill" ? (endgame0.donation?.amount ?? 0) : 0;
@@ -1880,6 +1926,19 @@ export class AugmentationRule {
       // `#endgame` holds the next; not bought yet (its reputation fell short), it waits. But for "Daedalus donations"
       // (#225 review): that install is for Daedalus's favour, without The Red Pill. The gang's faction (#334) holds
       // only The Red Pill's own install: `#endgame` lets an ordinary one go once the window's passed, and the gang stays.
+      // Committed for The Red Pill with the gang unread (#335's review: a brain restarted in BN2): its seller unknown
+      // until the gang's reading, so neither an install without it nor a call-off; it waits.
+      if (
+        note?.reason === "The Red Pill" &&
+        gangUnread &&
+        !Object.hasOwn(ownedAugs, THE_RED_PILL) &&
+        !installable.includes(THE_RED_PILL)
+      ) {
+        return this.#ask(null, {
+          ...committedView,
+          waitingFor: `the gang's first reading, for ${THE_RED_PILL}'s seller, before the install`,
+        });
+      }
       const redPillSold = [...shops].some(
         ([faction, shop]) =>
           shop.includes(THE_RED_PILL) && (faction !== shopsView.gangFaction || note?.reason === "The Red Pill"),
@@ -1957,6 +2016,7 @@ export class AugmentationRule {
     shops,
     destroyWanted,
     sinceResetMs,
+    onlineMs,
   }: {
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
     player: NonNullable<ReturnType<typeof playerOf>>;
@@ -1967,8 +2027,14 @@ export class AugmentationRule {
     shops: AugmentationShops;
     destroyWanted: boolean;
     sinceResetMs: number | null;
+    /** The game's time online this cycle (the bars' clock): the hold's window at the gang's faction, from its start. */
+    onlineMs: number;
   }): Endgame {
-    const { currentNode, ownedAugs, ownedSF } = resetInfo;
+    const { currentNode, ownedAugs, ownedSF, lastAugReset } = resetInfo;
+    // The hold at the gang's faction (#335's review): from its first start in the cycle, at most its window, never
+    // restarted, kept in the store as Daedalus's count hold is.
+    const stored = readGangRedPillHold(this.#store);
+    const heldSince = stored?.lastAugReset === lastAugReset ? stored.sinceOnlineMs : null;
     // The decision is core's (#260), the fast model's too; the words are the brain's.
     const endgame = augmentationEndgame({
       installed: ownedAugs,
@@ -1983,7 +2049,11 @@ export class AugmentationRule {
       ownedSF,
       destroyWanted,
       sinceResetMs,
+      gangHoldOver: heldSince !== null && onlineMs >= heldSince + GANG_RED_PILL_HOLD_MS,
     });
+    const atGang = endgame.kind === "hold" && "seller" in endgame && endgame.seller.faction === shops.gangFaction;
+    this.#redPillHeldAtGang = atGang;
+    if (atGang && heldSince === null) writeGangRedPillHold(this.#store, { lastAugReset, sinceOnlineMs: onlineMs });
     if (endgame.kind !== "hold") return endgame;
     const count = (value: number) => Math.floor(value).toLocaleString("en-US");
     const hold = (why: HoldReason, waitingFor: string): Endgame => ({
@@ -2019,7 +2089,9 @@ export class AugmentationRule {
                 // The gang's faction (#334): held only while it comes within the window.
                 (endgame.seller.etaMs === undefined
                   ? ""
-                  : `, about ${formatEta(endgame.seller.etaMs)} more at the cycle's rate (the gang's faction)`) +
+                  : `, about ${formatEta(endgame.seller.etaMs)} more at the cycle's rate (the gang's faction; held ` +
+                    `${formatEta(Math.max(0, onlineMs - (heldSince ?? onlineMs)))} of at most ` +
+                    `${formatEta(GANG_RED_PILL_HOLD_MS)})`) +
                 " (an install now would lose it)",
             );
       case "daedalus":

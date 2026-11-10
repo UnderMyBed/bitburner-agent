@@ -23,6 +23,7 @@ import {
   favorAfterInstall,
   favorToDonate,
   gangFactionOf,
+  gangSellsRedPill,
   isWorthInstalling,
   type JoinedFaction,
   type MediumSnapshotData,
@@ -218,6 +219,8 @@ function shopsOf(data: SlowSnapshotData): Shops | null {
       installed: purchaseState.installed,
       joined: state.joined,
       invitations: state.invitations,
+      // Never short with The Red Pill at the gang's faction (#335's review), as A6 has it.
+      redPillElsewhere: gangSellsRedPill(gangFactionOf(data), currentNode),
     });
     const owned = (name: string) =>
       Object.hasOwn(purchaseState.installed, name) || state.queuedAugmentations.includes(name);
