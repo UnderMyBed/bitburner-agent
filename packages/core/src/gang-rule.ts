@@ -696,7 +696,10 @@ export interface GangEquipmentPlan {
  *   minute's training pays within that time, `gangTrains`), when its task's money may buy one. None for the member
  *   the plan ascends, nor one whose ascension is due (0, held); a member whose ascension is close gets none, as
  *   nothing pays back in so short a time.
- * - **augmentations:** over `GANG_AUGMENTATION_HORIZON_MS`, a day.
+ * - **augmentations:** over `GANG_AUGMENTATION_HORIZON_MS`, a day, and only one paid back before the member's next
+ *   ascension too (G2's forecast, as above; none with it due): after it the member trains from level 1, earning no
+ *   money (`GangMember.ts:321-323`), and the members on a money task are often those about to ascend (#330's third
+ *   review).
  * - **Each valued at the plan's task for the member** (`gangEquipmentAppraisal`): the money that task earns, so none
  *   for one training, on justice or on a task earning none, augmentations included (#330's re-review).
  * - A member `plan` has no assignment for (the run report's, which reads the tasks): its task as read, its forecast
@@ -739,8 +742,11 @@ export function planGangEquipment(
     for (const item of relevant) {
       if (gangMemberOwns(member, item.name)) continue;
       let appraisal: GangEquipmentAppraisal;
-      if (gangEquipmentKept(item)) appraisal = appraise(item, GANG_AUGMENTATION_HORIZON_MS);
-      else {
+      if (gangEquipmentKept(item)) {
+        appraisal = appraise(item, GANG_AUGMENTATION_HORIZON_MS);
+        // Paid back before the next ascension, after which the member trains and earns none (#330's third review).
+        if (appraisal.pays && appraisal.paybackMs > lostHorizon()) continue;
+      } else {
         if (!forecast || !appraise(item, GANG_ASCENSION_HORIZON_CAP_MS).pays || lostHorizon() === 0) continue;
         appraisal = appraise(item, lostHorizon());
       }

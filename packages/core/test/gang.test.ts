@@ -990,10 +990,19 @@ describe("equipment (G3)", () => {
     // from the money it earns, kept. The same member training (the simulator's end-to-end case under 12 members), or on
     // a respect task that earns no money, earns none back: nothing, augmentations included (#330's re-review).
     const veryStrong = [hacker("member-01", 20_000, 1e6)];
-    const kept = planGangEquipment(inputs(veryStrong), planOf(veryStrong, 0), budget);
+    // Every rootkit owned already, its next ascension a day off.
+    const rootkits = ["NUKE Rootkit", "Soulstealer Rootkit", "Demon Rootkit", "Hmap Node", "Jack the Ripper"];
+    const rooted = [{ ...(veryStrong[0] as GangMemberFigures), upgrades: rootkits }];
+    const kept = planGangEquipment(inputs(rooted), planOf(rooted, GANG_ASCENSION_HORIZON_CAP_MS), budget);
     expect(kept.paying).toHaveLength(1);
     expect(kept.paying[0]).toMatchObject({ kept: true, horizonMs: GANG_AUGMENTATION_HORIZON_MS, pays: true });
-    expect(kept.paying[0]?.paybackMs).toBeLessThanOrEqual(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
+    const paybackMs = kept.paying[0]?.paybackMs as number;
+    expect(paybackMs).toBeLessThanOrEqual(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
+    // Its ascension sooner than that payback (#330's third review): after it, it trains and earns none, so none; just
+    // past the payback, bought; with the ascension due, none either.
+    expect(planGangEquipment(inputs(rooted), planOf(rooted, paybackMs / 2), budget).paying).toEqual([]);
+    expect(planGangEquipment(inputs(rooted), planOf(rooted, paybackMs * 1.01), budget).paying).toHaveLength(1);
+    expect(planGangEquipment(inputs(rooted), planOf(rooted, 0), budget).paying).toEqual([]);
     // 30 minutes from its next ascension, a rootkit: less money in all than an augmentation's day, but far more for
     // its price. The most gain for its cost, not the most gain.
     const either = planGangEquipment(inputs(veryStrong), planOf(veryStrong, 30 * MINUTE), budget).paying[0];

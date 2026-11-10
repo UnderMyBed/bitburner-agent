@@ -17,12 +17,13 @@
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import {
   GANG_AUGMENTATION_HORIZON_MS,
+  GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
+  gangBestWork,
   gangEquipment,
   gangEquipmentAppraisal,
   gangEquipmentCostMultOf,
   gangLostShare,
   gangLostShareBound,
-  gangTimeToAscensionMs,
   planGangEquipment,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
@@ -129,10 +130,10 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
   }
   // Equipment (G3): none pays by the rule's measure in the hour, so none is bought, and the gang's hour is G2's
   // (1,348 respect). Why, computed on the hour's last reading, with no limit on the money: G2 works its members minutes
-  // before each ascension, and trains them the rest (which earns nothing before the ascension loses a lost item); and
-  // no augmentation pays back within a day at these levels. The strongest's NUKE Rootkit, worked an hour, pays back in
-  // about 47 min (measured on 2026-11-09: member-02, hacking 263, on justice). Valued over G2's forecast of 7 h for
-  // such members, rootkits were bought ($42m) and lost at ascensions within the hour, before they paid back.
+  // before each ascension, and trains them the rest, and training, justice and respect tasks earn no money back. Even
+  // the strongest on its best money task, its cheapest hacking upgrade (NUKE Rootkit) pays back far slower than 15
+  // minutes (remeasured on the money that task earns). Valued over G2's forecast of 7 h for members
+  // training, rootkits were bought ($42m) and lost at ascensions within the hour, before they paid back.
   // The brain's own plan and the gang's own discount, as the brain had them at the end.
   expect(section).toMatch(/; no equipment bought\n/);
   const inputs = { gang: final.gang, isHacking: true, members: final.members, softcap: 1 };
@@ -143,14 +144,25 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
     costMult: gangEquipmentCostMultOf(final.gang),
   });
   expect(unlimited.paying).toEqual([]);
+  // Measured on 2026-11-09 (seed 1): member-02, hacking 263, on justice; on Fraud & Counterfeiting, its best money
+  // task, NUKE Rootkit at the gang's discount gains about $1m an hour, paid back in 4 h 31 min.
   const strongest = final.members.reduce((top, each) => (each.hack > top.hack ? each : top));
-  const hourMs = 3_600_000;
-  const nuke = gangEquipmentAppraisal(inputs, strongest, gangEquipment("NUKE Rootkit"), hourMs, 1);
-  console.log(
-    `G3: ${strongest.name} (hacking ${strongest.hack}, ${strongest.task}): NUKE Rootkit pays back in ` +
-      `${formatDuration((nuke.cost / nuke.gain) * hourMs)} of an hour's work; G2's forecast of its next ascension, ` +
-      `${formatDuration(gangTimeToAscensionMs(inputs, strongest, "respect"))}`,
+  const best = gangBestWork(inputs, strongest, "money").task.name;
+  const nuke = gangEquipmentAppraisal(
+    inputs,
+    strongest,
+    gangEquipment("NUKE Rootkit"),
+    GANG_AUGMENTATION_HORIZON_MS,
+    gangEquipmentCostMultOf(final.gang),
+    best,
   );
+  console.log(
+    `G3: ${strongest.name} (hacking ${strongest.hack}, ${strongest.task}): on ${best}, NUKE Rootkit gains ` +
+      `$${Math.round(nuke.gain / 24)} an hour, paid back in ${formatDuration(nuke.paybackMs)}`,
+  );
+  expect(nuke.gain).toBeGreaterThan(0);
+  expect(Number.isFinite(nuke.paybackMs)).toBe(true);
+  expect(nuke.paybackMs).toBeGreaterThan(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
   expect(notTheBatchersGrows(failures)).toEqual([]);
   expect(text).toContain("taken as BN1's");
 }, 120_000);
@@ -258,21 +270,29 @@ test("equipment (G3): a grown gang and $10b, then the brain for 45 minutes: none
   expect(section).toContain("equipment the rule buys, with the money free, not bought for 1 min or more:\n    none");
   expect([...equipmentLines]).toEqual(["no equipment pays back within 15 minutes"]);
   expect(last.members.every((each) => (each.upgrades ?? []).length === 0)).toBe(true);
-  // Why, computed on the last reading: the strongest's best augmentation for hacking, Neuralstimulator, over a day.
+  // Why, computed on the last reading: the strongest on a respect task (earning none), and even on its best money
+  // task, the best augmentation for hacking, Neuralstimulator, pays back far slower than 15 minutes (measured on
+  // 2026-11-09: member-03, hacking 1,868, on Cyberterrorism; on Money Laundering it gains $2.1b a day for its $9.2b
+  // at the gang's discount, paid back in 105 h 11 min).
   const inputs = { gang: last.gang, isHacking: true, members: last.members, softcap: 1 };
   const strongest = last.members.reduce((top, each) => (each.hack > top.hack ? each : top));
+  const best = gangBestWork(inputs, strongest, "money").task.name;
   const augmentation = gangEquipmentAppraisal(
     inputs,
     strongest,
     gangEquipment("Neuralstimulator"),
     GANG_AUGMENTATION_HORIZON_MS,
-    1,
+    gangEquipmentCostMultOf(last.gang),
+    best,
   );
   console.log(
-    `G3: ${strongest.name} (hacking ${strongest.hack}): Neuralstimulator gains $${Math.round(augmentation.gain)} in a ` +
-      `day for $${augmentation.cost}`,
+    `G3: ${strongest.name} (hacking ${strongest.hack}, ${strongest.task}): on ${best}, Neuralstimulator gains ` +
+      `$${Math.round(augmentation.gain)} in a day for $${Math.round(augmentation.cost)}, paid back in ` +
+      `${formatDuration(augmentation.paybackMs)}`,
   );
-  expect(augmentation.gain).toBeLessThan(augmentation.cost);
+  expect(augmentation.gain).toBeGreaterThan(0);
+  expect(Number.isFinite(augmentation.paybackMs)).toBe(true);
+  expect(augmentation.paybackMs).toBeGreaterThan(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
   expect(notTheBatchersGrows(failures)).toEqual([]);
 }, 120_000);
 
