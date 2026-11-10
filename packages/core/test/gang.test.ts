@@ -482,7 +482,7 @@ describe("the desired state's gang", () => {
     expect(parseGangState(undefined)).toEqual({ ok: true, gang: null });
     expect(parseGangState({ recruit: ["a"], tasks: { a: "Ransomware" } })).toEqual({
       ok: true,
-      gang: { recruit: ["a"], ascend: [], tasks: { a: "Ransomware" }, buy: [], keepMoney: null },
+      gang: { recruit: ["a"], ascend: [], tasks: { a: "Ransomware" }, buy: [], keepMoney: null, warfare: null },
     });
     expect(parseGangState({ recruit: [], tasks: { a: "Nap" } })).toMatchObject({ ok: false });
   });
@@ -491,7 +491,7 @@ describe("the desired state's gang", () => {
     const buy = [{ name: "a", equipment: "NUKE Rootkit", pointsBefore: 12.5 }];
     expect(parseGangState({ recruit: [], tasks: {}, buy, keepMoney: 1e9 })).toEqual({
       ok: true,
-      gang: { recruit: [], ascend: [], tasks: {}, buy, keepMoney: 1e9 },
+      gang: { recruit: [], ascend: [], tasks: {}, buy, keepMoney: 1e9, warfare: null },
     });
     expect(parseGangState({ recruit: [], tasks: {}, buy, keepMoney: null })).toMatchObject({ ok: true });
     for (const bad of [

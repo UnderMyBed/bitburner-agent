@@ -14,6 +14,9 @@
 //   equipment check, on the same readings, passes; and (#330's review) one member boosted by a harness edit far past
 //   that, in a gang of 12 (its objective money, so the plan puts it on Money Laundering): the rule orders equipment
 //   for it, the worker buys it, and the report counts it, end to end.
+// - Territory warfare (G4): in the hour, none on Territory Warfare and never engaged (why, computed on its last
+//   reading: the others outgrow the whole gang's power); and a gang of 12 with eleven fighters made by harness edits,
+//   then the brain for 20 minutes: ten on Territory Warfare, engaged throughout, territory growing, a death counted.
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import {
   GANG_AUGMENTATION_HORIZON_MS,
@@ -24,10 +27,15 @@ import {
   gangEquipmentCostMultOf,
   gangLostShare,
   gangLostShareBound,
+  gangOtherPowerGainPerUpdate,
+  gangPowerGainPerUpdate,
+  gangWarfareBasis,
+  gangWarfareCrew,
+  gangWarfareMeasure,
   planGangEquipment,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { gangSnapshotOf } from "../src/gang.ts";
+import { gangSnapshotOf, gangWarfareFiguresOf } from "../src/gang.ts";
 import { GANG_WANTED_OVER_BOUND_MS } from "../src/gang-report.ts";
 import { formatDuration } from "../src/gap-report.ts";
 import { runReport } from "../src/run-report.ts";
@@ -135,7 +143,7 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
   // minutes (remeasured on the money that task earns). Valued over G2's forecast of 7 h for members
   // training, rootkits were bought ($42m) and lost at ascensions within the hour, before they paid back.
   // The brain's own plan and the gang's own discount, as the brain had them at the end.
-  expect(section).toMatch(/; no equipment bought\n/);
+  expect(section).toMatch(/; no equipment bought; /);
   const inputs = { gang: final.gang, isHacking: true, members: final.members, softcap: 1 };
   const plan = fresh.controller().gangView().plan;
   expect(plan).not.toBeNull();
@@ -163,6 +171,38 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
   expect(nuke.gain).toBeGreaterThan(0);
   expect(Number.isFinite(nuke.paybackMs)).toBe(true);
   expect(nuke.paybackMs).toBeGreaterThan(GANG_EQUIPMENT_PAYBACK_LIMIT_MS);
+  // Territory warfare (G4): none on Territory Warfare in the hour and never engaged, so the gang is G3's (1,348
+  // respect), and the report's two checks pass on it. Why, computed on the hour's last reading: the others grow faster
+  // than the whole gang on Territory Warfare could. Its power gain an update, every member's levels over 95 × 0.015 ×
+  // 1/7 (`Gang.ts:362-369`), is under the strongest other's expected one (`Gang.ts:191-204`): no crew pays over a day,
+  // and the clashes now, at power 1 against the others', would lose territory.
+  expect(readings.every((each) => !each.tasks.includes("Territory Warfare"))).toBe(true);
+  expect(section).toMatch(/; territory 14\.3% → 14\.3%, power 1\.0 → 1\.0; warfare engaged 0 s; no deaths\n/);
+  for (const what of [
+    "territory warfare engaged while the rule's measure says it loses for 1 min or more:\n    none",
+    "territory warfare off while the rule's measure says it pays for 1 min or more:\n    none",
+  ]) {
+    expect(section).toContain(what);
+  }
+  const warfare = gangWarfareFiguresOf(final.gang);
+  if (warfare === undefined) throw new Error("no warfare read");
+  const everyone = gangPowerGainPerUpdate(final.gang.territory, final.members);
+  const fastest = warfare.others.reduce((top, each) =>
+    gangOtherPowerGainPerUpdate(each) > gangOtherPowerGainPerUpdate(top) ? each : top,
+  );
+  const withWarfare = { ...inputs, warfare };
+  const basis = gangWarfareBasis(withWarfare, "respect");
+  console.log(
+    `G4: power ${warfare.power.toFixed(2)} against ${warfare.others.map((each) => each.power.toFixed(1)).join(", ")}; ` +
+      `every member on Territory Warfare gains ${everyone.toFixed(4)} an update, ${fastest.faction} ` +
+      `${gangOtherPowerGainPerUpdate(fastest).toFixed(4)}; the clashes ` +
+      `${gangWarfareMeasure(withWarfare, basis, []).territoryPerUpdate.toExponential(2)} territory an update`,
+  );
+  // Measured on 2026-11-09 (seed 1): power 1.0 against 3.6 to 35.3; every member on it would gain 0.0301 an update,
+  // under a tenth of Speakers for the Dead's 0.3159; the clashes now −2.76e-4 territory an update.
+  expect(everyone).toBeLessThan(gangOtherPowerGainPerUpdate(fastest));
+  expect(gangWarfareCrew(withWarfare, basis)).toEqual({ crew: [], value: 0 });
+  expect(gangWarfareMeasure(withWarfare, basis, []).territoryPerUpdate).toBeLessThan(0);
   expect(notTheBatchersGrows(failures)).toEqual([]);
   expect(text).toContain("taken as BN1's");
 }, 120_000);
@@ -266,7 +306,7 @@ test("equipment (G3): a grown gang and $10b, then the brain for 45 minutes: none
   // training pays within the day to its next ascension, the cap), worked under 5 minutes, and two ascended (×1.56),
   // the respect recruiting four. No lost item pays back within a working stretch so short, nor an augmentation within
   // a day: none is bought, with $10b free, and the report's check, on the same readings, passes.
-  expect(section).toMatch(/\n {4}hour 1: 3 → \d+ members; .*; [1-9]\d* ascensions? \(.*\); no equipment bought\n/);
+  expect(section).toMatch(/\n {4}hour 1: 3 → \d+ members; .*; [1-9]\d* ascensions? \(.*\); no equipment bought; /);
   expect(section).toContain("equipment the rule buys, with the money free, not bought for 1 min or more:\n    none");
   expect([...equipmentLines]).toEqual(["no equipment pays back within 15 minutes"]);
   expect(last.members.every((each) => (each.upgrades ?? []).length === 0)).toBe(true);
@@ -353,6 +393,84 @@ test("equipment (G3) end to end: a member boosted far past an hour's play, on Mo
   expect(last.members[0]?.hack_mult).toBeGreaterThan(1);
   expect(section).toMatch(/\n {4}hour 1: .*; [1-9]\d* equipment bought for \$[\d,]+ \(/);
   expect(section).toContain("equipment the rule buys, with the money free, not bought for 1 min or more:\n    none");
+  expect(section).toContain("  problems the gang worker reported, as first seen:\n    none\n");
+  expect(notTheBatchersGrows(failures)).toEqual([]);
+}, 120_000);
+
+/**
+ * The owner's gang, NiteSec's, of 12 (G4): the three free recruits, the respect set to 2 million (`setGangRespect`) and
+ * nine more recruited, as G3's end-to-end test; then member-01 boosted as there (about 88 million hacking, so it works
+ * on Money Laundering) and the other eleven made fighters (strength, dexterity and agility experience 1e7 at ascension
+ * points 1e8: levels about 70,000, power about 2,200 each, `gangMemberPower`), their defence left at 1, so a clash can
+ * kill them (`Gang.ts:298`, 0.005 / 1^0.6 when won, in 35% of clashes).
+ */
+async function fightingGang(game: FreshGame) {
+  await game.simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
+  const names = Array.from({ length: 12 }, (_, index) => `member-${String(index + 1).padStart(2, "0")}`);
+  const recruit = (some: string[]) =>
+    ownerRunsOnHome(
+      game,
+      `export async function main(ns) {
+  if (!ns.gang.inGang()) ns.gang.createGang("NiteSec");
+  for (const name of ${JSON.stringify(some)}) {
+    ns.gang.recruitMember(name);
+    ns.gang.setMemberTask(name, "Train Hacking");
+  }
+}`,
+    );
+  await recruit(names.slice(0, 3));
+  await game.simulation.diagnostics.setGangRespect(2e6);
+  await recruit(names.slice(3));
+  await game.simulation.diagnostics.setGangMemberFigures("member-01", { hack_asc_points: 4.5e13, hack_exp: 4.5e10 });
+  const fighter = Object.fromEntries(
+    ["str", "dex", "agi"].flatMap((stat) => [
+      [`${stat}_exp`, 1e7],
+      [`${stat}_asc_points`, 1e8],
+    ]),
+  );
+  for (const name of names.slice(1)) await game.simulation.diagnostics.setGangMemberFigures(name, fighter);
+  await withoutSimEffectors(game);
+}
+
+test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare engaged, territory grows, deaths counted", async () => {
+  const fresh = await freshStartOf({ withDesiredState: true, fixture: BN2, beforeAgent: fightingGang });
+  await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
+  // Every 5 minutes: territory, power, the flag and the crew.
+  const readings: { minute: number; territory: number; power: number; engaged: boolean; crew: number }[] = [];
+  for (let minute = 5; minute <= 20; minute += 5) {
+    await fresh.game.run(5 * 60_000);
+    const reading = gangSnapshotOf(fresh.medium());
+    if (reading.kind !== "gang") throw new Error("no gang read");
+    readings.push({
+      minute,
+      territory: reading.gang.territory,
+      power: reading.gang.power,
+      engaged: reading.gang.territoryWarfareEngaged === true,
+      crew: reading.members.filter((each) => each.task === "Territory Warfare").length,
+    });
+  }
+  console.log(readings.map((each) => JSON.stringify(each)).join("\n"));
+  const { section, failures } = reportOf(fresh);
+  console.log(section);
+  console.log(fresh.controller().gangView().line);
+  const last = gangSnapshotOf(fresh.medium());
+  if (last.kind !== "gang") throw new Error("no gang read");
+  // Measured on 2026-11-09 (seed 1): the fighters on Territory Warfare from the brain's first plan (at equal powers,
+  // not engaged yet), the gang's power past the others' at the first territory update (11 × 2,200 × 0.015 × 1/7, about
+  // 52, against their 1), engaged from then on: 19 min 30 s of it, territory 14.3% → 17.4% in 20 minutes, power 3,181. One fighter died (member-06, about 0.35 × 0.005 a clash at defence 1, 2 clashes an update: about 2.3 deaths
+  // expected among 11 over 60 updates); the brain recruited a member-06 again, which trains, and the ten others stayed.
+  // Expected 9.5% territory an hour at the end, the win chance 100% against each.
+  expect(readings.every((each) => each.engaged)).toBe(true);
+  expect(readings.every((each) => each.crew === 10)).toBe(true);
+  expect(last.gang.territory).toBeGreaterThan(1 / 7 + 0.02);
+  expect(section).toMatch(
+    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 1 death \(member-06\)\n/,
+  );
+  expect(fresh.controller().gangView().line).toMatch(/; warfare on: .*; 10 on Territory Warfare; 1 death seen; /);
+  expect(section).toContain(
+    "territory warfare engaged while the rule's measure says it loses for 1 min or more:\n    none",
+  );
+  expect(section).toContain("territory warfare off while the rule's measure says it pays for 1 min or more:\n    none");
   expect(section).toContain("  problems the gang worker reported, as first seen:\n    none\n");
   expect(notTheBatchersGrows(failures)).toEqual([]);
 }, 120_000);

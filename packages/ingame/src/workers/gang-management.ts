@@ -14,16 +14,23 @@
 // - Then the tasks, each member named, every time: setting a member's task again changes nothing in the game
 //   (`GangMember.ts:91-98`), and the owner may have moved it. A name that isn't a member is skipped; a task the
 //   gang's kind hasn't, or one the game refuses, is a problem, and that member's task is left as it was.
-// - Then the reading: the gang's information, and each member's with its upgrades and augmentations, in the game's
-//   order, and the `keepMoney` it was given, for the run report.
+// - Then territory warfare (#332, G4), after the tasks so the crew is on it: with the brain's order, engaged while it
+//   stands (core's `gangWarfareOrderStands`: the territory the clashes are expected to gain an update, from the powers
+//   read now, `gangTerritoryPerUpdate`, above the brain's break-even), else disengaged; a stale order never keeps
+//   clashes on. With none (an older brain), the game's flag is left alone. Set only when it differs.
+// - Then the reading: the gang's information (its warfare flag and clash chance too, G4), each other gang's power,
+//   territory and the win chance against it (core's `gangClashWinChance`), and each member's with its upgrades and
+//   augmentations, in the game's order, and the `keepMoney` it was given, for the run report.
 // RAM (`Netscript/RamCostGenerator.ts:271-298`): `gang.ascendMember` and `gang.purchaseEquipment` 4 GB each,
-// `gang.getGangInformation`, `gang.getMemberInformation`, `gang.recruitMember` and `gang.setMemberTask` 2 GB each,
+// `gang.getGangInformation`, `gang.getAllGangInformation` (G4), `gang.getMemberInformation`, `gang.recruitMember`,
+// `gang.setMemberTask` and `gang.setTerritoryWarfare` (G4) 2 GB each,
 // `gang.getMemberNames` 1 GB, `getServerMoneyAvailable` 0.1 GB (on home, the player's money); `gang.inGang`,
 // `gang.getTaskNames` and `gang.getBonusTime` nothing. Nothing here may be named like an NS function
 // (packages/ingame/README.md, "RAM"): the gang information's recruit threshold isn't read, as its property is named
 // like one (1 GB); the brain computes it (core's `gangRecruitsAllowed`). The game's ascension result (2 GB) isn't
 // asked for either: core computes it from the points read (`gangAscensionResult`), checked in the parity suite. Nor
-// the equipment getters (2 GB each): core's table (`GANG_EQUIPMENT`), checked against them in the parity suite.
+// the equipment getters (2 GB each): core's table (`GANG_EQUIPMENT`), checked against them in the parity suite. Nor
+// `gang.getChanceToWinClash` (4 GB, G4): core computes it from the powers read, checked against it there too.
 import {
   GANG_STATS,
   type GangInformation,
@@ -32,9 +39,12 @@ import {
   type GangState,
   gangAscensionOrderStands,
   gangAscensionPointsOf,
+  gangClashWinChance,
   gangEquipment,
   gangEquipmentCost,
   gangMemberOwns,
+  gangTerritoryPerUpdate,
+  gangWarfareOrderStands,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 
@@ -81,6 +91,17 @@ export function gangManagement(ns: NS, state: GangState): GangReading {
     if (!taskNames.includes(taskName)) problems.push(`${taskName} isn't a task of this gang, for ${name}`);
     else if (!ns.gang.setMemberTask(name, taskName)) problems.push(`the game didn't set ${name} to ${taskName}`);
   }
+  // Territory warfare (G4), the other gangs read once, the game's order.
+  const faction = ns.gang.getGangInformation().faction;
+  const allGangs = ns.gang.getAllGangInformation();
+  const others = Object.entries(allGangs)
+    .filter(([name]) => name !== faction)
+    .map(([name, figures]) => ({ faction: name, power: figures.power, territory: figures.territory }));
+  const own = allGangs[faction];
+  if (state.warfare !== null && own !== undefined) {
+    const engage = gangWarfareOrderStands(state.warfare, gangTerritoryPerUpdate(own.power, own.territory, others));
+    if (ns.gang.getGangInformation().territoryWarfareEngaged !== engage) ns.gang.setTerritoryWarfare(engage);
+  }
   const information = ns.gang.getGangInformation();
   const gang: GangInformation = {
     faction: information.faction,
@@ -94,6 +115,9 @@ export function gangManagement(ns: NS, state: GangState): GangReading {
     wantedLevelGainRate: information.wantedLevelGainRate,
     power: information.power,
     equipmentCostMult: information.equipmentCostMult,
+    territoryWarfareEngaged: information.territoryWarfareEngaged,
+    territoryClashChance: information.territoryClashChance,
+    otherGangs: others.map((other) => ({ ...other, winChance: gangClashWinChance(information.power, other.power) })),
     bonusTimeMs: ns.gang.getBonusTime(),
   };
   const members = ns.gang.getMemberNames().map((name) => {

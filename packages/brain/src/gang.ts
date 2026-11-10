@@ -13,6 +13,9 @@
 // - Equipment (#330, G3): the purchases core's `planGangEquipment` makes within the money the desired state's
 //   controller leaves free (`equip`, `gangMoneyHoldOf`), each with the member's points as read, and the hold as
 //   `keepMoney`, so the worker spends none of it.
+// - Territory warfare (#332, G4): the crew core's `planGang` puts on Territory Warfare, in the tasks, and its order to
+//   engage or not (`warfare`, with the break-even the worker checks against the powers it reads); deaths counted as
+//   members on Territory Warfare gone between readings (only they can die, `Gang.ts:291-303`), on the dashboard.
 // - The gang's faction is left out of what the faction and augmentation rules see as joined (`withoutGangFaction`):
 //   the game offers no work or donations there (`Faction/ui/FactionRoot.tsx:97-99`, `:113`; Singularity's work and
 //   donation, `NetscriptFunctions/Singularity.ts:808-810`, `:934-935`), and its shop is nearly every augmentation
@@ -25,6 +28,7 @@ import {
   GANG_EQUIPMENT_NAMES,
   GANG_FACTIONS,
   GANG_STATS,
+  GANG_TERRITORY_UPDATE_MS,
   type GangEquipmentPlan,
   type GangInformation,
   type GangMemberReading,
@@ -32,6 +36,8 @@ import {
   type GangRuleInputs,
   type GangStat,
   type GangState,
+  type GangWarfareFigures,
+  type GangWarfarePlan,
   gangAscensionPointsOf,
   gangEquipmentCostMultOf,
   gangFactionOf,
@@ -46,6 +52,7 @@ import {
   planGang,
   planGangEquipment,
   type SlowSnapshotData,
+  TERRITORY_WARFARE_TASK,
 } from "@bitburner-agent/core";
 import type { CloudServerPurchase } from "./cloud-servers.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -129,12 +136,54 @@ export function gangSnapshotOf(mediumData: unknown): GangSnapshot {
   if (gang.equipmentCostMult !== undefined && !(isNumber(gang.equipmentCostMult) && gang.equipmentCostMult > 0)) {
     return { kind: "unread", problem: "the gang's equipment cost multiplier isn't a number" };
   }
+  // Territory warfare (G4): absent from an older Agent; else the flag, the clash chance and the other gangs' figures.
+  const isOther = (other: unknown) =>
+    isObject(other) &&
+    typeof other.faction === "string" &&
+    ["power", "territory", "winChance"].every((key) => isNumber(other[key]));
+  const warfareRead =
+    gang.otherGangs === undefined ||
+    (typeof gang.territoryWarfareEngaged === "boolean" &&
+      isNumber(gang.territoryClashChance) &&
+      isNumber(gang.power) &&
+      Array.isArray(gang.otherGangs) &&
+      gang.otherGangs.every(isOther));
+  if (!warfareRead) return { kind: "unread", problem: "the gang's territory warfare figures aren't numbers" };
   return {
     kind: "gang",
     gang: gang as unknown as GangInformation,
     members: members as GangMemberReading[],
     problems,
   };
+}
+
+/**
+ * Territory warfare's figures (G4) from a reading: its power, flag, clash chance and the other gangs; none from an older
+ * Agent, which reads no other gangs.
+ */
+export function gangWarfareFiguresOf(gang: GangInformation): GangWarfareFigures | undefined {
+  if (gang.otherGangs === undefined) return undefined;
+  return {
+    power: gang.power,
+    engaged: gang.territoryWarfareEngaged === true,
+    clashChance: gang.territoryClashChance ?? 0,
+    others: gang.otherGangs.map(({ faction, power, territory }) => ({ faction, power, territory })),
+  };
+}
+
+/**
+ * The members gone since the reading before who were on Territory Warfare then (G4): the deaths, as only they can die
+ * (`Gang.ts:291-303`) and nothing else takes a member from the gang but an owner's rename (`renameMember`), which would
+ * count as one.
+ */
+export function gangDeathsBetween(
+  before: readonly { name: string; task: string }[],
+  now: readonly { name: string }[],
+): string[] {
+  const names = new Set(now.map((member) => member.name));
+  return before
+    .filter((member) => member.task === TERRITORY_WARFARE_TASK && !names.has(member.name))
+    .map((member) => member.name);
 }
 
 /** The BitNode a slow snapshot shows, or null. */
@@ -313,6 +362,32 @@ export function describeEquipment(equipment: GangEquipmentPlan, hold: GangMoneyH
 const formatCount = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 const percent = (share: number) => `${(share * 100).toFixed(share < 0.1 ? 1 : 0)}%`;
 
+/** A territory update's time (`GANG_TERRITORY_UPDATE_MS`): 180 an hour. */
+const UPDATES_AN_HOUR = 3_600_000 / GANG_TERRITORY_UPDATE_MS;
+
+/**
+ * Territory warfare (G4), for the dashboard: "territory 14.3%, power 2.1; warfare off: the clashes would lose
+ * territory (win chance 4–9%); none on Territory Warfare; 0 deaths". On, the territory expected an hour; off with the
+ * clashes gaining, that their deaths would cost more; with no figures (an older Agent), territory and power only.
+ */
+export function describeWarfare(warfare: GangWarfarePlan | null, gang: GangInformation, deaths: number): string {
+  const share = `territory ${(gang.territory * 100).toFixed(1)}%, power ${gang.power.toFixed(1)}`;
+  if (warfare === null) return `${share}; warfare not read (an older Agent)`;
+  const { measure } = warfare;
+  const chances =
+    measure.winChances === null
+      ? "no other gang has territory"
+      : `win chance ${percent(measure.winChances.least)}–${percent(measure.winChances.most)}`;
+  const hourly = `${percent(measure.territoryPerUpdate * UPDATES_AN_HOUR)} territory an hour`;
+  const state = warfare.engage
+    ? `warfare on: ${hourly} expected (${chances})`
+    : measure.territoryPerUpdate > 0
+      ? `warfare off: its deaths would cost more than the ${hourly} it'd gain is worth (${chances})`
+      : `warfare off: the clashes would lose territory (${chances})`;
+  const crew = warfare.crew.length === 0 ? "none" : String(warfare.crew.length);
+  return `${share}; ${state}; ${crew} on Territory Warfare; ${formatCount(deaths, "death")} seen`;
+}
+
 /** "2 training, 3 on Phishing, 1 on justice (Ethical Hacking)": the plan's task mix. */
 export function describeTaskMix(plan: GangPlan): string {
   const counts = new Map<string, number>();
@@ -382,6 +457,10 @@ export class GangRule {
     keepMoney: number | null;
   } | null = null;
   #lastBought = "";
+  /** The members at the last reading (G4), with their tasks: one on Territory Warfare gone since died. */
+  #lastMembers: { name: string; task: string }[] | null = null;
+  /** The deaths seen since the brain started (G4). */
+  #deaths = 0;
 
   /** `store`: where the rule's justice members are kept across a restart; none (the tests), in memory only. */
   constructor(log: (line: string) => void = () => {}, store: TelemetryStore | null = null) {
@@ -430,7 +509,7 @@ export class GangRule {
       );
     }
     // Managed from here on: the worker reads the gang even before one is formed.
-    const read: GangState = { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null };
+    const read: GangState = { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null, warfare: null };
     const snapshot = gangSnapshotOf(mediumData);
     if (snapshot.kind === "absent" || snapshot.kind === "unread") {
       this.#holding = this.#faction === null;
@@ -455,6 +534,14 @@ export class GangRule {
     }
     const { gang, members } = snapshot;
     this.#faction = gang.faction;
+    // Deaths (G4): members on Territory Warfare at the reading before, gone now.
+    const died = this.#lastMembers === null ? [] : gangDeathsBetween(this.#lastMembers, members);
+    this.#lastMembers = members.map(({ name, task }) => ({ name, task }));
+    if (died.length > 0) {
+      this.#deaths += died.length;
+      this.#log(`gang: ${died.join(", ")} died in a clash, on Territory Warfare`);
+    }
+    const warfareFigures = gangWarfareFiguresOf(gang);
     const inputs: GangRuleInputs = {
       gang: { respect: gang.respect, wantedLevel: gang.wantedLevel, territory: gang.territory },
       isHacking: gang.isHacking,
@@ -462,6 +549,7 @@ export class GangRule {
       softcap: gangSoftcapOf(GANG_BITNODE),
       placedOnJustice: this.#placed,
       bonusTime: gangInBonusTime(gang.bonusTimeMs),
+      ...(warfareFigures === undefined ? {} : { warfare: warfareFigures }),
     };
     const plan = planGang(inputs);
     this.#basis = { mediumData, inputs, plan, costMult: gangEquipmentCostMultOf(gang) };
@@ -477,13 +565,23 @@ export class GangRule {
       `Gang: ${gang.faction}'s, ${formatCount(members.length, "member")} of 12 (${describeTaskMix(plan)}); ` +
       `respect ${Math.round(gang.respect).toLocaleString("en-US")}, wanted penalty ${percent(1 - gang.wantedPenalty)}` +
       ` (above its floor ${percent(plan.lostShare)}, bound ${percent(plan.bound)}); ` +
-      `$${Math.round(gang.moneyGainRate * 5).toLocaleString("en-US")}/s; ${describeAscension(plan)}`;
+      `$${Math.round(gang.moneyGainRate * 5).toLocaleString("en-US")}/s; ${describeAscension(plan)}; ` +
+      describeWarfare(plan.warfare, gang, this.#deaths);
+    // The order (G4): engaged with the break-even the worker checks the powers it reads against; none with none read.
+    const warfare =
+      plan.warfare === null
+        ? null
+        : {
+            engage: plan.warfare.engage,
+            leastTerritoryPerUpdate: plan.warfare.engage ? plan.warfare.measure.leastTerritoryPerUpdate : 0,
+          };
     return this.#decide({ stage: "managed", line, plan, equipment: null }, null, {
       recruit: plan.recruit,
       ascend,
       tasks,
       buy: [],
       keepMoney: null,
+      warfare,
     });
   }
 
@@ -543,7 +641,8 @@ export class GangRule {
         : `${this.#faction}'s gang: ${formatCount(view.plan.assignments.length, "member")} ` +
           `(${describeTaskMix(view.plan)})` +
           (view.plan.recruit.length > 0 ? `; recruiting ${view.plan.recruit.join(", ")}` : "") +
-          (view.plan.ascend !== null ? `; ${describeAscension(view.plan)}` : "");
+          (view.plan.ascend !== null ? `; ${describeAscension(view.plan)}` : "") +
+          (view.plan.warfare?.engage === true ? "; territory warfare engaged" : "");
     // Not managed (outside BN2, every other BitNode's brain) is never logged: it's no news.
     if (logged !== this.#lastLogged && view.stage !== "notManaged") {
       this.#log(logged.startsWith("Gang: ") ? `gang: ${logged.slice(6)}` : `gang: ${logged}`);

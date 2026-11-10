@@ -687,6 +687,125 @@ export function gangFactionToForm(joined: readonly string[]): string | null {
   return GANG_FACTIONS.find((faction) => joined.includes(faction)) ?? null;
 }
 
+/**
+ * The cycles between territory and power updates (G4, `Constants.ts:12`, `Gang.ts:180-182`): 100, 20 s; in bonus time
+ * too, the update counted in cycles.
+ */
+export const GANG_TERRITORY_UPDATE_CYCLES = 100;
+/** Each gang's power multiplier, its additive gain's factor (`Gang/data/power.ts`, `Gang.ts:199-203`). */
+export const GANG_POWER_MULTIPLIERS: Readonly<Record<string, number>> = {
+  "Slum Snakes": 1,
+  Tetrads: 2,
+  "The Syndicate": 2,
+  "The Dark Army": 2,
+  "Speakers for the Dead": 5,
+  NiteSec: 2,
+  "The Black Hand": 5,
+};
+/** The share of the player's clashes in which members may die (`Gang.ts:288-289`): 35%. */
+export const GANG_DEATH_ROUND_CHANCE = 0.35;
+/** A Territory Warfare member's base chance to die in such a clash, won and lost (`Gang.ts:283-284`). */
+export const GANG_DEATH_CHANCE_WON = 0.005;
+export const GANG_DEATH_CHANCE_LOST = 0.01;
+/** The share of the gang's respect a death costs, with the member's earned respect (`Gang.ts:372-375`). */
+export const GANG_DEATH_RESPECT_SHARE = 0.05;
+/** The clash chance's fall an update once warfare is disengaged (`Gang.ts:210-216`), from 1 while engaged. */
+export const GANG_CLASH_CHANCE_FALL_PER_UPDATE = 0.01;
+
+/** A member's power, its levels summed over 95 (`GangMember.ts:87-89`). */
+export function gangMemberPower(member: MemberLevels): number {
+  return (member.hack + member.str + member.def + member.dex + member.agi + member.cha) / 95;
+}
+
+/**
+ * The gang's power gain at a territory update (`Gang.ts:362-369`, `:189`): 0.015 × max(0.002, territory) × the
+ * members on Territory Warfare's power.
+ */
+export function gangPowerGainPerUpdate(territory: number, crew: readonly MemberLevels[]): number {
+  return 0.015 * Math.max(0.002, territory) * crew.reduce((sum, each) => sum + gangMemberPower(each), 0);
+}
+
+/** The chance to win a clash, power / (power + the other's) (`AllGangs.ts:73-77`, `NetscriptFunctions/Gang.ts:328-339`). */
+export function gangClashWinChance(power: number, otherPower: number): number {
+  const chance = power / (power + otherPower);
+  return Number.isFinite(chance) ? chance : 0;
+}
+
+/**
+ * The territory a clash moves on average (`Gang.ts:174-178`): 0.0001 × max(1, 1 + ln(winner's power / loser's) /
+ * ln 50) × (rand + 0.5), whose mean is 1; the game caps it at the loser's territory, which the caller does.
+ */
+export function gangTerritoryPerClash(winnerPower: number, loserPower: number): number {
+  return 0.0001 * Math.max(1, 1 + Math.log(winnerPower / loserPower) / Math.log(50));
+}
+
+/** Another gang, as `ns.gang.getAllGangInformation` gives it (G4, `NetscriptFunctions/Gang.ts:105-113`). */
+export interface GangOtherGang {
+  faction: string;
+  power: number;
+  territory: number;
+}
+
+/**
+ * Another gang's expected power gain at an update (`Gang.ts:191-204`): half the time × 1.005, capped at + 0.85; half
+ * + 0.75 × roll × territory × its multiplier, roll in [0.5, 1), 0.75 on average: 0.5 × min(0.85, 0.005 × power) +
+ * 0.28125 × territory × multiplier.
+ */
+export function gangOtherPowerGainPerUpdate(other: GangOtherGang): number {
+  const multiplier = GANG_POWER_MULTIPLIERS[other.faction] ?? 1;
+  return 0.5 * Math.min(0.85, 0.005 * other.power) + 0.5 * 0.75 * 0.75 * other.territory * multiplier;
+}
+
+/**
+ * The player's expected clashes against each other gang at an update, at clash chance 1 (`Gang.ts:219-234`): each gang
+ * with territory (the player's whatever its own) picks one of the others at random, so the player's gang clashes with
+ * a given one 2/(n − 1) times an update, n the gangs in it. Those with no territory are left out of it, and clash none.
+ */
+export function gangClashesPerUpdate(others: readonly GangOtherGang[]): number {
+  const n = others.filter((each) => each.territory > 0).length + 1;
+  return n > 1 ? 2 / (n - 1) : 0;
+}
+
+/**
+ * The territory the player's gang is expected to gain at an update, at clash chance 1 (`Gang.ts:219-268`): against
+ * each other gang with territory, its clashes × (the win chance × what a win takes, capped at its territory, less the
+ * loss chance × what a loss gives, capped at the player's). Negative: the clashes lose territory.
+ */
+export function gangTerritoryPerUpdate(power: number, territory: number, others: readonly GangOtherGang[]): number {
+  const clashes = gangClashesPerUpdate(others);
+  let total = 0;
+  for (const other of others) {
+    if (!(other.territory > 0)) continue;
+    const chance = gangClashWinChance(power, other.power);
+    const won = Math.min(other.territory, gangTerritoryPerClash(power, other.power));
+    const lost = Math.min(territory, gangTerritoryPerClash(other.power, power));
+    total += clashes * (chance * won - (1 - chance) * lost);
+  }
+  return total;
+}
+
+/**
+ * A Territory Warfare member's chance to die in one of the player's clashes at `winChance` (`Gang.ts:281-303`): 35%
+ * of them roll, at 0.005 won and 0.01 lost, over def^0.6.
+ */
+export function gangDeathChancePerClash(def: number, winChance: number): number {
+  const base = winChance * GANG_DEATH_CHANCE_WON + (1 - winChance) * GANG_DEATH_CHANCE_LOST;
+  return (GANG_DEATH_ROUND_CHANCE * base) / Math.max(1, def) ** 0.6;
+}
+
+/** A recruit as the game makes one (`GangMember.ts:31-66`): levels 1, no experience, multipliers 1, no points. */
+export function gangFreshRecruit(name: string): GangMemberFigures {
+  const recruit: Record<string, unknown> = { name, task: UNASSIGNED_GANG_TASK, earnedRespect: 0 };
+  for (const stat of GANG_STATS) {
+    recruit[stat] = 1;
+    recruit[`${stat}_exp`] = 0;
+    recruit[`${stat}_mult`] = 1;
+    recruit[`${stat}_asc_mult`] = 1;
+    recruit[`${stat}_asc_points`] = 0;
+  }
+  return { ...(recruit as unknown as GangMemberFigures), upgrades: [], augmentations: [] };
+}
+
 /** The territory multiplier of a gang's top respect task at `territory` (`formulas.ts:26`): the faction's choice. */
 export function gangTerritoryLeverage(isHacking: boolean, territory: number): number {
   const top = gangTask(isHacking ? "Cyberterrorism" : "Terrorism");
@@ -731,6 +850,29 @@ export interface GangState {
   buy: GangPurchaseOrder[];
   /** The money the purchases leave alone (G3): the brain's holds for its other spending; null, none spent. */
   keepMoney: number | null;
+  /**
+   * Territory warfare (G4, #332), set after the tasks: engaged while the order stands (`gangWarfareOrderStands`), else
+   * disengaged; null (absent from an older brain), the game's flag left alone.
+   */
+  warfare: GangWarfareOrder | null;
+}
+
+/**
+ * The brain's territory warfare (G4): engage or not, and the territory an update the clashes must be expected to gain,
+ * by the brain's measure (the deaths' cost over the territory's value, core's `gangWarfareMeasure`), to pay.
+ */
+export interface GangWarfareOrder {
+  engage: boolean;
+  leastTerritoryPerUpdate: number;
+}
+
+/**
+ * Whether the order to engage stands (G4): the territory the clashes are expected to gain an update, from the powers
+ * read now (`gangTerritoryPerUpdate`), still above the brain's break-even. So a stale order (others grown since the
+ * brain's reading, or the gang's own power fallen) never keeps clashes on at a loss: it disengages, the safe side.
+ */
+export function gangWarfareOrderStands(order: GangWarfareOrder, territoryPerUpdateNow: number): boolean {
+  return order.engage && territoryPerUpdateNow > order.leastTerritoryPerUpdate;
 }
 
 /** An upgrade to buy for a member (G3), with its ascension points when the brain read it. */
@@ -771,13 +913,13 @@ export const MAX_GANG_MEMBER_NAME_LENGTH = 64;
 
 /**
  * A desired state's `gang` (#325): none when absent or null; else at most 12 recruits' names, at most 12 members to
- * ascend (G2; absent, none), the game's tasks, and at most 12 purchases of the game's equipment with the money to keep
- * (G3; absent, none, and null).
+ * ascend (G2; absent, none), the game's tasks, at most 12 purchases of the game's equipment with the money to keep
+ * (G3; absent, none, and null), and territory warfare's order (G4; absent, null).
  */
 export function parseGangState(value: unknown): { ok: true; gang: GangState | null } | { ok: false; reason: string } {
   if (value === undefined || value === null) return { ok: true, gang: null };
   if (typeof value !== "object" || Array.isArray(value)) return { ok: false, reason: "gang isn't an object" };
-  const { recruit, ascend = [], tasks, buy = [], keepMoney = null } = value as Record<string, unknown>;
+  const { recruit, ascend = [], tasks, buy = [], keepMoney = null, warfare = null } = value as Record<string, unknown>;
   const isName = (name: unknown): name is string =>
     typeof name === "string" && name !== "" && name.length <= MAX_GANG_MEMBER_NAME_LENGTH;
   if (!Array.isArray(recruit) || recruit.length > GANG_MOST_MEMBERS || !recruit.every(isName)) {
@@ -804,6 +946,16 @@ export function parseGangState(value: unknown): { ok: true; gang: GangState | nu
   if (keepMoney !== null && !(typeof keepMoney === "number" && Number.isFinite(keepMoney) && keepMoney >= 0)) {
     return { ok: false, reason: "gang.keepMoney isn't null or an amount of money" };
   }
+  const isWarfare = (order: unknown): order is GangWarfareOrder =>
+    typeof order === "object" &&
+    order !== null &&
+    typeof (order as GangWarfareOrder).engage === "boolean" &&
+    typeof (order as GangWarfareOrder).leastTerritoryPerUpdate === "number" &&
+    Number.isFinite((order as GangWarfareOrder).leastTerritoryPerUpdate) &&
+    (order as GangWarfareOrder).leastTerritoryPerUpdate >= 0;
+  if (warfare !== null && !isWarfare(warfare)) {
+    return { ok: false, reason: "gang.warfare isn't null or an order to engage or not, with its break-even" };
+  }
   if (typeof tasks !== "object" || tasks === null || Array.isArray(tasks)) {
     return { ok: false, reason: "gang.tasks isn't an object" };
   }
@@ -823,13 +975,15 @@ export function parseGangState(value: unknown): { ok: true; gang: GangState | nu
       tasks: Object.fromEntries(entries) as Record<string, string>,
       buy: buy.map(({ name, equipment, pointsBefore }) => ({ name, equipment, pointsBefore })),
       keepMoney,
+      warfare:
+        warfare === null ? null : { engage: warfare.engage, leastTerritoryPerUpdate: warfare.leastTerritoryPerUpdate },
     },
   };
 }
 
 /**
- * The gang as `ns.gang.getGangInformation` gives it (#325), but its recruit threshold and territory warfare's figures;
- * its equipment cost multiplier since G3.
+ * The gang as `ns.gang.getGangInformation` gives it (#325), but its recruit threshold; its equipment cost multiplier
+ * since G3; territory warfare's figures and the other gangs since G4.
  */
 export interface GangInformation extends Pick<GangFigures, "respect" | "wantedLevel" | "territory"> {
   faction: string;
@@ -847,10 +1001,26 @@ export interface GangInformation extends Pick<GangFigures, "respect" | "wantedLe
    */
   equipmentCostMult?: number;
   /**
+   * Territory warfare (G4, `NetscriptFunctions/Gang.ts:96-98`): engaged, and the clash chance, 1 while engaged, falling
+   * 0.01 an update once not (`Gang.ts:210-216`). Absent from an older Agent.
+   */
+  territoryWarfareEngaged?: boolean;
+  territoryClashChance?: number;
+  /**
+   * The other gangs (G4, `ns.gang.getAllGangInformation`), the game's order, each with the win chance against it
+   * (`gangClashWinChance`, which `getChanceToWinClash` gives at 4 GB). Absent from an older Agent.
+   */
+  otherGangs?: GangOtherGangReading[];
+  /**
    * `ns.gang.getBonusTime()` (#325's review): the stored cycles' time, ms; over 2 s, bonus time, the gang processing 25
    * cycles a call (`gangInBonusTime`, `GANG_BONUS_CYCLES_PER_PROCESS`). Absent from an older Agent.
    */
   bonusTimeMs?: number;
+}
+
+/** Another gang as the worker reads it (G4): its power and territory, and the win chance against it. */
+export interface GangOtherGangReading extends GangOtherGang {
+  winChance: number;
 }
 
 /** A member as `ns.gang.getMemberInformation` gives it, its task's rates a cycle too (`NetscriptFunctions/Gang.ts`). */
