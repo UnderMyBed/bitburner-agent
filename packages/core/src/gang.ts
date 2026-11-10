@@ -1,10 +1,10 @@
 /**
- * Gangs (#325, slice G1 of the gangs epic #324): the game's gang facts and formulas, and the brain's rule for a gang
- * that grows: which faction it's formed with, who is recruited, and each member's task. Paths are
- * `vendor/bitburner-src/src/`'s. The formulas are the game's own (`Gang/formulas/formulas.ts`, `Gang/GangMember.ts`),
- * checked against the engine's `ns.formulas.gang` and `getTaskStats` in the brain's parity suite
- * (`gang-parity.test.ts`). In-game code bundles the protocol's part (the worker names, `GANG_TASK_NAMES`), so no name
- * here is an NS function's (packages/ingame/README.md, "RAM"): `gangRespectPerCycle`, never `respectGain`.
+ * Gangs (#325, slice G1 of the gangs epic #324; ascension, #328, G2): the game's gang facts and formulas, and the
+ * brain's rule for a gang that grows: which faction it's formed with, who is recruited, who ascends, and each member's
+ * task. Paths are `vendor/bitburner-src/src/`'s. The formulas are the game's own (`Gang/formulas/formulas.ts`,
+ * `Gang/GangMember.ts`), checked against the engine's `ns.formulas.gang` and `getTaskStats` in the brain's parity
+ * suite (`gang-parity.test.ts`). In-game code bundles the protocol's part (the worker names, `GANG_TASK_NAMES`), so no
+ * name here is an NS function's (packages/ingame/README.md, "RAM"): `gangRespectPerCycle`, never `respectGain`.
  */
 
 /** The factions a gang can be formed with, in the game's order (`Gang/data/Constants.ts:18-26`). */
@@ -331,11 +331,13 @@ export interface GangFigures {
 
 /**
  * What the brain reads of a member (`ns.gang.getMemberInformation`): its task, levels, experience, equipment
- * multipliers and ascension multipliers.
+ * multipliers, ascension multipliers and points (G2), and the respect it earned since its last ascension.
  */
 export interface GangMemberFigures {
   name: string;
   task: string;
+  /** Respect earned since the last ascension, which an ascension takes from the gang (`Gang.ts:390-393`). */
+  earnedRespect: number;
   hack: number;
   str: number;
   def: number;
@@ -360,6 +362,13 @@ export interface GangMemberFigures {
   dex_asc_mult: number;
   agi_asc_mult: number;
   cha_asc_mult: number;
+  /** The ascension points each multiplier comes from (`GangMember.ts:56-61`, `:74-76`). */
+  hack_asc_points: number;
+  str_asc_points: number;
+  def_asc_points: number;
+  dex_asc_points: number;
+  agi_asc_points: number;
+  cha_asc_points: number;
 }
 
 type MemberLevels = Pick<GangMemberFigures, GangStat>;
@@ -467,6 +476,64 @@ export function gangMemberAfter(member: GangMemberFigures, task: GangTask, cycle
   return after;
 }
 
+/** The experience an ascension leaves out of a stat's points: its first 1,000 (`formulas.ts:75-77`). */
+export const GANG_ASCENSION_EXP_LEFT_OUT = 1000;
+/** The points scale of an ascension multiplier, √(points / 2,000) (`formulas.ts:79-81`). */
+export const GANG_ASCENSION_POINTS_SCALE = 2000;
+
+/** The ascension points a stat's experience gives: max(0, exp − 1,000) (`formulas.ts:75-77`). */
+export function gangAscensionPointsGain(exp: number): number {
+  return Math.max(exp - GANG_ASCENSION_EXP_LEFT_OUT, 0);
+}
+
+/** A stat's ascension multiplier from its points: max(1, √(points / 2,000)) (`formulas.ts:79-81`). */
+export function gangAscensionMult(points: number): number {
+  return Math.max(Math.sqrt(points / GANG_ASCENSION_POINTS_SCALE), 1);
+}
+
+/** Whether the game lets the member ascend: a stat's experience over 1,000 (`GangMember.ts:245-248`). */
+export function gangCanAscend(member: GangMemberFigures): boolean {
+  return GANG_STATS.some((stat) => gangAscensionPointsGain(member[`${stat}_exp`]) > 0);
+}
+
+/** What an ascension gives, as `ns.gang.getAscensionResult` has it. */
+export type GangAscensionResult = { respect: number } & Record<GangStat, number>;
+
+/**
+ * What ascending the member now gives, as `ns.gang.getAscensionResult` (`NetscriptFunctions/Gang.ts:291-300`): the
+ * respect the gang loses, the member's earned respect (`Gang.ts:390-393`), and each stat's ascension multiplier after
+ * over before (`GangMember.ts:262-285`). Null when the game wouldn't ascend it (`gangCanAscend`).
+ */
+export function gangAscensionResult(member: GangMemberFigures): GangAscensionResult | null {
+  if (!gangCanAscend(member)) return null;
+  const result = { respect: member.earnedRespect, hack: 1, str: 1, def: 1, dex: 1, agi: 1, cha: 1 };
+  for (const stat of GANG_STATS) {
+    const points = member[`${stat}_asc_points`];
+    result[stat] =
+      gangAscensionMult(points + gangAscensionPointsGain(member[`${stat}_exp`])) / gangAscensionMult(points);
+  }
+  return result;
+}
+
+/**
+ * The member after an ascension (`GangMember.ts:298-320`): each stat's points gained, its experience 0, its levels
+ * recomputed, no respect earned. The equipment multipliers go back to 1: the upgrades are lost and the augmentations
+ * kept, which the brain doesn't read until G3 (#324), so a member with augmentations comes out stronger than this.
+ */
+export function gangMemberAscended(member: GangMemberFigures): GangMemberFigures {
+  const after = { ...member, earnedRespect: 0 };
+  for (const stat of GANG_STATS) {
+    const points = member[`${stat}_asc_points`] + gangAscensionPointsGain(member[`${stat}_exp`]);
+    const mult = gangAscensionMult(points);
+    after[`${stat}_asc_points`] = points;
+    after[`${stat}_asc_mult`] = mult;
+    after[`${stat}_mult`] = 1;
+    after[`${stat}_exp`] = 0;
+    after[stat] = gangSkillLevel(0, mult);
+  }
+  return after;
+}
+
 /** The respect the next recruit needs with `members` (`Gang.ts:316-323`): 0 for the free ones, Infinity at 12. */
 export function gangRespectToRecruit(members: number): number {
   if (members < GANG_FREE_MEMBERS) return 0;
@@ -523,22 +590,67 @@ export function gangWorkerFileNames(): string[] {
 export interface GangState {
   /** Names to recruit, in order, each while the game lets the gang recruit; a member's name already is skipped. */
   recruit: string[];
+  /**
+   * Members to ascend (G2), after the recruits and before the tasks: each only while its ascension points are still
+   * `pointsBefore` (`gangAscensionPointsOf`), the brain's reading, so the worker's next run, on the same state, doesn't
+   * ascend it again. Absent from a G1 brain: none.
+   */
+  ascend: GangAscensionOrder[];
   /** Tasks by member name (a recruit's too); a member not named keeps its task. */
   tasks: Record<string, string>;
+}
+
+/** A member to ascend (G2), with its ascension points when the brain read it. */
+export interface GangAscensionOrder {
+  name: string;
+  pointsBefore: number;
+}
+
+/**
+ * A member's ascension points, its stats' summed: they only rise by an ascension (`GangMember.ts:298-305`), and fall
+ * only by the install's penalty (`:287-296`), so a change says the member ascended (or augmentations were installed).
+ */
+export function gangAscensionPointsOf(member: Pick<GangMemberFigures, `${GangStat}_asc_points`>): number {
+  return (
+    member.hack_asc_points +
+    member.str_asc_points +
+    member.def_asc_points +
+    member.dex_asc_points +
+    member.agi_asc_points +
+    member.cha_asc_points
+  );
+}
+
+/** Whether the member's points are still the order's: the same to within a part in a billion (JSON keeps them). */
+export function gangAscensionOrderStands(order: GangAscensionOrder, pointsNow: number): boolean {
+  return Math.abs(pointsNow - order.pointsBefore) <= 1e-9 * Math.max(1, Math.abs(order.pointsBefore));
 }
 
 /** The longest member name the protocol takes. */
 export const MAX_GANG_MEMBER_NAME_LENGTH = 64;
 
-/** A desired state's `gang` (#325): none when absent or null; else at most 12 recruits' names, and the game's tasks. */
+/**
+ * A desired state's `gang` (#325): none when absent or null; else at most 12 recruits' names, at most 12 members to
+ * ascend (G2; absent, none), and the game's tasks.
+ */
 export function parseGangState(value: unknown): { ok: true; gang: GangState | null } | { ok: false; reason: string } {
   if (value === undefined || value === null) return { ok: true, gang: null };
   if (typeof value !== "object" || Array.isArray(value)) return { ok: false, reason: "gang isn't an object" };
-  const { recruit, tasks } = value as Record<string, unknown>;
+  const { recruit, ascend = [], tasks } = value as Record<string, unknown>;
   const isName = (name: unknown): name is string =>
     typeof name === "string" && name !== "" && name.length <= MAX_GANG_MEMBER_NAME_LENGTH;
   if (!Array.isArray(recruit) || recruit.length > GANG_MOST_MEMBERS || !recruit.every(isName)) {
     return { ok: false, reason: `gang.recruit isn't a list of at most ${GANG_MOST_MEMBERS} member names` };
+  }
+  const isOrder = (order: unknown): order is GangAscensionOrder =>
+    typeof order === "object" &&
+    order !== null &&
+    isName((order as GangAscensionOrder).name) &&
+    typeof (order as GangAscensionOrder).pointsBefore === "number" &&
+    Number.isFinite((order as GangAscensionOrder).pointsBefore) &&
+    (order as GangAscensionOrder).pointsBefore >= 0;
+  if (!Array.isArray(ascend) || ascend.length > GANG_MOST_MEMBERS || !ascend.every(isOrder)) {
+    return { ok: false, reason: `gang.ascend isn't a list of at most ${GANG_MOST_MEMBERS} members and their points` };
   }
   if (typeof tasks !== "object" || tasks === null || Array.isArray(tasks)) {
     return { ok: false, reason: "gang.tasks isn't an object" };
@@ -551,7 +663,14 @@ export function parseGangState(value: unknown): { ok: true; gang: GangState | nu
       return { ok: false, reason: `gang.tasks gives ${name} a task the game hasn't` };
     }
   }
-  return { ok: true, gang: { recruit: [...recruit], tasks: Object.fromEntries(entries) as Record<string, string> } };
+  return {
+    ok: true,
+    gang: {
+      recruit: [...recruit],
+      ascend: ascend.map(({ name, pointsBefore }) => ({ name, pointsBefore })),
+      tasks: Object.fromEntries(entries) as Record<string, string>,
+    },
+  };
 }
 
 /** The gang as `ns.gang.getGangInformation` gives it, but its recruit threshold and equipment (#325). */
@@ -574,7 +693,6 @@ export interface GangInformation extends Pick<GangFigures, "respect" | "wantedLe
 
 /** A member as `ns.gang.getMemberInformation` gives it, its task's rates a cycle too (`NetscriptFunctions/Gang.ts`). */
 export interface GangMemberReading extends GangMemberFigures {
-  earnedRespect: number;
   respectGain: number;
   moneyGain: number;
   wantedLevelGain: number;

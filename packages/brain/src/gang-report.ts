@@ -10,15 +10,24 @@
 //   the members' tasks now, not back at the bound within that time (`gangWantedRecovers`). With every member on
 //   justice it's all the game allows, however long the decay takes;
 // - the outcome, whatever that forecast: over the bound with a member off justice for `GANG_WANTED_OUTCOME_MS`;
-// - the gang unread (no reading, or the worker's problem) in BN2 for over `GANG_UNREAD_WITHIN_MS`.
+// - the gang unread (no reading, or the worker's problem) in BN2 for over `GANG_UNREAD_WITHIN_MS`;
+// - an ascension the rule makes (core's `gangAscensionToMake`, #328, G2) not made, for over `GANG_ASCEND_WITHIN_MS`.
+// The ascensions themselves (G2) are seen as a member's ascension points rising between readings (core's
+// `gangAscensionPointsOf`), each with its largest multiplier gain and the respect it had earned, by hour.
 import {
   GANG_CYCLE_MS,
   GANG_FACTIONS,
+  GANG_STATS,
   GANG_WANTED_RECOVERY_MS,
+  type GangMemberReading,
   type GangPlan,
+  type GangRuleInputs,
+  gangAscensionPointsOf,
+  gangAscensionToMake,
   gangInBonusTime,
   gangLostShare,
   gangLostShareBound,
+  gangObjectiveOf,
   gangRecruitsAllowed,
   gangSoftcapOf,
   gangWantedRecovers,
@@ -27,7 +36,7 @@ import {
   planGang,
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
-import { bitNodeOfSlow, describeTaskMix, GANG_BITNODE, gangSnapshotOf } from "./gang.ts";
+import { bitNodeOfSlow, describeTaskMix, GANG_BITNODE, gangSnapshotOf, topAscensionGain } from "./gang.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 
 /**
@@ -53,6 +62,22 @@ export const GANG_WANTED_OVER_BOUND_MS = GANG_WANTED_RECOVERY_MS;
 export const GANG_WANTED_OUTCOME_MS = 1.5 * GANG_WANTED_RECOVERY_MS;
 /** How long the gang may go unread in BN2: 5 minutes, 30 of the worker's runs. */
 export const GANG_UNREAD_WITHIN_MS = 5 * 60_000;
+/**
+ * How long an ascension the rule makes may wait (G2): 1 minute, as a recruit (`GANG_RECRUIT_WITHIN_MS`): the brain
+ * names it on the next medium snapshot, the Agent's worker runs at once on the changed state, and the next medium
+ * snapshot shows it.
+ */
+export const GANG_ASCEND_WITHIN_MS = GANG_RECRUIT_WITHIN_MS;
+
+/** An ascension seen (G2): a member's points risen between two readings. */
+interface Ascension {
+  atMs: number;
+  name: string;
+  /** Its largest multiplier gain, the ascension multiplier after over before. */
+  gain: number;
+  /** The respect it had earned at the reading before: what the gang lost, to within a reading's (10 s) earnings. */
+  respect: number;
+}
 
 /** A reading of the gang at a medium snapshot. */
 interface GangPoint {
@@ -65,8 +90,12 @@ interface GangPoint {
   penalty: number;
   lostShare: number;
   bound: number;
-  plan: GangPlan;
+  /** What the rule read: the plan, for the task mix, is worked out only for an hour's last reading. */
+  inputs: GangRuleInputs;
 }
+
+/** The rule's plan at a reading (core's `planGang`). */
+const planAt = (point: GangPoint): GangPlan => planGang(point.inputs);
 
 /** A stretch a condition held, from its first medium snapshot to its last (or the window's end). */
 interface Stretch {
@@ -113,6 +142,10 @@ export class GangFold {
   readonly #overBound = new Stretches();
   readonly #overBoundOffJustice = new Stretches();
   readonly #unread = new Stretches();
+  readonly #ascensionWaiting = new Stretches();
+  readonly #ascensions: Ascension[] = [];
+  /** Each member at the reading before, by name: its ascension points rising says it ascended. */
+  #lastMembers = new Map<string, GangMemberReading>();
 
   /** A slow snapshot: the BitNode from then on. */
   addSlow(atMs: number, data: SlowSnapshotData): void {
@@ -139,9 +172,11 @@ export class GangFold {
         this.#overBound,
         this.#overBoundOffJustice,
         this.#unread,
+        this.#ascensionWaiting,
       ]) {
         stretches.add(atMs, null);
       }
+      this.#lastMembers = new Map();
       return;
     }
     this.#mediumInBitNode2 += 1;
@@ -163,6 +198,9 @@ export class GangFold {
       this.#recruitWaiting.add(atMs, null);
       this.#overBound.add(atMs, null);
       this.#overBoundOffJustice.add(atMs, null);
+      this.#ascensionWaiting.add(atMs, null);
+      // A gang gone (another BitNode's start) has none of these members; one unread keeps them.
+      if (snapshot.kind === "none") this.#lastMembers = new Map();
       return;
     }
     const { gang, members, problems } = snapshot;
@@ -199,12 +237,33 @@ export class GangFold {
             `${members.length - offJustice} of ${members.length} on justice`
         : null,
     );
-    const plan = planGang({
+    const inputs: GangRuleInputs = {
       gang: { respect: gang.respect, wantedLevel: gang.wantedLevel, territory: gang.territory },
       isHacking: gang.isHacking,
       members,
       softcap: gangSoftcapOf(GANG_BITNODE),
-    });
+    };
+    // The ascensions since the reading before, and the rule's own (core's `gangAscensionToMake`, as the brain's plan
+    // has it) not made.
+    let ascended = false;
+    for (const member of members) {
+      const before = this.#lastMembers.get(member.name);
+      if (before === undefined || gangAscensionPointsOf(member) <= gangAscensionPointsOf(before)) continue;
+      ascended = true;
+      const gains = Object.fromEntries(
+        GANG_STATS.map((stat) => [stat, member[`${stat}_asc_mult`] / before[`${stat}_asc_mult`]]),
+      ) as Record<(typeof GANG_STATS)[number], number>;
+      this.#ascensions.push({ atMs, name: member.name, gain: topAscensionGain(gains), respect: before.earnedRespect });
+    }
+    this.#lastMembers = new Map(members.map((member) => [member.name, member]));
+    const due = ascended ? null : gangAscensionToMake(inputs, gangObjectiveOf(members.length));
+    this.#ascensionWaiting.add(
+      atMs,
+      due === null
+        ? null
+        : `${due.name}'s, multipliers up to ×${topAscensionGain(due.result).toFixed(2)}, a gain of ` +
+            `${whole(due.gain)} over a cost of ${whole(due.cost)} in ${formatDuration(due.horizonMs)}`,
+    );
     this.#points.push({
       atMs,
       members: members.length,
@@ -213,13 +272,13 @@ export class GangFold {
       penalty: 1 - gang.wantedPenalty,
       lostShare,
       bound,
-      plan,
+      inputs,
     });
   }
 
   /** The section's lines, its failures added to `failures`. */
   section(failures: string[], windowEndMs: number): string[] {
-    const lines = ["7. The gang (#325; played in BN2 only for now)"];
+    const lines = ["7. The gang (#325, ascension G2; played in BN2 only for now)"];
     if (this.#mediumInBitNode2 === 0) {
       lines.push("  not in BN2 in the window: no gang played");
       return lines;
@@ -243,8 +302,9 @@ export class GangFold {
     if (first !== undefined) {
       lines.push(`  by hour, from ${formatIsoTime(first.atMs)}:`);
       const hours = new Map<number, GangPoint[]>();
+      const hourOf = (atMs: number) => Math.floor((atMs - first.atMs) / 3_600_000);
       for (const point of this.#points) {
-        const hour = Math.floor((point.atMs - first.atMs) / 3_600_000);
+        const hour = hourOf(point.atMs);
         hours.set(hour, [...(hours.get(hour) ?? []), point]);
       }
       for (const [hour, points] of hours) {
@@ -253,13 +313,21 @@ export class GangFold {
         const seconds = Math.max(1, (end.atMs - start.atMs) / 1000);
         const money = points.reduce((sum, each) => sum + each.moneyPerSecond, 0) / points.length;
         const worst = points.reduce((top, each) => (each.lostShare > top.lostShare ? each : top));
+        const ascensions = this.#ascensions.filter((each) => hourOf(each.atMs) === hour);
         lines.push(
           `    hour ${hour + 1}: ${start.members} → ${end.members} members; respect ${whole(start.respect)} → ` +
             `${whole(end.respect)} (${((end.respect - start.respect) / seconds).toFixed(2)}/s); ` +
             `$${whole(money)}/s on average; wanted penalty ${percent(start.penalty)} → ${percent(end.penalty)}, ` +
             `above its floor at most ${percent(worst.lostShare)} (the bound then ${percent(worst.bound)}, at ` +
             `${worst.members} members); ` +
-            `tasks at its end: ${describeTaskMix(end.plan)}`,
+            `tasks at its end: ${describeTaskMix(planAt(end))}; ` +
+            (ascensions.length === 0
+              ? "no ascensions"
+              : `${ascensions.length} ascension${ascensions.length === 1 ? "" : "s"} (` +
+                ascensions
+                  .map((each) => `${each.name} ×${each.gain.toFixed(2)}, ${whole(each.respect)} respect`)
+                  .join("; ") +
+                ")"),
         );
       }
     }
@@ -276,6 +344,7 @@ export class GangFold {
         "the wanted penalty over the rule's bound with a member off justice",
       ],
       [this.#unread, GANG_UNREAD_WITHIN_MS, "the gang unread in BN2"],
+      [this.#ascensionWaiting, GANG_ASCEND_WITHIN_MS, "an ascension the rule makes not made"],
     ] as const;
     for (const [stretches, withinMs, what] of judged) {
       lines.push(`  ${what} for ${formatDuration(withinMs)} or more:`);

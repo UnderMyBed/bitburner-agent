@@ -61,7 +61,7 @@ Other mults that touch these systems: `FactionWorkRepGain`/`CompanyWorkRepGain`/
 
 ## 1. Gangs
 
-How the brain plays them (epic #324): G1 (#325), forming, recruiting, the task rule and the wanted level, in BN2, with core's formulas checked against the engine ([packages/brain](../../packages/brain/README.md#the-gang-bn2), [packages/core](../../packages/core/README.md#gangs)).
+How the brain plays them (epic #324): G1 (#325), forming, recruiting, the task rule and the wanted level, in BN2; G2 (#328), ascension; with core's formulas checked against the engine ([packages/brain](../../packages/brain/README.md#the-gang-bn2), [packages/core](../../packages/core/README.md#gangs)).
 
 ### 1.1 Creation
 

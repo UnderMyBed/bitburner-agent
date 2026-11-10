@@ -1,7 +1,8 @@
 // The gang's effectors in the simulator (#325): the `createGang` intent through the simulator's own effector and
 // through its home worker (`create-gang.js`, the NS API alone, so the `ui` backend's in any game), each refusing what
 // the game refuses; and the Agent's gang worker (`gang.js`) doing the desired state's recruits and tasks, its reading
-// in the medium snapshot, what the game refused among its problems. In BN2, NiteSec joined by a harness edit.
+// in the medium snapshot, what the game refused among its problems; and its ascensions (#328, G2). In BN2, NiteSec
+// joined by a harness edit.
 import {
   type DesiredState,
   type FastSnapshotData,
@@ -85,7 +86,7 @@ test("the gang worker: recruits and tasks done, read into the medium snapshot; w
   const fresh = await freshStart({ withDesiredState: false, fixture: BN2, beforeAgent: joinNiteSec });
   const state = (gang: GangState): DesiredState => ({ hackLoop: HACK_LOOP_OFF, intents: [], gang });
   // No gang yet: read as none, nothing done.
-  fresh.brain.channel.setDesiredState(state({ recruit: ["a"], tasks: { a: "Ransomware" } }));
+  fresh.brain.channel.setDesiredState(state({ recruit: ["a"], ascend: [], tasks: { a: "Ransomware" } }));
   await fresh.game.run(12_000);
   expect(fresh.medium()?.gang).toEqual({ gang: null, members: [], problems: [] });
 
@@ -96,6 +97,7 @@ test("the gang worker: recruits and tasks done, read into the medium snapshot; w
   fresh.brain.channel.setDesiredState(
     state({
       recruit: ["a", "b", "c", "d", "e"],
+      ascend: [],
       tasks: { a: "Train Hacking", b: "Ransomware", c: "Terrorism", zed: "Train Hacking" },
     }),
   );
@@ -122,4 +124,45 @@ test("the gang worker: recruits and tasks done, read into the medium snapshot; w
   fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
   await fresh.game.run(12_000);
   expect(fresh.medium()?.gang).toBeNull();
+});
+
+test("the gang worker's ascensions (G2): made while the order's points stand, once; one the game can't, a problem", async () => {
+  const fresh = await freshStart({ withDesiredState: false, fixture: BN2, beforeAgent: joinNiteSec });
+  const state = (gang: GangState): DesiredState => ({ hackLoop: HACK_LOOP_OFF, intents: [], gang });
+  expect(await triedOnce(fresh, createGang("NiteSec"))).toMatchObject({ done: true });
+  // Three recruits: two trained 3 minutes (1,850 hacking experience, past the 1,000 an ascension leaves out), one
+  // left unassigned (none).
+  const tasks = { a: "Train Hacking", b: "Train Hacking", c: "Unassigned" };
+  fresh.brain.channel.setDesiredState(state({ recruit: ["a", "b", "c"], ascend: [], tasks }));
+  await fresh.game.run(3 * 60_000);
+  const before = (fresh.medium() as MediumSnapshotData).gang?.members ?? [];
+  expect(before.map((member) => [member.name, member.hack_exp > 1_000, member.hack_asc_points])).toEqual([
+    ["a", true, 0],
+    ["b", true, 0],
+    ["c", false, 0],
+  ]);
+  // a's order stands (its points 0, as read); b's doesn't (as if it had ascended since the brain read it); c can't.
+  const ascend = [
+    { name: "a", pointsBefore: 0 },
+    { name: "b", pointsBefore: 5 },
+    { name: "c", pointsBefore: 0 },
+  ];
+  fresh.brain.channel.setDesiredState(state({ recruit: [], ascend, tasks }));
+  await fresh.game.runUntil(
+    () => ((fresh.medium() as MediumSnapshotData).gang?.members[0]?.hack_asc_points ?? 0) > 0,
+    30_000,
+  );
+  const reading = (fresh.medium() as MediumSnapshotData).gang;
+  const [a, b, c] = reading?.members ?? [];
+  const aBefore = before[0] as NonNullable<typeof a>;
+  // a: its points the experience over 1,000 (more by the seconds it trained since), its experience reset.
+  expect(a?.hack_asc_points).toBeGreaterThanOrEqual(aBefore.hack_exp - 1_000);
+  expect(a?.hack_exp).toBeLessThan(aBefore.hack_exp);
+  expect(b?.hack_asc_points).toBe(0);
+  expect(c?.hack_asc_points).toBe(0);
+  expect(reading?.problems).toEqual(["the game didn't ascend c"]);
+  // The worker's next runs, on the same state: a's points aren't the order's now, so it isn't ascended again.
+  const points = a?.hack_asc_points;
+  await fresh.game.run(25_000);
+  expect((fresh.medium() as MediumSnapshotData).gang?.members[0]?.hack_asc_points).toBe(points);
 });

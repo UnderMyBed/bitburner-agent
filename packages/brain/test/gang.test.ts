@@ -1,6 +1,6 @@
-// The gang (#325, G1 of #324): the brain's rule on the snapshots, the gang faction left out of what the other rules
-// see, the gate's guard on forming, and the run report's section with each of its failures. The rule against the real
-// engine is gang-simulation.test.ts's; the formulas against it, gang-parity.test.ts's.
+// The gang (#325, G1 of #324; ascension #328, G2): the brain's rule on the snapshots, the gang faction left out of
+// what the other rules see, the gate's guard on forming, and the run report's section with each of its failures. The
+// rule against the real engine is gang-simulation.test.ts's; the formulas against it, gang-parity.test.ts's.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +15,7 @@ import {
   type GangInformation,
   type GangMemberReading,
   type GangReading,
+  gangMemberAscended,
   type Intent,
   intentId,
   type MediumSnapshotData,
@@ -33,6 +34,7 @@ import {
   withoutGangFaction,
 } from "../src/gang.ts";
 import {
+  GANG_ASCEND_WITHIN_MS,
   GANG_FORM_WITHIN_MS,
   GANG_RECRUIT_WITHIN_MS,
   GANG_UNREAD_WITHIN_MS,
@@ -63,6 +65,7 @@ function member(name: string, hack = 1, task = "Unassigned"): GangMemberReading 
     reading[`${stat}_exp`] = expFor(level);
     reading[`${stat}_mult`] = 1;
     reading[`${stat}_asc_mult`] = 1;
+    reading[`${stat}_asc_points`] = 0;
   }
   return reading as unknown as GangMemberReading;
 }
@@ -109,7 +112,7 @@ describe("the rule", () => {
     const rule = new GangRule();
     expect(rule.update({ mediumData: withGang(undefined), slowData: slowData(2) })).toEqual({
       intent: null,
-      gang: { recruit: [], tasks: {} },
+      gang: { recruit: [], ascend: [], tasks: {} },
     });
     expect(rule.view().stage).toBe("waiting");
     const unread = withGang({ gang: null, members: [], problems: ["the gang state isn't one to do"] });
@@ -123,7 +126,7 @@ describe("the rule", () => {
     expect(rule.view().stage).toBe("noFaction");
     expect(rule.update({ mediumData: withGang(NONE), slowData: slowData(2) })).toEqual({
       intent: FORM_NITESEC,
-      gang: { recruit: [], tasks: {} },
+      gang: { recruit: [], ascend: [], tasks: {} },
     });
     expect(rule.view().line).toBe("Gang: forming with NiteSec");
     // A combat faction joined too: formed there (core's gangFactionToForm).
@@ -138,17 +141,22 @@ describe("the rule", () => {
     expect(decision.intent).toBeNull();
     expect(decision.gang).toEqual({
       recruit: ["member-01", "member-02", "member-03"],
+      ascend: [],
       tasks: { "member-01": "Train Hacking", "member-02": "Train Hacking", "member-03": "Train Hacking" },
     });
     expect(rule.gangFaction()).toBe("NiteSec");
     const grown = formed([member("member-01", 300), member("member-02", 40), member("member-03", 120)], {
       respect: 1_000,
       wantedPenalty: 0.999,
+      moneyGainRate: 10,
     });
+    // member-01 ascends (G2): its levels are all experience, never ascended; it trains after. Its points as read go
+    // with the order, the worker's guard.
     expect(rule.update({ mediumData: withGang(grown), slowData: slowData(2) }).gang).toEqual({
       recruit: ["member-04", "member-05", "member-06", "member-07"],
+      ascend: [{ name: "member-01", pointsBefore: 0 }],
       tasks: {
-        "member-01": "Plant Virus",
+        "member-01": "Train Hacking",
         "member-02": "Train Hacking",
         "member-03": "Phishing",
         "member-04": "Train Hacking",
@@ -157,9 +165,10 @@ describe("the rule", () => {
         "member-07": "Train Hacking",
       },
     });
-    expect(rule.view().line).toMatch(
-      /^Gang: NiteSec's, 3 members of 12 \(1 on Plant Virus, 1 training, 1 on Phishing\);/,
-    );
+    expect(rule.view().line).toMatch(/^Gang: NiteSec's, 3 members of 12 \(2 training, 1 on Phishing\);/);
+    expect(rule.view().line).toMatch(/; ascending member-01 \(multipliers up to ×\d+\.\d\d, 0 respect lost\)$/);
+    // The money a second, 10 a 200 ms cycle, in dollars (#328's review: the "$" was lost once).
+    expect(rule.view().line).toContain("; $50/s; ascending member-01");
   });
 
   test("the hysteresis across updates: the rule's own justice members kept in the band, an owner's moved back", () => {
@@ -240,6 +249,39 @@ describe("the rule", () => {
       kind: "unread",
     });
     expect(gangSnapshotOf({ player: {} })).toEqual({ kind: "absent" });
+    // A member with no ascension points (#328, G2): an Agent from before G2, whose reading the rule can't ascend from.
+    const { hack_asc_points: _, ...noPoints } = member("member-01");
+    expect(gangSnapshotOf(withGang({ ...formed([]), members: [noPoints] } as never))).toMatchObject({ kind: "unread" });
+  });
+});
+
+describe("ascension (G2)", () => {
+  test("the order carries the member's points as read, and is logged; with none, the line says when the next is", () => {
+    const logs: string[] = [];
+    const rule = new GangRule((line) => logs.push(line));
+    // member-01 ascended before (5,000 points), with all of its experience since to gain from.
+    const before = {
+      ...member("member-01", 300, "Plant Virus"),
+      hack_asc_points: 5_000,
+      hack_asc_mult: Math.sqrt(2.5),
+    };
+    const three = [before, member("member-02"), member("member-03")];
+    const decision = rule.update({ mediumData: withGang(formed(three, { respect: 4 })), slowData: slowData(2) });
+    expect(decision.gang?.ascend).toEqual([{ name: "member-01", pointsBefore: 5_000 }]);
+    expect(decision.gang?.tasks["member-01"]).toBe("Train Hacking");
+    expect(logs.at(-1)).toMatch(/; ascending member-01 \(multipliers up to ×\d+\.\d\d, 0 respect lost\)$/);
+    // Ascended: none can now (its experience reset, the others' under 1,000), and none in a day's work.
+    const after = { ...before, ...gangMemberAscended(before) };
+    const none = rule.update({
+      mediumData: withGang(formed([after, ...three.slice(1)], { respect: 4 })),
+      slowData: slowData(2),
+    });
+    expect(none.gang?.ascend).toEqual([]);
+    expect(rule.view().line).toMatch(/; no ascension due within a day$/);
+    // Trained to hacking 81, about 10 minutes from level 1: a few minutes' work on, it would.
+    const nearly = [member("member-01", 81, "Ransomware"), ...three.slice(1)];
+    rule.update({ mediumData: withGang(formed(nearly, { respect: 4 })), slowData: slowData(2) });
+    expect(rule.view().line).toMatch(/; next ascension: member-01's, in about \d+ min$/);
   });
 });
 
@@ -307,7 +349,7 @@ describe("the run report's section", () => {
 
   test("outside BN2: no gang played, nothing judged", () => {
     expect(fold([withGang(NONE)], 1)).toEqual({
-      text: "7. The gang (#325; played in BN2 only for now)\n  not in BN2 in the window: no gang played",
+      text: "7. The gang (#325, ascension G2; played in BN2 only for now)\n  not in BN2 in the window: no gang played",
       failures: [],
     });
   });
@@ -388,6 +430,44 @@ describe("the run report's section", () => {
     expect(failures[0]).toMatch(
       /^the wanted penalty over the rule's bound, off course, for 23 min 10 s, from .* \(37\.5% over 33\.3%, wanted 4, 0 of 3 on justice, off course\)$/,
     );
+  });
+
+  test("ascensions (G2) by hour, each with its gain and the respect it had earned; one the rule makes undone for 1 min fails", () => {
+    // member-01 never ascended, its levels all experience: the rule ascends it (respect 4: no recruit due).
+    const ready = { ...member("member-01", 300, "Plant Virus"), earnedRespect: 12 };
+    const others = [member("member-02"), member("member-03")];
+    const due = withGang(formed([ready, ...others], { respect: 4 }));
+    expect(fold(repeat(due, steps(GANG_ASCEND_WITHIN_MS) - 1)).failures).toEqual([]);
+    const { failures } = fold(repeat(due, steps(GANG_ASCEND_WITHIN_MS)));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(
+      /^an ascension the rule makes not made for 1 min, from 1970-01-01T00:00:00\.000Z to 1970-01-01T00:01:00\.000Z \(member-01's, multipliers up to ×\d+\.\d\d, a gain of [\d,]+ over a cost of 12 in /,
+    );
+    // Made on the third reading: none fails, and the hour's line lists it, its gain the multiplier's rise.
+    const ascended = { ...ready, ...gangMemberAscended(ready) };
+    const made = withGang(formed([ascended, ...others], { respect: 1 }));
+    const { text, failures: none } = fold([due, due, ...repeat(made, steps(GANG_ASCEND_WITHIN_MS) * 2)]);
+    expect(none).toEqual([]);
+    const gain = ascended.hack_asc_mult.toFixed(2);
+    expect(text).toContain(`; 1 ascension (member-01 ×${gain}, 12 respect)`);
+    expect(fold(repeat(made, 3)).text).toContain("; no ascensions");
+    // Two due, one ascension a reading's run: each ascension starts the wait again, so two made 30 s apart pass.
+    const second = { ...ready, name: "member-02" };
+    const both = withGang(formed([ready, second, others[1] as GangMemberReading], { respect: 4 }));
+    const firstMade = withGang(formed([ascended, second, others[1] as GangMemberReading], { respect: 1 }));
+    const secondMade = withGang(
+      formed([ascended, { ...second, ...gangMemberAscended(second) }, others[1] as GangMemberReading], { respect: 1 }),
+    );
+    const paced = fold([...repeat(both, 3), ...repeat(firstMade, 4), ...repeat(secondMade, 3)]);
+    expect(paced.failures).toEqual([]);
+    expect(paced.text).toContain("; 2 ascensions (member-01 ×");
+  });
+
+  test("an owner's member named past what the protocol takes is never an ascension due (#328's review)", () => {
+    const longName = { ...member("x".repeat(65), 300, "Plant Virus"), earnedRespect: 0 };
+    const reading = withGang(formed([longName, member("member-02"), member("member-03")], { respect: 4 }));
+    const { failures } = fold(repeat(reading, steps(GANG_ASCEND_WITHIN_MS) * 2));
+    expect(failures).toEqual([]);
   });
 
   test("the gang unread in BN2 for 5 min fails: no reading, or the worker's problem", () => {
@@ -516,7 +596,7 @@ describe("the controller (#325)", () => {
     const { controller, send, last, lines } = connected();
     send("slow", niteSecSlow(2));
     send("medium", niteSecMedium(NONE));
-    expect(last()?.gang).toEqual({ recruit: [], tasks: {} });
+    expect(last()?.gang).toEqual({ recruit: [], ascend: [], tasks: {} });
     expect(controller.intentsView()).toEqual([
       { id: FORM_NITESEC.id, source: "gang", outcome: null, waitingFor: expect.any(String) },
     ]);

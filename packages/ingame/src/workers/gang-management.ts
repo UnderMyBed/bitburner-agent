@@ -3,21 +3,27 @@
 // Gang.ts:20-23`). With no gang formed, it reads that there's none.
 // - The recruits first, in order, each name not a member yet, while the game takes them (`Gang.ts:336-354`): a refusal
 //   is a problem, and none after it is tried (the respect only lets the next in after this one).
+// - Then the ascensions (#328, G2), each member named while its ascension points are still the brain's reading
+//   (core's `gangAscensionOrderStands`): the worker runs again on the same state 10 s later, and must not ascend it
+//   twice. One the game refuses (`NetscriptFunctions/Gang.ts:284-290`: nothing when it can't ascend) is a problem.
 // - Then the tasks, each member named, every time: setting a member's task again changes nothing in the game
 //   (`GangMember.ts:91-98`), and the owner may have moved it. A name that isn't a member is skipped; a task the
 //   gang's kind hasn't, or one the game refuses, is a problem, and that member's task is left as it was.
 // - Then the reading: the gang's information, and each member's, in the game's order.
-// RAM (`Netscript/RamCostGenerator.ts:271-298`): `gang.getGangInformation`, `gang.getMemberInformation`,
-// `gang.recruitMember` and `gang.setMemberTask` 2 GB each, `gang.getMemberNames` 1 GB; `gang.inGang`,
-// `gang.getTaskNames` and `gang.getBonusTime` nothing. Nothing here may be named like an NS function (packages/ingame/README.md, "RAM"): the
-// gang information's recruit threshold isn't read, as its property is named like one (1 GB); the brain computes it
-// (core's `gangRecruitsAllowed`).
+// RAM (`Netscript/RamCostGenerator.ts:271-298`): `gang.ascendMember` 4 GB, `gang.getGangInformation`,
+// `gang.getMemberInformation`, `gang.recruitMember` and `gang.setMemberTask` 2 GB each, `gang.getMemberNames` 1 GB;
+// `gang.inGang`, `gang.getTaskNames` and `gang.getBonusTime` nothing. Nothing here may be named like an NS function
+// (packages/ingame/README.md, "RAM"): the gang information's recruit threshold isn't read, as its property is named
+// like one (1 GB); the brain computes it (core's `gangRecruitsAllowed`). The game's ascension result (2 GB) isn't
+// asked for either: core computes it from the points read (`gangAscensionResult`), checked in the parity suite.
 import {
   GANG_STATS,
   type GangInformation,
   type GangMemberReading,
   type GangReading,
   type GangState,
+  gangAscensionOrderStands,
+  gangAscensionPointsOf,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 
@@ -33,6 +39,12 @@ export function gangManagement(ns: NS, state: GangState): GangReading {
       break;
     }
     memberNames.add(name);
+  }
+  for (const order of state.ascend) {
+    if (!memberNames.has(order.name)) continue;
+    const points = gangAscensionPointsOf(ns.gang.getMemberInformation(order.name));
+    if (!gangAscensionOrderStands(order, points)) continue;
+    if (ns.gang.ascendMember(order.name) === undefined) problems.push(`the game didn't ascend ${order.name}`);
   }
   // The game answers true for a task this gang's kind hasn't, having left the member Unassigned
   // (`NetscriptFunctions/Gang.ts:200-207`): such a task is refused here, before it's set.
@@ -67,7 +79,9 @@ export function gangManagement(ns: NS, state: GangState): GangReading {
       wantedLevelGain: figures.wantedLevelGain,
     };
     for (const stat of GANG_STATS) {
-      for (const key of [stat, `${stat}_exp`, `${stat}_mult`, `${stat}_asc_mult`]) reading[key] = figures[key];
+      for (const key of [stat, `${stat}_exp`, `${stat}_mult`, `${stat}_asc_mult`, `${stat}_asc_points`]) {
+        reading[key] = figures[key];
+      }
     }
     return reading as unknown as GangMemberReading;
   });
