@@ -36,6 +36,20 @@ export const GANG_CYCLE_MS = 200;
  */
 export const GANG_JUSTICE_DECAY_PER_PROCESS = 0.001;
 export const GANG_CYCLES_PER_PROCESS = 10;
+/**
+ * The cycles a process takes in bonus time, the game's stored cycles (`Constants.ts:30-31`, `Gang.ts:100-104`): 25, with
+ * the justice decay still once a process (`Gang.ts:161`), so 2.5 times slower a cycle.
+ */
+export const GANG_BONUS_CYCLES_PER_PROCESS = 25;
+
+/**
+ * Whether the gang is in bonus time, from `ns.gang.getBonusTime()` (its stored cycles × 200 ms,
+ * `NetscriptFunctions/Gang.ts:340-343`): in normal time it stores under 10 cycles between processes (`Gang.ts:99-101`),
+ * under 2 s; more is bonus time, processed 25 cycles a call.
+ */
+export function gangInBonusTime(bonusTimeMs: number | undefined): boolean {
+  return (bonusTimeMs ?? 0) > GANG_CYCLES_PER_PROCESS * GANG_CYCLE_MS;
+}
 
 /** The six stats, by the game's short names (`GangMember.ts:35-40`). */
 export const GANG_STATS = ["hack", "str", "def", "dex", "agi", "cha"] as const;
@@ -551,6 +565,11 @@ export interface GangInformation extends Pick<GangFigures, "respect" | "wantedLe
   moneyGainRate: number;
   wantedLevelGainRate: number;
   power: number;
+  /**
+   * `ns.gang.getBonusTime()` (#325's review): the stored cycles' time, ms; over 2 s, bonus time, the gang processing 25
+   * cycles a call (`gangInBonusTime`, `GANG_BONUS_CYCLES_PER_PROCESS`). Absent from an older Agent.
+   */
+  bonusTimeMs?: number;
 }
 
 /** A member as `ns.gang.getMemberInformation` gives it, its task's rates a cycle too (`NetscriptFunctions/Gang.ts`). */

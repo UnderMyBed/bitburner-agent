@@ -87,7 +87,7 @@ The test prints each bundle's RAM against its budget. What each script calls tha
 | `install-augmentations.js` | nothing beyond the base; the page costs nothing (#167) | 1.6 GB (1.6) |
 | `close-game.js` | nothing beyond the base; the page costs nothing (#303) | 1.6 GB (1.6) |
 | `create-gang.js` | `gang.createGang` (1 GB), `gang.getGangInformation` (2 GB); `gang.inGang` costs nothing; no page (#325) | 4.6 GB (4.6) |
-| `gang.js` | `gang.getGangInformation`, `gang.getMemberInformation`, `gang.recruitMember`, `gang.setMemberTask` (2 GB each), `gang.getMemberNames` (1 GB); `gang.inGang` and `gang.getTaskNames` cost nothing; no page (#325). Only where a gang can be formed, BN2 in the campaign, which has SF1.3's 32 GB home: left out of the fresh save's 8 GB check, and checked against BN2's home instead | 10.6 GB (10.6) |
+| `gang.js` | `gang.getGangInformation`, `gang.getMemberInformation`, `gang.recruitMember`, `gang.setMemberTask` (2 GB each), `gang.getMemberNames` (1 GB); `gang.inGang`, `gang.getTaskNames` and `gang.getBonusTime` cost nothing; no page (#325). Only where a gang can be formed, BN2 in the campaign, which has SF1.3's 32 GB home: left out of the fresh save's 8 GB check, and checked against BN2's home instead | 10.6 GB (10.6) |
 | `destroy-bitnode.js` | `getServer` (2 GB), `scan` (0.2 GB), `serverExists`, `getServerRequiredHackingLevel` (0.1 GB each), `hasRootAccess`, `getHackingLevel`, `getHackTime` (0.05 GB each); the page costs nothing (#177) | 4.15 GB (4.15) |
 | `singularity-travel.js` | `getPlayer` (0.5 GB), `singularity.travelToCity` (2 GB at SF4.3 or in BN4) | 4.1 GB (4.1) |
 | `singularity-buy-tor.js` | `hasTorRouter` (0.05 GB), `singularity.purchaseTor` (2 GB) | 3.65 GB (3.65) |

@@ -9,12 +9,14 @@
 //   rule's own test for more members on justice (core's `planGang`), a member off justice and the wanted level, with
 //   the members' tasks now, not back at the bound within that time (`gangWantedRecovers`). With every member on
 //   justice it's all the game allows, however long the decay takes;
+// - the outcome, whatever that forecast: over the bound with a member off justice for `GANG_WANTED_OUTCOME_MS`;
 // - the gang unread (no reading, or the worker's problem) in BN2 for over `GANG_UNREAD_WITHIN_MS`.
 import {
   GANG_CYCLE_MS,
   GANG_FACTIONS,
   GANG_WANTED_RECOVERY_MS,
   type GangPlan,
+  gangInBonusTime,
   gangLostShare,
   gangLostShareBound,
   gangRecruitsAllowed,
@@ -43,6 +45,12 @@ export const GANG_RECRUIT_WITHIN_MS = 60_000;
  * on a justice task's time to halve the wanted level by the game's decay alone (`Gang.ts:161`), about 23 min.
  */
 export const GANG_WANTED_OVER_BOUND_MS = GANG_WANTED_RECOVERY_MS;
+/**
+ * How long the wanted penalty may stay over the rule's bound with a member off justice, whatever the rule's forecast
+ * (#325's review): the recovery time, half again for the forecast's error (the gains move as the members' levels do).
+ * The outcome check: a forecast wrong in a way the rule can't see (bonus time's slower decay, say) shows here.
+ */
+export const GANG_WANTED_OUTCOME_MS = 1.5 * GANG_WANTED_RECOVERY_MS;
 /** How long the gang may go unread in BN2: 5 minutes, 30 of the worker's runs. */
 export const GANG_UNREAD_WITHIN_MS = 5 * 60_000;
 
@@ -103,6 +111,7 @@ export class GangFold {
   readonly #notFormed = new Stretches();
   readonly #recruitWaiting = new Stretches();
   readonly #overBound = new Stretches();
+  readonly #overBoundOffJustice = new Stretches();
   readonly #unread = new Stretches();
 
   /** A slow snapshot: the BitNode from then on. */
@@ -124,7 +133,13 @@ export class GangFold {
   /** A medium snapshot (a whole one: a thinned one says nothing of the gang). */
   addMedium(atMs: number, data: MediumSnapshotData): void {
     if (this.#bitNodeAt(atMs) !== GANG_BITNODE) {
-      for (const stretches of [this.#notFormed, this.#recruitWaiting, this.#overBound, this.#unread]) {
+      for (const stretches of [
+        this.#notFormed,
+        this.#recruitWaiting,
+        this.#overBound,
+        this.#overBoundOffJustice,
+        this.#unread,
+      ]) {
         stretches.add(atMs, null);
       }
       return;
@@ -147,6 +162,7 @@ export class GangFold {
     if (snapshot.kind !== "gang") {
       this.#recruitWaiting.add(atMs, null);
       this.#overBound.add(atMs, null);
+      this.#overBoundOffJustice.add(atMs, null);
       return;
     }
     const { gang, members, problems } = snapshot;
@@ -168,9 +184,19 @@ export class GangFold {
     const offJustice = tasks.filter((task) => !isGangJusticeTask(task)).length;
     this.#overBound.add(
       atMs,
-      lostShare > bound && offJustice > 0 && !gangWantedRecovers(gang, members, tasks)
+      lostShare > bound &&
+        offJustice > 0 &&
+        !gangWantedRecovers(gang, members, tasks, gangInBonusTime(gang.bonusTimeMs))
         ? `${percent(lostShare)} over ${percent(bound)}, wanted ${Math.round(gang.wantedLevel)}, ` +
             `${members.length - offJustice} of ${members.length} on justice, off course`
+        : null,
+    );
+    // The outcome, whatever the forecast: over the bound with a member off justice.
+    this.#overBoundOffJustice.add(
+      atMs,
+      lostShare > bound && offJustice > 0
+        ? `${percent(lostShare)} over ${percent(bound)}, wanted ${Math.round(gang.wantedLevel)}, ` +
+            `${members.length - offJustice} of ${members.length} on justice`
         : null,
     );
     const plan = planGang({
@@ -244,6 +270,11 @@ export class GangFold {
       [this.#notFormed, GANG_FORM_WITHIN_MS, "no gang formed with a gang faction joined"],
       [this.#recruitWaiting, GANG_RECRUIT_WITHIN_MS, "a recruit the respect allows not made"],
       [this.#overBound, GANG_WANTED_OVER_BOUND_MS, "the wanted penalty over the rule's bound, off course,"],
+      [
+        this.#overBoundOffJustice,
+        GANG_WANTED_OUTCOME_MS,
+        "the wanted penalty over the rule's bound with a member off justice",
+      ],
       [this.#unread, GANG_UNREAD_WITHIN_MS, "the gang unread in BN2"],
     ] as const;
     for (const [stretches, withinMs, what] of judged) {

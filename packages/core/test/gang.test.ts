@@ -329,6 +329,42 @@ describe("the rule", () => {
     expect(gangWantedRecovers(gangOf(987), idle, tasks)).toBe(false);
   });
 
+  test("in bonus time the decay is 2.5 times slower a cycle, so more go to justice (#325's review)", () => {
+    // 25 cycles a process (`Gang.ts:100-104`), the decay still once a process (`Gang.ts:161`): k = 0.00004 × J.
+    const idle = ["a", "b", "c"].map((name) => member(name));
+    const tasks = ["Ethical Hacking", "Unassigned", "Unassigned"];
+    const gang = { respect: 1_007, wantedLevel: 1_000, territory: 1 / 7 };
+    const cycles = GANG_WANTED_RECOVERY_MS / 200;
+    expect(gangWantedAfter(gang, idle, tasks, cycles, true)).toBeCloseTo(1_000 * Math.exp(-0.00004 * cycles), 9);
+    expect(gangWantedRecovers(gang, idle, tasks)).toBe(true);
+    expect(gangWantedRecovers(gang, idle, tasks, true)).toBe(false);
+    // The plan: two to justice in normal time (the test above), all three in bonus time.
+    const three = [member("member-01", { hack: 300 }), member("member-02", { hack: 200 }), member("member-03")];
+    const over = { respect: 1_000, wantedLevel: 800, territory: 1 / 7 };
+    const roles = (bonusTime: boolean) =>
+      planGang({ ...inputs(three, over), bonusTime }).assignments.map((each) => each.role);
+    expect(roles(false)).toEqual(["working", "justice", "justice"]);
+    expect(roles(true)).toEqual(["justice", "justice", "justice"]);
+  });
+
+  test("over the bound, the rule's own justice members stay, though fewer would be on course now: it only shortens", () => {
+    const at34 = { respect: 1_000, wantedLevel: (1_000 * 0.34 + 1) / (1 - 0.34), territory: 1 / 7 };
+    const onJustice = [300, 250, 200].map((hack, index) => ({
+      ...member(`member-0${index + 1}`, { hack }),
+      task: "Ethical Hacking",
+    }));
+    const placed = ["member-01", "member-02", "member-03"];
+    expect(
+      planGang({ ...inputs(onJustice, at34), placedOnJustice: placed }).assignments.map((each) => each.role),
+    ).toEqual(["justice", "justice", "justice"]);
+    // From scratch, two are enough.
+    expect(planGang(inputs(onJustice, at34)).assignments.map((each) => each.role)).toEqual([
+      "working",
+      "justice",
+      "justice",
+    ]);
+  });
+
   test("hysteresis: the rule's own justice members kept until the share is under half the bound, none flipping", () => {
     // Respect 1,000; the wanted level that makes each share, (W − 1) / (1,000 + W).
     const at = (share: number) => ({

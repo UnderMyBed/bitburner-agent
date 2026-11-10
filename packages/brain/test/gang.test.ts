@@ -25,11 +25,18 @@ import {
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { donationStatus } from "../src/augmentation-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
-import { GangFactionCarry, GangRule, gangSnapshotOf, withoutGangFaction } from "../src/gang.ts";
+import {
+  GANG_PLACED_ON_JUSTICE_SETTING,
+  GangFactionCarry,
+  GangRule,
+  gangSnapshotOf,
+  withoutGangFaction,
+} from "../src/gang.ts";
 import {
   GANG_FORM_WITHIN_MS,
   GANG_RECRUIT_WITHIN_MS,
   GANG_UNREAD_WITHIN_MS,
+  GANG_WANTED_OUTCOME_MS,
   GANG_WANTED_OVER_BOUND_MS,
   GangFold,
 } from "../src/gang-report.ts";
@@ -187,6 +194,43 @@ describe("the rule", () => {
       "member-02": "Plant Virus",
       "member-03": "DDoS Attacks",
     });
+    // Kept in the store: a restarted brain's rule keeps them where they are, with no extra swing.
+    const settings = new Map<string, string>();
+    const store = {
+      getSetting: (key: string) => settings.get(key) ?? null,
+      setSetting: (key: string, value: string) => settings.set(key, value),
+    } as unknown as TelemetryStore;
+    new GangRule(() => {}, store).update({
+      mediumData: reading(["Plant Virus", "Plant Virus", "DDoS Attacks"], 0.4),
+      slowData: slowData(2),
+    });
+    expect(JSON.parse(settings.get(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null")).toEqual(["member-02", "member-03"]);
+    expect(new GangRule(() => {}, store).update({ mediumData: band, slowData: slowData(2) }).gang?.tasks).toMatchObject(
+      {
+        "member-02": "Ethical Hacking",
+        "member-03": "Ethical Hacking",
+      },
+    );
+    // Over the bound, the rule's own stay on justice as the wanted level falls, so the course back only shortens.
+    const falling = reading(["Plant Virus", "Ethical Hacking", "Ethical Hacking"], 0.34);
+    expect(rule.update({ mediumData: falling, slowData: slowData(2) }).gang?.tasks).toMatchObject({
+      "member-02": "Ethical Hacking",
+      "member-03": "Ethical Hacking",
+    });
+  });
+
+  test("in bonus time (over 2 s stored), more members to justice: the game's decay is slower a cycle", () => {
+    const three = [member("member-01", 300), member("member-02", 200), member("member-03")];
+    const figures = { respect: 1_000, wantedLevel: 800, wantedPenalty: 1_000 / 1_800 };
+    const roles = (bonusTimeMs: number) => {
+      const decision = new GangRule().update({
+        mediumData: withGang(formed(three, { ...figures, bonusTimeMs })),
+        slowData: slowData(2),
+      });
+      return three.map((each) => decision.gang?.tasks[each.name]);
+    };
+    expect(roles(1_800)).toEqual(["Plant Virus", "Ethical Hacking", "Ethical Hacking"]);
+    expect(roles(60_000)).toEqual(["Ethical Hacking", "Ethical Hacking", "Ethical Hacking"]);
   });
 
   test("a reading whose figures aren't numbers is unread, never acted on", () => {
@@ -315,7 +359,25 @@ describe("the run report's section", () => {
     const onCourse = withGang(
       formed([{ ...member("member-01"), task: "Ethical Hacking" }, ...three.slice(1)], figures),
     );
-    expect(fold(repeat(onCourse, 2 * steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([]);
+    expect(fold(repeat(onCourse, steps(GANG_WANTED_OUTCOME_MS) - 1)).failures).toEqual([]);
+    // The outcome check (#325's review), whatever the forecast: held there, on course by the forecast but not back
+    // (a forecast wrong, as bonus time's slower decay makes it), over the bound with a member off justice, for the
+    // recovery time and half again: a failure.
+    expect(GANG_WANTED_OUTCOME_MS).toBeCloseTo(1.5 * GANG_WANTED_OVER_BOUND_MS, 9);
+    // At wanted 6 (50%; back at the bound at 3.5), one on justice is on course in normal time (6 halves to 3), not in
+    // bonus time: the decay 2.5 times slower a cycle leaves 4.5.
+    const oneOnJustice = [{ ...member("member-01"), task: "Ethical Hacking" }, ...three.slice(1)];
+    const higher = { respect: 4, wantedLevel: 6, wantedPenalty: 0.4 };
+    expect(fold(repeat(withGang(formed(oneOnJustice, higher)), steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([]);
+    const inBonusTime = withGang(formed(oneOnJustice, { ...higher, bonusTimeMs: 60_000 }));
+    expect(fold(repeat(inBonusTime, steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([
+      expect.stringMatching(/^the wanted penalty over the rule's bound, off course, for 23 min 10 s, /),
+    ]);
+    expect(fold(repeat(onCourse, steps(GANG_WANTED_OUTCOME_MS))).failures).toEqual([
+      expect.stringMatching(
+        /^the wanted penalty over the rule's bound with a member off justice for 34 min 40 s, from .* \(37\.5% over 33\.3%, wanted 4, 1 of 3 on justice\)$/,
+      ),
+    ]);
     // Far over with every member on justice: all the game allows, however long the decay takes.
     const allOnJustice = three.map((each) => ({ ...each, task: "Ethical Hacking" }));
     const far = withGang(formed(allOnJustice, { respect: 4, wantedLevel: 4_000, wantedPenalty: 0.001 }));
@@ -498,6 +560,20 @@ describe("the controller (#325)", () => {
     // Two members: one free recruit left, member-02.
     expect(Object.keys(last()?.gang?.tasks ?? {})).toEqual(["member-01", "member-02"]);
     expect(parseGangState(last()?.gang)).toMatchObject({ ok: true });
+  });
+
+  test("the rule's justice members are kept in the brain's store, for a restarted brain", () => {
+    const { send, last } = connected();
+    send("slow", niteSecSlow(2));
+    // Three recruits, all training, far over the bound: all to justice.
+    const three = ["member-01", "member-02", "member-03"].map((name) => member(name));
+    send("medium", niteSecMedium(formed(three, { respect: 1, wantedLevel: 20, wantedPenalty: 1 / 21 })));
+    expect(Object.values(last()?.gang?.tasks ?? {})).toEqual(Array(3).fill("Ethical Hacking"));
+    expect(JSON.parse(store.getSetting(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null")).toEqual([
+      "member-01",
+      "member-02",
+      "member-03",
+    ]);
   });
 
   test("outside BN2: no gang in the state, nothing logged of it", () => {

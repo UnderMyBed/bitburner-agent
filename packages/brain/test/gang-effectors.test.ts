@@ -111,6 +111,9 @@ test("the gang worker: recruits and tasks done, read into the medium snapshot; w
     "the game didn't recruit d (respect short, the name taken, or 12 members)",
     "Terrorism isn't a task of this gang, for c",
   ]);
+  // Normal time: the gang stores under 10 cycles between processes, so its bonus time is under 2 s (core's
+  // `gangInBonusTime`).
+  expect(reading?.gang?.bonusTimeMs).toBeLessThanOrEqual(2_000);
   // The member's figures, as the brain's rule reads them.
   expect(reading?.members[0]).toMatchObject({ hack: 1, hack_exp: 0, hack_mult: 1, hack_asc_mult: 1, earnedRespect: 0 });
   // The slow snapshot carries the gang's faction, for the reports' donors (#325's review).

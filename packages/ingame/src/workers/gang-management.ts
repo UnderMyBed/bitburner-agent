@@ -8,8 +8,8 @@
 //   gang's kind hasn't, or one the game refuses, is a problem, and that member's task is left as it was.
 // - Then the reading: the gang's information, and each member's, in the game's order.
 // RAM (`Netscript/RamCostGenerator.ts:271-298`): `gang.getGangInformation`, `gang.getMemberInformation`,
-// `gang.recruitMember` and `gang.setMemberTask` 2 GB each, `gang.getMemberNames` 1 GB; `gang.inGang` and
-// `gang.getTaskNames` nothing. Nothing here may be named like an NS function (packages/ingame/README.md, "RAM"): the
+// `gang.recruitMember` and `gang.setMemberTask` 2 GB each, `gang.getMemberNames` 1 GB; `gang.inGang`,
+// `gang.getTaskNames` and `gang.getBonusTime` nothing. Nothing here may be named like an NS function (packages/ingame/README.md, "RAM"): the
 // gang information's recruit threshold isn't read, as its property is named like one (1 GB); the brain computes it
 // (core's `gangRecruitsAllowed`).
 import {
@@ -54,6 +54,7 @@ export function gangManagement(ns: NS, state: GangState): GangReading {
     moneyGainRate: information.moneyGainRate,
     wantedLevelGainRate: information.wantedLevelGainRate,
     power: information.power,
+    bonusTimeMs: ns.gang.getBonusTime(),
   };
   const members = ns.gang.getMemberNames().map((name) => {
     const figures = ns.gang.getMemberInformation(name) as unknown as Record<string, number>;

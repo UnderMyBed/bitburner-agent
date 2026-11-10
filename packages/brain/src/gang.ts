@@ -25,6 +25,7 @@ import {
   type GangState,
   gangFactionOf,
   gangFactionToForm,
+  gangInBonusTime,
   gangSoftcapOf,
   gangTrainingTask,
   type Intent,
@@ -34,6 +35,22 @@ import {
   planGang,
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
+import type { TelemetryStore } from "./telemetry-store.ts";
+
+/** The store's setting with the members the gang rule put on justice (#325's re-review), as a JSON list of names. */
+export const GANG_PLACED_ON_JUSTICE_SETTING = "gang.placedOnJustice";
+
+/** The rule's justice members from the store; none with no store or setting, or one that isn't a list of names. */
+export function readPlacedOnJustice(store: TelemetryStore | null): string[] {
+  const value = store?.getSetting(GANG_PLACED_ON_JUSTICE_SETTING) ?? null;
+  if (value === null) return [];
+  try {
+    const names: unknown = JSON.parse(value);
+    return Array.isArray(names) && names.every((name) => typeof name === "string") ? names : [];
+  } catch {
+    return [];
+  }
+}
 
 /** The only BitNode the brain plays a gang in for now (#325). */
 export const GANG_BITNODE = 2;
@@ -186,12 +203,19 @@ export class GangRule {
   #faction: string | null = null;
   /** In BN2 with no reading yet that says whether there's a gang, or whose: every gang faction is held out. */
   #holding = false;
-  /** The members the rule put on justice in its last plan (#325's re-review): only those are kept there, the hysteresis. */
+  /**
+   * The members the rule put on justice in its last plan (#325's re-review): only those are kept there, the hysteresis.
+   * Kept in the store (`GANG_PLACED_ON_JUSTICE_SETTING`) too, so a restarted brain keeps them where they are.
+   */
   #placed: string[] = [];
+  readonly #store: TelemetryStore | null;
   #lastLogged = "";
 
-  constructor(log: (line: string) => void = () => {}) {
+  /** `store`: where the rule's justice members are kept across a restart; none (the tests), in memory only. */
+  constructor(log: (line: string) => void = () => {}, store: TelemetryStore | null = null) {
     this.#log = log;
+    this.#store = store;
+    this.#placed = readPlacedOnJustice(store);
   }
 
   /** Where the rule stands, for the dashboard. */
@@ -225,7 +249,7 @@ export class GangRule {
     if (bitNode !== GANG_BITNODE) {
       this.#faction = null;
       this.#holding = false;
-      this.#placed = [];
+      this.#setPlaced([]);
       const why = bitNode === null ? "no slow snapshot yet" : `gangs play in BN2 only for now; this is BN${bitNode}`;
       return this.#decide({ stage: "notManaged", line: `Gang: not managed (${why})`, plan: null }, null, null);
     }
@@ -240,7 +264,7 @@ export class GangRule {
     this.#holding = false;
     if (snapshot.kind === "none") {
       this.#faction = null;
-      this.#placed = [];
+      this.#setPlaced([]);
       const faction = gangFactionToForm(joinedFactionsOf(mediumData));
       if (faction === null) {
         const line = "Gang: none yet: no gang faction joined (NiteSec comes with avmnite-02h's backdoor)";
@@ -257,8 +281,9 @@ export class GangRule {
       members,
       softcap: gangSoftcapOf(GANG_BITNODE),
       placedOnJustice: this.#placed,
+      bonusTime: gangInBonusTime(gang.bonusTimeMs),
     });
-    this.#placed = plan.assignments.filter((each) => each.role === "justice").map((each) => each.name);
+    this.#setPlaced(plan.assignments.filter((each) => each.role === "justice").map((each) => each.name));
     const tasks: Record<string, string> = {};
     // A member the owner named past what the protocol takes is left as it is: the Agent would refuse the whole state.
     for (const { name, task } of plan.assignments) if (isProtocolName(name)) tasks[name] = task;
@@ -269,6 +294,13 @@ export class GangRule {
       ` (above its floor ${percent(plan.lostShare)}, bound ${percent(plan.bound)}); ` +
       `$${Math.round(gang.moneyGainRate * 5).toLocaleString("en-US")}/s`;
     return this.#decide({ stage: "managed", line, plan }, null, { recruit: plan.recruit, tasks });
+  }
+
+  /** The rule's justice members, written to the store on a change. */
+  #setPlaced(names: string[]): void {
+    if (names.join("\n") === this.#placed.join("\n")) return;
+    this.#placed = names;
+    this.#store?.setSetting(GANG_PLACED_ON_JUSTICE_SETTING, JSON.stringify(names));
   }
 
   #decide(view: GangView, intent: Intent | null, gang: GangState | null): GangDecision {

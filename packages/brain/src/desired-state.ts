@@ -444,7 +444,7 @@ export class DesiredStateController {
     this.#store = store;
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
-    this.#gang = new GangRule(log);
+    this.#gang = new GangRule(log, store);
     this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event) });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });

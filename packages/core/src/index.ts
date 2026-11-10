@@ -401,6 +401,7 @@ export {
 export { gameDrift, PINNED_GAME } from "./game-version.ts";
 export {
   CREATE_GANG_WORKER_NAME,
+  GANG_BONUS_CYCLES_PER_PROCESS,
   GANG_CYCLE_MS,
   GANG_CYCLES_PER_PROCESS,
   GANG_FACTIONS,
@@ -423,6 +424,7 @@ export {
   gangExpPerCycle,
   gangFactionOf,
   gangFactionToForm,
+  gangInBonusTime,
   gangMemberAfter,
   gangMoneyPerCycle,
   gangRecruitsAllowed,
