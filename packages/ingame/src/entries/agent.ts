@@ -301,9 +301,11 @@ export async function main(ns: NS): Promise<void> {
     socket = null;
     // One-shot actions need the brain: the next one sends its own. The hack loop and the work go on in safe mode, on
     // the last state, its clock stopping here; with none kept, they wait for the next brain. The gang waits for it too
-    // (#325): its members keep their tasks in the game.
+    // (#325): its members keep their tasks in the game. Territory warfare the brain ordered goes off at once (#332, G4):
+    // no brain weighs the clashes now, and the Agent may wait asleep for the next.
     intentRunner.forget();
     gangActivity.forget();
+    await gangActivity.convergeIfDue(monotonicMs() + SNAPSHOT_ROUND_MS);
 
     // A newer Agent replaced this one: this one is stale, and must not come back (it would replace the new one), nor
     // write the file over the newer one's.

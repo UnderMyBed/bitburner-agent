@@ -460,13 +460,14 @@ describe("the gang (#325)", () => {
     expect(gangOf(null)).toBeUndefined();
   });
 
-  test("carried with its recruits, ascensions (G2), tasks and purchases (G3), only its known fields", () => {
+  test("carried with its recruits, ascensions (G2), tasks, purchases (G3) and warfare (G4), only its known fields", () => {
     const gang = {
       recruit: ["member-04"],
       ascend: [{ name: "member-02", pointsBefore: 1234.5 }],
       tasks: { "member-01": "Train Hacking", "member-04": "Ransomware" },
       buy: [{ name: "member-01", equipment: "NUKE Rootkit", pointsBefore: 0 }],
       keepMoney: 5e8,
+      warfare: { engage: true, leastTerritoryPerUpdate: 2e-6 },
     };
     expect(
       gangOf({
@@ -474,11 +475,13 @@ describe("the gang (#325)", () => {
         extra: 1,
         ascend: [{ ...gang.ascend[0], extra: 2 }],
         buy: [{ ...gang.buy[0], extra: 3 }],
+        warfare: { ...gang.warfare, extra: 4 },
       }),
     ).toEqual(gang);
-    const none = { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null };
+    const none = { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null, warfare: null };
     expect(gangOf({ recruit: [], ascend: [], tasks: {} })).toEqual(none);
-    // A G1 brain's, with no ascensions: none; a G2 brain's, with no purchases: none, and none spent.
+    // A G1 brain's, with no ascensions: none; a G2 brain's, with no purchases: none, and none spent; a G3 brain's,
+    // with no warfare: none, the game's flag left alone.
     expect(gangOf({ recruit: [], tasks: {} })).toEqual(none);
   });
 
@@ -504,12 +507,21 @@ describe("the gang (#325)", () => {
     ["tasks that aren't an object", { recruit: [], tasks: [] }, "gang.tasks isn't an object"],
     ["a task the game hasn't", { recruit: [], tasks: { "member-01": "Hack the Gibson" } }, "a task the game hasn't"],
     ["a task named in another case", { recruit: [], tasks: { "member-01": "train hacking" } }, "the game hasn't"],
+    ["warfare that isn't an order", { recruit: [], tasks: {}, warfare: true }, "gang.warfare isn't"],
+    ["warfare with no break-even", { recruit: [], tasks: {}, warfare: { engage: true } }, "gang.warfare isn't"],
   ])("refused: %s", (_, gang, reason) => {
     expect(gangOf(gang)).toContain(reason);
   });
 
   test("while the brain holds, no gang is managed: none goes", () => {
-    const gang = { recruit: [], ascend: [], tasks: { "member-01": "Train Hacking" }, buy: [], keepMoney: null };
+    const gang = {
+      recruit: [],
+      ascend: [],
+      tasks: { "member-01": "Train Hacking" },
+      buy: [],
+      keepMoney: null,
+      warfare: null,
+    };
     const desired = { hackLoop: { enabled: false, target: null, hosts: [] }, intents: [], gang };
     expect(desiredStateWhileHolding(desired, null)).toEqual({ hackLoop: desired.hackLoop, intents: [] });
   });

@@ -1,6 +1,6 @@
-// The gang (#325, G1 of #324; ascension #328, G2; equipment #330, G3): the brain's rule on the snapshots, the gang
-// faction left out of what the other rules see, the gate's guard on forming, the equipment's hold, and the run report's
-// section with each of its failures.
+// The gang (#325, G1 of #324; ascension #328, G2; equipment #330, G3; territory warfare #332, G4): the brain's rule on
+// the snapshots, the gang faction left out of what the other rules see, the gate's guard on forming, the equipment's
+// hold, the warfare order and deaths, and the run report's section with each of its failures.
 // The rule against the real engine is gang-simulation.test.ts's; the formulas against it, gang-parity.test.ts's.
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -9,17 +9,23 @@ import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
   AUGMENTATION_NAMES,
+  BATCHER_RAM_BUDGET_GB,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
   GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
   GANG_FACTIONS,
   GANG_STATS,
+  GANG_TERRITORY_UPDATE_MS,
   type GangInformation,
   type GangMemberReading,
   type GangReading,
+  type GangWarfareFigures,
   gangMemberAscended,
   gangSkillLevel,
+  gangTerritoryPerUpdate,
+  gangWarfareBasis,
+  gangWarfareMeasure,
   homeRamUpgradePrice,
   type Intent,
   intentId,
@@ -35,12 +41,15 @@ import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "../src/cloud-servers.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import {
+  describeWarfare,
   GANG_PLACED_ON_JUSTICE_SETTING,
   GangFactionCarry,
   GangRule,
+  gangDeathsBetween,
   gangMoneyHoldOf,
   gangPurchasesSpokenFor,
   gangSnapshotOf,
+  gangWarfareFiguresOf,
   withoutGangFaction,
 } from "../src/gang.ts";
 import {
@@ -51,6 +60,7 @@ import {
   GANG_UNREAD_WITHIN_MS,
   GANG_WANTED_OUTCOME_MS,
   GANG_WANTED_OVER_BOUND_MS,
+  GANG_WARFARE_WITHIN_MS,
   GangFold,
 } from "../src/gang-report.ts";
 import { snapshotGuardFailure } from "../src/irreversible-gate.ts";
@@ -106,6 +116,35 @@ const formed = (members: GangMemberReading[], changes: Partial<GangInformation> 
   problems: [],
 });
 const NONE: GangReading = { gang: null, members: [], problems: [] };
+
+/** A fighter (G4): combat levels 5,000 (power 210, `gangMemberPower`), hacking 1, on `task`. */
+function fighter(name: string, task = "Territory Warfare"): GangMemberReading {
+  const reading = member(name, 1, task) as unknown as Record<string, number>;
+  for (const stat of ["str", "def", "dex", "agi"]) {
+    reading[stat] = 5_000;
+    reading[`${stat}_exp`] = expFor(5_000);
+  }
+  return reading as unknown as GangMemberReading;
+}
+/** The six other gangs (G4), each at `power` and 1/7 of the territory. */
+const others = (power: number) =>
+  GANG_FACTIONS.filter((faction) => faction !== "NiteSec").map((faction) => ({ faction, power, territory: 1 / 7 }));
+/** NiteSec with territory warfare read (G4): its power, the flag, and the others at `otherPower`. */
+const warring = (
+  members: GangMemberReading[],
+  power: number,
+  otherPower: number,
+  changes: Partial<GangInformation> = {},
+): GangReading =>
+  formed(members, {
+    respect: 1_000,
+    wantedPenalty: 0.999,
+    power,
+    territoryWarfareEngaged: false,
+    territoryClashChance: 0,
+    otherGangs: others(otherPower).map((other) => ({ ...other, winChance: power / (power + other.power) })),
+    ...changes,
+  });
 const FORM_NITESEC: Intent = {
   action: "createGang",
   args: { faction: "NiteSec" },
@@ -124,7 +163,7 @@ describe("the rule", () => {
     const rule = new GangRule();
     expect(rule.update({ mediumData: withGang(undefined), slowData: slowData(2) })).toEqual({
       intent: null,
-      gang: { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null },
+      gang: { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null, warfare: null },
     });
     expect(rule.view().stage).toBe("waiting");
     const unread = withGang({ gang: null, members: [], problems: ["the gang state isn't one to do"] });
@@ -138,7 +177,7 @@ describe("the rule", () => {
     expect(rule.view().stage).toBe("noFaction");
     expect(rule.update({ mediumData: withGang(NONE), slowData: slowData(2) })).toEqual({
       intent: FORM_NITESEC,
-      gang: { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null },
+      gang: { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null, warfare: null },
     });
     expect(rule.view().line).toBe("Gang: forming with NiteSec");
     // A combat faction joined too: formed there (core's gangFactionToForm).
@@ -157,6 +196,7 @@ describe("the rule", () => {
       tasks: { "member-01": "Train Hacking", "member-02": "Train Hacking", "member-03": "Train Hacking" },
       buy: [],
       keepMoney: null,
+      warfare: null,
     });
     expect(rule.gangFaction()).toBe("NiteSec");
     const grown = formed([member("member-01", 300), member("member-02", 40), member("member-03", 120)], {
@@ -180,9 +220,12 @@ describe("the rule", () => {
       },
       buy: [],
       keepMoney: null,
+      warfare: null,
     });
     expect(rule.view().line).toMatch(/^Gang: NiteSec's, 3 members of 12 \(2 training, 1 on Phishing\);/);
-    expect(rule.view().line).toMatch(/; ascending member-01 \(multipliers up to ×\d+\.\d\d, 0 respect lost\)$/);
+    expect(rule.view().line).toMatch(/; ascending member-01 \(multipliers up to ×\d+\.\d\d, 0 respect lost\); /);
+    // Territory warfare (G4): an older Agent's reading has no other gangs, so no order, the flag left alone.
+    expect(rule.view().line).toMatch(/; territory 14\.3%, power 1\.0; warfare not read \(an older Agent\)$/);
     // The money a second, 10 a 200 ms cycle, in dollars (#328's review: the "$" was lost once).
     expect(rule.view().line).toContain("; $50/s; ascending member-01");
   });
@@ -293,11 +336,11 @@ describe("ascension (G2)", () => {
       slowData: slowData(2),
     });
     expect(none.gang?.ascend).toEqual([]);
-    expect(rule.view().line).toMatch(/; no ascension due within a day$/);
+    expect(rule.view().line).toMatch(/; no ascension due within a day; territory /);
     // Trained to hacking 81, about 10 minutes from level 1: a few minutes' work on, it would.
     const nearly = [member("member-01", 81, "Ransomware"), ...three.slice(1)];
     rule.update({ mediumData: withGang(formed(nearly, { respect: 4 })), slowData: slowData(2) });
-    expect(rule.view().line).toMatch(/; next ascension: member-01's, in about \d+ min$/);
+    expect(rule.view().line).toMatch(/; next ascension: member-01's, in about \d+ min; territory /);
   });
 });
 
@@ -365,7 +408,7 @@ describe("the run report's section", () => {
 
   test("outside BN2: no gang played, nothing judged", () => {
     expect(fold([withGang(NONE)], 1)).toEqual({
-      text: "7. The gang (#325, ascension G2, equipment G3; played in BN2 only for now)\n  not in BN2 in the window: no gang played",
+      text: "7. The gang (#325, ascension G2, equipment G3, territory G4; played in BN2 only for now)\n  not in BN2 in the window: no gang played",
       failures: [],
     });
   });
@@ -641,7 +684,7 @@ describe("the controller (#325)", () => {
     const { controller, send, last, lines } = connected();
     send("slow", niteSecSlow(2));
     send("medium", niteSecMedium(NONE));
-    expect(last()?.gang).toEqual({ recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null });
+    expect(last()?.gang).toEqual({ recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null, warfare: null });
     expect(controller.intentsView()).toEqual([
       { id: FORM_NITESEC.id, source: "gang", outcome: null, waitingFor: expect.any(String) },
     ]);
@@ -754,6 +797,24 @@ describe("the controller (#325)", () => {
     expect(last()?.gang?.keepMoney).toBe(100e9 + 200_000);
   });
 
+  test("territory warfare (G4): the crew's tasks and the order sent in the desired state, engaged once stronger", () => {
+    const { send, last, lines } = connected();
+    send("slow", niteSecSlow(2));
+    const members = [member("member-01", 400), fighter("member-02"), fighter("member-03")];
+    send("medium", niteSecMedium(warring(members, 1, 1)));
+    // At equal powers the fighters build power, not yet engaged: the order says off.
+    expect(last()?.gang?.tasks).toMatchObject({ "member-02": "Territory Warfare", "member-03": "Territory Warfare" });
+    expect(last()?.gang?.warfare).toEqual({ engage: false, leastTerritoryPerUpdate: 0 });
+    expect(parseGangState(last()?.gang)).toMatchObject({ ok: true });
+    // Stronger: engaged, with the measure's break-even for the worker's check.
+    send("medium", niteSecMedium(warring(members, 50, 1)));
+    const order = last()?.gang?.warfare;
+    expect(order?.engage).toBe(true);
+    expect(order?.leastTerritoryPerUpdate).toBeGreaterThan(0);
+    expect(order?.leastTerritoryPerUpdate).toBeLessThan(gangTerritoryPerUpdate(50, 1 / 7, others(1)));
+    expect(lines.some((line) => /; territory warfare engaged$/.test(line))).toBe(true);
+  });
+
   test("outside BN2: no gang in the state, nothing logged of it", () => {
     const { send, last, lines } = connected();
     send("slow", niteSecSlow(1));
@@ -852,6 +913,10 @@ describe("equipment (G3)", () => {
       readFileSync(new URL("../../ingame/ram-budget.json", import.meta.url), "utf8"),
     ) as Record<string, number>;
     expect(budgets["gang.js"]).toBeLessThanOrEqual(SHARE_HOME_KEPT_GB);
+    // With the Agent and the batcher on home too, both within what share threads leave (G4's review): 32 − 3.0 − 3.85.
+    const room = SHARE_HOME_KEPT_GB - (budgets["agent.js"] as number) - BATCHER_RAM_BUDGET_GB;
+    expect(room).toBeCloseTo(25.15, 9);
+    expect(budgets["gang.js"]).toBeLessThanOrEqual(room);
     expect(budgets["gang.js"]).toBeGreaterThan(HOME_KEPT_FOR_THE_AGENT_GB);
   });
 
@@ -997,5 +1062,210 @@ describe("equipment (G3)", () => {
       1e8,
     ) as MediumSnapshotData;
     expect(fold([...repeat(waiting, 5), ...repeat(ascendedTwo, 3)]).failures).toEqual([]);
+  });
+});
+
+describe("territory warfare (G4)", () => {
+  const SLOW = slowData(2);
+  const update = (rule: GangRule, reading: GangReading) =>
+    rule.update({ mediumData: withGang(reading), slowData: SLOW });
+
+  test("the reading's warfare figures: absent from an older Agent, none; the flag, chance and others' numbers, or unread", () => {
+    expect(gangSnapshotOf(withGang(formed([]))).kind).toBe("gang");
+    expect(gangSnapshotOf(withGang(warring([], 1, 1))).kind).toBe("gang");
+    for (const bad of [
+      { territoryWarfareEngaged: "yes" as unknown as boolean },
+      { territoryClashChance: Number.NaN },
+      { otherGangs: [{ faction: "Tetrads", power: "big", territory: 0.1, winChance: 0.5 }] as never },
+      { otherGangs: "Tetrads" as never },
+    ]) {
+      expect(gangSnapshotOf(withGang(warring([], 1, 1, bad))), JSON.stringify(bad)).toMatchObject({
+        kind: "unread",
+        problem: "the gang's territory warfare figures aren't numbers",
+      });
+    }
+  });
+
+  test("the rule's figures from the reading: power, flag, chance, the others; none from an older Agent", () => {
+    const reading = warring([], 3, 1, { territoryWarfareEngaged: true, territoryClashChance: 0.5 });
+    expect(gangWarfareFiguresOf(reading.gang as GangInformation)).toEqual({
+      power: 3,
+      engaged: true,
+      clashChance: 0.5,
+      others: others(1),
+    });
+    expect(gangWarfareFiguresOf(NITESEC)).toBeUndefined();
+  });
+
+  test("the crew on Territory Warfare, the order and the dashboard's line: off while it builds, on once stronger", () => {
+    const rule = new GangRule();
+    const members = [member("member-01", 400), fighter("member-02"), fighter("member-03")];
+    const building = update(rule, warring(members, 1, 1));
+    expect(building.gang?.tasks).toMatchObject({
+      "member-02": "Territory Warfare",
+      "member-03": "Territory Warfare",
+    });
+    expect(building.gang?.warfare).toEqual({ engage: false, leastTerritoryPerUpdate: 0 });
+    expect(rule.view().line).toMatch(
+      /; territory 14\.3%, power 1\.0; warfare off: the clashes would gain no territory \(win chance 50%–50%\); 2 on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 0 deaths seen$/,
+    );
+    const strong = update(rule, warring(members, 50, 1));
+    const plan = rule.view().plan;
+    expect(strong.gang?.warfare).toEqual({
+      engage: true,
+      leastTerritoryPerUpdate: plan?.warfare?.measure.leastTerritoryPerUpdate,
+    });
+    // 2 × (50/51 × 0.0002 − 1/51 × 0.0001) an update, 180 an hour: 7.0% of the territory.
+    const hourly = gangTerritoryPerUpdate(50, 1 / 7, others(1)) * (3_600_000 / GANG_TERRITORY_UPDATE_MS);
+    expect(hourly).toBeCloseTo(0.0699, 4);
+    expect(rule.view().line).toMatch(
+      /; warfare on: 7\.0% territory an hour expected \(win chance 98%–98%\); 2 on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 0 deaths seen$/,
+    );
+    // An older Agent's reading: no order, the flag left alone.
+    expect(update(rule, formed(members)).gang?.warfare).toBeNull();
+  });
+
+  test("the line's other cases: off as the deaths would cost more; no gang left with territory", () => {
+    const measure = {
+      territoryPerUpdate: 1e-4,
+      territoryValue: 1,
+      deathsPerUpdate: 1,
+      deathCostPerUpdate: 1,
+      gainPerUpdate: 1e-4,
+      pays: false,
+      leastTerritoryPerUpdate: 1,
+      winChances: { least: 0.6, most: 0.7 },
+      tailCostPerUpdate: 0,
+      crewDeaths: [],
+      recruitDeath: { perUpdate: 0, cost: 0 },
+    };
+    expect(describeWarfare({ crew: ["a"], engage: false, measure, deaths: 3.25 }, NITESEC, 2)).toBe(
+      "territory 14.3%, power 1.0; warfare off: its deaths would cost more than the 1.8% territory an hour it'd gain " +
+        "is worth (win chance 60%–70%); 1 on Territory Warfare (about 3.3 deaths expected in a day engaged); 2 deaths seen",
+    );
+    const alone = { ...measure, territoryPerUpdate: 0, winChances: null };
+    expect(
+      describeWarfare({ crew: [], engage: false, measure: alone, deaths: 0 }, { ...NITESEC, territory: 1 }, 0),
+    ).toBe(
+      "territory 100.0%, power 1.0; warfare off: the clashes would gain no territory (no other gang has territory); none on " +
+        "Territory Warfare; 0 deaths seen",
+    );
+  });
+
+  test("deaths: a member on Territory Warfare gone between readings, logged and counted; one off it gone, not", () => {
+    const before = [
+      { name: "a", task: "Territory Warfare" },
+      { name: "b", task: "Train Hacking" },
+    ];
+    expect(gangDeathsBetween(before, [])).toEqual(["a"]);
+    expect(gangDeathsBetween(before, [{ name: "a" }])).toEqual([]);
+    const logs: string[] = [];
+    const rule = new GangRule((line) => logs.push(line));
+    const members = [member("member-01", 400), fighter("member-02"), fighter("member-03")];
+    update(rule, warring(members, 1, 1));
+    update(rule, warring([members[0] as GangMemberReading, members[2] as GangMemberReading], 1, 1));
+    expect(logs).toContain("gang: member-02 died in a clash, on Territory Warfare");
+    expect(rule.view().line).toMatch(/; 1 death seen$/);
+    // member-01 isn't on Territory Warfare: gone, it's no death.
+    update(rule, warring([members[2] as GangMemberReading], 1, 1));
+    expect(rule.view().line).toMatch(/; 1 death seen$/);
+    // A gang gone (none read, or another BitNode) and another formed: its members aren't deaths of the last one's.
+    const crew = (...names: string[]) => names.map((name) => fighter(name));
+    update(rule, warring(crew("member-03", "member-09"), 1, 1));
+    update(rule, NONE);
+    update(rule, warring(crew("member-10"), 1, 1));
+    expect(rule.view().line).toMatch(/; 1 death seen$/);
+    update(rule, warring(crew("member-10", "member-11"), 1, 1));
+    rule.update({ mediumData: withGang(NONE), slowData: slowData(1) });
+    update(rule, warring(crew("member-12"), 1, 1));
+    expect(rule.view().line).toMatch(/; 1 death seen$/);
+    expect(logs.filter((line) => line.includes("died"))).toEqual([
+      "gang: member-02 died in a clash, on Territory Warfare",
+    ]);
+    // Weaker: the clashes would lose territory.
+    update(rule, warring(members, 1, 50));
+    expect(rule.view().line).toMatch(/; warfare off: the clashes would lose territory \(win chance 2\.0%–2\.0%\); /);
+  });
+
+  /** A fold over a BN2 window: a slow snapshot, then a medium one every 10 s from `readings`. */
+  function fold(readings: GangReading[]) {
+    const gang = new GangFold();
+    gang.addSlow(0, SLOW);
+    readings.forEach((reading, index) => {
+      gang.addMedium(index * 10_000, withGang(reading));
+    });
+    const failures: string[] = [];
+    const lines = gang.section(failures, readings.length * 10_000);
+    // Territory warfare's alone: these readings leave recruits and an ascension undone too.
+    return { text: lines.join("\n"), failures: failures.filter((each) => each.startsWith("territory warfare")) };
+  }
+  const repeat = <Value>(value: Value, count: number) => Array.from({ length: count }, () => value);
+  const minute = Math.ceil(GANG_WARFARE_WITHIN_MS / 10_000) + 1;
+
+  test("the report: engaged while the measure says it loses, or off while it pays, for a minute fails; under, not", () => {
+    const crew = [member("member-01", 400), fighter("member-02")];
+    const losing = warring(crew, 1, 50, { territoryWarfareEngaged: true, territoryClashChance: 1 });
+    const failed = fold(repeat(losing, minute)).failures;
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatch(
+      /^territory warfare engaged while the rule's measure says it loses for 1 min, from .* \(the clashes expected to lose territory, 1 on Territory Warfare\)$/,
+    );
+    expect(fold(repeat(losing, minute - 1)).failures).toEqual([]);
+    // At equal powers the clashes gain none: engaged, it loses by the measure all the same.
+    const even = warring(crew, 1, 1, { territoryWarfareEngaged: true, territoryClashChance: 1 });
+    expect(fold(repeat(even, minute)).failures).toEqual([
+      expect.stringMatching(/ \(the clashes expected to gain no territory, 1 on Territory Warfare\)$/),
+    ]);
+    // Off while it pays: stronger, no crew, so no deaths.
+    const paying = warring([member("member-01", 400)], 50, 1);
+    expect(fold(repeat(paying, minute)).failures).toEqual([
+      expect.stringMatching(
+        /^territory warfare off while the rule's measure says it pays for 1 min, from .* \(the territory expected worth [\d,]+ an update against deaths costing 0, 0 on Territory Warfare\)$/,
+      ),
+    ]);
+    // The detail's deaths with the tail's (a fighter at defence 1, the gang's respect 1e8: deaths worth counting).
+    const exposedFighter = { ...fighter("member-02"), def: 1, def_exp: 0 } as GangMemberReading;
+    const exposed = (engaged: boolean) =>
+      warring([member("member-01", 400), exposedFighter], 50, 1, { respect: 1e8, territoryWarfareEngaged: engaged });
+    const reading = exposed(false);
+    const gang = reading.gang as GangInformation;
+    const inputs = {
+      gang: { respect: gang.respect, wantedLevel: gang.wantedLevel, territory: gang.territory },
+      isHacking: true,
+      members: reading.members,
+      softcap: 1,
+      warfare: gangWarfareFiguresOf(gang) as GangWarfareFigures,
+    };
+    const measure = gangWarfareMeasure(inputs, gangWarfareBasis(inputs, "respect"), ["member-02"]);
+    expect(measure.tailCostPerUpdate).toBeGreaterThan(1);
+    const counted = Math.round(measure.deathCostPerUpdate + measure.tailCostPerUpdate).toLocaleString("en-US");
+    const either = [true, false].flatMap((engaged) => fold(repeat(exposed(engaged), minute)).failures);
+    expect(either).toHaveLength(1);
+    expect(either[0]).toContain(`against deaths costing ${counted}, 1 on Territory Warfare)`);
+    // Each the right way: none; an older Agent's readings: never judged.
+    const engaged = { ...paying, gang: { ...(paying.gang as GangInformation), territoryWarfareEngaged: true } };
+    expect(fold(repeat(engaged, minute)).failures).toEqual([]);
+    expect(fold(repeat(warring(crew, 1, 50), minute)).failures).toEqual([]);
+    expect(fold(repeat(formed(crew, { territoryWarfareEngaged: true }), minute)).failures).toEqual([]);
+  });
+
+  test("the report by hour: territory and power, the time engaged, the deaths; the clashes' count not read", () => {
+    const crew = [member("member-01", 400), fighter("member-02"), fighter("member-03")];
+    const on = (territory: number, power: number, members = crew) =>
+      warring(members, power, 1, { territory, territoryWarfareEngaged: true, territoryClashChance: 1 });
+    const readings = [
+      warring(crew, 1, 1),
+      on(1 / 7, 40),
+      on(0.15, 45),
+      on(0.16, 50, [crew[0] as GangMemberReading, crew[2] as GangMemberReading]),
+    ];
+    const { text } = fold(readings);
+    expect(text).toMatch(
+      /; territory 14\.3% → 16\.0%, power 1\.0 → 50\.0; warfare engaged 30 s; 1 death \(member-02\)\n/,
+    );
+    expect(text).toContain(
+      "  clashes won and lost: not read, the game counts neither (the territory and power show what they came to)",
+    );
+    expect(fold([formed(crew), formed(crew)]).text).toMatch(/; warfare not read; no deaths\n/);
   });
 });

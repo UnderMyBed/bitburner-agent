@@ -13,10 +13,15 @@
 // - the gang unread (no reading, or the worker's problem) in BN2 for over `GANG_UNREAD_WITHIN_MS`;
 // - an ascension the rule makes (core's `gangAscensionToMake`, #328, G2) not made, for over `GANG_ASCEND_WITHIN_MS`;
 // - equipment the rule buys (core's `planGangEquipment`, #330, G3), with the money above the reading's `keepMoney`
-//   (the brain's holds, as the worker was given them), not bought, for over `GANG_EQUIP_WITHIN_MS`.
+//   (the brain's holds, as the worker was given them), not bought, for over `GANG_EQUIP_WITHIN_MS`;
+// - territory warfare (#332, G4) engaged while the rule's own measure (core's `gangWarfareMeasure`, with the members
+//   on Territory Warfare as read) says the clashes lose, or off while it says they pay, for over
+//   `GANG_WARFARE_WITHIN_MS`.
 // The ascensions themselves (G2) are seen as a member's ascension points rising between readings (core's
 // `gangAscensionPointsOf`), each with its largest multiplier gain and the respect it had earned, by hour; the
-// equipment bought (G3) as an item new in a member's lists, its cost the discounted one at the reading before.
+// equipment bought (G3) as an item new in a member's lists, its cost the discounted one at the reading before; the
+// deaths (G4) as a member on Territory Warfare at the reading before gone (`gangDeathsBetween`). Clashes won and lost
+// aren't read: the game counts neither; the territory and power by hour show what they came to.
 import {
   GANG_CYCLE_MS,
   GANG_EQUIPMENT,
@@ -28,6 +33,7 @@ import {
   type GangMemberReading,
   type GangPlan,
   type GangRuleInputs,
+  type GangWarfareMeasure,
   gangAscensionPointsOf,
   gangAscensionToMake,
   gangEquipment,
@@ -39,14 +45,26 @@ import {
   gangObjectiveOf,
   gangRecruitsAllowed,
   gangSoftcapOf,
+  gangTerritoryPerUpdate,
   gangWantedRecovers,
+  gangWarfareBasis,
+  gangWarfareMeasure,
   isGangJusticeTask,
   type MediumSnapshotData,
   planGang,
   planGangEquipment,
   type SlowSnapshotData,
+  TERRITORY_WARFARE_TASK,
 } from "@bitburner-agent/core";
-import { bitNodeOfSlow, describeTaskMix, GANG_BITNODE, gangSnapshotOf, topAscensionGain } from "./gang.ts";
+import {
+  bitNodeOfSlow,
+  describeTaskMix,
+  GANG_BITNODE,
+  gangDeathsBetween,
+  gangSnapshotOf,
+  gangWarfareFiguresOf,
+  topAscensionGain,
+} from "./gang.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 
 /**
@@ -84,6 +102,18 @@ export const GANG_ASCEND_WITHIN_MS = GANG_RECRUIT_WITHIN_MS;
  * shows it.
  */
 export const GANG_EQUIP_WITHIN_MS = GANG_RECRUIT_WITHIN_MS;
+/**
+ * How long territory warfare may stay on while the rule's measure says the clashes lose, or off while it says they pay
+ * (G4): 1 minute, as a recruit (`GANG_RECRUIT_WITHIN_MS`): the brain orders it on the next medium snapshot, the
+ * Agent's worker runs at once on the changed state, and the next medium snapshot shows it.
+ */
+export const GANG_WARFARE_WITHIN_MS = GANG_RECRUIT_WITHIN_MS;
+
+/** A death seen (G4): a member on Territory Warfare at the reading before, gone. */
+interface Death {
+  atMs: number;
+  name: string;
+}
 
 /** An upgrade bought (G3): new in a member's lists between two readings, at its cost then. */
 interface Purchase {
@@ -114,6 +144,10 @@ interface GangPoint {
   penalty: number;
   lostShare: number;
   bound: number;
+  /** Territory warfare (G4): the gang's share and power, and whether engaged (null: not read, an older Agent). */
+  territory: number;
+  power: number;
+  engaged: boolean | null;
   /** What the rule read: the plan, for the task mix, is worked out only for an hour's last reading. */
   inputs: GangRuleInputs;
 }
@@ -170,6 +204,9 @@ export class GangFold {
   readonly #ascensions: Ascension[] = [];
   readonly #equipmentWaiting = new Stretches();
   readonly #purchases: Purchase[] = [];
+  readonly #warfareLosing = new Stretches();
+  readonly #warfarePaying = new Stretches();
+  readonly #deaths: Death[] = [];
   /** The cost multiplier at the reading before: what a purchase since cost. */
   #lastCostMult: number | null = null;
   /** Each member at the reading before, by name: its ascension points rising says it ascended. */
@@ -202,6 +239,8 @@ export class GangFold {
         this.#unread,
         this.#ascensionWaiting,
         this.#equipmentWaiting,
+        this.#warfareLosing,
+        this.#warfarePaying,
       ]) {
         stretches.add(atMs, null);
       }
@@ -229,6 +268,8 @@ export class GangFold {
       this.#overBoundOffJustice.add(atMs, null);
       this.#ascensionWaiting.add(atMs, null);
       this.#equipmentWaiting.add(atMs, null);
+      this.#warfareLosing.add(atMs, null);
+      this.#warfarePaying.add(atMs, null);
       // A gang gone (another BitNode's start) has none of these members; one unread keeps them.
       if (snapshot.kind === "none") this.#lastMembers = new Map();
       return;
@@ -267,12 +308,31 @@ export class GangFold {
             `${members.length - offJustice} of ${members.length} on justice`
         : null,
     );
+    const warfare = gangWarfareFiguresOf(gang);
     const inputs: GangRuleInputs = {
       gang: { respect: gang.respect, wantedLevel: gang.wantedLevel, territory: gang.territory },
       isHacking: gang.isHacking,
       members,
       softcap: gangSoftcapOf(GANG_BITNODE),
+      ...(warfare === undefined ? {} : { warfare }),
     };
+    // Territory warfare (G4): the rule's measure with the crew as read, against the flag. The measure's worth only
+    // when the clashes gain territory at all: else they lose, whatever it's worth.
+    if (warfare === undefined) {
+      this.#warfareLosing.add(atMs, null);
+      this.#warfarePaying.add(atMs, null);
+    } else {
+      const crew = members.filter((member) => member.task === TERRITORY_WARFARE_TASK).map((member) => member.name);
+      const expected = gangTerritoryPerUpdate(warfare.power, gang.territory, warfare.others);
+      const measure =
+        expected > 0
+          ? gangWarfareMeasure(inputs, gangWarfareBasis(inputs, gangObjectiveOf(members.length)), crew)
+          : null;
+      const detail = describeMeasure(measure, expected, crew.length);
+      this.#warfareLosing.add(atMs, warfare.engaged && measure?.pays !== true ? detail : null);
+      this.#warfarePaying.add(atMs, !warfare.engaged && measure?.pays === true ? detail : null);
+    }
+    for (const name of gangDeathsBetween([...this.#lastMembers.values()], members)) this.#deaths.push({ atMs, name });
     // The ascensions since the reading before, and the rule's own (core's `gangAscensionToMake`, as the brain's plan
     // has it) not made.
     let ascended = false;
@@ -332,13 +392,16 @@ export class GangFold {
       penalty: 1 - gang.wantedPenalty,
       lostShare,
       bound,
+      territory: gang.territory,
+      power: gang.power,
+      engaged: warfare === undefined ? null : warfare.engaged,
       inputs,
     });
   }
 
   /** The section's lines, its failures added to `failures`. */
   section(failures: string[], windowEndMs: number): string[] {
-    const lines = ["7. The gang (#325, ascension G2, equipment G3; played in BN2 only for now)"];
+    const lines = ["7. The gang (#325, ascension G2, equipment G3, territory G4; played in BN2 only for now)"];
     if (this.#mediumInBitNode2 === 0) {
       lines.push("  not in BN2 in the window: no gang played");
       return lines;
@@ -367,6 +430,7 @@ export class GangFold {
         const hour = hourOf(point.atMs);
         hours.set(hour, [...(hours.get(hour) ?? []), point]);
       }
+      const nextAt = new Map(this.#points.map((point, index) => [point, this.#points[index + 1]?.atMs ?? null]));
       for (const [hour, points] of hours) {
         const start = points[0] as GangPoint;
         const end = points.at(-1) as GangPoint;
@@ -378,6 +442,14 @@ export class GangFold {
         const items = new Map<string, number>();
         for (const { equipment } of purchases) items.set(equipment, (items.get(equipment) ?? 0) + 1);
         const spent = purchases.reduce((sum, each) => sum + each.cost, 0);
+        const deaths = this.#deaths.filter((each) => hourOf(each.atMs) === hour);
+        // The time engaged: each reading engaged, to the next (the window's last to the hour's end, or the window's).
+        const hourEndMs = Math.min(windowEndMs, first.atMs + (hour + 1) * 3_600_000);
+        const engagedMs = points.reduce(
+          (sum, each) => (each.engaged === true ? sum + Math.max(0, (nextAt.get(each) ?? hourEndMs) - each.atMs) : sum),
+          0,
+        );
+        const warfareRead = points.some((each) => each.engaged !== null);
         lines.push(
           `    hour ${hour + 1}: ${start.members} → ${end.members} members; respect ${whole(start.respect)} → ` +
             `${whole(end.respect)} (${((end.respect - start.respect) / seconds).toFixed(2)}/s); ` +
@@ -397,9 +469,16 @@ export class GangFold {
               ? "no equipment bought"
               : `${purchases.length} equipment bought for $${whole(spent)} (` +
                 [...items].map(([item, count]) => (count === 1 ? item : `${item} ×${count}`)).join(", ") +
-                ")"),
+                ")") +
+            `; territory ${percent(start.territory)} → ${percent(end.territory)}, power ${start.power.toFixed(1)} → ` +
+            `${end.power.toFixed(1)}; ` +
+            (warfareRead ? `warfare engaged ${formatDuration(engagedMs)}` : "warfare not read") +
+            `; ${deaths.length === 0 ? "no deaths" : `${deaths.length} death${deaths.length === 1 ? "" : "s"} (${deaths.map((each) => each.name).join(", ")})`}`,
         );
       }
+      lines.push(
+        "  clashes won and lost: not read, the game counts neither (the territory and power show what they came to)",
+      );
     }
     lines.push("  problems the gang worker reported, as first seen:");
     if (this.#problems.size === 0) lines.push("    none");
@@ -416,6 +495,8 @@ export class GangFold {
       [this.#unread, GANG_UNREAD_WITHIN_MS, "the gang unread in BN2"],
       [this.#ascensionWaiting, GANG_ASCEND_WITHIN_MS, "an ascension the rule makes not made"],
       [this.#equipmentWaiting, GANG_EQUIP_WITHIN_MS, "equipment the rule buys, with the money free, not bought"],
+      [this.#warfareLosing, GANG_WARFARE_WITHIN_MS, "territory warfare engaged while the rule's measure says it loses"],
+      [this.#warfarePaying, GANG_WARFARE_WITHIN_MS, "territory warfare off while the rule's measure says it pays"],
     ] as const;
     for (const [stretches, withinMs, what] of judged) {
       lines.push(`  ${what} for ${formatDuration(withinMs)} or more:`);
@@ -435,6 +516,21 @@ export class GangFold {
 
 const whole = (value: number) => Math.round(value).toLocaleString("en-US");
 const percent = (share: number) => `${(share * 100).toFixed(1)}%`;
+
+/**
+ * The measure at a reading (G4), for a failure's detail: the clashes expected to lose territory or gain none (null:
+ * the measure wasn't needed), or the territory's worth an update against the deaths' cost, with the crew's size.
+ */
+function describeMeasure(measure: GangWarfareMeasure | null, expected: number, crew: number): string {
+  if (measure === null) {
+    const what = expected === 0 ? "gain no territory" : "lose territory";
+    return `the clashes expected to ${what}, ${crew} on Territory Warfare`;
+  }
+  return (
+    `the territory expected worth ${whole(measure.gainPerUpdate)} an update against deaths costing ` +
+    `${whole(measure.deathCostPerUpdate + measure.tailCostPerUpdate)}, ${crew} on Territory Warfare`
+  );
+}
 
 /**
  * The first upgrade the rule buys with `free` dollars (core's `planGangEquipment`), as the brain would: the ascension

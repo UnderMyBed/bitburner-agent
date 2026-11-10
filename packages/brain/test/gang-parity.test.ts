@@ -4,8 +4,9 @@
 // formulas read, training's experience against the members' own `expGain`, the recruit threshold against
 // `respectForNextRecruit`, every BitNode's `GangSoftcap` against the engine's multipliers, and (#328, G2) the ascension
 // result and the member after it against `getAscensionResult` and `ascendMember`; (#330, G3) every upgrade against the
-// equipment getters, a purchase against `purchaseEquipment`, and an ascension keeping an augmentation. In BN2 (softcap
-// 1), where the brain plays gangs.
+// equipment getters, a purchase against `purchaseEquipment`, and an ascension keeping an augmentation; (#332, G4) the
+// power an update gives the members on Territory Warfare, and the win chance against `getChanceToWinClash`. In BN2
+// (softcap 1), where the brain plays gangs.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   GANG_EQUIPMENT,
@@ -14,6 +15,7 @@ import {
   type GangMemberFigures,
   gangAscensionPointsOf,
   gangAscensionResult,
+  gangClashWinChance,
   gangEquipment,
   gangEquipmentCost,
   gangEquipmentCostMultOf,
@@ -21,7 +23,9 @@ import {
   gangExpPerCycle,
   gangMemberAscended,
   gangMemberEquipped,
+  gangMemberPower,
   gangMoneyPerCycle,
+  gangPowerGainPerUpdate,
   gangRespectPerCycle,
   gangRespectToRecruit,
   gangSoftcapOf,
@@ -326,5 +330,70 @@ out({ ascended: ns.gang.getMemberInformation("a") });`,
     for (const key of [stat, `${stat}_exp`, `${stat}_mult`, `${stat}_asc_mult`, `${stat}_asc_points`] as const) {
       expect(after[key], key).toBeCloseTo(ascended[key], 9);
     }
+  }
+}, 60_000);
+
+test("core's power gain and win chance are the engine's (G4): an update's power, `getChanceToWinClash`", async () => {
+  const sim = await start({
+    seed: 1,
+    epochMs: Date.UTC(2026, 0, 1),
+    fixture: { kind: "bitnode", n: 2, sourceFiles: {} },
+  });
+  await sim.diagnostics.setHomeRam(128);
+  await sim.diagnostics.joinFactionWithReputation("NiteSec", 0);
+  // Two of three on Territory Warfare, warfare off (no clash moves the power, `Gang.ts:281-303`): the gang's power
+  // rises only by its gain, at the first territory update after the members' levels are set (`Gang.ts:99-121`).
+  // Read there, with each other gang's and the game's win chance against it.
+  const { out, log } = await runScript(
+    sim,
+    `ns.gang.createGang("NiteSec");
+for (const [name, task] of [["a", "Territory Warfare"], ["b", "Territory Warfare"], ["c", "Train Hacking"]]) {
+  ns.gang.recruitMember(name);
+  ns.gang.setMemberTask(name, task);
+}
+let before = ns.gang.getGangInformation().power;
+for (let update = 0; update < 30; update += 1) {
+  await ns.gang.nextUpdate();
+  const gang = ns.gang.getGangInformation();
+  if (gang.power !== before) {
+    const all = ns.gang.getAllGangInformation();
+    const others = Object.keys(all).filter((name) => name !== "NiteSec");
+    out({
+      before,
+      gang,
+      members: ["a", "b", "c"].map((name) => ns.gang.getMemberInformation(name)),
+      all,
+      chances: Object.fromEntries(others.map((name) => [name, ns.gang.getChanceToWinClash(name)])),
+    });
+    break;
+  }
+  before = gang.power;
+}`,
+    60_000,
+  );
+  expect((await sim.events()).events.filter((event) => event.type === "error")).toEqual([]);
+  expect(log.filter((line) => !line.startsWith("out:"))).toEqual([]);
+  const read = out[0] as {
+    before: number;
+    gang: { power: number; territory: number; territoryWarfareEngaged: boolean; territoryClashChance: number };
+    members: GangMemberFigures[];
+    all: Record<string, { power: number; territory: number }>;
+    chances: Record<string, number>;
+  };
+  expect(read.gang).toMatchObject({ territoryWarfareEngaged: false, territoryClashChance: 0 });
+  // The gain: 0.015 × max(0.002, territory) × the crew's levels over 95, `calculatePower` (`Gang.ts:362-369`).
+  const crew = read.members.filter((member) => member.task === "Territory Warfare");
+  expect(crew).toHaveLength(2);
+  const gain = gangPowerGainPerUpdate(read.gang.territory, crew);
+  expect(gain).toBeGreaterThan(0);
+  expect(read.gang.power - read.before).toBeCloseTo(gain, 12);
+  expect(gangMemberPower(crew[0] as GangMemberFigures)).toBeCloseTo(
+    GANG_STATS.reduce((sum, stat) => sum + (crew[0] as GangMemberFigures)[stat], 0) / 95,
+    12,
+  );
+  // The win chance, against each of the six others.
+  expect(Object.keys(read.chances)).toHaveLength(6);
+  for (const [faction, chance] of Object.entries(read.chances)) {
+    expect(gangClashWinChance(read.gang.power, read.all[faction]?.power as number), faction).toBeCloseTo(chance, 12);
   }
 }, 60_000);
