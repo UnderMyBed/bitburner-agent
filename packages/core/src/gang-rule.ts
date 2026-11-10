@@ -17,10 +17,12 @@
  *   (`Gang.ts:164-166`). The share of output the penalty takes above that floor is (wanted − 1) / (respect + wanted);
  *   a member moved to a justice task costs about its own share, 1/N of N members', the bound (`gangLostShareBound`).
  *   Over the bound, members go to the justice task that lowers wanted most for each (Ethical Hacking or Vigilante
- *   Justice) until the gang's wanted level falls, its justice members' decay counted (`Gang.ts:157-167`): those on
- *   justice already first, then the weakest working, then the weakest training (all training, wanted would stay put).
- *   The run report judges the same: over the bound with the wanted level not falling. Members on justice stay there
- *   until the share is under half the bound (`GANG_JUSTICE_RELEASE`), so none flips at the bound every 10 s.
+ *   Justice) until the wanted level, at that pace, reaches the bound within `GANG_WANTED_RECOVERY_MS` (one justice
+ *   member's time to halve it; `gangWantedRecovers`, the game's gains and justice decay, `Gang.ts:157-167`), or every
+ *   member is on justice: those the rule put on justice already first, then those training (their output is none
+ *   either way), then the weakest working. The run report judges the same: over the bound, not on course, and a member
+ *   off justice. Members the rule put on justice stay there until the share is under half the bound
+ *   (`GANG_JUSTICE_RELEASE`), so none flips at the bound every 10 s; one the owner put there is the rule's to move.
  * - **Recruits:** as many as the respect allows (`Gang.ts:325-334`), named `member-01` to `member-12`, the first
  *   names free, each set to train at once.
  */
@@ -50,6 +52,13 @@ export const GANG_TRAINING_HORIZON_MS = 60 * 60_000;
 export const GANG_TRAINING_STEP_MS = 60_000;
 /** The share of the bound under which members on justice go back to work (#325's review): half, the hysteresis. */
 export const GANG_JUSTICE_RELEASE = 0.5;
+/**
+ * The time the rule gives the wanted level to come back to the bound (#325's re-review), and the run report its check:
+ * one member on a justice task's time to halve it by the game's decay alone, × (1 − 0.001) each 2 s process
+ * (`Gang.ts:161`): 1,385 s, about 23 min.
+ */
+export const GANG_WANTED_RECOVERY_MS =
+  (GANG_CYCLES_PER_PROCESS * GANG_CYCLE_MS * Math.LN2) / -Math.log1p(-GANG_JUSTICE_DECAY_PER_PROCESS);
 
 /** What the rule reads of the gang: the formulas' figures, its kind, and its members. */
 export interface GangRuleInputs {
@@ -58,6 +67,11 @@ export interface GangRuleInputs {
   members: readonly GangMemberFigures[];
   /** The BitNode's `GangSoftcap` (`gangSoftcapOf`). */
   softcap: number;
+  /**
+   * The members the rule put on justice in its last plan: those of them still on a justice task are kept there, the
+   * hysteresis. None given (a brain just started, the run report): none kept.
+   */
+  placedOnJustice?: readonly string[];
 }
 
 export type GangObjective = "respect" | "money";
@@ -194,17 +208,41 @@ function bestJustice(inputs: GangRuleInputs, member: GangMemberFigures): { task:
 }
 
 /**
- * Whether the gang's wanted level falls a cycle with these tasks (`Gang.ts:157-167`): the members' gains, justice's
- * negative, less the justice members' decay, × (1 − 0.001 × J) each 10-cycle process.
+ * The wanted level after `cycles` with these tasks (`Gang.ts:157-167`): the members' gains g a cycle (justice's
+ * negative), and the justice members' decay, × (1 − 0.001 × J) each 10-cycle process, k = 0.0001 × J a cycle. So
+ * W' = g − kW: W(t) = g/k + (W − g/k)e^(−kt), or W + gt with none on justice; never below the floor of 1.
  */
-export function gangWantedFalls(gang: GangFigures, members: readonly GangMemberFigures[], tasks: string[]): boolean {
+export function gangWantedAfter(
+  gang: GangFigures,
+  members: readonly GangMemberFigures[],
+  tasks: readonly string[],
+  cycles: number,
+): number {
   const justice = tasks.filter(isGangJusticeTask).length;
-  const decay = (gang.wantedLevel * GANG_JUSTICE_DECAY_PER_PROCESS * justice) / GANG_CYCLES_PER_PROCESS;
+  const k = (GANG_JUSTICE_DECAY_PER_PROCESS * justice) / GANG_CYCLES_PER_PROCESS;
   const gains = members.reduce(
     (sum, member, index) => sum + gangWantedPerCycle(gang, member, gangTask(tasks[index] as string)),
     0,
   );
-  return gains - decay < 0;
+  const after =
+    k === 0 ? gang.wantedLevel + gains * cycles : gains / k + (gang.wantedLevel - gains / k) * Math.exp(-k * cycles);
+  return Math.max(1, after);
+}
+
+/** The wanted level at which the lost share is the bound: (wanted − 1)/(respect + wanted) = 1/N. */
+export function gangWantedAtBound(gang: Pick<GangFigures, "respect">, members: number): number {
+  const bound = gangLostShareBound(members);
+  return bound >= 1 ? Number.POSITIVE_INFINITY : (bound * gang.respect + 1) / (1 - bound);
+}
+
+/** Whether, with these tasks, the wanted level reaches the bound within `GANG_WANTED_RECOVERY_MS`. */
+export function gangWantedRecovers(
+  gang: GangFigures,
+  members: readonly GangMemberFigures[],
+  tasks: readonly string[],
+): boolean {
+  const cycles = GANG_WANTED_RECOVERY_MS / GANG_CYCLE_MS;
+  return gangWantedAfter(gang, members, tasks, cycles) <= gangWantedAtBound(gang, members.length);
 }
 
 /** Each member's task, and the recruits, by the rule above. `members` in the game's order, each with its task now. */
@@ -224,8 +262,8 @@ export function planGang(inputs: GangRuleInputs): GangPlan {
     };
   });
 
-  // Wanted control: over the bound, members to justice until the wanted level falls; under it, those on justice kept
-  // there until the share is under half the bound.
+  // Wanted control: over the bound, members to justice until the wanted level is on course back to it; under it,
+  // those the rule put on justice kept there until the share is under half the bound.
   const lostShare = gangLostShare(gang);
   const bound = gangLostShareBound(members.length);
   const byName = new Map(members.map((member) => [member.name, member]));
@@ -233,14 +271,16 @@ export function planGang(inputs: GangRuleInputs): GangPlan {
     assignment.task = bestJustice(inputs, byName.get(assignment.name) as GangMemberFigures).task.name;
     assignment.role = "justice";
   };
-  const onJusticeNow = (assignment: GangAssignment) => isGangJusticeTask(byName.get(assignment.name)?.task ?? "");
+  const placed = new Set(inputs.placedOnJustice ?? []);
+  const onJusticeNow = (assignment: GangAssignment) =>
+    placed.has(assignment.name) && isGangJusticeTask(byName.get(assignment.name)?.task ?? "");
   if (lostShare > bound) {
     const weakestFirst = (role: GangRole) =>
       assignments.filter((each) => each.role === role && !onJusticeNow(each)).sort((a, b) => a.value - b.value);
-    const candidates = [...assignments.filter(onJusticeNow), ...weakestFirst("working"), ...weakestFirst("training")];
+    const candidates = [...assignments.filter(onJusticeNow), ...weakestFirst("training"), ...weakestFirst("working")];
     for (const assignment of candidates) {
       const tasks = assignments.map((each) => each.task);
-      if (gangWantedFalls(gang, members, tasks)) break;
+      if (gangWantedRecovers(gang, members, tasks)) break;
       toJustice(assignment);
     }
   } else if (lostShare > bound * GANG_JUSTICE_RELEASE) {

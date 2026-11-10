@@ -25,7 +25,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { donationStatus } from "../src/augmentation-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
-import { GangRule, gangSnapshotOf, withoutGangFaction } from "../src/gang.ts";
+import { GangFactionCarry, GangRule, gangSnapshotOf, withoutGangFaction } from "../src/gang.ts";
 import {
   GANG_FORM_WITHIN_MS,
   GANG_RECRUIT_WITHIN_MS,
@@ -155,6 +155,40 @@ describe("the rule", () => {
     );
   });
 
+  test("the hysteresis across updates: the rule's own justice members kept in the band, an owner's moved back", () => {
+    // Respect 1,000; the wanted level that makes each share, (W − 1) / (1,000 + W): the bound 1/3, its half 1/6.
+    const at = (share: number) => ({
+      respect: 1_000,
+      wantedLevel: (1_000 * share + 1) / (1 - share),
+      wantedPenalty: 0.5,
+    });
+    const levels = [300, 250, 200];
+    const reading = (tasks: string[], share: number) =>
+      withGang(
+        formed(
+          levels.map((hack, index) => member(`member-0${index + 1}`, hack, tasks[index])),
+          at(share),
+        ),
+      );
+    const rule = new GangRule();
+    const over = rule.update({
+      mediumData: reading(["Plant Virus", "Plant Virus", "DDoS Attacks"], 0.4),
+      slowData: slowData(2),
+    });
+    expect(over.gang?.tasks).toMatchObject({ "member-02": "Ethical Hacking", "member-03": "Ethical Hacking" });
+    // Under the bound, over its half, the game showing them on justice: kept.
+    const band = reading(["Plant Virus", "Ethical Hacking", "Ethical Hacking"], 0.32);
+    expect(rule.update({ mediumData: band, slowData: slowData(2) }).gang?.tasks).toMatchObject({
+      "member-02": "Ethical Hacking",
+      "member-03": "Ethical Hacking",
+    });
+    // The same reading to a rule that didn't put them there (the owner did): back to work.
+    expect(new GangRule().update({ mediumData: band, slowData: slowData(2) }).gang?.tasks).toMatchObject({
+      "member-02": "Plant Virus",
+      "member-03": "DDoS Attacks",
+    });
+  });
+
   test("a reading whose figures aren't numbers is unread, never acted on", () => {
     const broken = { ...formed([member("member-01")]), members: [{ ...member("member-01"), hack: "9" }] };
     expect(gangSnapshotOf(withGang(broken as unknown as GangReading))).toMatchObject({ kind: "unread" });
@@ -271,20 +305,26 @@ describe("the run report's section", () => {
     ]);
   });
 
-  test("the wanted penalty over the rule's bound, wanted not falling, for 23 min fails; falling, it doesn't", () => {
+  test("the wanted penalty over the rule's bound, off course, for 23 min fails; on course, or all on justice, it doesn't", () => {
+    // (4 − 1) / (4 + 4) = 37.5%, just over 1/3 (back at the bound at wanted 3); 4 respect, short of the fourth
+    // recruit; members at level 1, whose tasks add no wanted. None on justice: off course, the rule's to fix.
     const three = [member("member-01"), member("member-02"), member("member-03")];
-    // (4 − 1) / (4 + 4) = 37.5%, just over 1/3; 4 respect, short of the fourth recruit; the game's rate 0: not falling.
-    const wanted = withGang(formed(three, { respect: 4, wantedLevel: 4, wantedPenalty: 0.5 }));
-    // Falling (the rule's justice members at work), however long it takes: no failure.
-    const falling = withGang(
-      formed(three, { respect: 4, wantedLevel: 4, wantedPenalty: 0.5, wantedLevelGainRate: -1e-4 }),
+    const figures = { respect: 4, wantedLevel: 4, wantedPenalty: 0.5 };
+    const wanted = withGang(formed(three, figures));
+    // One on Ethical Hacking: its decay alone brings 4 to 2 in the 23 min, on course, the others' tasks as they are.
+    const onCourse = withGang(
+      formed([{ ...member("member-01"), task: "Ethical Hacking" }, ...three.slice(1)], figures),
     );
-    expect(fold(repeat(falling, 2 * steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([]);
+    expect(fold(repeat(onCourse, 2 * steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([]);
+    // Far over with every member on justice: all the game allows, however long the decay takes.
+    const allOnJustice = three.map((each) => ({ ...each, task: "Ethical Hacking" }));
+    const far = withGang(formed(allOnJustice, { respect: 4, wantedLevel: 4_000, wantedPenalty: 0.001 }));
+    expect(fold(repeat(far, 2 * steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([]);
     expect(fold(repeat(wanted, steps(GANG_WANTED_OVER_BOUND_MS) - 1)).failures).toEqual([]);
     const { failures } = fold(repeat(wanted, steps(GANG_WANTED_OVER_BOUND_MS)));
     expect(failures).toHaveLength(1);
     expect(failures[0]).toMatch(
-      /^the wanted penalty over the rule's bound, not falling, for 23 min 10 s, from .* \(37\.5% over 33\.3%, wanted 4, not falling\)$/,
+      /^the wanted penalty over the rule's bound, off course, for 23 min 10 s, from .* \(37\.5% over 33\.3%, wanted 4, 0 of 3 on justice, off course\)$/,
     );
   });
 
@@ -297,6 +337,22 @@ describe("the run report's section", () => {
     expect(fold(repeat(unread, steps(GANG_UNREAD_WITHIN_MS))).failures[0]).toContain(
       "(the gang state isn't one to do)",
     );
+  });
+
+  test("the reports carry the gang's faction within a BitNode past an Agent start's first slow snapshot", () => {
+    const carry = new GangFactionCarry();
+    const bn2 = (gangFaction: string | null | undefined, lastNodeReset = 0) => ({
+      ...slowData(2),
+      resetInfo: { ...slowData(2).resetInfo, lastNodeReset },
+      ...(gangFaction === undefined ? {} : { gangFaction }),
+    });
+    expect(carry.of(bn2(null)).gangFaction).toBeNull();
+    expect(carry.of(bn2("NiteSec")).gangFaction).toBe("NiteSec");
+    // A new Agent's first: null, or absent from an older one; carried.
+    expect(carry.of(bn2(null)).gangFaction).toBe("NiteSec");
+    expect(carry.of(bn2(undefined)).gangFaction).toBe("NiteSec");
+    // Another BitNode (a destroy into BN2 again): none carried.
+    expect(carry.of(bn2(null, 99)).gangFaction).toBeNull();
   });
 
   test("the gang's faction takes no donations in the reports: the slow snapshot's gangFaction (#325's review)", () => {

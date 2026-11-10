@@ -4,22 +4,23 @@
 // the game or the brain's own pace:
 // - no gang formed while a gang faction is joined, for over `GANG_FORM_WITHIN_MS`;
 // - a recruit the respect allows (core's `gangRecruitsAllowed`) not made, for over `GANG_RECRUIT_WITHIN_MS`;
-// - the wanted penalty's share above its floor over the rule's bound (core's `gangLostShare`, `gangLostShareBound`)
-//   with the wanted level not falling (the game's own rate, `wantedLevelGainRate`), for longer than
-//   `GANG_WANTED_OVER_BOUND_MS`, one justice member's time to halve the wanted level. The rule's own test: over the
-//   bound, it puts members on justice until the wanted level falls (core's `planGang`), and the game's decay alone
-//   may take hours to bring a large wanted level under the bound;
+// - the wanted penalty's share above its floor over the rule's bound (core's `gangLostShare`, `gangLostShareBound`),
+//   off course, for longer than `GANG_WANTED_OVER_BOUND_MS`, one justice member's time to halve the wanted level: the
+//   rule's own test for more members on justice (core's `planGang`), a member off justice and the wanted level, with
+//   the members' tasks now, not back at the bound within that time (`gangWantedRecovers`). With every member on
+//   justice it's all the game allows, however long the decay takes;
 // - the gang unread (no reading, or the worker's problem) in BN2 for over `GANG_UNREAD_WITHIN_MS`.
 import {
   GANG_CYCLE_MS,
-  GANG_CYCLES_PER_PROCESS,
   GANG_FACTIONS,
-  GANG_JUSTICE_DECAY_PER_PROCESS,
+  GANG_WANTED_RECOVERY_MS,
   type GangPlan,
   gangLostShare,
   gangLostShareBound,
   gangRecruitsAllowed,
   gangSoftcapOf,
+  gangWantedRecovers,
+  isGangJusticeTask,
   type MediumSnapshotData,
   planGang,
   type SlowSnapshotData,
@@ -38,12 +39,10 @@ export const GANG_FORM_WITHIN_MS = 5 * 60_000;
  */
 export const GANG_RECRUIT_WITHIN_MS = 60_000;
 /**
- * How long the wanted penalty may stay over the rule's bound without the wanted level falling: the time one member on
- * a justice task takes to halve
- * the wanted level by the game's decay alone, × (1 − 0.001) each 2 s process (`Gang.ts:161`): 1,385 s, about 23 min.
+ * How long the wanted penalty may stay over the rule's bound off course (core's `GANG_WANTED_RECOVERY_MS`): one member
+ * on a justice task's time to halve the wanted level by the game's decay alone (`Gang.ts:161`), about 23 min.
  */
-export const GANG_WANTED_OVER_BOUND_MS =
-  (GANG_CYCLES_PER_PROCESS * GANG_CYCLE_MS * Math.LN2) / -Math.log1p(-GANG_JUSTICE_DECAY_PER_PROCESS);
+export const GANG_WANTED_OVER_BOUND_MS = GANG_WANTED_RECOVERY_MS;
 /** How long the gang may go unread in BN2: 5 minutes, 30 of the worker's runs. */
 export const GANG_UNREAD_WITHIN_MS = 5 * 60_000;
 
@@ -163,11 +162,15 @@ export class GangFold {
     );
     const lostShare = gangLostShare(gang);
     const bound = gangLostShareBound(members.length);
-    // Over the bound and not falling: the rule's condition for more members on justice.
+    // The rule's condition for more members on justice: over the bound, not on course back to it within the recovery
+    // time with the members' tasks now (core's `gangWantedRecovers`), and a member off justice.
+    const tasks = members.map((member) => member.task);
+    const offJustice = tasks.filter((task) => !isGangJusticeTask(task)).length;
     this.#overBound.add(
       atMs,
-      lostShare > bound && gang.wantedLevelGainRate >= 0
-        ? `${percent(lostShare)} over ${percent(bound)}, wanted ${Math.round(gang.wantedLevel)}, not falling`
+      lostShare > bound && offJustice > 0 && !gangWantedRecovers(gang, members, tasks)
+        ? `${percent(lostShare)} over ${percent(bound)}, wanted ${Math.round(gang.wantedLevel)}, ` +
+            `${members.length - offJustice} of ${members.length} on justice, off course`
         : null,
     );
     const plan = planGang({
@@ -240,7 +243,7 @@ export class GangFold {
     const judged = [
       [this.#notFormed, GANG_FORM_WITHIN_MS, "no gang formed with a gang faction joined"],
       [this.#recruitWaiting, GANG_RECRUIT_WITHIN_MS, "a recruit the respect allows not made"],
-      [this.#overBound, GANG_WANTED_OVER_BOUND_MS, "the wanted penalty over the rule's bound, not falling,"],
+      [this.#overBound, GANG_WANTED_OVER_BOUND_MS, "the wanted penalty over the rule's bound, off course,"],
       [this.#unread, GANG_UNREAD_WITHIN_MS, "the gang unread in BN2"],
     ] as const;
     for (const [stretches, withinMs, what] of judged) {

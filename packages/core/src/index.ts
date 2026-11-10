@@ -450,6 +450,7 @@ export {
   GANG_MEMBER_NAMES,
   GANG_TRAINING_HORIZON_MS,
   GANG_TRAINING_STEP_MS,
+  GANG_WANTED_RECOVERY_MS,
   type GangAssignment,
   type GangObjective,
   type GangPlan,
@@ -461,7 +462,9 @@ export {
   gangObjectiveOf,
   gangTrainingTask,
   gangTrains,
-  gangWantedFalls,
+  gangWantedAfter,
+  gangWantedAtBound,
+  gangWantedRecovers,
   isGangJusticeTask,
   planGang,
 } from "./gang-rule.ts";

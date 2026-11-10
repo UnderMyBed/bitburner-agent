@@ -71,6 +71,7 @@ import {
   FactionWorkTimeline,
   SLOW_SNAPSHOT_GAP_MS,
 } from "./factions.ts";
+import { GangFactionCarry } from "./gang.ts";
 import { GangFold } from "./gang-report.ts";
 import {
   countsOf,
@@ -743,7 +744,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const factionState = new FactionStateFolding();
     const augmentations = new AugmentationTimeline();
     const gang = new GangFold();
-    for (const { atMs, gameTimeMs, data } of ofTier<SlowSnapshotData>("slow")) {
+    // The gang's faction carried within each BitNode (#325): an Agent's first slow snapshot comes before its reading.
+    const gangFactions = new GangFactionCarry();
+    for (const { atMs, gameTimeMs, data: slowAsSent } of ofTier<SlowSnapshotData>("slow")) {
+      const data = gangFactions.of(slowAsSent);
       snapshotCount++;
       gang.addSlow(atMs, data);
       hacking.addSlow(atMs, data);

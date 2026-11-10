@@ -2144,10 +2144,13 @@ describe("donations (#225)", () => {
     events: donationEvents = [],
     money = 6e9,
     favor = 150,
+    gangFactionAt = () => undefined,
   }: {
     events?: [number, string, unknown][];
     money?: number;
     favor?: number;
+    /** Each slow snapshot's `gangFaction` (#325), by its offset; absent by default, as an older Agent's. */
+    gangFactionAt?: (offsetMs: number) => string | null | undefined;
   } = {}) {
     event(0, "brainStarted", { release: "r" });
     for (let offsetMs = 10 * SECOND; offsetMs <= DONATION_RUN_MS; offsetMs += 10 * SECOND) {
@@ -2157,7 +2160,9 @@ describe("donations (#225)", () => {
     }
     for (let offsetMs = MINUTE; offsetMs <= DONATION_RUN_MS; offsetMs += MINUTE) {
       const factions = factionState({ joined: [{ name: "CyberSec", reputation: 5_000, favor }] });
-      snapshot("slow", offsetMs, slowData([], {}, {}, factions), 1e12 + offsetMs);
+      const gangFaction = gangFactionAt(offsetMs);
+      const slow = slowData([], {}, {}, factions);
+      snapshot("slow", offsetMs, gangFaction === undefined ? slow : { ...slow, gangFaction }, 1e12 + offsetMs);
     }
     for (const [offsetMs, kind, detail] of donationEvents) event(offsetMs, kind, detail);
     // Each donation, as these tests read them: --verbose (#245).
@@ -2186,6 +2191,14 @@ describe("donations (#225)", () => {
     expect(report.text).toContain(
       "    CyberSec: reputation 5,000 (unchanged), favour 150 (unchanged); donations unlocked",
     );
+  });
+
+  test("the gang's faction is no donor (#325): its gangFaction carried past a new Agent's first slow snapshot", () => {
+    // The gang's faction stands in as CyberSec here: `acceptsDonations` refuses whichever the slow snapshot names.
+    // Read at the first slow snapshot, then a new Agent's null (before its gang worker's reading) every 10 minutes.
+    const report = donationRun({ gangFactionAt: (offsetMs) => (offsetMs === MINUTE ? "CyberSec" : null) });
+    expect(unused(report)).toEqual([]);
+    expect(report.text).toContain("    CyberSec: reputation 5,000 (unchanged), favour 150 (unchanged)\n");
   });
 
   test("donations unused (#225 review): weighed against the money left after the brain's counted set", () => {

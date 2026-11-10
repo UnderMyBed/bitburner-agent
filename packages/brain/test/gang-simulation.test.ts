@@ -4,8 +4,9 @@
 // which an hour from a fresh start doesn't reach). One seed each: a thin slice, no sweep.
 // - A bounded hour: the gang forms through the gate, recruits, trains, works, and the run report's gang section passes.
 // - Wanted control, end to end: a gang the owner left with its wanted level far over the bound (three members on DDoS
-//   Attacks, which earns them no respect at their levels), then the brain for 10 minutes: members go to justice, the
-//   wanted level falls, and the report's wanted check passes.
+//   Attacks, which earns them no respect at their levels), then the brain for 10 minutes: every member goes to
+//   justice, as fewer couldn't bring the wanted level back to the bound within the 23 min, it falls fast, and the
+//   report's wanted check passes.
 import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
 import { gangLostShare, gangLostShareBound } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
@@ -19,7 +20,7 @@ import { type FreshGame, ownerRunsOnHome, useFreshStarts, withoutSimEffectors } 
 const freshStartOf = useFreshStarts();
 const BN2 = { kind: "bitnode", n: 2, sourceFiles: { 1: 3, 4: 3 } } as const;
 const WANTED_CHECK =
-  "the wanted penalty over the rule's bound, not falling, for " + formatDuration(GANG_WANTED_OVER_BOUND_MS);
+  "the wanted penalty over the rule's bound, off course, for " + formatDuration(GANG_WANTED_OVER_BOUND_MS);
 
 /** The run report's gang section and failures, from the run's start to now. */
 function reportOf(fresh: Awaited<ReturnType<typeof freshStartOf>>) {
@@ -119,7 +120,7 @@ async function wantedGang(game: FreshGame) {
   await withoutSimEffectors(game);
 }
 
-test("wanted control end to end: a gang left far over the bound, then the brain: members on justice, wanted falling, the check passing", async () => {
+test("wanted control end to end: a gang left far over the bound, then the brain: on justice at the pace the bound needs, the check passing", async () => {
   const fresh = await freshStartOf({ withDesiredState: true, fixture: BN2, beforeAgent: wantedGang });
   await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
   const first = gangSnapshotOf(fresh.medium());
@@ -132,12 +133,12 @@ test("wanted control end to end: a gang left far over the bound, then the brain:
   const { section, failures } = reportOf(fresh);
   console.log(JSON.stringify({ first: first.gang, last: last.gang, tasks: last.members.map((each) => each.task) }));
   console.log(section);
-  // Measured on 2026-11-09 (seed 1): read at wanted 183 and respect 3.6 (97.8% above the floor, the bound 33.3%); one
-  // member on Ethical Hacking, enough for the wanted level to fall, the two others training; 150 after 10 minutes.
-  expect(last.members.filter((member) => member.task === "Ethical Hacking")).toHaveLength(1);
-  expect(last.gang.wantedLevel).toBeLessThan(0.9 * first.gang.wantedLevel);
-  expect(last.members.some((member) => member.task === "Ethical Hacking")).toBe(true);
-  expect(last.gang.wantedLevel).toBeLessThan(first.gang.wantedLevel);
+  // Measured on 2026-11-09 (seed 1): read at wanted 183 and respect 3.6 (97.8% above the floor, the bound 33.3%, back
+  // at wanted 3.3). All three went to Ethical Hacking, the decay × (1 − 0.003) each 2 s; as the wanted level fell, two
+  // were enough to be back at the bound within 23 min from then, and the third went back to training. 78 of 183 after
+  // 10 minutes, 0.43 of it, where one on justice alone (the fix round's rule) left 0.82.
+  expect(last.members.filter((member) => member.task === "Ethical Hacking").length).toBeGreaterThanOrEqual(2);
+  expect(last.gang.wantedLevel).toBeLessThan(0.45 * first.gang.wantedLevel);
   expect(last.gang.wantedLevelGainRate).toBeLessThan(0);
   expect(section).toContain("  formed: with NiteSec, before the window");
   expect(section).toContain(`${WANTED_CHECK} or more:\n    none`);

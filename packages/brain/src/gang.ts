@@ -23,6 +23,7 @@ import {
   type GangMemberReading,
   type GangPlan,
   type GangState,
+  gangFactionOf,
   gangFactionToForm,
   gangSoftcapOf,
   gangTrainingTask,
@@ -128,6 +129,29 @@ export function withoutGangFaction(
 /** Whether the protocol takes `name` as a member's (core's `parseGangState`): an owner's longer name is skipped. */
 const isProtocolName = (name: string) => name !== "" && name.length <= MAX_GANG_MEMBER_NAME_LENGTH;
 
+/**
+ * The gang's faction carried forward within a BitNode (#325's re-review), for the reports: an Agent's first slow
+ * snapshot after it starts comes before its gang worker's first reading, so its `gangFaction` is null though the gang
+ * is there. A BitNode is its `currentNode` and `lastNodeReset`: a destroy starts another, with no gang.
+ */
+export class GangFactionCarry {
+  #bitNode: string | null = null;
+  #faction: string | null = null;
+
+  /** `slow` with the gang's faction it, or an earlier one of its BitNode, showed. */
+  of(slow: SlowSnapshotData): SlowSnapshotData {
+    const info = slow?.resetInfo;
+    const bitNode = `${String(info?.currentNode)}:${String(info?.lastNodeReset)}`;
+    if (bitNode !== this.#bitNode) {
+      this.#bitNode = bitNode;
+      this.#faction = null;
+    }
+    const faction = gangFactionOf(slow);
+    if (faction !== null) this.#faction = faction;
+    return faction === null && this.#faction !== null ? { ...slow, gangFaction: this.#faction } : slow;
+  }
+}
+
 /** What the rule wants now: the gang's forming intent, or null; and the desired state's gang, or null for none. */
 export interface GangDecision {
   intent: Intent | null;
@@ -162,6 +186,8 @@ export class GangRule {
   #faction: string | null = null;
   /** In BN2 with no reading yet that says whether there's a gang, or whose: every gang faction is held out. */
   #holding = false;
+  /** The members the rule put on justice in its last plan (#325's re-review): only those are kept there, the hysteresis. */
+  #placed: string[] = [];
   #lastLogged = "";
 
   constructor(log: (line: string) => void = () => {}) {
@@ -199,6 +225,7 @@ export class GangRule {
     if (bitNode !== GANG_BITNODE) {
       this.#faction = null;
       this.#holding = false;
+      this.#placed = [];
       const why = bitNode === null ? "no slow snapshot yet" : `gangs play in BN2 only for now; this is BN${bitNode}`;
       return this.#decide({ stage: "notManaged", line: `Gang: not managed (${why})`, plan: null }, null, null);
     }
@@ -213,6 +240,7 @@ export class GangRule {
     this.#holding = false;
     if (snapshot.kind === "none") {
       this.#faction = null;
+      this.#placed = [];
       const faction = gangFactionToForm(joinedFactionsOf(mediumData));
       if (faction === null) {
         const line = "Gang: none yet: no gang faction joined (NiteSec comes with avmnite-02h's backdoor)";
@@ -228,7 +256,9 @@ export class GangRule {
       isHacking: gang.isHacking,
       members,
       softcap: gangSoftcapOf(GANG_BITNODE),
+      placedOnJustice: this.#placed,
     });
+    this.#placed = plan.assignments.filter((each) => each.role === "justice").map((each) => each.name);
     const tasks: Record<string, string> = {};
     // A member the owner named past what the protocol takes is left as it is: the Agent would refuse the whole state.
     for (const { name, task } of plan.assignments) if (isProtocolName(name)) tasks[name] = task;
