@@ -414,13 +414,14 @@ describe("the rows and the comparison", () => {
 // ran in 48.6 s of real time with `batcher.home` on and 28.0 s off, with 21,561 batches against 11,839, 305,039
 // timers fired against 190,290, and 5.9 s of the brain's CPU against 3.6 s: in proportion to the batches. CI ran
 // main's in 107 s, and the other simulator suites run 2-3 times local there (augmentations 75 s, 245 s in CI), so
-// up to about 150 s now: 300 s leaves the headroom 180 s no longer did. Since #345 seed 1 never installs in the hour
-// (below): 133-139 s locally against main 48.7 s, 82 s of it in the last 20 virtual minutes, as the running scripts
-// grow from 4,000 to 13,400 (main: 3,600 after its install) at hacking 390-500 against phantasy and omega-net, the
-// share at up to 65 TB. Real time follows the running scripts more than the timers (5 virtual minutes: 44,000 timers
-// in 4.2 s with 1,000 scripts, 53,000 in 21.8 s with 7,200). At 2-3 times local, CI is at this bound.
+// up to about 150 s then. Since #345 seed 1 never installs in the hour (below), so more simulated work with no reset:
+// 132 s locally (133-139 s over four runs) against main's 48.7 s, 82 s of it in the last 20 virtual minutes, as the
+// running scripts grow from 4,000 to 13,400 (main: 3,600 after its install) at hacking 390-500 against phantasy and
+// omega-net, the share at up to 65 TB. Real time follows the running scripts more than the timers (5 virtual minutes:
+// 44,000 timers in 4.2 s with 1,000 scripts, 53,000 in 21.8 s with 7,200). CI at about 2-3 times local is 265-400 s:
+// 600 s. The checkpoints stay, as the comparison with the fork.
 test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the game's own summary, printed as a row", {
-  timeout: 300_000,
+  timeout: 600_000,
 }, async () => {
   const fresh = await freshStartOf({ withDesiredState: true, seed: 1, fixture: BASELINE.fixture });
   const game: CheckpointGame = { summary: () => fresh.simulation.summary(), run: (ms) => fresh.game.run(ms) };
