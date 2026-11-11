@@ -48,6 +48,13 @@ const FIVE = [
   "Neurotrainer I",
 ];
 
+/** The brain's line as it queues the install, before the install's gate and its save backup (augmentations.ts). */
+const INSTALL_QUEUED = /^augmentations: installing \d+ queued \(the gate, then a save backup first\)$/;
+
+/** The Agent sessions the brain has seen connect. */
+const agentSessions = (brain: { channelEvents: { type: string }[] }) =>
+  brain.channelEvents.filter((event) => event.type === "agentConnected").length;
+
 /** A purchase state in BitNode `n` with SF1.3 and SF4.3, nothing installed, `queued` queued. */
 const stateIn = (n: number, queued: string[]): AugmentationPurchaseState => ({
   installed: {},
@@ -59,7 +66,10 @@ const stateIn = (n: number, queued: string[]): AugmentationPurchaseState => ({
 const priceInBuyOrder = (n: number, names: string[], index: number) =>
   augmentationCost(names[index] as string, stateIn(n, names.slice(0, index))).money;
 
-/** Home's RAM upgrade price at `ram` GB (`Server/ServerPurchases.ts:66-76`; BN5's `HomeComputerRamCost` is 1). */
+/**
+ * Home's RAM upgrade price at `ram` GB (`PersonObjects/Player/PlayerObjectServerMethods.ts:30-40`; BN5's
+ * `HomeComputerRamCost` is 1).
+ */
 const upgradePrice = (ram: number) => ram * 32_000 * 1.58 ** Math.log2(ram);
 
 /** The game's own price now (`getAugCost`, which Singularity's `getAugmentationPrice` returns, `Singularity.ts:151-156`). */
@@ -111,9 +121,14 @@ test("an install at BN5's prices: CyberSec's five, home's RAM and NeuroFlux Gove
   await simulation.diagnostics.setMoney(fiveCost + homeRamPrice + neuroflux + 3_000_000);
   const editedAtMs = game.clock.now();
   await game.runUntil(() => controller.augmentationsView().committed, STAGE_MS);
+  const sessionsBefore = agentSessions(brain);
   controller.setProgramsEnabled(true);
   controller.setHomeRamEnabled(true);
   controller.setCloudServersEnabled(true);
+  // The backups counted as the install is queued, before its gate: the city factions' joins after the edit each take
+  // their own at their gate (augmentations-simulation's count).
+  await game.runUntil(() => brain.logLines.some((line) => INSTALL_QUEUED.test(line)), STAGE_MS);
+  const backupsBefore = brain.saveBackupEvents.length;
   await game.runUntil(() => (slow()?.resetInfo.lastAugReset ?? startedAt) !== startedAt, STAGE_MS);
   const resetSeenAtMs = game.clock.now();
 
@@ -149,14 +164,18 @@ test("an install at BN5's prices: CyberSec's five, home's RAM and NeuroFlux Gove
       ),
     );
   }
-  expect(brain.saveBackupEvents.filter((event) => "file" in event).length).toBeGreaterThanOrEqual(1);
+  // The install's gate: one save backup, its own (destroy-restart's check).
+  expect(brain.saveBackupEvents.slice(backupsBefore)).toEqual([expect.objectContaining({ file: expect.any(String) })]);
   expect(brain.logLines.filter((line) => line.includes("NOT QUEUED"))).toEqual([]);
 
   // The reset: the set installed, home's RAM kept, the next Agent back.
-  expect(slow()?.resetInfo).toMatchObject({ currentNode: 5, ownedSF: SOURCE_FILES });
+  expect(slow()?.resetInfo).toMatchObject({ currentNode: 5 });
+  expect(slow()?.resetInfo.ownedSF).toEqual(SOURCE_FILES);
   expect(slow()?.resetInfo.ownedAugs).toEqual(Object.fromEntries(set.map((name) => [name, 1])));
-  await game.runUntil(() => brain.channelEvents.filter((event) => event.type === "agentConnected").length >= 2, MINUTE);
+  await game.runUntil(() => agentSessions(brain) > sessionsBefore, MINUTE);
   await game.run(MINUTE);
+  expect(agentSessions(brain)).toBe(sessionsBefore + 1);
+  expect(brain.saveBackupEvents.slice(backupsBefore)).toHaveLength(1);
   expect(homeRam()).toBe(homeRamAfter);
   expect(controller.augmentationsView()).toMatchObject({ committed: false, notQueued: [] });
   expect(controller.installAwaitingRestart()).toBeNull();
@@ -239,7 +258,8 @@ test("the destroy at BN5's World Daemon: held short of 4,500, then the brain's o
   const hacking = () => (fresh.medium()?.player.skills as { hacking?: number } | undefined)?.hacking ?? 0;
   await game.runUntil(() => slow() !== null && fresh.medium() !== null, MINUTE);
   const before = slow()?.resetInfo;
-  expect(before).toMatchObject({ currentNode: 5, ownedSF: SOURCE_FILES, ownedAugs: { [RED_PILL]: 1 } });
+  expect(before).toMatchObject({ currentNode: 5, ownedAugs: { [RED_PILL]: 1 } });
+  expect(before?.ownedSF).toEqual(SOURCE_FILES);
   const nodeResetBefore = before?.lastNodeReset as number;
 
   // 4,500 in the game's static snapshot: BN1's 3,000 × BN5's 1.5.
@@ -271,22 +291,25 @@ test("the destroy at BN5's World Daemon: held short of 4,500, then the brain's o
 
   // Past 4,500 (a harness edit for the hours of it): the brain's own destroy, through the gate and a backup.
   const backupsBefore = brain.saveBackupEvents.length;
+  const sessionsBefore = agentSessions(brain);
   await simulation.diagnostics.gainHackingExp(PAST_4500_EXP);
   const levelledAtMs = game.clock.now();
   await game.runUntil(() => (slow()?.resetInfo.lastNodeReset ?? nodeResetBefore) !== nodeResetBefore, STAGE_MS);
   const enteredSeenAtMs = game.clock.now();
 
   // BN2.1: SF5.1 gained beside SF1.3 and SF4.3; the next Agent connected.
-  expect(slow()?.resetInfo).toMatchObject({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1 }, ownedAugs: {} });
-  // Through Singularity's `destroyW0r1dD43m0n`, which enters the next BitNode straight (`Singularity.ts:1186-1188`):
+  expect(slow()?.resetInfo).toMatchObject({ currentNode: 2, ownedAugs: {} });
+  expect(slow()?.resetInfo.ownedSF).toEqual({ 1: 3, 4: 3, 5: 1 });
+  // Through Singularity's `destroyW0r1dD43m0n`, which enters the next BitNode straight (`Singularity.ts:1188-1190`):
   // the page's way (the terminal's backdoor, then the portal) would reach the BitVerse first.
   expect(
     (await simulation.events(0)).events.filter((event) =>
       ["bitnodeDestroyed", "bitnodeFlumed", "bitverseReached"].includes(event.type),
     ),
   ).toEqual([expect.objectContaining({ type: "bitnodeDestroyed", destroyed: 5, entered: 2 })]);
-  expect(brain.channelEvents.filter((event) => event.type === "agentConnected").length).toBeGreaterThanOrEqual(2);
-  expect(brain.saveBackupEvents.length).toBeGreaterThan(backupsBefore);
+  expect(agentSessions(brain)).toBe(sessionsBefore + 1);
+  // The destroy's gate: one save backup, its own (destroy-restart's check).
+  expect(brain.saveBackupEvents.slice(backupsBefore)).toEqual([expect.objectContaining({ file: expect.any(String) })]);
   const stored = (kind: string) =>
     fresh.data.store
       .eventsInWindow({ environment: "E1", sinceMs: 0, untilMs: game.clock.now() })
