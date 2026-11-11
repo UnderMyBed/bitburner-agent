@@ -14,7 +14,7 @@ export const HACK_LOOP_SCRIPT_NAME = "hack-loop.js";
 export const LEVEL_LOOP_SCRIPT_NAME = "level-loop.js";
 /**
  * Levelling mode's grow loop (#336): grows its target for ever, in the level loop's place once the target is at its
- * minimum security, where a grow at its maximum money adds none (`Server/ServerHelpers.ts:201-212`) and earns 1.25 times
+ * minimum security and maximum money, where a grow adds none (`Server/ServerHelpers.ts:201-212`) and earns 1.25 times
  * a weaken's experience a thread-second. A script of its own: one script calling both would cost 0.15 GB a thread more.
  */
 export const LEVEL_GROW_SCRIPT_NAME = "level-grow.js";

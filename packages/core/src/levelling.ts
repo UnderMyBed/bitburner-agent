@@ -95,18 +95,21 @@ export function levellingExpPerThreadSecond(
  * the most experience a thread-second (`levellingExpPerThreadSecond`), ties to the first hostname and to the grow;
  * null with none above 0. Computed, never named: in BN1 and BN4 it's joesguns (base difficulty 15, minimum 5, required
  * 10), as `7.5 / 625` beats every other server's `(3 + 0.3 × base) / (2.5 × required × minimum + 500)`, whatever the
- * level and the speed, which only scale them all; and the grow, 1.25 times the weaken on every server. A grow there
- * keeps its minimum security only at its maximum money: the brain sends it once the target is at its minimum, a weaken
- * till then (./levelling.ts in the brain).
+ * level and the speed, which only scale them all; and the grow, 1.25 times the weaken on every server. A grow keeps
+ * its target's security only at its minimum security and maximum money (below it, a grow adds 0.004 a thread,
+ * `Server/ServerHelpers.ts:201-212`), so a target grows only where `mayGrow` says it's there (the brain's medium
+ * snapshot); elsewhere, the weaken (all may, absent).
  */
 export function chooseLevellingTarget<Target extends { hostname: string; figures: HackingTarget }>(
   targets: readonly Target[],
   player: HackingPlayer,
   hackingExp: number,
+  mayGrow: (target: Target) => boolean = () => true,
 ): (Target & { expPerThreadSecond: number; operation: LevellingOperation }) | null {
   let best: (Target & { expPerThreadSecond: number; operation: LevellingOperation }) | null = null;
   for (const target of targets) {
     for (const operation of LEVELLING_OPERATIONS) {
+      if (operation === "grow" && !mayGrow(target)) continue;
       const expPerThreadSecond = levellingExpPerThreadSecond(target.figures, player, hackingExp, operation);
       if (!(expPerThreadSecond > 0)) continue;
       if (
@@ -187,7 +190,9 @@ export interface LevellingInputs {
   /**
    * (c) NeuroFlux Governor's levels the money buys (A6's count, donations included: decision 53), home's level loop
    * threads (home's RAM is kept through an install, `Prestige.ts`), and one thread's predicted rate on the levelling
-   * target now (before the levels); null with no levels to buy or no levelling target.
+   * target after it (before the levels): a weaken's, as the install leaves every server below its maximum money
+   * (the servers made afresh at their starting money, `Prestige.ts:74`, `:98`; `Server/Server.ts:74-76`); null with no
+   * levels to buy or no levelling target.
    */
   install: { levels: number; homeThreads: number; perThread: LevellingRate } | null;
 }

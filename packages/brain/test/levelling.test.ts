@@ -39,6 +39,7 @@ import {
   type LevellingRuleInputs,
   levelAllThatsLeft,
   levellingFiguresOf,
+  levellingInputsOf,
   settleMsOf,
 } from "../src/levelling.ts";
 import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
@@ -125,6 +126,7 @@ function medium({
   rooted = true,
   homeGb = 4096,
   joesgunsSecurity = 5,
+  joesgunsMoney = 6.25e7,
 }: {
   level?: number;
   money?: number;
@@ -132,14 +134,16 @@ function medium({
   rooted?: boolean;
   homeGb?: number;
   joesgunsSecurity?: number;
+  /** joesguns' money: its maximum by default, so (at its minimum security too) the grow. */
+  joesgunsMoney?: number;
 } = {}): MediumSnapshotData {
-  const server = (hostname: string, maxRam: number, hasAdminRights = true, hackDifficulty = 5) => ({
+  const server = (hostname: string, maxRam: number, hasAdminRights = true, hackDifficulty = 5, moneyAvailable = 0) => ({
     hostname,
     maxRam,
     cpuCores: 1,
     hasAdminRights,
     backdoorInstalled: false,
-    moneyAvailable: 0,
+    moneyAvailable,
     hackDifficulty,
   });
   return {
@@ -149,7 +153,7 @@ function medium({
     servers: [
       server("home", homeGb),
       server("n00dles", 4, true, 1),
-      server("joesguns", 16, true, joesgunsSecurity),
+      server("joesguns", 16, true, joesgunsSecurity, joesgunsMoney),
       server("ecorp", 0, true, 33),
       server("w0r1d_d43m0n", 0, rooted, 1),
       server("pserv-0", 1024),
@@ -188,6 +192,17 @@ function slow({
 }
 
 describe("levelling mode's figures (#336)", () => {
+  test("(c) after the install at the weaken's rate: every server back at its starting money, below its maximum", () => {
+    const figures = levellingFiguresOf(STATIC, medium(), slow(), BN1_HACKING);
+    expect(figures?.target?.operation).toBe("grow");
+    const inputs = levellingInputsOf(figures as NonNullable<typeof figures>, 3000, null, null, 5);
+    expect(inputs.install?.perThread.expPerSecond).toBe(figures?.weakenExpPerThreadSecond);
+    expect((figures?.target?.expPerThreadSecond ?? 0) / (inputs.install?.perThread.expPerSecond ?? 1)).toBeCloseTo(
+      1.25,
+      12,
+    );
+  });
+
   test("the target computed (joesguns), the batcher's hosts and home's RAM beyond what it keeps, the player's", () => {
     const figures = levellingFiguresOf(STATIC, medium(), slow(), BN1_HACKING);
     expect(figures).toMatchObject({
@@ -239,6 +254,9 @@ describe("levelling mode's figures (#336)", () => {
   });
 });
 
+/** Home's level loop threads in the test's figures: 4,096 GB less 32, at 1.75 GB. */
+const HOME_THREADS = Math.floor((4096 - SHARE_HOME_KEPT_GB) / 1.75);
+
 describe("the levelling rule (#336)", () => {
   /** Its inputs over the snapshots: medium at `atMs` of the game's time, A6 offering `neuroFluxLevels`. */
   function inputsAt(
@@ -250,11 +268,12 @@ describe("the levelling rule (#336)", () => {
       installCommitted = false,
       enabled = true,
       slowData = slow(),
-      levelLoop = { sent: true, homeThreads: 100 },
+      levelLoop = { sent: true, homeThreads: HOME_THREADS },
       joesgunsSecurity = 5,
+      joesgunsMoney = 6.25e7,
     } = {},
   ): LevellingRuleInputs {
-    const mediumData = medium({ level, expAbove, joesgunsSecurity });
+    const mediumData = medium({ level, expAbove, joesgunsSecurity, joesgunsMoney });
     return {
       path: worldDaemonPath({ staticData: STATIC, mediumData, slowData, expPerSecond: null }),
       enabled,
@@ -327,15 +346,31 @@ describe("the levelling rule (#336)", () => {
     expect(lines).toEqual([
       expect.stringMatching(/^levelling: batching for money to levelling mode: batching for money about/),
     ]);
-    expect(levelling.view().lines[1]).toContain("chosen: levelling mode on joesguns, growing it");
+    expect(levelling.view().lines[1]).toContain("chosen: levelling mode on joesguns, growing it (the operation sent)");
     expect(levelling.view().lines[1]).toContain("not measured yet (1 taken, optimistic)");
   });
 
-  test("the operation: the grow once joesguns is at its minimum security, the weaken above it", () => {
+  test("the operation: the grow only at joesguns' minimum security and maximum money, the weaken otherwise", () => {
     const levelling = rule();
     measureMoney(levelling, 10);
     expect(levelling.update(inputsAt(5 * MINUTE, { joesgunsSecurity: 5.004 })).levelling?.operation).toBe("weaken");
-    expect(levelling.update(inputsAt(5 * MINUTE + 10 * SECOND)).levelling?.operation).toBe("grow");
+    // At its minimum security but below its maximum money, a grow would add security: the weaken, no flip.
+    expect(levelling.update(inputsAt(5 * MINUTE + 10 * SECOND, { joesgunsMoney: 6e7 })).levelling?.operation).toBe(
+      "weaken",
+    );
+    expect(levelling.view().lines[1]).toContain("weakening it (the operation sent)");
+    expect(levelling.update(inputsAt(5 * MINUTE + 20 * SECOND)).levelling?.operation).toBe("grow");
+    expect(levelling.view().lines[1]).toContain("growing it (the operation sent)");
+  });
+
+  test("the fit is for the threads running: home's loop at a tenth of its room, measured at its rate, fits 1", () => {
+    const levelling = rule();
+    const { switchedAtMs } = measureMoney(levelling, 10);
+    const homeThreads = Math.floor(HOME_THREADS / 10);
+    const running = (figures?.threads ?? 0) - HOME_THREADS + homeThreads;
+    const share = running / (figures?.threads ?? 1);
+    levelFor(levelling, switchedAtMs + 10 * SECOND, SETTLE_MS + 2 * MINUTE, share, { sent: true, homeThreads }, 3000);
+    expect(levelling.view().fit?.factor).toBeCloseTo(1, 2);
   });
 
   test("the first update settles: a restarted brain's level loops still landing aren't money's rate", () => {
@@ -366,7 +401,7 @@ describe("the levelling rule (#336)", () => {
     fromMs: number,
     durationMs: number,
     share: number,
-    levelLoop = { sent: true, homeThreads: 100 },
+    levelLoop = { sent: true, homeThreads: HOME_THREADS },
     expAt0 = 0,
   ) {
     for (let atMs = fromMs; atMs <= fromMs + durationMs; atMs += 10 * SECOND) {
@@ -604,6 +639,24 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     });
     expect(readAugmentationCycle(store)?.neuroFluxTarget).toBeGreaterThan(0);
     expect(state?.hackLoop.levelling).toEqual({ homeKeptGb: SHARE_HOME_KEPT_GB, operation: "grow" });
+  });
+
+  test("the operation sent flips with joesguns' state: the grow at its minimum and maximum money, else the weaken", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    writeAugmentationsEnabled(store, false);
+    aMinuteOf(connection);
+    expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("grow");
+    // Grown below its maximum (as an install leaves it, say): the weaken, which never raises its security.
+    send(connection, "medium", medium({ level: 2000, expAbove: 3000, joesgunsMoney: 1e6 }), 200 * SECOND);
+    expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("weaken");
+    expect(controller.levellingView().lines[1]).toContain("weakening it (the operation sent)");
+    // Above its minimum security: the weaken too.
+    send(connection, "medium", medium({ level: 2000, expAbove: 3100, joesgunsSecurity: 6 }), 210 * SECOND);
+    expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("weaken");
+    // Back at both: the grow.
+    send(connection, "medium", medium({ level: 2000, expAbove: 3200 }), 220 * SECOND);
+    expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("grow");
   });
 
   test("the fit only while the level loop runs: with the hack loop off while levelling, none; on, with it on home, one", () => {

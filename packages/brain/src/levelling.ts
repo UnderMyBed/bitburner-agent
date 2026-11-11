@@ -95,13 +95,18 @@ export function levelAllThatsLeft(path: WorldDaemonPath | null): boolean {
 
 /** What levelling mode would run, from the snapshots: the target, the RAM, and the player's figures. */
 export interface LevellingFigures {
-  /** The target, its operation's experience a thread-second at its minimum security, and the operation. */
+  /**
+   * The target, its operation's experience a thread-second at its minimum security, and the operation: the one sent, a
+   * grow only where the medium snapshot shows the target at its minimum security and maximum money.
+   */
   target: {
     hostname: string;
     figures: HackingTarget;
     expPerThreadSecond: number;
     operation: LevellingOperation;
   } | null;
+  /** The best weaken's experience a thread-second: (c)'s, after an install leaves every server below its money. */
+  weakenExpPerThreadSecond: number | null;
   /** The batcher's hosts (`hackLoopHosts`), their RAM, and home's RAM and what it keeps, GB. */
   hosts: string[];
   hostsGb: number;
@@ -161,8 +166,22 @@ export function levellingFiguresOf(
   const homeGb = mediumData.servers.find((server) => server?.hostname === "home")?.maxRam;
   const homeKeptGb = homeKeptGbOf(singularityRamMultiplierOf(slowData));
   const homeThreads = isFiniteNumber(homeGb) ? threadsThatFit(Math.max(0, homeGb - homeKeptGb), LEVEL_LOOP_RAM_GB) : 0;
+  // A grow only at the target's minimum security and maximum money, where it adds no security (#339's re-review).
+  const now = new Map(mediumData.servers.map((server) => [server?.hostname, server]));
+  const mayGrow = ({ hostname, figures }: { hostname: string; figures: HackingTarget }) => {
+    const server = now.get(hostname);
+    return (
+      isFiniteNumber(server?.hackDifficulty) &&
+      server.hackDifficulty <= figures.minDifficulty &&
+      isFiniteNumber(server.moneyAvailable) &&
+      figures.moneyMax > 0 &&
+      server.moneyAvailable >= figures.moneyMax
+    );
+  };
   return {
-    target: chooseLevellingTarget(targets, player, hackingExp),
+    target: chooseLevellingTarget(targets, player, hackingExp, mayGrow),
+    weakenExpPerThreadSecond:
+      chooseLevellingTarget(targets, player, hackingExp, () => false)?.expPerThreadSecond ?? null,
     hosts: hosts.map(({ hostname }) => hostname),
     hostsGb: hosts.reduce((total, { ram }) => total + ram, 0),
     homeGb: isFiniteNumber(homeGb) ? homeGb : 0,
@@ -188,6 +207,10 @@ export function levellingInputsOf(
 ): LevellingInputs {
   const { target, level } = figures;
   const perThread = target === null ? null : { expPerSecond: target.expPerThreadSecond, atLevel: level };
+  const afterInstall =
+    figures.weakenExpPerThreadSecond === null
+      ? null
+      : { expPerSecond: figures.weakenExpPerThreadSecond, atLevel: level };
   return {
     exp: figures.exp,
     level,
@@ -199,9 +222,9 @@ export function levellingInputsOf(
         ? null
         : { predicted: { expPerSecond: perThread.expPerSecond * figures.threads, atLevel: level }, factor },
     install:
-      perThread === null || neuroFluxLevels === null || neuroFluxLevels <= 0
+      afterInstall === null || neuroFluxLevels === null || neuroFluxLevels <= 0
         ? null
-        : { levels: neuroFluxLevels, homeThreads: figures.homeThreads, perThread },
+        : { levels: neuroFluxLevels, homeThreads: figures.homeThreads, perThread: afterInstall },
   };
 }
 
@@ -321,21 +344,6 @@ export interface LevellingView {
   lines: string[];
 }
 
-/**
- * The operation levelling mode sends now (#336's review): the target's best (core's `chooseLevellingTarget`), but a
- * grow only once the medium snapshot shows the target at its minimum security. A grow below its maximum money adds
- * security (`Server/ServerHelpers.ts:201-212`), so the weaken takes it back to its minimum first; at its maximum money,
- * grown by the first grows, no grow adds any, and it stays a grow.
- */
-export function operationNow(
-  target: NonNullable<LevellingFigures["target"]>,
-  mediumData: MediumSnapshotData | null,
-): LevellingOperation {
-  if (target.operation !== "grow") return target.operation;
-  const security = mediumData?.servers.find((server) => server?.hostname === target.hostname)?.hackDifficulty;
-  return isFiniteNumber(security) && security <= target.figures.minDifficulty ? "grow" : "weaken";
-}
-
 /** The levelling rule (#336), as the controller runs it. */
 export class LevellingRule {
   readonly #log: (line: string) => void;
@@ -422,7 +430,9 @@ export class LevellingRule {
     const target = figures.target;
     if (measured !== null && this.#mode === "money") this.#money = measured;
     if (measured !== null && this.#mode === "level" && target !== null) {
-      const predicted = target.expPerThreadSecond * figures.threads * ((measured.atLevel + 50) / (figures.level + 50));
+      // For the threads running (#339's re-review): the hosts' as sent, home's as the fast snapshot shows them.
+      const running = figures.threads - figures.homeThreads + inputs.levelLoop.homeThreads;
+      const predicted = target.expPerThreadSecond * running * ((measured.atLevel + 50) / (figures.level + 50));
       if (predicted > 0)
         this.#fit = { measured: measured.expPerSecond, predicted, factor: measured.expPerSecond / predicted };
     }
@@ -451,7 +461,7 @@ export class LevellingRule {
               target: target.hostname,
               hosts: figures.hosts,
               homeKeptGb: figures.homeKeptGb,
-              operation: operationNow(target, mediumData),
+              operation: target.operation,
             },
     };
   }
@@ -473,7 +483,7 @@ export class LevellingRule {
       `  chosen: ${LEVELLING_CANDIDATE_WORDS[this.#mode]}` +
         (this.#mode === "money" || target === null
           ? ""
-          : ` on ${target}, ${figures.target?.operation === "grow" ? "growing" : "weakening"} it ` +
+          : ` on ${target}, ${figures.target?.operation === "grow" ? "growing" : "weakening"} it (the operation sent) ` +
             `(${Math.floor(figures.threads).toLocaleString("en-US")} threads, home's beyond ` +
             `${Math.round(figures.homeKeptGb).toLocaleString("en-US")} GB among them)`) +
         "; levelling's fitted factor " +

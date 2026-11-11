@@ -16,7 +16,7 @@ import {
   AUGMENTATIONS,
   deployedFilePath,
   hackingExpOfLevel,
-  LEVEL_GROW_SCRIPT_NAME,
+  LEVEL_LOOP_SCRIPT_NAME,
   type MediumSnapshotData,
   NEUROFLUX_GOVERNOR,
   type SlowSnapshotData,
@@ -107,18 +107,19 @@ test.each(SEEDS)(
     ]);
     expect(fresh.controller().hackLoopView()).toMatchObject({ target: "joesguns", levelling: true });
 
-    // Its measured rate once settled, fitted against the formula's for the RAM sent, the grow's: near it over the
-    // window's 10 minutes (1.007 to 1.008 on seeds 1 to 4).
+    // Its measured rate once settled, fitted against the formula's for the threads running, the weaken's: near it over
+    // the window's 10 minutes (0.975 to 1.034 on seeds 1 to 4).
     await game.runUntil(() => fresh.controller().levellingView().fit !== null, STAGE_MS);
     await game.run(10 * MINUTE);
     const fit = fresh.controller().levellingView().fit;
     console.log(`seed ${seed}: levelling's fit ${JSON.stringify(fit)}`);
-    expect(fit?.factor).toBeGreaterThan(0.98);
-    expect(fit?.factor).toBeLessThan(1.02);
-    // The grow loop on home, beyond what home keeps for the Agent, and on the hosts, joesguns at its minimum security
-    // (weakened there first, as the weaken goes before the grow); no batcher.
-    expect(fresh.controller().levellingView().lines[1]).toContain("growing it");
-    const loopFile = deployedFilePath(fresh.deploymentId, LEVEL_GROW_SCRIPT_NAME);
+    expect(fit?.factor).toBeGreaterThan(0.95);
+    expect(fit?.factor).toBeLessThan(1.05);
+    // The level loop on home, beyond what home keeps for the Agent, and on the hosts, joesguns weakened to its minimum
+    // security; the weaken, not the grow, as the install left joesguns at its starting money, a 25th of its maximum
+    // (`Server/Server.ts:74-76`), and a grow there would add security. No batcher.
+    expect(fresh.controller().levellingView().lines[1]).toContain("weakening it (the operation sent)");
+    const loopFile = deployedFilePath(fresh.deploymentId, LEVEL_LOOP_SCRIPT_NAME);
     const onHome = (await simulation.ps("home")).filter((process) => process.filename === loopFile);
     expect(onHome).toEqual([expect.objectContaining({ args: ["joesguns"] })]);
     const homeThreads = onHome[0]?.threads ?? 0;

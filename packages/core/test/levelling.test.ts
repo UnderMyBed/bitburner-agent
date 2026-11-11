@@ -103,6 +103,16 @@ describe("the experience a grow or weaken thread earns a second (#336)", () => {
     for (const player of [BN4_PLAYER, slow]) {
       expect(chooseLevellingTarget(SERVERS, player, 1)).toMatchObject({ hostname: "joesguns", operation: "grow" });
     }
+    // Where it may not grow (not at its minimum security and maximum money), the weaken.
+    expect(chooseLevellingTarget(SERVERS, slow, 1, () => false)).toMatchObject({
+      hostname: "joesguns",
+      operation: "weaken",
+    });
+    // Only foodnstuff may: its grow's 6 / 507.5 / 3.2 beats joesguns' weaken's 7.5 / 625 / 4.
+    expect(chooseLevellingTarget(SERVERS, slow, 1, (target) => target.hostname === "foodnstuff")).toMatchObject({
+      hostname: "foodnstuff",
+      operation: "grow",
+    });
     // Without joesguns, foodnstuff's 6 / 507.5 beats sigma-cosmetics' 6 / 537.5.
     expect(chooseLevellingTarget(SERVERS.slice(0, 3), slow, 1)?.hostname).toBe("foodnstuff");
     expect(chooseLevellingTarget([], slow, 1)).toBeNull();
@@ -163,13 +173,15 @@ describe("the time to a level (#336)", () => {
 });
 
 describe("the candidates and the choice (#336), on BN4.1's last snapshot", () => {
-  // The chosen operation's, the grow's: once joesguns is at its minimum security, and its maximum money.
+  // The chosen operation's, the grow's, joesguns at its minimum security and maximum money; after an install, the
+  // weaken's (every server back at its starting money).
   const joesgunsRate = levellingExpPerThreadSecond(
     SERVERS[3]?.figures as HackingTarget,
     BN4_PLAYER,
     BN4_HACKING_EXP,
     "grow",
   );
+  const weakenRate = levellingExpPerThreadSecond(SERVERS[3]?.figures as HackingTarget, BN4_PLAYER, BN4_HACKING_EXP);
   const threads = levelLoopThreads([CLOUD_GB, HOME_GB - 32]);
   const homeThreads = levelLoopThreads([HOME_GB - 32]);
   const inputs = {
@@ -179,21 +191,27 @@ describe("the candidates and the choice (#336), on BN4.1's last snapshot", () =>
     levelMult: BN4_LEVEL_MULT,
     money: { expPerSecond: 2.65e6, atLevel: 6779 },
     levelling: { predicted: { expPerSecond: joesgunsRate * threads, atLevel: 6779 }, factor: null },
-    install: { levels: 17, homeThreads, perThread: { expPerSecond: joesgunsRate, atLevel: 6779 } },
+    install: { levels: 17, homeThreads, perThread: { expPerSecond: weakenRate, atLevel: 6779 } },
   };
 
-  test("the figures the PR quotes: (a) 2,307.7 h, (b) 61.7 min, (c) 20.1 / 27.1 / 103.1 min at 17 / 10 / 1 levels", () => {
+  test("the figures the PR quotes: (a) 2,307.7 h, (b) 61.7 min, (c) 20.5 / 29.3 / 124.2 min at 17 / 10 / 1 levels", () => {
     const estimates = levellingEstimates(inputs);
     // At a flat 2.65e6/s, 2.82e13 more experience is the report's 2,873 h; its rise with the level takes some off.
     expect((estimates.money as number) / HOUR).toBeCloseTo(2307.75, 1);
     expect((estimates.level as number) / 60).toBeCloseTo(61.7, 1);
+    // Below its maximum money, the weaken: 77.1 min.
+    const weakening = levellingEstimates({
+      ...inputs,
+      levelling: { predicted: { expPerSecond: weakenRate * threads, atLevel: 6779 }, factor: null },
+    });
+    expect((weakening.level as number) / 60).toBeCloseTo(77.1, 1);
     // The install's own 15 minutes and the root's 3.4, then 17 levels' cut: 9,000 at ×13.5 is about 6e11 experience.
     // The 17 are assumed (the store's NeuroFlux Governor level isn't in the fixture), not derived from $6.96e15.
-    expect((estimates.install as number) / 60).toBeCloseTo(20.1, 1);
+    expect((estimates.install as number) / 60).toBeCloseTo(20.5, 1);
     const levels = (count: number) =>
       (levellingEstimates({ ...inputs, install: { ...inputs.install, levels: count } }).install as number) / 60;
-    expect(levels(10)).toBeCloseTo(27.1, 1);
-    expect(levels(1)).toBeCloseTo(103.1, 1);
+    expect(levels(10)).toBeCloseTo(29.3, 1);
+    expect(levels(1)).toBeCloseTo(124.2, 1);
     expect(chooseLevelling(estimates, "money")).toBe("install");
     expect(chooseLevelling(estimates, "level")).toBe("install");
   });
@@ -211,7 +229,7 @@ describe("the candidates and the choice (#336), on BN4.1's last snapshot", () =>
     const expected =
       (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS) / 1000 +
       secondsToHackingLevel(0, BN4_REQUIRED, BN4_LEVEL_MULT * hacking ** 17, {
-        expPerSecond: joesgunsRate * homeThreads * (hackingExp * hackingSpeed) ** 17 * 0.8,
+        expPerSecond: weakenRate * homeThreads * (hackingExp * hackingSpeed) ** 17 * 0.8,
         atLevel: 6779,
       });
     const install = levellingEstimates({ ...inputs, levelling: { ...inputs.levelling, factor: 0.8 } }).install;

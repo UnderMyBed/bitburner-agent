@@ -3260,13 +3260,13 @@ describe("the levelling choice (#336)", () => {
     money = 6.96e15,
     daemonRooted = true,
   ): MediumSnapshotData {
-    const server = (hostname: string, maxRam: number, security = 1) => ({
+    const server = (hostname: string, maxRam: number, security = 1, moneyAvailable = 0) => ({
       hostname,
       maxRam,
       cpuCores: 1,
       hasAdminRights: hostname !== "w0r1d_d43m0n" || daemonRooted,
       backdoorInstalled: false,
-      moneyAvailable: 0,
+      moneyAvailable,
       hackDifficulty: security,
     });
     return {
@@ -3292,7 +3292,8 @@ describe("the levelling choice (#336)", () => {
       servers: [
         server("home", 33.5e6),
         server("pserv-0", 26.2e6),
-        server("joesguns", 16, 5),
+        // At its minimum security and maximum money: the grow (#339's re-review).
+        server("joesguns", 16, 5, 6.25e7),
         server("ecorp", 0, 33),
         server("w0r1d_d43m0n", 0),
       ],
