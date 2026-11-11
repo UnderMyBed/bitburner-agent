@@ -19,7 +19,7 @@
  * purchase a medium snapshot, cloud servers on its own income measure (./money.ts); the batches' use of their hosts,
  * for the share, is core's batch maths on the state (./batches.ts); each tested against the brain's own functions
  * (packages/brain/test/backdoors.test.ts and cloud-servers.test.ts).
- * Not wired into the brain's choices (owner decision 46: phase B replaces a choice only where it measurably beats it).
+ * Not wired into the brain's choices yet (owner decision 67: planner v0 chooses among the rules' candidates, #14).
  */
 import {
   type AugmentationPurchaseState,

@@ -1,6 +1,6 @@
 # 0011 — The simulator compares at checkpoints; full-length runs are occasional
 
-- **Status:** Accepted (2026-10-25). Amended by [owner decision 32](owner-decisions.md) (the fork baseline runs only when it can change, not at every release), [owner decision 46](owner-decisions.md) (the M4 comparisons below are phase B's, and the campaign no longer waits for them), and [owner decision 65](owner-decisions.md) (Q10's answer: what "at least as far along" means; full-length runs may run more than one seed at once).
+- **Status:** Accepted (2026-10-25). Amended by [owner decision 32](owner-decisions.md) (the fork baseline runs only when it can change, not at every release), [owner decision 46](owner-decisions.md) (the M4 comparisons below are phase B's, and the campaign no longer waits for them), and [owner decision 65](owner-decisions.md) (Q10's answer: what "at least as far along" means; full-length runs may run more than one seed at once), and [owner decision 67](owner-decisions.md) (#337: that gate is retired as the progress measure, for the online hours to the destroy for each BitNode; the comparison stays as a record).
 - **Amends:** [0007](0007-headless-engine-simulator.md) (what the simulator is used for), and the M1 and M4 (now M4 phase B) exit criteria in [architecture §13](../architecture.md#13-milestones)
 
 ## Context
