@@ -42,6 +42,16 @@ import { useFreshStarts } from "./helpers/fresh-start.ts";
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
+/** The planner's install timing as an `augmentationProgress` event logs it (#343, core's `installTiming`). */
+interface LoggedTiming {
+  adding: number;
+  onlineMs: number;
+  candidates: { k: number; tauMs: number; estimateMs: number }[];
+  choice: number | null;
+  heldForIncome: boolean;
+  heldForInvitation: boolean;
+}
+
 /** Seeds as the baseline's `--seeds` takes them (`a..b` or `a,b,c`, distinct); seed 1 when unset. Else it throws. */
 export function seedsOf(text: string | undefined): number[] {
   if (text === undefined) return [1];
@@ -457,12 +467,14 @@ test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the g
   });
   // The peak is every poll's highest. Since #345 the planner counts the share in its τ by work, and seed 1 waits all
   // hour: its countables at an install rise from 0 to 7 between 23 and 60 minutes online, each wait coming in about as
-  // estimated (at 35 minutes, waiting for 3 more, 4.8 h to the count, against installing now's 5.4 h), with no install
-  // (on main, #343's install at 35 minutes: 3 new, installing now 5.4 h against waiting 5.5 h). Its level at 1 h, 506,
-  // passes main's 458 with that install.
+  // estimated (at 36 minutes, waiting for 3 more, 4.9 h to the count, against installing now's 5.4 h; the share bonus at
+  // its 10-minute mean, #345's review), with no install (on main, #343's install at 35 minutes: 3 new, installing now
+  // 5.4 h against waiting 5.5 h). Its level at 1 h, 506, passes main's 458 with that install.
   expect(last.peakHackingLevel).toBe(Math.max(...levels));
   // The planner sound over the run: the countables at an install rose; no wait went overdue; past the income's first
-  // window (10 minutes), every timing it logged made a choice.
+  // window (10 minutes), every timing it logged made a choice; and each choice is its candidates' least estimate, a tie
+  // to installing now (then to the fewer to wait for), or the least wait while installing now is held (core's
+  // `installTiming`). A planner always installing now, or always waiting for the most, fails it.
   const events = fresh.data.store.eventsInWindow({
     environment: "E1",
     sinceMs: EPOCH_MS,
@@ -470,12 +482,20 @@ test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the g
   });
   const timings = events
     .filter((event) => event.kind === AUGMENTATION_PROGRESS_EVENT_KIND)
-    .map((event) => (event.detail as { timing?: { adding: number; onlineMs: number; choice: number | null } }).timing)
+    .map((event) => (event.detail as { timing?: LoggedTiming }).timing)
     .filter((timing) => timing !== undefined && timing !== null);
   expect(timings.length).toBeGreaterThan(0);
   expect(Math.max(...timings.map((timing) => timing.adding))).toBeGreaterThan(timings[0]?.adding ?? 0);
   expect(events.filter((event) => event.kind === AUGMENTATION_WAIT_OVERDUE_EVENT_KIND)).toEqual([]);
   expect(timings.filter((timing) => timing.onlineMs >= 10 * MINUTE && timing.choice === null)).toEqual([]);
+  const least = ({ candidates, heldForIncome, heldForInvitation }: LoggedTiming) => {
+    const allowed = candidates.filter((each) => !(heldForIncome || heldForInvitation) || each.k > 0);
+    return allowed.reduce<LoggedTiming["candidates"][number] | null>(
+      (best, each) => (best === null || each.estimateMs < best.estimateMs ? each : best),
+      null,
+    );
+  };
+  expect(timings.filter((timing) => timing.choice !== (least(timing)?.k ?? null))).toEqual([]);
   // The brain played: past hacking 1, home at SF1's 32 GB or more.
   expect(last.reading.hackingLevel).toBeGreaterThan(50);
   expect(last.reading.homeRamMax).toBeGreaterThanOrEqual(32);

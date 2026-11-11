@@ -247,13 +247,18 @@ test("the share bonus (#224, #345): 1 + ln(power)/25 multiplies hacking work's r
 
 /**
  * The Red Pill holds of BN1.2, BN1.3, BN1.4 and BN4.1 (#345, the store to 2026-11-11): Daedalus's hacking work, favour
- * 0, focused, from the hold's start to its choice. The hacking level at each end, `faction_rep`, the share bonus (the
- * fast snapshots' mean over the hold), the BitNode's FactionWorkRepGain (0.75 in BN4, `BitNode.tsx:651`), Daedalus's
- * reputation at each end over the online minutes taken, and the rate the brain's `factionWorkChosen` logged.
+ * 0, focused, from the hold's start (the work's choice) to the install's. The hacking level at each end; `faction_rep`,
+ * the last medium snapshot's `player.mults` at the hold's start; two share bonuses from the fast snapshots' batcher
+ * health: `share`, its mean over the hold, and `choiceShare`, the one the work's choice took (the last within 2 minutes
+ * of it; 1 in BN1.2 and BN1.3, whose logged rate is the formula's with none: no share ran yet); the BitNode's
+ * FactionWorkRepGain (0.75 in BN4, `BitNode.tsx:651`); Daedalus's reputation at each end over the online minutes
+ * taken; and the rate `factionWorkChosen` logged, to 0.1. Read from a copy of the store by #345's analysis, its
+ * queries' figures listed in #351.
  */
 const RED_PILL_HOLDS = [
   {
     node: "BN1.2",
+    choiceShare: 1,
     hacking: [2_970, 5_185],
     factionRep: 3.221,
     share: 1.603,
@@ -264,6 +269,7 @@ const RED_PILL_HOLDS = [
   },
   {
     node: "BN1.3",
+    choiceShare: 1,
     hacking: [2_679, 4_676],
     factionRep: 3.041,
     share: 1.625,
@@ -274,6 +280,7 @@ const RED_PILL_HOLDS = [
   },
   {
     node: "BN1.4",
+    choiceShare: 1.555,
     hacking: [5_569, 7_685],
     factionRep: 4.986,
     share: 1.615,
@@ -284,6 +291,7 @@ const RED_PILL_HOLDS = [
   },
   {
     node: "BN4.1",
+    choiceShare: 1.582,
     hacking: [2_633, 4_773],
     factionRep: 2.913,
     share: 1.625,
@@ -315,11 +323,10 @@ test.each(RED_PILL_HOLDS)(
     expect(rateAt(toLevel, hold.share)).toBeGreaterThan(measured);
     // Without the share, even the last level's rate is under it: the level's rise alone can't account for it.
     expect(rateAt(toLevel, 1)).toBeLessThan(measured);
-    // The logged rate is the formula at the first level: in BN1.2 and BN1.3 without the share (none ran yet at the
-    // choice), in BN1.4 and BN4.1 with it (the bonus then, near the hold's mean).
-    const loggedShare = hold.node === "BN1.2" || hold.node === "BN1.3" ? 1 : hold.share;
-    expect(rateAt(fromLevel, loggedShare) / hold.logged).toBeCloseTo(1, 1);
-    // The ETA at the first level with the share is still too long: the level's rise, left out, is cautious for waiting.
+    // The logged rate is the formula at the first level with the bonus at the choice: in BN1.2 and BN1.3 none (no
+    // share ran yet), in BN1.4 and BN4.1 the one then, under the hold's mean.
+    expect(rateAt(fromLevel, hold.choiceShare)).toBeCloseTo(hold.logged, 1);
+    // The ETA at the first level with the hold's mean share is still too long: the level's rise, left out, is cautious for waiting.
     const etaMinutes = (toRep - fromRep) / rateAt(fromLevel, hold.share) / 60;
     expect(etaMinutes).toBeGreaterThan(hold.min);
   },

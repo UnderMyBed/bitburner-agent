@@ -156,6 +156,15 @@ export const AUGMENTATION_COUNT_HOLD_SETTING = "augmentations.countHold";
 
 /** How long the income is measured over: the slow snapshots' money sources across 10 minutes. */
 export const AUGMENTATION_INCOME_WINDOW_MS = 10 * 60_000;
+
+/**
+ * The share bonus A6's estimates by work take (#345's review): the mean of its samples over the income's window, one a
+ * slow snapshot, so a dip for an update (a stale health, a batcher restarting, a work switch) moves it a tenth of the
+ * way to 1, and it is 1 only once no share ran in the whole window; 1 with no samples.
+ */
+export function shareBonusMean(bonuses: readonly number[]): number {
+  return bonuses.length === 0 ? 1 : bonuses.reduce((sum, bonus) => sum + bonus, 0) / bonuses.length;
+}
 /**
  * Slow snapshots further apart than this (3 slow intervals, 3 minutes) have a gap between them: the game closed
  * (offline earns a fraction of the online rate), or the Agent or the brain away. The time across it isn't online time
@@ -519,8 +528,10 @@ export interface AugmentationInputs {
    */
   invitationHold?: number;
   /**
-   * The share bonus the batcher reports running (#345, the controller's `shareBonusOf`, ./share.ts), in the work's rate
-   * that A6's estimates by work take (`countablesToCome`: the planner's τ, #243's hold). Absent, 1: none running.
+   * The share bonus the batcher reports running (#345, the controller's `shareBonusOf`, ./share.ts), sampled at each
+   * slow snapshot: A6's estimates by work (`countablesToCome`: the planner's τ, #243's hold) take its mean over the
+   * income's window (`shareBonusMean`), a rate fitted online (owner decision 67), so a dip doesn't flip a wait to an
+   * install. Absent, 1: none running.
    */
   shareBonus?: number;
 }
@@ -1045,6 +1056,8 @@ export class AugmentationRule {
   readonly #emit: (event: AugmentationEvent) => void;
   /** The income's samples: the game's time, the money earned since the install, and that install. */
   #incomeSamples: { gameTimeMs: number; earned: number; lastAugReset: number }[] = [];
+  /** The share bonus's samples (#345's review): the game's time, the bonus then, and the install; the income's window. */
+  #shareSamples: { gameTimeMs: number; bonus: number; lastAugReset: number }[] = [];
   /**
    * The bars' clock (#222), as stored. There's no NS call for the time online since an install
    * (`getTimeSinceLastAug` went in 3.0), so it's the time the brain saw online.
@@ -1314,7 +1327,7 @@ export class AugmentationRule {
       this.#view = { ...this.#view, asking: null, waitingFor, committed, reserve, ...view };
       return { intent: null, install: false, committed };
     };
-    if (slowData !== null) this.#sample(slowData, slowGameTimeMs, atMs);
+    if (slowData !== null) this.#sample(slowData, slowGameTimeMs, atMs, inputs.shareBonus ?? 1);
     this.#recordDone(doneIds, fastGameTimeMs, atMs);
     this.#watchInstallDone(doneIds, slowGameTimeMs, atMs);
     // Spending a medium snapshot taken after it already shows.
@@ -1370,7 +1383,7 @@ export class AugmentationRule {
         gangUnread: inputs.gangUnread ?? false,
         levellingInstall: inputs.levellingInstall ?? false,
         invitationHold: inputs.invitationHold ?? 0,
-        shareBonus: inputs.shareBonus ?? 1,
+        shareBonus: shareBonusMean(this.#shareSamples.map((sample) => sample.bonus)),
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -1378,7 +1391,7 @@ export class AugmentationRule {
   }
 
   /** A slow snapshot: a reset; and once per snapshot, the bars' clock, the income's sample and the faction state's read. */
-  #sample(slowData: SlowSnapshotData, gameTimeMs: number | null, atMs: number): void {
+  #sample(slowData: SlowSnapshotData, gameTimeMs: number | null, atMs: number, shareBonus: number): void {
     const lastAugReset = slowData.resetInfo?.lastAugReset;
     if (isFiniteNumber(lastAugReset) && this.#lastAugReset !== null && lastAugReset !== this.#lastAugReset) {
       // A new game: its purchases start afresh.
@@ -1441,6 +1454,12 @@ export class AugmentationRule {
       );
       if (old > 0) this.#incomeSamples = this.#incomeSamples.slice(old);
     }
+    // The share bonus's samples: this cycle's, within the window (a gap starts them afresh, as the income's).
+    this.#shareSamples = this.#shareSamples.filter(
+      (sample) =>
+        !gap && sample.lastAugReset === lastAugReset && gameTimeMs - sample.gameTimeMs < AUGMENTATION_INCOME_WINDOW_MS,
+    );
+    if (isFiniteNumber(lastAugReset)) this.#shareSamples.push({ gameTimeMs, bonus: shareBonus, lastAugReset });
     this.#confirmQueued(slowData, atMs);
   }
 

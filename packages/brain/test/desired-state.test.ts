@@ -1438,6 +1438,27 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       const augmentationIntents = (ids: string[]) =>
         ids.filter((id) => id === INSTALL.id || id.startsWith("purchaseAugmentation"));
 
+      test("the share bonus the batcher reports reaches the planner's τ by work (#345): The Black Hand at ×1.6", () => {
+        const { controller, connection } = connectedWithLoopOff("planner");
+        // The batcher's health first: share threads running, the bonus 1.6, so each slow snapshot samples it.
+        const sharing = { wanted: true, threads: 1_000, ramGb: 4_000, hostsRamGb: 4_000, bonus: 1.6, roomGb: 0 };
+        const health = { ...newBatcherHealth("n00dles", "r", 1_000), state: "batching" as const, sharing };
+        send(connection, "fast", { degradedTiers: [], pageHeapUsedBytes: null, game: null, batcher: health });
+        // The Black Hand 30 minutes off by A5's work at ×1.6 (hacking 300, favour 0), its money in hand.
+        const rate = factionReputationPerSecond(
+          { skills: richMedium(0).player.skills, mults: { faction_rep: 1 } },
+          "hacking",
+          { favor: 0, sourceFile15Level: 0, factionWorkRepGain: 1, focused: true, implant: false },
+        );
+        const blackHand = 100_000 - rate * 1.6 * 30 * 60;
+        for (let minute = 0; minute <= 10; minute += 1) minuteAt(connection, minute, 1e12, { blackHand });
+        expect(controller.augmentationsView().progress?.timing?.next[0]).toMatchObject({
+          augmentation: TBH,
+          way: "work",
+          tauMs: expect.closeTo(30 * MINUTE, -3),
+        });
+      });
+
       test("a wait at 29 of 30, The Black Hand's money 5 min off: nothing goes; restarted, no income measured, still none", () => {
         const { controller, connection, sentIds } = connectedWithLoopOff("planner");
         // Ten minutes of slow snapshots measure the income; meanwhile installing now is held for it.
@@ -3113,15 +3134,17 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       sendAt(connection, "slow", slow, 7 * 3_600_000 + MINUTE);
       send(connection, "medium", player(medium(1.5e9)));
       expect(controller.augmentationsView().progress?.countHold).toBeNull();
-      // The batcher's health: share threads running, the bonus 1.6. A6's estimate counts it: 25 / 1.6 minutes, held.
+      // The batcher's health: share threads running, the bonus 1.6, sampled at the next slow snapshot. A6's estimate
+      // takes the window's mean, (1 + 1.6) / 2: 25 / 1.3 minutes, held.
       const sharing = { wanted: true, threads: 1_000, ramGb: 4_000, hostsRamGb: 4_000, bonus: 1.6, roomGb: 0 };
       const health = { ...newBatcherHealth("n00dles", "r", 1_000), state: "batching" as const, sharing };
       send(connection, "fast", { degradedTiers: [], pageHeapUsedBytes: null, game: null, batcher: health });
+      sendAt(connection, "slow", slow, 7 * 3_600_000 + 2 * MINUTE);
       send(connection, "medium", player(medium(1.5e9)));
       expect(controller.augmentationsView().progress?.countHold).toMatchObject({
         augmentation: TBH,
         way: "work",
-        etaMs: expect.closeTo((25 / 1.6) * MINUTE, -3),
+        etaMs: expect.closeTo((25 / 1.3) * MINUTE, -3),
       });
     });
 

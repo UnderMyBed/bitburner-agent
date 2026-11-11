@@ -89,7 +89,8 @@ export interface HoldWork {
  *   `planDonations` has it, legacy `faction-manager.js:891`), so only the difference is its;
  * - work, the sooner of that and a donation: only at a seller someone works for: the owner's faction work there, at
  *   its work type; or, with no owner's work and A5's switch on, A5 under the hold (`bestWorkRate`, the work's formula;
- *   since #345 with the share bonus `conditions` carry: the brain's measured, 1 while none runs, cautious for waiting;
+ *   since #345 with the share bonus `conditions` carry: the brain's mean over the income's window of the one measured,
+ *   1 with none in it, cautious for waiting;
  *   the level's rise over the work left out: cautious for waiting, optimistic for installing now);
  * - its money: the set with it, in buy order (`augmentationBuyOrder`: a dear one goes first), with the set's donations
  *   and its own, beyond `money`, at `income` a second. With no income measured, only what `money` covers, unless
