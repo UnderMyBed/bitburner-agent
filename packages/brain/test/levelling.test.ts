@@ -12,6 +12,7 @@ import {
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
+  type HackingTarget,
   hackingExpOfLevel,
   LEVEL_LOOP_RAM_GB,
   LEVELLING_INSTALL_MS,
@@ -224,8 +225,8 @@ describe("levelling mode's figures (#336)", () => {
   });
 
   test("a mode settles a minute and the longest weaken still landing, at each target's security now", () => {
-    const joesguns = { hostname: "joesguns", figures: { ...(STATIC.servers[2] as never) } };
-    const figures = STATIC.servers[2] as { minDifficulty: number; requiredHackingSkill: number };
+    const figures = STATIC.servers[2] as HackingTarget;
+    const joesguns = { hostname: "joesguns", figures };
     const settle = settleMsOf(medium(), BN1_HACKING, [joesguns]);
     const weakenMs = ((4 * 5 * (2.5 * figures.requiredHackingSkill * 5 + 500)) / (2000 + 50)) * 1000;
     expect(settle).toBeCloseTo(LEVELLING_SETTLE_MS + weakenMs, 6);
@@ -320,7 +321,7 @@ describe("the levelling rule (#336)", () => {
     const predicted = (figures?.target?.expPerThreadSecond ?? 0) * (figures?.threads ?? 0);
     // While it settles, the batcher's last waves land, a burst; then half the formula's rate: the factor 0.5.
     // Chosen at 60 s, as money's rate first spans a minute.
-    const startMs = 60 * SECOND + settleMsOf(medium(), BN1_HACKING, [figures?.target as never]);
+    const startMs = 60 * SECOND + settleMsOf(medium(), BN1_HACKING, figures?.target ? [figures.target] : []);
     const burst = 700 + 1e6;
     for (let atMs = 80 * SECOND; atMs < startMs; atMs += 10 * SECOND) {
       levelling.update(inputsAt(atMs, { expAbove: atMs < 100 * SECOND ? 700 : burst }));
