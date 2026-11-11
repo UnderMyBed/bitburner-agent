@@ -14,7 +14,8 @@
 // `levellingChosen` events (none, a brain from before #336: batching for money), and levelling mode's fitted factor,
 // its measured rate against the formula's. A failure: the brain not on the shortest (past the hysteresis' 1.25 times)
 // for longer than a choice takes (`LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS`), or its choice's estimate past the time
-// the BitNode has taken so far, a hopeless one (decision 67's point 8).
+// the BitNode has taken so far, a hopeless one (decision 67's point 8). With the World Daemon's switch off, both are
+// warnings: the destroy isn't wanted, and money is what the owner asked for.
 import {
   gangFactionOf,
   LEVELLING_SWITCH_GAIN,
@@ -240,6 +241,7 @@ export class WorldDaemonFold {
       formatTime,
       bitNodeAt,
       snapshots,
+      worldDaemonEnabled = true,
     }: {
       failures: string[];
       warnings: string[];
@@ -247,6 +249,11 @@ export class WorldDaemonFold {
       bitNodeAt: (atMs: number) => number;
       /** The window's last snapshots, for the levelling choice's judgement (#336); absent, none. */
       snapshots?: LastSnapshots;
+      /**
+       * The World Daemon's switch now (#336's review): off, the destroy isn't wanted and money is what the owner asked
+       * for, so the levelling choice's failures are warnings. Absent, on.
+       */
+      worldDaemonEnabled?: boolean;
     },
   ): string[] {
     const lines = [
@@ -315,8 +322,14 @@ export class WorldDaemonFold {
         "far):",
     );
     for (const failure of levelling.failures) {
-      lines.push(`    ${failure}`);
-      failures.push(failure);
+      if (worldDaemonEnabled) {
+        lines.push(`    ${failure}`);
+        failures.push(failure);
+      } else {
+        const warning = `${failure} (the World Daemon's switch is off now: the destroy isn't wanted, so a warning)`;
+        lines.push(`    ${warning}`);
+        warnings.push(warning);
+      }
     }
     if (levelling.failures.length === 0) lines.push("    none");
     return lines;
@@ -397,10 +410,12 @@ export class WorldDaemonFold {
       (ours === null || shortest * LEVELLING_SWITCH_GAIN < ours) &&
       offMs > LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS
     ) {
+      // The time in the mode, which the last snapshots find off the shortest: when another became shorter isn't
+      // followed snapshot by snapshot.
       failures.push(
-        `levelling: the brain on ${words[mode]} (${describeEstimate(ours)}) since ${formatTime(modeSinceMs)}, not the ` +
-          `shortest, ${words[best]} (${describeEstimate(shortest)}), for ${formatDuration(offMs)}, past the ` +
-          `${formatDuration(LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS)} a choice takes`,
+        `levelling: the brain on ${words[mode]} (${describeEstimate(ours)}) for ${formatDuration(offMs)}, since ` +
+          `${formatTime(modeSinceMs)}, past the ${formatDuration(LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS)} a choice ` +
+          `takes, and ${words[best]} (${describeEstimate(shortest)}) is shorter by more than 1.25 times at its end`,
       );
     }
     const resetAt = slowLast?.resetInfo?.lastNodeReset;

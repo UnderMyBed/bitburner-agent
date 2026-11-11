@@ -4,12 +4,13 @@
  * all that's left. The rules propose three candidates and the planner takes the one whose estimated time to the level
  * is least, the formulas its model and the rates fitted online from live snapshots:
  * - **money:** batching for money as now, at its measured experience rate;
- * - **level:** levelling mode, weaken loops on the server with the most experience per thread-second at its minimum
- *   security, on the RAM the batcher would batch with (`levellingExpPerThreadSecond`, the formula's prediction, times
- *   the factor fitted from the measured rate in that mode);
- * - **install:** NeuroFlux Governor's levels the money buys, an install, then levelling mode from zero experience at
- *   the new multipliers, on home's RAM alone (the cloud servers are lost, `Prestige.ts`, and bought back later: left
- *   out, cautious), after the install's own time (`LEVELLING_INSTALL_MS`).
+ * - **level:** levelling mode, grow or weaken loops on the server and with the operation that earn the most experience
+ *   per thread-second at its minimum security, on the RAM the batcher would batch with (`levellingExpPerThreadSecond`,
+ *   the formula's prediction, times the factor fitted from the measured rate in that mode);
+ * - **install:** NeuroFlux Governor's levels the money buys, an install, w0r1d_d43m0n rooted again
+ *   (`LEVELLING_REROOT_MS`), then levelling mode from zero experience at the new multipliers, on home's RAM alone (the
+ *   cloud servers are lost, `Prestige.ts`, and bought back later: left out, cautious), after the install's own time
+ *   (`LEVELLING_INSTALL_MS`).
  * Every rate scales with the level as `level + 50`: an operation's time is `5 × (2.5 × required × security + 500) /
  * (hacking + 50)` over the speed (`Hacking.ts:60-80`), so on fixed RAM the threads land that much more often, each
  * giving the same experience (`Hacking.ts:30-38`). The same scaling for the batcher's measured rate values both sides
@@ -21,11 +22,16 @@ import { NEUROFLUX_GOVERNOR } from "./augmentations.ts";
 import { hackingExpOfLevel, hackingLevelOfExp, operationExpPerThread, threadsThatFit } from "./batcher.ts";
 import { LEVEL_LOOP_RAM_GB } from "./hack-loop.ts";
 import {
+  GROW_TIME_PER_HACK_TIME,
   type HackingPlayer,
   type HackingTarget,
   hackTimeSeconds,
   WEAKEN_TIME_PER_HACK_TIME,
 } from "./hacking-ceiling.ts";
+
+/** Levelling mode's operations (#336): the level loop's (`level-loop.js`) and the grow loop's (`level-grow.js`). */
+export const LEVELLING_OPERATIONS = ["grow", "weaken"] as const;
+export type LevellingOperation = (typeof LEVELLING_OPERATIONS)[number];
 
 /** The candidates, in the order a tie goes: the cheapest action first. */
 export const LEVELLING_CANDIDATES = ["money", "level", "install"] as const;
@@ -47,21 +53,36 @@ export const LEVELLING_SWITCH_GAIN = 1.25;
  */
 export const LEVELLING_INSTALL_MS = 15 * 60_000;
 
+/**
+ * The time from the install to w0r1d_d43m0n rooted again, the rooted gate open again (the port openers and the money
+ * for them are lost with it, `Prestige.ts`): 3.4 minutes, one live measurement, BN4's. In BN4.1 (2026-11-10) The Red
+ * Pill's install was at 17:02:18; the TOR router came at 1.9 minutes, the five port openers at 3.2, the root at 3.4,
+ * at hacking 2,938 (the coordinator's reading of that run's store). The experience meanwhile is left out (cautious).
+ */
+export const LEVELLING_REROOT_MS = 3.4 * 60_000;
+
 /** The level's term in an operation's time: `hacking + 50` (`Hacking.ts:69-73`'s `baseSkill`). */
 const LEVEL_TERM = 50;
 
 /**
- * The hacking experience a weaken thread earns a second on `target` at its minimum security, where weaken loops keep
- * it: a thread's experience (`calculateHackingExpGain`, `Hacking.ts:30-38`, the same for a weaken as for a grow or a hack
- * that succeeds, `NetscriptFunctions.ts:373`; core's `operationExpPerThread`) over a weaken's time (4 hacks', `Hacking.ts:
- * 89-94`). `hackingExp` is the player's `hacking_exp` with the BitNode's `HackExpGain` folded in (0.4 in BN4). A weaken
- * needs root only, never the hacking level (`netscriptCanWeaken`, `Hacking/netscriptCanHack.ts:53-55`). 0 for a server
- * whose base difficulty is 0 (the game gives no experience there) or unread.
+ * The hacking experience a thread of `operation` earns a second on `target` at its minimum security: a thread's
+ * experience (`calculateHackingExpGain`, `Hacking.ts:30-38`, the same for a grow, a weaken or a hack that succeeds,
+ * `NetscriptFunctions.ts:295`, `:373`; core's `operationExpPerThread`) over the operation's time (a grow's 3.2 hacks', a
+ * weaken's 4, `Hacking.ts:83-94`). So a grow earns 1.25 times a weaken's, at the same 0.15 GB (`RamCostGenerator.ts:18`,
+ * `:20`); at its maximum money it adds no security (`processSingleServerGrowth`, `Server/ServerHelpers.ts:201-212`).
+ * `hackingExp` is the player's `hacking_exp` with the BitNode's `HackExpGain` folded in (0.4 in BN4). Neither needs the
+ * hacking level, only root (`Hacking/netscriptCanHack.ts:49-55`). 0 for a server whose base difficulty is 0 (the game
+ * gives no experience there) or unread.
  */
-export function levellingExpPerThreadSecond(target: HackingTarget, player: HackingPlayer, hackingExp: number): number {
+export function levellingExpPerThreadSecond(
+  target: HackingTarget,
+  player: HackingPlayer,
+  hackingExp: number,
+  operation: LevellingOperation = "weaken",
+): number {
   if (!(typeof target.baseDifficulty === "number" && target.baseDifficulty > 0)) return 0;
   const seconds =
-    WEAKEN_TIME_PER_HACK_TIME *
+    (operation === "grow" ? GROW_TIME_PER_HACK_TIME : WEAKEN_TIME_PER_HACK_TIME) *
     hackTimeSeconds(
       { hackDifficulty: target.minDifficulty, requiredHackingSkill: target.requiredHackingSkill },
       player,
@@ -70,26 +91,31 @@ export function levellingExpPerThreadSecond(target: HackingTarget, player: Hacki
 }
 
 /**
- * The levelling target: of `targets` (the game's rooted servers), the one with the most experience a thread-second
- * (`levellingExpPerThreadSecond`), ties to the first hostname; null with none above 0. Computed, never named: in BN1
- * and BN4 it's joesguns (base difficulty 15, minimum 5, required 10), as `7.5 / 625` beats every other server's
- * `(3 + 0.3 × base) / (2.5 × required × minimum + 500)`, whatever the level and the speed, which only scale them all.
+ * The levelling target and its operation: of `targets` (the game's rooted servers) and the operations, the pair with
+ * the most experience a thread-second (`levellingExpPerThreadSecond`), ties to the first hostname and to the grow;
+ * null with none above 0. Computed, never named: in BN1 and BN4 it's joesguns (base difficulty 15, minimum 5, required
+ * 10), as `7.5 / 625` beats every other server's `(3 + 0.3 × base) / (2.5 × required × minimum + 500)`, whatever the
+ * level and the speed, which only scale them all; and the grow, 1.25 times the weaken on every server. A grow there
+ * keeps its minimum security only at its maximum money: the brain sends it once the target is at its minimum, a weaken
+ * till then (./levelling.ts in the brain).
  */
 export function chooseLevellingTarget<Target extends { hostname: string; figures: HackingTarget }>(
   targets: readonly Target[],
   player: HackingPlayer,
   hackingExp: number,
-): (Target & { expPerThreadSecond: number }) | null {
-  let best: (Target & { expPerThreadSecond: number }) | null = null;
+): (Target & { expPerThreadSecond: number; operation: LevellingOperation }) | null {
+  let best: (Target & { expPerThreadSecond: number; operation: LevellingOperation }) | null = null;
   for (const target of targets) {
-    const expPerThreadSecond = levellingExpPerThreadSecond(target.figures, player, hackingExp);
-    if (!(expPerThreadSecond > 0)) continue;
-    if (
-      best === null ||
-      expPerThreadSecond > best.expPerThreadSecond ||
-      (expPerThreadSecond === best.expPerThreadSecond && target.hostname < best.hostname)
-    ) {
-      best = { ...target, expPerThreadSecond };
+    for (const operation of LEVELLING_OPERATIONS) {
+      const expPerThreadSecond = levellingExpPerThreadSecond(target.figures, player, hackingExp, operation);
+      if (!(expPerThreadSecond > 0)) continue;
+      if (
+        best === null ||
+        expPerThreadSecond > best.expPerThreadSecond ||
+        (expPerThreadSecond === best.expPerThreadSecond && target.hostname < best.hostname)
+      ) {
+        best = { ...target, expPerThreadSecond, operation };
+      }
     }
   }
   return best;
@@ -171,10 +197,11 @@ export type LevellingEstimates = Record<LevellingCandidate, number | null>;
 
 /**
  * The candidates' estimates (#336): (a) at its measured rate; (b) at the formula's prediction times its fitted factor;
- * (c) the install's own time, then from 0 experience at the multipliers the levels give (`levelMult`, `hacking_exp`
- * and `hacking_speed` × NeuroFlux Governor's each, `neuroFluxMultipliers`), at (b)'s factor, on home's threads alone.
- * Left out of (c): the cloud servers bought back (cautious), the port openers bought again before w0r1d_d43m0n is
- * rooted again (optimistic: minutes at those multipliers), and the set's other augmentations A6 buys first (cautious).
+ * (c) the install's own time and w0r1d_d43m0n's root again (`LEVELLING_REROOT_MS`, one live BN4 measurement), then
+ * from 0 experience at the multipliers the levels give (`levelMult`, `hacking_exp` and `hacking_speed` × NeuroFlux
+ * Governor's each, `neuroFluxMultipliers`), at (b)'s factor, on home's threads alone. Left out of (c): the cloud servers
+ * bought back, the experience while w0r1d_d43m0n is rooted again, and the set's other augmentations A6 buys first (all
+ * cautious).
  */
 export function levellingEstimates(inputs: LevellingInputs): LevellingEstimates {
   const { exp, required, levelMult } = inputs;
@@ -200,7 +227,7 @@ export function levellingEstimates(inputs: LevellingInputs): LevellingEstimates 
       atLevel: offer.perThread.atLevel,
     };
     install =
-      LEVELLING_INSTALL_MS / 1000 +
+      (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS) / 1000 +
       secondsToHackingLevel(0, required, levelMult * neuroFlux.hacking ** offer.levels, rate);
   }
   return { money, level, install };

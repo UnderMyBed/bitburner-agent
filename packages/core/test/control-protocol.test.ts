@@ -396,6 +396,16 @@ describe("rejected, each with a reason", () => {
       const result = at(fields);
       return result.ok ? null : result.reason;
     };
+    // The operation (#336's review): the grow or the weaken, carried; another refused.
+    for (const operation of ["grow", "weaken"] as const) {
+      expect(at({ ...hackLoop, levelling: { ...levelling, operation } })).toEqual({
+        ok: true,
+        message: { ...desiredState, hackLoop: { ...hackLoop, levelling: { ...levelling, operation } } },
+      });
+    }
+    expect(reasonOf({ ...hackLoop, levelling: { ...levelling, operation: "hack" } })).toBe(
+      'desiredState\'s hackLoop.levelling.operation is "hack"',
+    );
     for (const notAnObject of [4, "4", [4], true]) {
       expect(reasonOf({ ...hackLoop, levelling: notAnObject })).toBe(
         "desiredState's hackLoop.levelling isn't an object",

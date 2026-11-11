@@ -1,13 +1,14 @@
 // Levelling (#336, planner v0's first decision, owner decision 67): once The Red Pill is installed and w0r1d_d43m0n
 // rooted, with only its hacking level missing (A8's path, ./world-daemon.ts: `worldDaemonPath`'s `daemon`), the
 // planner chooses among the rules' three candidates by their estimated time to the level (core's levelling.ts): (a)
-// batching for money as now, (b) levelling mode, weaken loops on the server with the most experience a thread-second
-// (the hack loop's hosts and home's RAM beyond what it keeps, the level loop), (c) NeuroFlux Governor's levels the
-// money buys (A6's count), an install, then levelling mode. The least wins, with hysteresis (core's `chooseLevelling`).
+// batching for money as now, (b) levelling mode, grow or weaken loops on the server, and with the operation, earning the
+// most experience a thread-second (the hack loop's hosts and home's RAM beyond what it keeps), (c) NeuroFlux Governor's
+// levels the money buys (A6's count), an install, w0r1d_d43m0n rooted again, then levelling mode. The least wins, with hysteresis (core's `chooseLevelling`).
 // - The rates are fitted online (decision 67's "adapt on the fly"): (a) is the experience a second measured while
 //   batching; (b) the formula's prediction for the RAM sent times the factor fitted from the rate measured in
-//   levelling mode, 1 until measured (optimistic); (c) at (b)'s factor. Each measurement starts once a mode has
-//   settled: the operations of the one before landed, and the first weaken at the target's security.
+//   levelling mode while its loop runs, 1 until measured (optimistic); (c) at (b)'s factor. Each measurement starts once
+//   a mode has settled (the brain's first update too): the operations of the one before landed, and the first weaken
+//   at the target's security. An install resets them all.
 // - The choice goes to the controller (./desired-state.ts): money, the hack loop and the batcher as before; levelling,
 //   the hack loop's `levelling` on the batcher's hosts, no batcher; the install, levelling meanwhile, and A6 commits the
 //   install ("the hacking level", ./augmentations.ts), its irreversible gate as always. After the install the choice
@@ -15,7 +16,7 @@
 //   by the same score.
 // - Each choice is a `levellingChosen` event and a log line, with the candidates' estimates: the run report's path
 //   section shows them, and fails a brain that isn't on the shortest, or a chosen estimate past a computed bound
-//   (./world-daemon-report.ts).
+//   (./world-daemon-report.ts); with the World Daemon's switch off, warnings.
 import {
   type BitNodeHackingMultipliers,
   chooseLevelling,
@@ -26,6 +27,7 @@ import {
   type LevellingCandidate,
   type LevellingEstimates,
   type LevellingInputs,
+  type LevellingOperation,
   type LevellingRate,
   levelLoopThreads,
   levellingEstimates,
@@ -93,7 +95,13 @@ export function levelAllThatsLeft(path: WorldDaemonPath | null): boolean {
 
 /** What levelling mode would run, from the snapshots: the target, the RAM, and the player's figures. */
 export interface LevellingFigures {
-  target: { hostname: string; figures: HackingTarget; expPerThreadSecond: number } | null;
+  /** The target, its operation's experience a thread-second at its minimum security, and the operation. */
+  target: {
+    hostname: string;
+    figures: HackingTarget;
+    expPerThreadSecond: number;
+    operation: LevellingOperation;
+  } | null;
   /** The batcher's hosts (`hackLoopHosts`), their RAM, and home's RAM and what it keeps, GB. */
   hosts: string[];
   hostsGb: number;
@@ -284,6 +292,12 @@ export interface LevellingRuleInputs {
   neuroFluxLevels: number | null;
   /** A6 committed to an install (the levelling one, once chosen). */
   installCommitted: boolean;
+  /**
+   * Whether the level loop runs (#336's review): the state last sent has the hack loop on and levelling, and the fast
+   * snapshot's home processes show levelling mode's loop's threads (`homeThreads`), where home has room for them. Only
+   * then is levelling's rate measured: a fit of a loop that isn't running would be about 0, and lock the choice on money.
+   */
+  levelLoop: { sent: boolean; homeThreads: number };
   /** The batcher's last target and figures, whose waves land as a mode settles; null with none sent. */
   batcherTarget: { hostname: string; figures: HackingTarget } | null;
   nowMs: number | null;
@@ -292,7 +306,7 @@ export interface LevellingRuleInputs {
 /** The rule's plan: the mode, and levelling mode's target and home's kept RAM while it levels. */
 export interface LevellingPlan {
   mode: LevellingCandidate;
-  levelling: { target: string; hosts: string[]; homeKeptGb: number } | null;
+  levelling: { target: string; hosts: string[]; homeKeptGb: number; operation: LevellingOperation } | null;
 }
 
 /** What the dashboard shows (#336): whether the choice is on, the candidates, the choice and the fitted factor. */
@@ -307,6 +321,21 @@ export interface LevellingView {
   lines: string[];
 }
 
+/**
+ * The operation levelling mode sends now (#336's review): the target's best (core's `chooseLevellingTarget`), but a
+ * grow only once the medium snapshot shows the target at its minimum security. A grow below its maximum money adds
+ * security (`Server/ServerHelpers.ts:201-212`), so the weaken takes it back to its minimum first; at its maximum money,
+ * grown by the first grows, no grow adds any, and it stays a grow.
+ */
+export function operationNow(
+  target: NonNullable<LevellingFigures["target"]>,
+  mediumData: MediumSnapshotData | null,
+): LevellingOperation {
+  if (target.operation !== "grow") return target.operation;
+  const security = mediumData?.servers.find((server) => server?.hostname === target.hostname)?.hackDifficulty;
+  return isFiniteNumber(security) && security <= target.figures.minDifficulty ? "grow" : "weaken";
+}
+
 /** The levelling rule (#336), as the controller runs it. */
 export class LevellingRule {
   readonly #log: (line: string) => void;
@@ -319,6 +348,10 @@ export class LevellingRule {
   #money: LevellingRate | null = null;
   #fit: { measured: number; predicted: number; factor: number } | null = null;
   #lastAugReset: number | null = null;
+  /** The first update with a medium snapshot is past (it settles too: a restarted brain's loops still land). */
+  #started = false;
+  /** The level loop ran at the last update. */
+  #levelLoopRan = false;
   #view: LevellingView = { applies: false, mode: "money", estimates: null, target: null, fit: null, lines: [] };
 
   constructor({
@@ -342,18 +375,38 @@ export class LevellingRule {
     const { mediumData, mediumGameTimeMs, slowData } = inputs;
     const lastAugReset = slowData?.resetInfo?.lastAugReset;
     const figures = levellingFiguresOf(inputs.staticData, mediumData, slowData, inputs.hacking);
-    // An install (or a destroy): a new game, back to money (w0r1d_d43m0n to root again); the fit is the formula's error,
-    // so it's kept.
+    // An install (or a destroy): a new game, back to money (w0r1d_d43m0n to root again), each rate and fit afresh.
     if (isFiniteNumber(lastAugReset)) {
       if (this.#lastAugReset !== null && lastAugReset !== this.#lastAugReset) {
         if (this.#mode !== "money") this.#switch("money", inputs, null, figures, "an install reset the game");
         this.#money = null;
+        this.#fit = null;
         this.#window.clear();
         this.#settledAtGameMs = null;
       }
       this.#lastAugReset = lastAugReset;
     }
-    if (figures !== null && isFiniteNumber(mediumGameTimeMs) && mediumGameTimeMs >= (this.#settledAtGameMs ?? 0)) {
+    // The first update settles as a switch does: a restarted brain's level loops, or the batcher's waves, still land.
+    if (!this.#started && mediumData !== null && isFiniteNumber(mediumGameTimeMs)) {
+      this.#started = true;
+      this.#settledAtGameMs = mediumGameTimeMs + this.#settleMs(inputs, figures);
+    }
+    // Levelling's rate only while the level loop runs (#336's review); its start settles again.
+    const levelLoopRuns =
+      inputs.levelLoop.sent && (figures === null || figures.homeThreads === 0 || inputs.levelLoop.homeThreads > 0);
+    if (this.#mode !== "money" && !levelLoopRuns) this.#window.clear();
+    if (this.#mode !== "money" && levelLoopRuns && !this.#levelLoopRan && isFiniteNumber(mediumGameTimeMs)) {
+      this.#window.clear();
+      this.#settledAtGameMs = mediumGameTimeMs + this.#settleMs(inputs, figures);
+    }
+    this.#levelLoopRan = levelLoopRuns;
+    const measuring = this.#mode === "money" || levelLoopRuns;
+    if (
+      measuring &&
+      figures !== null &&
+      isFiniteNumber(mediumGameTimeMs) &&
+      mediumGameTimeMs >= (this.#settledAtGameMs ?? 0)
+    ) {
       this.#window.add(mediumGameTimeMs, figures.exp, figures.level);
     }
     const applies = inputs.enabled && levelAllThatsLeft(inputs.path);
@@ -369,7 +422,7 @@ export class LevellingRule {
     const measured = this.#window.measured();
     const target = figures.target;
     if (measured !== null && this.#mode === "money") this.#money = measured;
-    if (measured !== null && this.#mode === "level" && target !== null) {
+    if (measured !== null && this.#mode === "level" && levelLoopRuns && target !== null) {
       const predicted = target.expPerThreadSecond * figures.threads * ((measured.atLevel + 50) / (figures.level + 50));
       if (predicted > 0)
         this.#fit = { measured: measured.expPerSecond, predicted, factor: measured.expPerSecond / predicted };
@@ -395,8 +448,23 @@ export class LevellingRule {
       levelling:
         this.#mode === "money" || target === null
           ? null
-          : { target: target.hostname, hosts: figures.hosts, homeKeptGb: figures.homeKeptGb },
+          : {
+              target: target.hostname,
+              hosts: figures.hosts,
+              homeKeptGb: figures.homeKeptGb,
+              operation: operationNow(target, mediumData),
+            },
     };
+  }
+
+  /** How long a mode settles from now (`settleMsOf`): the levelling target's and the batcher's weakens still landing. */
+  #settleMs(inputs: LevellingRuleInputs, figures: LevellingFigures | null): number {
+    if (inputs.mediumData === null) return LEVELLING_SETTLE_MS;
+    const settling = [
+      ...(figures?.target ? [figures.target] : []),
+      ...(inputs.batcherTarget === null ? [] : [inputs.batcherTarget]),
+    ];
+    return settleMsOf(inputs.mediumData, inputs.hacking, settling);
   }
 
   #lines(estimates: LevellingEstimates, target: string | null, figures: LevellingFigures): string[] {
@@ -406,7 +474,8 @@ export class LevellingRule {
       `  chosen: ${LEVELLING_CANDIDATE_WORDS[this.#mode]}` +
         (this.#mode === "money" || target === null
           ? ""
-          : ` on ${target} (${Math.floor(figures.threads).toLocaleString("en-US")} threads, home's beyond ` +
+          : ` on ${target}, ${figures.target?.operation === "grow" ? "growing" : "weakening"} it ` +
+            `(${Math.floor(figures.threads).toLocaleString("en-US")} threads, home's beyond ` +
             `${Math.round(figures.homeKeptGb).toLocaleString("en-US")} GB among them)`) +
         "; levelling's fitted factor " +
         (fit === null
@@ -426,15 +495,10 @@ export class LevellingRule {
     const from = this.#mode;
     this.#mode = mode;
     this.#window.clear();
-    const { mediumData, mediumGameTimeMs } = inputs;
-    const settling = [
-      ...(figures?.target ? [figures.target] : []),
-      ...(inputs.batcherTarget === null ? [] : [inputs.batcherTarget]),
-    ];
-    this.#settledAtGameMs =
-      mediumData === null || !isFiniteNumber(mediumGameTimeMs)
-        ? null
-        : mediumGameTimeMs + settleMsOf(mediumData, inputs.hacking, settling);
+    const { mediumGameTimeMs } = inputs;
+    this.#settledAtGameMs = !isFiniteNumber(mediumGameTimeMs)
+      ? null
+      : mediumGameTimeMs + this.#settleMs(inputs, figures);
     const detail =
       `${LEVELLING_CANDIDATE_WORDS[from]} to ${LEVELLING_CANDIDATE_WORDS[mode]}` +
       (why !== null ? `: ${why}` : estimates === null ? "" : `: ${describeEstimates(estimates)}`);

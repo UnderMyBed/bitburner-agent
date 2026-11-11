@@ -33,6 +33,7 @@ import {
 } from "../src/run-report.ts";
 import { thinStore } from "../src/store-thinning.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
+import { writeWorldDaemonEnabled } from "../src/world-daemon.ts";
 import { staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const REPORT_CLI = path.resolve(import.meta.dirname, "../src/report-cli.ts");
@@ -3314,7 +3315,7 @@ describe("the levelling choice (#336)", () => {
     }
   }
 
-  test("BN4.1's shape: batching for money at 2.65e6/s, about 2,300 h, while levelling mode is about 77 min: FAIL", () => {
+  test("BN4.1's shape: batching for money at 2.65e6/s, about 2,300 h, while levelling mode is about an hour: FAIL", () => {
     bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6);
     const { text, failures } = report();
     expect(text).toMatch(
@@ -3325,7 +3326,7 @@ describe("the levelling choice (#336)", () => {
     const levelling = failures.filter((failure) => failure.startsWith("levelling:"));
     expect(levelling).toEqual([
       expect.stringMatching(
-        /^levelling: the brain on batching for money \(about 2[0-9]{3}\.\d h\) since .*, not the shortest, levelling mode \(about \d+ min\), for 19 min 50 s, past the 10 min a choice takes$/,
+        /^levelling: the brain on batching for money \(about 2[0-9]{3}\.\d h\) for 19 min 50 s, since .*, past the 10 min a choice takes, and levelling mode \(about \d+ min\) is shorter by more than 1\.25 times at its end$/,
       ),
       expect.stringMatching(
         /^levelling: the brain's choice, batching for money, about 2[0-9]{3}\.\d h to w0r1d_d43m0n's level, past the 26 h 59 min the BitNode has taken so far: a hopeless estimate$/,
@@ -3338,6 +3339,21 @@ describe("the levelling choice (#336)", () => {
     );
   });
 
+  test("the World Daemon's switch off: the same two lines, warnings, not failures (money is what the owner asked for)", () => {
+    bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6);
+    writeWorldDaemonEnabled(store, false);
+    const { text, failures, warnings } = report();
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
+    const off = " (the World Daemon's switch is off now: the destroy isn't wanted, so a warning)";
+    expect(warnings.filter((warning) => warning.startsWith("levelling:"))).toEqual([
+      expect.stringMatching(/^levelling: the brain on batching for money .*/),
+      expect.stringMatching(/^levelling: the brain's choice, batching for money, .*/),
+    ]);
+    for (const warning of warnings.filter((each) => each.startsWith("levelling:")))
+      expect(warning.endsWith(off)).toBe(true);
+    expect(text).toContain(off);
+  });
+
   test("w0r1d_d43m0n rooted 9 min 50 s before the window's end: the choice is shown, not yet failed", () => {
     bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6, undefined, 10 * MINUTE + 10 * SECOND);
     const { text, failures } = report();
@@ -3348,7 +3364,8 @@ describe("the levelling choice (#336)", () => {
   test("the brain in levelling mode at the formula's rate: its fit near 1, nothing fails, no income expected of it", () => {
     // Levelling from a minute in, at what the formula gives joesguns on the hosts and home beyond its 32 GB (with
     // Singularity in BN4, its largest worker's beside them); the money flat from then.
-    const joesgunsPerThreadSecond = (7.5 * 19.06 * 0.4) / ((4 * 5 * 625) / (6779 + 50) / 4.465);
+    // joesguns' grow, at its minimum security: 3.2 hacks' time (`Hacking.ts:83-87`).
+    const joesgunsPerThreadSecond = (7.5 * 19.06 * 0.4) / ((3.2 * 5 * 625) / (6779 + 50) / 4.465);
     const home = Math.floor((33.5e6 - 32 - 33.9) / 1.75);
     const predicted = joesgunsPerThreadSecond * (Math.floor(26.2e6 / 1.75) + Math.floor(16 / 1.75) + home);
     const fromMs = MINUTE;

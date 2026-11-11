@@ -6,9 +6,16 @@ import {
   HACK_LOOP_SECURITY_MARGIN,
   hackLoopDeployArguments,
   hackLoopsByHost,
+  hostLoopOf,
   isHackLoopFile,
   isHackLoopReady,
+  keptGbOf,
+  LEVEL_GROW_SCRIPT_NAME,
+  LEVEL_LOOP_SCRIPT_NAME,
+  loopScriptNameOf,
+  loopThreadsRoom,
   percentMoneyHackedPerThread,
+  restartsAtFullSize,
 } from "../src/hack-loop.ts";
 
 test("a hack loop is ours only in a folder the deployer generated, so a player's own agent/<name>/ is never touched", () => {
@@ -21,20 +28,22 @@ test("a hack loop is ours only in a folder the deployer generated, so a player's
   // Levelling mode's loop (#336) is ours on the same terms.
   expect(isHackLoopFile("agent/0123456789ab/level-loop.js")).toBe(true);
   expect(isHackLoopFile("agent/mine/level-loop.js")).toBe(false);
+  expect(isHackLoopFile("agent/0123456789ab/level-grow.js")).toBe(true);
 });
 
-test("the deploy worker's arguments in levelling mode (#336): each host and home with the target, home's kept RAM", () => {
+test("the deploy worker's arguments in levelling mode (#336): home's kept RAM, the operation, each host and home", () => {
   const hackLoop = {
     enabled: true,
     target: "joesguns",
     hosts: ["foodnstuff", "pserv-0"],
-    levelling: { homeKeptGb: 32 },
+    levelling: { homeKeptGb: 32, operation: "grow" as const },
   };
   const args = hackLoopDeployArguments(hackLoop);
   expect(args).toEqual([
     true,
     "levelling",
     32,
+    "grow",
     "foodnstuff",
     "joesguns",
     0,
@@ -45,17 +54,18 @@ test("the deploy worker's arguments in levelling mode (#336): each host and home
     "joesguns",
     0,
   ]);
-  const levelling = { homeKeptGb: 32 };
+  const levelling = { homeKeptGb: 32, operation: "grow" };
   expect([...hackLoopsByHost(args)]).toEqual([
     ["foodnstuff", { target: "joesguns", hackThreads: null, levelling }],
     ["pserv-0", { target: "joesguns", hackThreads: null, levelling }],
     ["home", { target: "joesguns", hackThreads: null, levelling }],
   ]);
-  // Home named already: once.
-  expect(hackLoopDeployArguments({ ...hackLoop, hosts: ["home"] })).toEqual([
+  // Home named already: once. No operation: the weaken.
+  expect(hackLoopDeployArguments({ ...hackLoop, hosts: ["home"], levelling: { homeKeptGb: 32 } })).toEqual([
     true,
     "levelling",
     32,
+    "weaken",
     "home",
     "joesguns",
     0,
@@ -63,12 +73,52 @@ test("the deploy worker's arguments in levelling mode (#336): each host and home
   // Off, or no target: none, as before.
   expect(hackLoopsByHost(hackLoopDeployArguments({ ...hackLoop, enabled: false })).size).toBe(0);
   expect(hackLoopsByHost(hackLoopDeployArguments({ ...hackLoop, target: null })).size).toBe(0);
-  // Home's kept RAM unread: none of home is used.
-  expect(hackLoopsByHost([true, "levelling", "32", "home", "joesguns", 0]).get("home")).toEqual({
+  // Home's kept RAM unread: none of home is used; the operation unread, the weaken.
+  expect(hackLoopsByHost([true, "levelling", "32", "x", "home", "joesguns", 0]).get("home")).toEqual({
     target: "joesguns",
     hackThreads: null,
-    levelling: { homeKeptGb: Number.POSITIVE_INFINITY },
+    levelling: { homeKeptGb: Number.POSITIVE_INFINITY, operation: "weaken" },
   });
+});
+
+test("the deploy worker's choices (#336): each host's script, home only levelling, home's kept RAM, its room and restart", () => {
+  const levelling = { homeKeptGb: 32, operation: "weaken" as const };
+  const loops = new Map([
+    ["home", { target: "joesguns", hackThreads: null, levelling }],
+    ["foodnstuff", { target: "joesguns", hackThreads: null, levelling: { ...levelling, operation: "grow" as const } }],
+  ]);
+  expect(loopScriptNameOf(loops.get("home"))).toBe(LEVEL_LOOP_SCRIPT_NAME);
+  expect(loopScriptNameOf(loops.get("foodnstuff"))).toBe(LEVEL_GROW_SCRIPT_NAME);
+  expect(loopScriptNameOf({ target: "n00dles", hackThreads: 4 })).toBe("hack-loop.js");
+  expect(loopScriptNameOf(undefined)).toBe("hack-loop.js");
+  // Home runs ours only in levelling mode: a hack loop named for it (an older brain's, say) is none there, so ours
+  // there are stopped; elsewhere the loop named.
+  expect(hostLoopOf(loops, "home")).toEqual(loops.get("home"));
+  const hackLoops = new Map([["home", { target: "n00dles", hackThreads: null }]]);
+  expect(hostLoopOf(hackLoops, "home")).toBeUndefined();
+  expect(hostLoopOf(hackLoops, "n00dles")).toBeUndefined();
+  expect(hostLoopOf(loops, "foodnstuff")).toEqual(loops.get("foodnstuff"));
+  // Home keeps the brain's kept RAM in levelling mode, all of it otherwise; other hosts nothing.
+  expect(keptGbOf("home", loops.get("home"))).toBe(32);
+  expect(keptGbOf("home", undefined)).toBe(Number.POSITIVE_INFINITY);
+  expect(keptGbOf("foodnstuff", loops.get("foodnstuff"))).toBe(0);
+  // The room: home's RAM less what the others use, then less what's kept; our own loop's counted free.
+  const home = { maxGb: 1024, usedGb: 40, oursGb: 0, keptGb: 32, scriptGb: 1.75 };
+  expect(loopThreadsRoom(home)).toBe(Math.floor((1024 - 40 - 32) / 1.75));
+  // Others already past the kept RAM: still the kept RAM free beside them.
+  expect(loopThreadsRoom({ ...home, usedGb: 100 })).toBe(Math.floor((1024 - 100 - 32) / 1.75));
+  expect(loopThreadsRoom({ ...home, usedGb: 40 + 500 * 1.75, oursGb: 500 * 1.75 })).toBe(
+    Math.floor((1024 - 40 - 32) / 1.75),
+  );
+  expect(loopThreadsRoom({ ...home, keptGb: Number.POSITIVE_INFINITY })).toBe(0);
+  expect(loopThreadsRoom({ ...home, maxGb: 50 })).toBe(0);
+  expect(loopThreadsRoom({ maxGb: 16, usedGb: 3.2, oursGb: 0, keptGb: 0, scriptGb: 2.4 })).toBe(5);
+  // Started again at full size: elsewhere once a thread more fits, on home once as many as its kept RAM holds.
+  expect(restartsAtFullSize(6, 5, 0, 2.4)).toBe(true);
+  expect(restartsAtFullSize(5, 5, 0, 2.4)).toBe(false);
+  expect(restartsAtFullSize(540 + 17, 540, 32, 1.75)).toBe(false);
+  expect(restartsAtFullSize(540 + 18, 540, 32, 1.75)).toBe(true);
+  expect(restartsAtFullSize(10, 0, 32, 1.75)).toBe(false);
 });
 
 test("generated deployment ids are 12 lowercase hex digits", () => {

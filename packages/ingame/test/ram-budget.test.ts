@@ -14,6 +14,7 @@ import {
   gangWorkerFileNames,
   HACK_LOOP_RAM_BUDGET_GB,
   homeWorkerFileNames,
+  LEVEL_GROW_SCRIPT_NAME,
   LEVEL_LOOP_RAM_GB,
   LEVEL_LOOP_SCRIPT_NAME,
   SHARE_RAM_GB,
@@ -57,7 +58,7 @@ test("every bundle has a budget, every budget a bundle, and each bundle's RAM is
 
 /**
  * What isn't a worker beside the Agent on home: the Agent, `boot.js`, the loop, which runs on other servers, levelling
- * mode's loop (#336), on home only beyond the RAM it keeps, and the
+ * mode's loops (#336), on home only beyond the RAM it keeps, and the
  * batcher and its operation scripts (#204) and share script (#224), whose place the Agent chooses by RAM (#205).
  */
 const NOT_HOME_WORKERS = [
@@ -65,6 +66,7 @@ const NOT_HOME_WORKERS = [
   "boot.js",
   "hack-loop.js",
   LEVEL_LOOP_SCRIPT_NAME,
+  LEVEL_GROW_SCRIPT_NAME,
   BATCHER_SCRIPT_NAME,
   BATCH_HACK_SCRIPT_NAME,
   BATCH_GROW_SCRIPT_NAME,
@@ -98,6 +100,7 @@ test("the loop's budget is core's, by which the brain counts a host's threads (#
   expect(budgets["hack-loop.js"]).toBe(HACK_LOOP_RAM_BUDGET_GB);
   // Levelling mode's (#336), by which the brain counts its threads and predicts its rate.
   expect(budgets[LEVEL_LOOP_SCRIPT_NAME]).toBe(LEVEL_LOOP_RAM_GB);
+  expect(budgets[LEVEL_GROW_SCRIPT_NAME]).toBe(LEVEL_LOOP_RAM_GB);
 });
 
 test("the batch operation scripts' budgets are core's, by which the batcher and its plan count threads (#204)", () => {

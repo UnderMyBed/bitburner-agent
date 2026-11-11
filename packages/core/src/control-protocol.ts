@@ -115,12 +115,12 @@ export interface HackLoopState {
   hackThreads?: Record<string, number> | null;
   /**
    * Levelling mode (#336), or absent (null): the hack loop. On, every host of `hosts`, and home's RAM beyond
-   * `homeKeptGb` (what home keeps for the Agent and its workers), runs the level loop, which only weakens `target`,
-   * for the hacking experience. Only with the loop on and a target, and with neither `preparing` nor `hackThreads`.
-   * Absent is how an older brain, and safe mode's file from one, says none; an older Agent ignores it, and runs the
-   * hack loop against `target` on `hosts`.
+   * `homeKeptGb` (what home keeps for the Agent and its workers), runs levelling mode's loop, which only weakens
+   * `target` (`operation` "weaken", or absent) or only grows it ("grow"), for the hacking experience. Only with the loop
+   * on and a target, and with neither `preparing` nor `hackThreads`. Absent is how an older brain, and safe mode's file
+   * from one, says none; an older Agent ignores it, and runs the hack loop against `target` on `hosts`.
    */
-  levelling?: { homeKeptGb: number } | null;
+  levelling?: { homeKeptGb: number; operation?: "grow" | "weaken" } | null;
 }
 
 /** The desired state's batcher (#205): the host it runs on, and its config (core's `BatcherConfig`, #204). */
@@ -349,23 +349,27 @@ export function parseHackLoop(hackLoop: unknown): ParsedMessage<HackLoopState> {
 
 /**
  * `hackLoop.levelling` (#336), as `parseHackLoop` says: null for none (absent or null); else `homeKeptGb` a finite
- * number of 0 or more, only with the loop on and a target, and neither `preparing` nor `hackThreads` (`others`).
+ * number of 0 or more, `operation` absent, "grow" or "weaken"; only with the loop on and a target, and neither
+ * `preparing` nor `hackThreads` (`others`).
  */
 function parseLevelling(
   levelling: unknown,
   { enabled, target, others }: { enabled: boolean; target: string | null; others: boolean },
-): ParsedMessage<{ homeKeptGb: number } | null> {
+): ParsedMessage<{ homeKeptGb: number; operation?: "grow" | "weaken" } | null> {
   if (levelling === undefined || levelling === null) return { ok: true, message: null };
   if (typeof levelling !== "object" || Array.isArray(levelling)) {
     return { ok: false, reason: "hackLoop.levelling isn't an object" };
   }
-  const { homeKeptGb } = levelling as JsonObject;
+  const { homeKeptGb, operation } = levelling as JsonObject;
   if (typeof homeKeptGb !== "number" || !Number.isFinite(homeKeptGb) || homeKeptGb < 0) {
     return { ok: false, reason: `hackLoop.levelling.homeKeptGb is ${describeValue(homeKeptGb)}` };
   }
+  if (operation !== undefined && operation !== "grow" && operation !== "weaken") {
+    return { ok: false, reason: `hackLoop.levelling.operation is ${describeValue(operation)}` };
+  }
   if (!enabled || target === null) return { ok: false, reason: "hackLoop.levelling with the loop off or no target" };
   if (others) return { ok: false, reason: "hackLoop.levelling with preparing or hackThreads" };
-  return { ok: true, message: { homeKeptGb } };
+  return { ok: true, message: { homeKeptGb, ...(operation === undefined ? {} : { operation }) } };
 }
 
 /** `hackLoop.preparing` (#184), as `parseHackLoop` says: null for none. */

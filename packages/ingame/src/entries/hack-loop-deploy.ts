@@ -6,20 +6,25 @@
 // host, or all of them when off), and starts this deployment's loop on each host where it isn't running, with the
 // threads the free RAM allows, and the hack threads capped at those; one running beside free RAM that holds another
 // thread is started again at full size (#211). It never touches any other script, and uses only RAM left free.
-// - Levelling mode (#336): the level loop (`level-loop.js`) in the hack loop's place on each host, and on home, where
-//   our loops never run otherwise, only beyond the RAM the brain says home keeps for the Agent and its workers: home's
-//   loop holds at most its RAM less that, or less what home's other scripts use, if more. So a worker running as it
-//   starts takes no RAM from the reservation, and one ending later starts it again only once at full size.
+// - Levelling mode (#336): the level loop (`level-loop.js`) or the grow loop (`level-grow.js`), the operation the
+//   brain sends, in the hack loop's place on each host, and on home, where our loops never run otherwise
+//   (core's `hostLoopOf`), only beyond the RAM the brain says home keeps for the Agent and its workers: home's loop is
+//   sized from home's free RAM less that kept RAM (core's `loopThreadsRoom`), so the reservation stays free beside
+//   whatever runs as it starts; once other scripts' end frees as much again, it's started again at full size
+//   (`restartsAtFullSize`). It holds home for as long as it runs, where the share threads' 10 s rounds give it back.
 // RAM: `scan` 0.2 + `hasRootAccess` 0.05 + `ps` 0.2 + `kill` 0.5 + `scp` 0.6 + `exec` 1.3 + `getScriptRam` 0.1 +
 // `getServerMaxRam` and `getServerUsedRam` 0.05 each (ram-budget.json).
 import {
   deployedFilePath,
   deploymentIdOfPath,
-  HACK_LOOP_SCRIPT_NAME,
   type HackLoopDeployReport,
   hackLoopsByHost,
+  hostLoopOf,
   isHackLoopFile,
-  LEVEL_LOOP_SCRIPT_NAME,
+  keptGbOf,
+  loopScriptNameOf,
+  loopThreadsRoom,
+  restartsAtFullSize,
 } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { reachableHostnames } from "../workers/reachable-hostnames.ts";
@@ -35,24 +40,22 @@ export function main(ns: NS): void {
     reportToAgent(ns, report);
     return;
   }
-  const hackLoopFile = deployedFilePath(ownDeploymentId, HACK_LOOP_SCRIPT_NAME);
-  const levelLoopFile = deployedFilePath(ownDeploymentId, LEVEL_LOOP_SCRIPT_NAME);
-  const hackLoopRam = ns.getScriptRam(hackLoopFile, "home");
-  const levelLoopRam = ns.getScriptRam(levelLoopFile, "home");
-  const levelling = [...loopOfHost.values()].some((loop) => loop.levelling !== undefined);
-  if (loopOfHost.size > 0 && (levelling ? levelLoopRam : hackLoopRam) === 0) {
+  const fileOf = (loop: Parameters<typeof loopScriptNameOf>[0]) =>
+    deployedFilePath(ownDeploymentId, loopScriptNameOf(loop));
+  // The script the hosts run: every host's is the same one.
+  const [anyLoop] = loopOfHost.values();
+  if (anyLoop !== undefined && ns.getScriptRam(fileOf(anyLoop), "home") === 0) {
     // Stopping still goes ahead: only starting needs the script.
-    report.problem = `${levelling ? levelLoopFile : hackLoopFile} isn't on home`;
+    report.problem = `${fileOf(anyLoop)} isn't on home`;
   }
   for (const hostname of reachableHostnames(ns)) {
     if (!ns.hasRootAccess(hostname)) continue;
     // This host's loop, or undefined: no loop of ours runs here. Home runs one only in levelling mode.
-    const named = loopOfHost.get(hostname);
-    const loop = hostname === "home" && named?.levelling === undefined ? undefined : named;
-    const loopFile = loop?.levelling === undefined ? hackLoopFile : levelLoopFile;
-    const loopRam = loop?.levelling === undefined ? hackLoopRam : levelLoopRam;
+    const loop = hostLoopOf(loopOfHost, hostname);
+    const loopFile = fileOf(loop);
+    const loopRam = ns.getScriptRam(loopFile, "home");
     // What this host keeps of its RAM from our loop: on home, the brain's word (unread: all of it).
-    const keptGb = hostname === "home" ? (loop?.levelling?.homeKeptGb ?? Number.POSITIVE_INFINITY) : 0;
+    const keptGb = keptGbOf(hostname, loop);
     // The loop's arguments with `threads` threads: its target, and its hack threads capped at those (none: all).
     const loopArguments = (threads: number): (string | number)[] =>
       loop === undefined
@@ -79,17 +82,19 @@ export function main(ns: NS): void {
         ns.kill(process.pid);
       }
     }
-    // The threads our loop may hold here beside the rest, `runningThreads` of them ours now: the RAM less what's kept,
-    // or less what the other scripts use, if more.
+    // The threads our loop may hold here beside the rest, `runningThreads` of them ours now.
     const threadsRoom = () =>
-      Math.floor(
-        (ns.getServerMaxRam(hostname) - Math.max(keptGb, ns.getServerUsedRam(hostname) - runningThreads * loopRam)) /
-          loopRam,
-      );
+      loopThreadsRoom({
+        maxGb: ns.getServerMaxRam(hostname),
+        usedGb: ns.getServerUsedRam(hostname),
+        oursGb: runningThreads * loopRam,
+        keptGb,
+        scriptGb: loopRam,
+      });
     // A loop started small, beside RAM that's been freed since (the batcher's operations, landed after it was turned
-    // off, #211), is started again at full size once the free RAM holds another thread: so no loop stays starved. Only
-    // RAM freed since it started can do that, so it's rare: what a restart loses is the weaken or grow under way.
-    if (runningThreads > 0 && loopRam > 0 && threadsRoom() > runningThreads) {
+    // off, #211; on home, other scripts' end), is started again at full size: so no loop stays starved. Only RAM freed
+    // since it started can do that, so it's rare: what a restart loses is the weaken or grow under way.
+    if (loopRam > 0 && restartsAtFullSize(threadsRoom(), runningThreads, keptGb, loopRam)) {
       for (const pid of runningPids) ns.kill(pid);
       runningThreads = 0;
       hackThreads = 0;

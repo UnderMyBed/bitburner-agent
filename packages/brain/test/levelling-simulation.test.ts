@@ -16,7 +16,7 @@ import {
   AUGMENTATIONS,
   deployedFilePath,
   hackingExpOfLevel,
-  LEVEL_LOOP_SCRIPT_NAME,
+  LEVEL_GROW_SCRIPT_NAME,
   type MediumSnapshotData,
   NEUROFLUX_GOVERNOR,
   type SlowSnapshotData,
@@ -107,16 +107,18 @@ test.each(SEEDS)(
     ]);
     expect(fresh.controller().hackLoopView()).toMatchObject({ target: "joesguns", levelling: true });
 
-    // Its measured rate once settled, fitted against the formula's for the RAM sent: near it over the window's 10
-    // minutes (a minute's counts its hosts' whole landings, a weaken's 4 s apart: 0.95 to 1.03 on seeds 1 to 4).
+    // Its measured rate once settled, fitted against the formula's for the RAM sent, the grow's: near it over the
+    // window's 10 minutes (1.007 to 1.008 on seeds 1 to 4).
     await game.runUntil(() => fresh.controller().levellingView().fit !== null, STAGE_MS);
     await game.run(10 * MINUTE);
     const fit = fresh.controller().levellingView().fit;
     console.log(`seed ${seed}: levelling's fit ${JSON.stringify(fit)}`);
-    expect(fit?.factor).toBeGreaterThan(0.95);
-    expect(fit?.factor).toBeLessThan(1.05);
-    // The level loop on home, beyond what home keeps for the Agent, and on the hosts; no batcher.
-    const loopFile = deployedFilePath(fresh.deploymentId, LEVEL_LOOP_SCRIPT_NAME);
+    expect(fit?.factor).toBeGreaterThan(0.98);
+    expect(fit?.factor).toBeLessThan(1.02);
+    // The grow loop on home, beyond what home keeps for the Agent, and on the hosts, joesguns at its minimum security
+    // (weakened there first, as the weaken goes before the grow); no batcher.
+    expect(fresh.controller().levellingView().lines[1]).toContain("growing it");
+    const loopFile = deployedFilePath(fresh.deploymentId, LEVEL_GROW_SCRIPT_NAME);
     const onHome = (await simulation.ps("home")).filter((process) => process.filename === loopFile);
     expect(onHome).toEqual([expect.objectContaining({ args: ["joesguns"] })]);
     const homeThreads = onHome[0]?.threads ?? 0;
@@ -124,7 +126,6 @@ test.each(SEEDS)(
     expect(homeThreads).toBeGreaterThan(((HOME_GB - SHARE_HOME_KEPT_GB) / 1.75) * 0.95);
     const onJoesguns = (await simulation.ps("joesguns")).filter((process) => process.filename === loopFile);
     expect(onJoesguns).toEqual([expect.objectContaining({ args: ["joesguns"] })]);
-    // Weakened to its minimum.
     const medium: MediumSnapshotData | null = fresh.medium();
     expect(medium?.servers.find((server) => server.hostname === "joesguns")?.hackDifficulty).toBe(5);
     expect(fresh.controller().batcherView().sent).toBeNull();

@@ -1,5 +1,6 @@
-// Levelling (#336): the experience a weaken thread earns a second, the levelling target, the time to a level, and the
-// planner's three candidates and choice, on figures shaped like BN4.1's last snapshot (2026-11-10's run).
+// Levelling (#336): the experience a grow or weaken thread earns a second, the levelling target and operation, the
+// time to a level, and the planner's three candidates and choice, on figures shaped like BN4.1's last snapshot
+// (2026-11-10's run; its hacking_speed and NeuroFlux Governor levels assumed, not read).
 import { describe, expect, test } from "vitest";
 import { hackingExpOfLevel, hackingLevelOfExp } from "../src/batcher.ts";
 import { LEVEL_LOOP_RAM_GB } from "../src/hack-loop.ts";
@@ -8,6 +9,7 @@ import {
   chooseLevelling,
   chooseLevellingTarget,
   LEVELLING_INSTALL_MS,
+  LEVELLING_REROOT_MS,
   LEVELLING_SWITCH_GAIN,
   levelLoopThreads,
   levellingEstimates,
@@ -61,7 +63,7 @@ const BN4_REQUIRED = 9000;
 const CLOUD_GB = 26.2e6;
 const HOME_GB = 33.5e6;
 
-describe("the experience a weaken thread earns a second (#336)", () => {
+describe("the experience a grow or weaken thread earns a second (#336)", () => {
   test("joesguns at BN4.1's level: (3 + 0.3 × 15) × hacking_exp over a weaken's 4 hacks' time", () => {
     const joesguns = SERVERS[3]?.figures as HackingTarget;
     const perThread = 7.5 * BN4_HACKING_EXP;
@@ -78,6 +80,14 @@ describe("the experience a weaken thread earns a second (#336)", () => {
     expect(levellingExpPerThreadSecond(ecorp, BN4_PLAYER, BN4_HACKING_EXP)).toBeLessThan(139.5 / 30);
   });
 
+  test("a grow earns 1.25 times a weaken's: the same experience in 3.2 hacks' time against 4", () => {
+    const joesguns = SERVERS[3]?.figures as HackingTarget;
+    const weaken = levellingExpPerThreadSecond(joesguns, BN4_PLAYER, BN4_HACKING_EXP, "weaken");
+    const grow = levellingExpPerThreadSecond(joesguns, BN4_PLAYER, BN4_HACKING_EXP, "grow");
+    expect(grow / weaken).toBeCloseTo(1.25, 12);
+    expect(grow).toBeCloseTo(174.4, 1);
+  });
+
   test("none where the game gives none: a base difficulty of 0, or unread", () => {
     const joesguns = SERVERS[3]?.figures as HackingTarget;
     expect(levellingExpPerThreadSecond({ ...joesguns, baseDifficulty: 0 }, BN4_PLAYER, BN4_HACKING_EXP)).toBe(0);
@@ -91,7 +101,7 @@ describe("the experience a weaken thread earns a second (#336)", () => {
       mults: { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1 },
     };
     for (const player of [BN4_PLAYER, slow]) {
-      expect(chooseLevellingTarget(SERVERS, player, 1)?.hostname).toBe("joesguns");
+      expect(chooseLevellingTarget(SERVERS, player, 1)).toMatchObject({ hostname: "joesguns", operation: "grow" });
     }
     // Without joesguns, foodnstuff's 6 / 507.5 beats sigma-cosmetics' 6 / 537.5.
     expect(chooseLevellingTarget(SERVERS.slice(0, 3), slow, 1)?.hostname).toBe("foodnstuff");
@@ -153,7 +163,13 @@ describe("the time to a level (#336)", () => {
 });
 
 describe("the candidates and the choice (#336), on BN4.1's last snapshot", () => {
-  const joesgunsRate = levellingExpPerThreadSecond(SERVERS[3]?.figures as HackingTarget, BN4_PLAYER, BN4_HACKING_EXP);
+  // The chosen operation's, the grow's: once joesguns is at its minimum security, and its maximum money.
+  const joesgunsRate = levellingExpPerThreadSecond(
+    SERVERS[3]?.figures as HackingTarget,
+    BN4_PLAYER,
+    BN4_HACKING_EXP,
+    "grow",
+  );
   const threads = levelLoopThreads([CLOUD_GB, HOME_GB - 32]);
   const homeThreads = levelLoopThreads([HOME_GB - 32]);
   const inputs = {
@@ -166,16 +182,18 @@ describe("the candidates and the choice (#336), on BN4.1's last snapshot", () =>
     install: { levels: 17, homeThreads, perThread: { expPerSecond: joesgunsRate, atLevel: 6779 } },
   };
 
-  test("(a) is thousands of hours, (b) hours, (c) under an hour: the install wins", () => {
+  test("the figures the PR quotes: (a) 2,307.7 h, (b) 61.7 min, (c) 20.1 / 27.1 / 103.1 min at 17 / 10 / 1 levels", () => {
     const estimates = levellingEstimates(inputs);
     // At a flat 2.65e6/s, 2.82e13 more experience is the report's 2,873 h; its rise with the level takes some off.
-    expect((estimates.money as number) / HOUR).toBeGreaterThan(2000);
-    expect((estimates.money as number) / HOUR).toBeLessThan(2873);
-    expect((estimates.level as number) / HOUR).toBeGreaterThan(0.5);
-    expect((estimates.level as number) / HOUR).toBeLessThan(3);
-    // The install's own 15 minutes, then 17 levels' cut: 9,000 at ×13.5 is about 6e11 experience, from zero.
-    expect(estimates.install as number).toBeGreaterThan(LEVELLING_INSTALL_MS / 1000);
-    expect((estimates.install as number) / HOUR).toBeLessThan(1);
+    expect((estimates.money as number) / HOUR).toBeCloseTo(2307.75, 1);
+    expect((estimates.level as number) / 60).toBeCloseTo(61.7, 1);
+    // The install's own 15 minutes and the root's 3.4, then 17 levels' cut: 9,000 at ×13.5 is about 6e11 experience.
+    // The 17 are assumed (the store's NeuroFlux Governor level isn't in the fixture), not derived from $6.96e15.
+    expect((estimates.install as number) / 60).toBeCloseTo(20.1, 1);
+    const levels = (count: number) =>
+      (levellingEstimates({ ...inputs, install: { ...inputs.install, levels: count } }).install as number) / 60;
+    expect(levels(10)).toBeCloseTo(27.1, 1);
+    expect(levels(1)).toBeCloseTo(103.1, 1);
     expect(chooseLevelling(estimates, "money")).toBe("install");
     expect(chooseLevelling(estimates, "level")).toBe("install");
   });
@@ -187,10 +205,11 @@ describe("the candidates and the choice (#336), on BN4.1's last snapshot", () =>
     expect(fitted.install as number).toBeGreaterThan(unfitted.install as number);
   });
 
-  test("(c): the install's time, then from 0 at the levels' multipliers (the level's, the experience's, the speed's) on home's threads", () => {
+  test("(c): the install's time and the root's again, then from 0 at the levels' multipliers (the level's, the experience's, the speed's) on home's threads", () => {
     const { hacking, hackingExp, hackingSpeed } = neuroFluxMultipliers();
+    expect(LEVELLING_REROOT_MS).toBe(204_000);
     const expected =
-      LEVELLING_INSTALL_MS / 1000 +
+      (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS) / 1000 +
       secondsToHackingLevel(0, BN4_REQUIRED, BN4_LEVEL_MULT * hacking ** 17, {
         expPerSecond: joesgunsRate * homeThreads * (hackingExp * hackingSpeed) ** 17 * 0.8,
         atLevel: 6779,

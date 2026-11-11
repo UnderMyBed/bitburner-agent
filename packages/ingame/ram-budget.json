@@ -26,6 +26,7 @@
   "hack-loop.js": 2.4,
   "install-augmentations.js": 1.6,
   "join-faction.js": 2.1,
+  "level-grow.js": 1.75,
   "level-loop.js": 1.75,
   "singularity-backdoor.js": 8.0,
   "singularity-buy-augmentation.js": 12.6,

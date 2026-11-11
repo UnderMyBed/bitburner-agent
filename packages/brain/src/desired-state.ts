@@ -25,8 +25,11 @@ import {
   type IntentOutcome,
   intentId,
   isBitNodeNumber,
+  isHackLoopFile,
   isIrreversibleIntent,
   type JoinedFaction,
+  LEVEL_GROW_SCRIPT_NAME,
+  LEVEL_LOOP_SCRIPT_NAME,
   MAX_INTENTS,
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
@@ -692,6 +695,24 @@ export class DesiredStateController {
     if (!this.#bitNodeEnd.closeGameAsked()) return "not asked for";
     if (this.#closeGameSentAtMs !== null) return null;
     return this.intentsView().find((view) => view.id === CLOSE_GAME_INTENT.id)?.waitingFor ?? "not sent yet";
+  }
+
+  /**
+   * Whether levelling mode's loop runs (#336's review): the state last sent levels with the hack loop on, and the threads
+   * the fast snapshot shows of levelling mode's loops on home (the Agent's word, so checked).
+   */
+  #levelLoopRunning(): { sent: boolean; homeThreads: number } {
+    const hackLoop = this.#desired?.hackLoop;
+    const processes = this.#fastData?.game?.homeProcesses;
+    let homeThreads = 0;
+    for (const process of Array.isArray(processes) ? processes : []) {
+      const { filename, threads } = process ?? {};
+      if (typeof filename !== "string" || typeof threads !== "number" || !isHackLoopFile(filename)) continue;
+      if (filename.endsWith(`/${LEVEL_LOOP_SCRIPT_NAME}`) || filename.endsWith(`/${LEVEL_GROW_SCRIPT_NAME}`)) {
+        homeThreads += threads;
+      }
+    }
+    return { sent: hackLoop?.enabled === true && hackLoop.levelling != null, homeThreads };
   }
 
   /** The planner's levelling choice (#336): the candidates, the choice and the fitted factor. */
@@ -1509,7 +1530,7 @@ export class DesiredStateController {
           enabled: true,
           target: levelling.target,
           hosts: levelling.hosts,
-          levelling: { homeKeptGb: levelling.homeKeptGb },
+          levelling: { homeKeptGb: levelling.homeKeptGb, operation: levelling.operation },
         },
       };
     }
@@ -1682,6 +1703,7 @@ export class DesiredStateController {
       neuroFluxLevels: this.#augmentations.neuroFluxOffer(),
       installCommitted: augmentations.committed,
       batcherTarget: batcherConfig === null ? null : { hostname: batcherConfig.target, figures: batcherConfig.figures },
+      levelLoop: this.#levelLoopRunning(),
       nowMs: this.#lastEventAtMs,
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.

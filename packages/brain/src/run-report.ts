@@ -114,7 +114,7 @@ import {
   type StoredEvent,
   type TelemetryStore,
 } from "./telemetry-store.ts";
-import { BITNODE_DESTROY_SENT_EVENT_KIND } from "./world-daemon.ts";
+import { BITNODE_DESTROY_SENT_EVENT_KIND, readWorldDaemonEnabled } from "./world-daemon.ts";
 import { levellingModeAt, WORLD_DAEMON_EVENT_KINDS, WorldDaemonFold } from "./world-daemon-report.ts";
 
 /** An Agent disconnect with no reconnect within this is a failure, unless the run ended there. */
@@ -659,6 +659,8 @@ interface RunFacts extends RunWindow {
   hackLoopEnabled: boolean;
   /** The Augmentations switch, now (#222): likewise. */
   augmentationsEnabled: boolean;
+  /** The World Daemon's switch, now (#336's review): off, the levelling choice's failures are warnings. */
+  worldDaemonEnabled: boolean;
   /** The newest brain start in the day before the window, if any: the window may not be the whole run. */
   earlierBrainStartMs: number | null;
   /**
@@ -889,6 +891,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       cloudServerChanges: cloudServerChanges.changes,
       hackLoopEnabled: readHackLoopEnabled(store),
       augmentationsEnabled: readAugmentationsEnabled(store),
+      worldDaemonEnabled: readWorldDaemonEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
       thinningsBefore,
       hacking,
@@ -2144,8 +2147,9 @@ function healthSection(
       warnings,
       formatTime: formatIsoTime,
       bitNodeAt: (atMs) => facts.cycles.bitNodeIndexAt(atMs),
-      // The levelling choice's judgement (#336), on the window's last snapshots.
+      // The levelling choice's judgement (#336), on the window's last snapshots, and the switch it applies under.
       snapshots: facts,
+      worldDaemonEnabled: facts.worldDaemonEnabled,
     }),
   );
 
