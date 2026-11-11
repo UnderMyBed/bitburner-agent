@@ -61,6 +61,7 @@ describe("the choice (#343)", () => {
       ],
       choice: 1,
       heldForIncome: false,
+      heldForInvitation: false,
       tauScale: 1,
     });
     // The last one a cycle off, or more: install now.
@@ -129,6 +130,18 @@ describe("the choice (#343)", () => {
       candidates: [],
       choice: null,
     });
+  });
+
+  test("an invitation's money held: installing now held likewise, unless the set meets the count", () => {
+    const holding = { needed: 5, adding: 4, onlineMs: 28 * MINUTE, invitationHeld: true };
+    expect(installTiming({ ...holding, next: [{ tauMs: 30 * MINUTE }] })).toMatchObject({
+      choice: 1,
+      heldForInvitation: true,
+      heldForIncome: false,
+    });
+    expect(installTiming({ ...holding, next: [] })).toMatchObject({ choice: null, heldForInvitation: true });
+    expect(installTiming({ ...holding, adding: 5, next: [] })).toMatchObject({ choice: 0, heldForInvitation: false });
+    expect(installTiming({ ...holding, invitationHeld: false, next: [] })).toMatchObject({ choice: 0 });
   });
 
   test("no income measured: installing now held unless the set meets the count; the least wait, or none, instead", () => {

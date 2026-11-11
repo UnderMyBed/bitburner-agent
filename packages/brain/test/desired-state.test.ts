@@ -1384,11 +1384,14 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         ownedAugs = OWNED,
         queued = ["Neural Wit Amplifier"],
         blackHand = 100_000,
+        invited = [],
       }: {
         minute: number;
         ownedAugs?: Record<string, number>;
         queued?: string[];
         blackHand?: number;
+        /** Factions inviting (a city group's, ending #228's hold for its invitations). */
+        invited?: string[];
       }) => ({
         ...slowData(),
         resetInfo: { ...slowData().resetInfo, lastAugReset: 0, ownedAugs },
@@ -1400,7 +1403,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
               { name: "CyberSec", reputation: 18_750, favor: 0 },
               { name: TBH, reputation: blackHand, favor: 0 },
             ],
-            invitations: [],
+            invitations: invited,
             queuedAugmentations: queued,
           },
           problem: null,
@@ -1497,7 +1500,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         expect(augmentationIntents(sentIds())).toEqual([]);
       });
 
-      test("held while the income is unmeasured; then installing now, at once, through the gate and a backup", async () => {
+      test("held while the income is unmeasured, then while #228 holds a city group's money; then installing now, at once, through the gate and a backup", async () => {
         const { controller, connection, sentIds, backupNow, settleBackup } = connectedWithLoopOff("planner");
         const sent: unknown[] = [];
         controller.subscribe((event) => isInvitationEvent(event) || sent.push(event));
@@ -1510,7 +1513,22 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         expect(controller.augmentationsView().progress?.timing?.words).toMatch(
           /; install now held: no income measured/,
         );
+        // The income measured; the invitations rule meanwhile holds money for a city group's invitations (#228):
+        // installing now, which would spend it, held for it.
         minuteAt(connection, 10, THREE_EXACTLY, { blackHand: 0 });
+        expect(controller.invitationsView().hold).toBeGreaterThan(0);
+        expect(controller.augmentationsView().progress?.timing).toMatchObject({
+          choice: 1,
+          heldForIncome: false,
+          heldForInvitation: true,
+        });
+        expect(controller.augmentationsView().committed).toBe(false);
+        // The group inviting: the hold over (as of the invitations rule's next update), installing now goes.
+        const group = controller.invitationsView().cityFactions;
+        expect(group.length).toBeGreaterThan(0);
+        minuteAt(connection, 11, THREE_EXACTLY, { blackHand: 0, invited: group });
+        expect(controller.invitationsView().hold).toBe(0);
+        minuteAt(connection, 12, THREE_EXACTLY, { blackHand: 0, invited: group });
         expect(controller.augmentationsView()).toMatchObject({ committed: true });
         expect(sent).toContainEqual(
           expect.objectContaining({
@@ -1530,14 +1548,23 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
             game: null,
             intents: [{ id: buy(name).id, done: true, tries: 1, problem: null, backend: "sim" }],
           });
-          minuteAt(connection, 11 + index, THREE_EXACTLY, { queued: queued.slice(0, index + 2), blackHand: 0 });
+          minuteAt(connection, 13 + index, THREE_EXACTLY, {
+            queued: queued.slice(0, index + 2),
+            blackHand: 0,
+            invited: group,
+          });
         }
         // The four shown queued: the install asked for, then the gate: two consecutive medium snapshots, and a backup.
-        minuteAt(connection, 14, 0, { queued, blackHand: 0 });
-        minuteAt(connection, 15, 0, { queued, blackHand: 0 });
-        minuteAt(connection, 16, 0, { queued, blackHand: 0 });
-        expect(backupNow).toHaveBeenCalledTimes(1);
-        await settleBackup(SAVED);
+        minuteAt(connection, 16, 0, { queued, blackHand: 0, invited: group });
+        minuteAt(connection, 17, 0, { queued, blackHand: 0, invited: group });
+        minuteAt(connection, 18, 0, { queued, blackHand: 0, invited: group });
+        // The group's joins (A5's, irreversible too) take their own backups, in turn: each settled.
+        expect(backupNow).toHaveBeenCalled();
+        for (let backup = 0; backup < 4 && !sentIds().includes(INSTALL.id); backup += 1) {
+          await settleBackup(SAVED);
+          minuteAt(connection, 19 + backup, 0, { queued, blackHand: 0, invited: group });
+        }
+        expect(controller.intentsView().map((each) => each.id)).toContain(INSTALL.id);
         expect(sentIds()).toContain(INSTALL.id);
       });
     });

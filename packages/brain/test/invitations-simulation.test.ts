@@ -113,21 +113,37 @@ test.each(SEEDS)(
 
     // Money for a city group's invitations (#228, decision 54): B, the most that count (5, against A 4, C 3), Ishima's
     // first (the player is there), then Chongqing and New Tokyo, back to Ishima; none of A's or C's joined.
+    // From here on, at every step, no install chosen that doesn't meet the count while #228's hold keeps money for an
+    // invitation (#343): the planner holds installing now meanwhile, whatever the income.
+    const holds = { steps: 0, installsWhileHeld: 0, installs: 0 };
+    const watchHold = () => {
+      const installs = events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND).filter((event) => {
+        const timing = (event.detail as { timing?: { adding: number; needed: number } }).timing;
+        return timing === undefined || timing.adding < timing.needed;
+      }).length;
+      if (fresh.controller().invitationsView().hold > 0) {
+        holds.steps += 1;
+        holds.installsWhileHeld += installs - holds.installs;
+      }
+      holds.installs = installs;
+    };
     await simulation.diagnostics.setMoney(100e6);
     const groupB = ["Chongqing", "New Tokyo", "Ishima"];
-    await game.runUntil(
-      () => groupB.every((faction) => joined().includes(faction)) && fresh.medium()?.player.city === "Ishima",
-      STAGE_MS,
-    );
+    await game.runUntil(() => {
+      watchHold();
+      return groupB.every((faction) => joined().includes(faction)) && fresh.medium()?.player.city === "Ishima";
+    }, STAGE_MS);
     expect(events(CITY_GROUP_CHOSEN_EVENT_KIND).map((event) => event.detail)).toEqual([
       expect.objectContaining({ group: "B", factions: groupB, short: true }),
     ]);
     expect(joined().filter((faction) => ["Sector-12", "Aevum", "Volhaven"].includes(faction))).toEqual([]);
     // No install meanwhile (#343). The $100m covers Tian Di Hui's three (23 → 26 of 30). Installing now, about 2T (47
     // min at the edit), is the planner's only candidate until the group joins (the hack loop is off, so the money never
-    // comes at a rate known): held while no income is measured, the brain's first 10 minutes of slow snapshots (seed 1:
-    // its first at 20.5 min of the game's time, measured from 30.5). Group B joined (seed 1: 28 min), its countables
-    // come by work, and waiting wins: NutriGen Implant 3 min off at New Tokyo, 34 min against installing now's 55.
+    // comes at a rate known): held while #228's hold keeps the group's money (the whole stage), and while no income is
+    // measured (seed 1: from 20.5 to 30.5 min of the game's time). Group B joined (seed 1: 28 min), its countables come
+    // by work, and waiting wins: NutriGen Implant 3 min off at New Tokyo, 34 min against installing now's 55.
+    expect(holds.steps).toBeGreaterThan(0);
+    expect(holds.installsWhileHeld).toBe(0);
     expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([]);
     expect(fresh.controller().augmentationsView().progress?.timing).toMatchObject({
       needed: 7,
@@ -140,7 +156,11 @@ test.each(SEEDS)(
     await simulation.diagnostics.joinFactionWithReputation("Tian Di Hui", 80_000);
     await simulation.diagnostics.setMoney(200e9);
     const startedAt = slow()?.resetInfo.lastAugReset as number;
-    await game.runUntil(() => (slow()?.resetInfo.lastAugReset ?? startedAt) !== startedAt, STAGE_MS);
+    await game.runUntil(() => {
+      watchHold();
+      return (slow()?.resetInfo.lastAugReset ?? startedAt) !== startedAt;
+    }, STAGE_MS);
+    expect(holds.installsWhileHeld).toBe(0);
     const bought = events(AUGMENTATION_BOUGHT_EVENT_KIND).map(
       (event) => (event.detail as { augmentation: string }).augmentation,
     );

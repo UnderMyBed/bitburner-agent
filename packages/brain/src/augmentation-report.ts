@@ -33,6 +33,7 @@ import {
   AUGMENTATION_CYCLE_CALLED_OFF_EVENT_KIND,
   AUGMENTATION_DONATED_EVENT_KIND,
   AUGMENTATION_DONATION_FAILED_EVENT_KIND,
+  AUGMENTATION_INCOME_HELD_EVENT_KIND,
   AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
   AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND,
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
@@ -61,6 +62,7 @@ export const AUGMENTATION_EVENT_KINDS = [
   AUGMENTATION_DONATED_EVENT_KIND,
   AUGMENTATION_DONATION_FAILED_EVENT_KIND,
   AUGMENTATION_WAIT_OVERDUE_EVENT_KIND,
+  AUGMENTATION_INCOME_HELD_EVENT_KIND,
 ];
 
 /**
@@ -511,6 +513,8 @@ export class AugmentationTimeline {
               : "") +
             timingWords(fields.timing, "; the planner: "),
         });
+      } else if (kind === AUGMENTATION_INCOME_HELD_EVENT_KIND) {
+        entries.push({ atMs, text: describeIncomeHeld(fields) });
       } else if (kind === AUGMENTATION_WAIT_OVERDUE_EVENT_KIND) {
         entries.push({ atMs, text: describeWaitOverdue(fields) });
       } else if (kind === AUGMENTATION_DONATED_EVENT_KIND) {
@@ -835,6 +839,17 @@ export class AugmentationTimeline {
   }
 }
 
+/** Installing now held for the income too long (#343), in words. */
+function describeIncomeHeld(fields: Record<string, unknown>): string {
+  const eta = (ms: unknown) => formatEta(isFiniteNumber(ms) ? ms : null);
+  const since = isFiniteNumber(fields.sinceOnlineMs) ? fields.sinceOnlineMs : null;
+  const held = since !== null && isFiniteNumber(fields.onlineMs) ? fields.onlineMs - since : null;
+  return (
+    `income unmeasured: installing now held for the income from ${eta(since)} online, ${eta(held)} on` +
+    timingWords(fields.timing, ": ")
+  );
+}
+
 /** A wait overdue (#343), in words: when it began, its first τ, the n it waited for, and the planner's figures now. */
 function describeWaitOverdue(fields: Record<string, unknown>): string {
   const eta = (ms: unknown) => formatEta(isFiniteNumber(ms) ? ms : null);
@@ -847,10 +862,11 @@ function describeWaitOverdue(fields: Record<string, unknown>): string {
 
 /**
  * The planner's install timing's failures (#343), section 4's: an install chosen short of Daedalus's count (the event's
- * `short`, this brain's) without the planner's estimates; one short of it whose set and queue hold nothing but
- * NeuroFlux Governor (its levels, bought after the commit, aren't in the event: a NeuroFlux-only install, whoever chose
- * it); and each wait the brain found overdue (its event). Each is the brain's own error, so a failure whatever the
- * switch says now. Both install failures can fire on one install. None, no lines: the report's length bounds (#245).
+ * `short`, this brain's) without the planner's estimates; one short of it adding nothing to it: the planner's n 0
+ * where its estimates are there, else a set and queue of NeuroFlux Governor alone (its levels, bought after the commit,
+ * aren't in the event); each wait the brain found overdue, and each install held for the income too long (their
+ * events). Each is the brain's own error, so a failure whatever the switch says now. Both install failures can fire on
+ * one install. None, no lines: the report's length bounds (#245).
  */
 function timingLines(
   events: readonly StoredEvent[],
@@ -867,6 +883,10 @@ function timingLines(
       add(atMs, describeWaitOverdue(fields));
       continue;
     }
+    if (kind === AUGMENTATION_INCOME_HELD_EVENT_KIND) {
+      add(atMs, describeIncomeHeld(fields));
+      continue;
+    }
     if (kind !== AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND) continue;
     const short = shortOf(fields.short);
     if (short === null) continue;
@@ -877,10 +897,17 @@ function timingLines(
         `install short of Daedalus's count without the planner's estimates: ${count}, ${describeStoredReason(fields)}`,
       );
     }
+    // The planner's own n where it's there (NeuroFlux Governor counts once, while none is installed,
+    // `Augmentation/AugmentationHelpers.ts:55-58`); else the set and queue, NeuroFlux Governor alone in them.
+    const adding = fieldsOf(fields.timing).adding;
     const set = Array.isArray(fields.set) ? fields.set.map((each) => fieldsOf(each).augmentation) : [];
     const queued = Array.isArray(fields.queued) ? fields.queued : [];
-    if ([...set, ...queued].every((name) => name === NEUROFLUX_GOVERNOR)) {
-      add(atMs, `NeuroFlux-only install short of Daedalus's count: ${count}, nothing in its set or queue but it`);
+    const names = [...set, ...queued];
+    const neuroFluxOnly = isFiniteNumber(adding)
+      ? adding === 0
+      : names.length > 0 && names.every((name) => name === NEUROFLUX_GOVERNOR);
+    if (neuroFluxOnly) {
+      add(atMs, `NeuroFlux-only install short of Daedalus's count: ${count}, nothing new to it in its set or queue`);
     }
   }
   return lines.length === 1 ? [] : lines;

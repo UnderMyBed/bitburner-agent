@@ -2143,7 +2143,7 @@ describe("augmentations and the reset (#210)", () => {
       candidates: [{ k: 0, tauMs: 0, estimateMs: 112 * MINUTE }],
       choice: 0,
       next: [],
-      words: "25 of 30 installed, 1 new at an install, 28 min online this cycle; to Daedalus's count: …",
+      words: "25 of 30 installed, 1 new at an install, 28 min this cycle (T); to Daedalus's count: …",
       ...fields,
     });
     const failuresOf = (report: ReturnType<typeof augmentationRun>) =>
@@ -2170,7 +2170,7 @@ describe("augmentations and the reset (#210)", () => {
       expect(failuresOf(report)).toEqual([]);
     });
 
-    test("fails an install short of the count without its estimates, and a NeuroFlux-only one, judged by its set and queue", () => {
+    test("fails an install short of the count without its estimates, and a NeuroFlux-only one: n 0, else its set and queue", () => {
       const NFG = "NeuroFlux Governor";
       const report = augmentationRun({
         events: [
@@ -2181,25 +2181,74 @@ describe("augmentations and the reset (#210)", () => {
             "augmentationInstallChosen",
             { ...CHOSEN, set: [], cost: 0, queued: [NFG, NFG], reason: "count reached", short: SHORT },
           ],
-          // The planner's, its set not empty: no failure; an earlier brain's, its count not stored: not judged.
+          // The planner's with nothing new (n 0): a failure, whatever its set.
           [
             4 * MINUTE,
             "augmentationInstallChosen",
+            { ...CHOSEN, reason: "Daedalus's count", short: SHORT, timing: timing({ adding: 0 }) },
+          ],
+          // Not failures: NeuroFlux Governor's first level, none installed (n 1: it counts once); the planner's, its
+          // set; an install of nothing judged by its set and queue (none); an earlier brain's, its count not stored.
+          [
+            5 * MINUTE,
+            "augmentationInstallChosen",
+            {
+              ...CHOSEN,
+              set: [],
+              queued: [NFG],
+              reason: "Daedalus's count",
+              short: SHORT,
+              timing: timing({ adding: 1 }),
+            },
+          ],
+          [
+            6 * MINUTE,
+            "augmentationInstallChosen",
             { ...CHOSEN, reason: "Daedalus's count", short: SHORT, timing: timing() },
           ],
-          [5 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, set: [], queued: [NFG], reason: "count reached" }],
+          [
+            7 * MINUTE,
+            "augmentationInstallChosen",
+            { ...CHOSEN, set: [], queued: [], reason: "count reached", short: SHORT },
+          ],
+          [8 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, set: [], queued: [NFG], reason: "count reached" }],
         ],
       });
       const neuroFluxOnly =
-        "NeuroFlux-only install short of Daedalus's count: 25 of 30 installed, nothing in its set or queue but it";
+        "NeuroFlux-only install short of Daedalus's count: 25 of 30 installed, nothing new to it in its set or queue";
+      const withoutEstimates =
+        "install short of Daedalus's count without the planner's estimates: 25 of 30 installed, the count reached: 1 " +
+        "of 7 new augmentations affordable (3 of 11 with NeuroFlux)";
       expect(failuresOf(report)).toEqual([
-        "install short of Daedalus's count without the planner's estimates: 25 of 30 installed, the count reached: 1 " +
-          "of 7 new augmentations affordable (3 of 11 with NeuroFlux)",
-        "install short of Daedalus's count without the planner's estimates: 25 of 30 installed, the count reached: 1 " +
-          "of 7 new augmentations affordable (3 of 11 with NeuroFlux)",
+        withoutEstimates,
+        withoutEstimates,
         neuroFluxOnly,
+        neuroFluxOnly,
+        withoutEstimates,
       ]);
       expect(report.text).toContain(`    ${at(3 * MINUTE)}  ${neuroFluxOnly}`);
+      expect(report.text).toContain(`    ${at(4 * MINUTE)}  ${neuroFluxOnly}`);
+    });
+
+    test("fails installing held for the income too long, listed with the decisions too", () => {
+      const report = augmentationRun({
+        events: [
+          [
+            10 * MINUTE,
+            "augmentationIncomeHeld",
+            {
+              onlineMs: 38 * MINUTE,
+              sinceOnlineMs: 18 * MINUTE,
+              timing: timing({ choice: null, heldForIncome: true, words: "… chosen: none; install now held: …" }),
+            },
+          ],
+        ],
+      });
+      const line =
+        "income unmeasured: installing now held for the income from 18 min online, 20 min on: … chosen: none; install " +
+        "now held: …";
+      expect(failuresOf(report)).toEqual([line]);
+      expect(report.text.split("\n").filter((each) => each.endsWith(line))).toHaveLength(3);
     });
 
     test("fails a wait the brain found overdue, listed with the decisions too", () => {

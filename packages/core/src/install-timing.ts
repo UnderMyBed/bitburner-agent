@@ -27,10 +27,13 @@
  * - the work one faction at a time, each in turn (`nextCountables`), never two at once: the order A5 takes and its
  *   switches left out, cautious for waiting where its own choice is already one of them;
  * - the countables whose prerequisite is among the k (not offered until it's bought): cautious for waiting.
- * Two guards, each the rule's own measure: with no income measured (`incomeMeasured` false: 10 minutes of slow
+ * Three guards, each the rule's own measure: with no income measured (`incomeMeasured` false: 10 minutes of slow
  * snapshots after a restart or a gap), every money-bound τ is never, so installing now is held unless the set meets
- * the count; and a wait still short of its countables at twice its first τ and 10 minutes scales every fresh τ by its
- * measured error, the wait so far over its first τ (`tauScale`, a rate fitted online), so a stalled wait gives way.
+ * the count; while an invitation's money is held (#228's hold, `invitationHeld`: it ends on the invitation, or 5
+ * minutes in the city without one), installing now, which would spend it, is held likewise; and a wait still short of
+ * its countables at twice its first τ and 10 minutes scales every fresh τ by its measured error, the wait so far over
+ * its first τ (`tauScale`, a rate fitted online), so a stalled wait gives way, except at the last countable, where the
+ * scaled wait never exceeds T; the overdue failure reports it.
  * Pure, so the brain's rule and the run report read the same figures.
  */
 
@@ -153,6 +156,8 @@ export interface InstallTiming {
   choice: number | null;
   /** Installing now was the least but held, as no income is measured and the set doesn't meet the count. */
   heldForIncome: boolean;
+  /** Installing now was the least but held for an invitation's money (#228's hold), the set not meeting the count. */
+  heldForInvitation: boolean;
   /** The factor each wait's τ was scaled by (an overdue wait's measured error), 1 for none. */
   tauScale: number;
 }
@@ -162,7 +167,8 @@ export interface InstallTiming {
  * overdue wait's measured error; never, with a τ above 0 times a scale of Infinity), the least estimate chosen; a tie
  * to install (irreversible, it still passes the controller's gate), then to the fewer to wait for. With no income
  * measured (`incomeMeasured` false), installing now is chosen only once the set meets the count; else the least wait,
- * or none (`heldForIncome` says so).
+ * or none (`heldForIncome` says so); likewise while an invitation's money is held (`invitationHeld`,
+ * `heldForInvitation`).
  */
 export function installTiming({
   needed,
@@ -170,6 +176,7 @@ export function installTiming({
   onlineMs,
   next,
   incomeMeasured = true,
+  invitationHeld = false,
   tauScale = 1,
 }: {
   needed: number;
@@ -177,6 +184,7 @@ export function installTiming({
   onlineMs: number;
   next: readonly { tauMs: number }[];
   incomeMeasured?: boolean;
+  invitationHeld?: boolean;
   tauScale?: number;
 }): InstallTiming {
   const candidates: InstallTimingCandidate[] = [];
@@ -195,7 +203,10 @@ export function installTiming({
     return best;
   };
   const best = least(() => true);
-  const heldForIncome = best?.k === 0 && !incomeMeasured && adding < needed;
-  const choice = heldForIncome ? (least((candidate) => candidate.k > 0)?.k ?? null) : (best?.k ?? null);
-  return { needed, adding, onlineMs, candidates, choice, heldForIncome, tauScale };
+  const held = best?.k === 0 && adding < needed;
+  const heldForIncome = held && !incomeMeasured;
+  const heldForInvitation = held && invitationHeld;
+  const choice =
+    heldForIncome || heldForInvitation ? (least((candidate) => candidate.k > 0)?.k ?? null) : (best?.k ?? null);
+  return { needed, adding, onlineMs, candidates, choice, heldForIncome, heldForInvitation, tauScale };
 }

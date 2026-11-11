@@ -24,6 +24,7 @@ import { type Countdown, countHoldOf, holdsOf, installClock, installDecision } f
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   AUGMENTATION_COUNT_HOLD_SETTING,
+  AUGMENTATION_CYCLE_SEEN_SETTING,
   AUGMENTATION_CYCLE_SETTING,
   AUGMENTATION_INCOME_WINDOW_MS,
   AUGMENTATION_INSTALL_INTENT,
@@ -2994,6 +2995,8 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
       AUGMENTATION_ONLINE_SETTING,
       JSON.stringify({ lastAugReset: 0, onlineMs: minutes * MINUTE, lastGameTimeMs: gameTimeMs }),
     );
+    // The brain saw the cycle from its install: T is the time online.
+    store.setSetting(AUGMENTATION_CYCLE_SEEN_SETTING, JSON.stringify({ lastAugReset: 0, gameTimeMs: 0 }));
     rule = newRule("planner");
   };
   const minuteOn = (
@@ -3028,10 +3031,12 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
       ],
       choice: 1,
       heldForIncome: false,
+      heldForInvitation: false,
       tauScale: 1,
+      timeOnlineMs: 28 * MINUTE,
       next: [{ augmentation: TBH, faction: TBH, way: "work", tauMs: expect.closeTo(17 * MINUTE, -3) }],
       words:
-        "25 of 30 installed, 4 new at an install, 28 min online this cycle; to Daedalus's count: install now 28 min, " +
+        "25 of 30 installed, 4 new at an install, 28 min this cycle (T); to Daedalus's count: install now 28 min, " +
         "wait for The Black Hand (17 min, by work at The Black Hand) 17 min; chosen: wait for 1",
     });
     expect(progress).toMatchObject({ reason: null, countdown: null, countHold: null, held: null });
@@ -3262,6 +3267,71 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
       candidates: [{ k: 0, estimateMs: 7 * HOUR }, { k: 1 }],
       choice: 1,
     });
+  });
+
+  test("an invitation's money held (#228): installing now held unless the set meets the count; then installed", () => {
+    plannerAt(17);
+    tenMinutes({ reputation: reputationFor(30 * MINUTE) });
+    // The income measured, installing now (28 min) the shortest; the invitations rule holding $30m for a city group.
+    minuteOn({ reputation: reputationFor(30 * MINUTE) }, MONEY, { invitationHold: 30e6 });
+    expect(rule.view().progress?.timing).toMatchObject({
+      choice: 1,
+      heldForIncome: false,
+      heldForInvitation: true,
+    });
+    expect(rule.view().progress?.timing?.words).toMatch(
+      /; install now held: the money held for an invitation \(#228\)/,
+    );
+    expect(chosen()).toEqual([]);
+    // The set meeting the count installs, the hold or not.
+    minuteOn({ reputation: 100_000 }, MONEY, { invitationHold: 30e6 });
+    expect(chosen()).toEqual([expect.objectContaining({ timing: expect.objectContaining({ adding: 5, choice: 0 }) })]);
+  });
+
+  test("the invitation's hold over: installing now goes", () => {
+    plannerAt(17);
+    tenMinutes({ reputation: reputationFor(30 * MINUTE) });
+    minuteOn({ reputation: reputationFor(30 * MINUTE) }, MONEY, { invitationHold: 30e6 });
+    expect(chosen()).toEqual([]);
+    minuteOn({ reputation: reputationFor(30 * MINUTE) }, MONEY, { invitationHold: 0 });
+    expect(chosen()).toEqual([
+      expect.objectContaining({ timing: expect.objectContaining({ choice: 0, heldForInvitation: false }) }),
+    ]);
+  });
+
+  test("held for the income 20 minutes online (two of its windows): once, the event and the log line", () => {
+    plannerAt(17);
+    // No money sources in the slow snapshots: the income is never measured.
+    const unmeasured = () => {
+      gameTimeMs += MINUTE;
+      const { moneySources: _sources, ...data } = slowWith({ reputation: reputationFor(60 * MINUTE) });
+      return update({ slowData: data as SlowSnapshotData, mediumData: playerWith(MONEY) });
+    };
+    const held = () => events.filter((event) => event.type === "augmentationIncomeHeld");
+    for (let minute = 0; minute < 20; minute += 1) unmeasured();
+    expect(rule.view().progress?.timing).toMatchObject({ heldForIncome: true });
+    expect(held()).toEqual([]);
+    unmeasured();
+    expect(held()).toEqual([
+      expect.objectContaining({ onlineMs: 38 * MINUTE, sinceOnlineMs: 18 * MINUTE, timing: expect.any(Object) }),
+    ]);
+    expect(lines.at(-1)).toMatch(/^augmentations: INCOME UNMEASURED: installing now held for the income since 18 min/);
+    for (let minute = 0; minute < 5; minute += 1) unmeasured();
+    expect(held()).toHaveLength(1);
+    expect(chosen()).toEqual([]);
+  });
+
+  test("a store from before #343, its clock for the cycle and no record of its start: seeded from the clock", () => {
+    // 27 min online, its last slow snapshot at the game's 7 h: the brain first saw the cycle about 6 h 33 min in.
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: 0, onlineMs: 27 * MINUTE, lastGameTimeMs: gameTimeMs }),
+    );
+    rule = newRule("planner");
+    minuteOn({ reputation: reputationFor(17 * MINUTE) });
+    expect(readCycleSeen(store)).toEqual({ lastAugReset: 0, gameTimeMs: 7 * HOUR - 27 * MINUTE });
+    expect(rule.view().progress?.timing).toMatchObject({ onlineMs: 7 * HOUR + MINUTE, timeOnlineMs: 28 * MINUTE });
+    expect(rule.view().progress?.timing?.words).toMatch(/, 7\.0 h this cycle \(T; 28 min online\); /);
   });
 
   test("Daedalus inviting (the count met): the count rule times installs, as before; the planner doesn't", () => {

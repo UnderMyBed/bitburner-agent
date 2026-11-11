@@ -1720,6 +1720,8 @@ export class DesiredStateController {
       gangUnread: this.#gang.gangUnread(),
       // The planner's levelling choice (#336), as of the last update: NeuroFlux Governor's levels and an install.
       levellingInstall: this.#levelling.mode() === "install",
+      // #228's invitation hold, as of the invitations rule's last update (#343: installing now held meanwhile).
+      invitationHold: this.#invitations.hold(),
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;

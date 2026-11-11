@@ -461,8 +461,8 @@ test.each(
     expect(waitedWithFour).toEqual([
       expect.stringMatching(
         new RegExp(
-          "^augmentations: the planner's install timing: 25 of 30 installed, 4 new at an install, \\d+ min online " +
-            "this cycle; to Daedalus's count: install now \\d+ min, wait for The Black Hand \\(1\\d min, by work at " +
+          "^augmentations: the planner's install timing: 25 of 30 installed, 4 new at an install, \\d+ min this cycle " +
+            "\\(T[^)]*\\); to Daedalus's count: install now \\d+ min, wait for The Black Hand \\(1\\d min, by work at " +
             "The Black Hand\\) 1\\d min; chosen: wait for 1$",
         ),
       ),
