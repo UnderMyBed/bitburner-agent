@@ -2392,6 +2392,32 @@ describe("held for Daedalus's count (#243)", () => {
     expect(rule.view().progress?.countHold).not.toBeNull();
   });
 
+  test("the share bonus measured (#345): The Black Hand 25 min off at ×1 isn't held (20 min); at ×1.6, 15.6 min, held", () => {
+    const reputation = reputationFor(25 * MINUTE);
+    online();
+    minuteOn({ reputation });
+    expect(rule.view().progress).toMatchObject({ countHold: null, reason: "count reached" });
+    online();
+    minuteOn({ reputation }, MONEY, { shareBonus: 1.6 });
+    expect(rule.view().progress?.countHold).toMatchObject({
+      augmentation: TBH,
+      way: "work",
+      etaMs: expect.closeTo((25 / 1.6) * MINUTE, -3),
+      workMs: expect.closeTo((25 / 1.6) * MINUTE, -3),
+    });
+    // The owner's field work there: the share lifts its hacking term alone (`reputation.ts:40-52`).
+    const there = { kind: "faction", faction: TBH, workType: "field" } as const;
+    const conditions = workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow());
+    const person = workingPersonOf(playerWith(0)) as WorkingPerson;
+    const fieldRate = factionReputationPerSecond(person, "field", { favor: 0, ...conditions, shareBonus: 1.6 });
+    online();
+    minuteOn({ reputation: 100_000 - fieldRate * 300 }, MONEY, {
+      holdWork: { owners: there, brainWorks: false },
+      shareBonus: 1.6,
+    });
+    expect(rule.view().progress?.countHold).toMatchObject({ way: "work", etaMs: expect.closeTo(5 * MINUTE, -3) });
+  });
+
   test("the work counts only where someone works: A5 under the hold, or the owner's faction work there", () => {
     const fiveOff = reputationFor(5 * MINUTE);
     // A5's switch off, no owner's work: nobody earns The Black Hand's reputation, so no hold.
@@ -3096,6 +3122,33 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
         `(${dollars(THREE_COST)}), Daedalus's count: the planner's shortest time to it is installing now (#343); ${words}`,
     ]);
     expect(rule.reserve()).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test("the share bonus measured (#345): The Black Hand 30 min off at ×1 is install now; at ×1.6, its τ 18.75 min, a wait", () => {
+    plannerAt(17);
+    const reputation = reputationFor(30 * MINUTE);
+    // The share running (the batcher's health, the controller's `shareBonusOf`): A5's work there earns 1.6 times as
+    // much.
+    for (let minute = 0; minute < 10; minute += 1) minuteOn({ reputation }, MONEY, { shareBonus: 1.6 });
+    const ask = minuteOn({ reputation }, MONEY, { shareBonus: 1.6 });
+    expect(ask).toEqual({ intent: null, install: false, committed: false });
+    expect(rule.view().progress?.timing).toMatchObject({
+      onlineMs: 28 * MINUTE,
+      candidates: [
+        { k: 0, estimateMs: 28 * MINUTE },
+        { k: 1, tauMs: expect.closeTo((30 / 1.6) * MINUTE, -3) },
+      ],
+      choice: 1,
+      heldForIncome: false,
+    });
+    expect(rule.countHoldTarget()).toEqual({ faction: TBH, augmentation: TBH });
+    expect(chosen()).toEqual([]);
+    // The share gone (none running, or the batcher's health stale): ×1, as before #345, 30 min against 29: install now.
+    minuteOn({ reputation }, MONEY, { shareBonus: 1 });
+    expect(chosen().at(-1)).toMatchObject({
+      reason: "Daedalus's count",
+      timing: { candidates: [{ k: 0 }, { k: 1, tauMs: expect.closeTo(30 * MINUTE, -3) }], choice: 0 },
+    });
   });
 
   test("its reputation reached: the set meets the count (n ≥ N), installed at once with all five, 30 of 30", () => {

@@ -41,10 +41,10 @@
 //   counts and bars, the countdown, the lookahead's reserve and "nothing left"; the progress says so.
 // - Held for Daedalus's count (#243, core's `daedalusCountHold`): an install the count rule chose that would leave the
 //   count one short is held while the last can be bought within the hold's window (`DAEDALUS_COUNT_HOLD_MS`, 20 min
-//   online from the cycle's first hold, kept in the store): its reputation by work at A5's rate for its seller, or a
-//   donation, and the money at the income (`countablesToCome`). No countdown meanwhile; the countdown's money (or the
-//   set's and the last's, if more) held back from cloud servers and home RAM; the progress, the dashboard and the log
-//   say so, and when it's over.
+//   online from the cycle's first hold, kept in the store): its reputation by work at A5's rate for its seller (with
+//   the share bonus measured, #345), or a donation, and the money at the income (`countablesToCome`). No countdown
+//   meanwhile; the countdown's money (or the set's and the last's, if more) held back from cloud servers and home
+//   RAM; the progress, the dashboard and the log say so, and when it's over.
 // - The planner's levelling install (#336, ./levelling.ts): The Red Pill installed and every install held for the
 //   destroy, A6 offers the NeuroFlux Governor levels the money buys (`neuroFluxOffer`); once the planner chooses them,
 //   the install is chosen at once (`reason` "the hacking level"), the destroy's hold set aside for it.
@@ -518,6 +518,11 @@ export interface AugmentationInputs {
    * or 0: short of Daedalus's count, the planner holds installing now meanwhile (#343). Absent, 0.
    */
   invitationHold?: number;
+  /**
+   * The share bonus the batcher reports running (#345, the controller's `shareBonusOf`, ./share.ts), in the work's rate
+   * that A6's estimates by work take (`countablesToCome`: the planner's τ, #243's hold). Absent, 1: none running.
+   */
+  shareBonus?: number;
 }
 
 /** What the rule asks of the controller. */
@@ -1365,6 +1370,7 @@ export class AugmentationRule {
         gangUnread: inputs.gangUnread ?? false,
         levellingInstall: inputs.levellingInstall ?? false,
         invitationHold: inputs.invitationHold ?? 0,
+        shareBonus: inputs.shareBonus ?? 1,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -1704,6 +1710,7 @@ export class AugmentationRule {
     gangUnread,
     levellingInstall,
     invitationHold,
+    shareBonus,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -1721,6 +1728,7 @@ export class AugmentationRule {
     gangUnread: boolean;
     levellingInstall: boolean;
     invitationHold: number;
+    shareBonus: number;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -1953,7 +1961,7 @@ export class AugmentationRule {
           shops,
           terms,
           person: player.person,
-          conditions: workConditionsOf(resetInfo, slowData),
+          conditions: workConditionsOf(resetInfo, slowData, shareBonus),
           work: holdWork,
           money: budget,
           income,
@@ -2040,7 +2048,7 @@ export class AugmentationRule {
                 shops,
                 terms,
                 person: player.person,
-                conditions: workConditionsOf(resetInfo, slowData),
+                conditions: workConditionsOf(resetInfo, slowData, shareBonus),
                 work: holdWork,
                 money: budget,
                 income: this.#income(),

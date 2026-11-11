@@ -22,6 +22,7 @@ import {
   type IntentRequest,
   intentId,
   isWorthInstalling,
+  newBatcherHealth,
   PORT_OPENER_PROGRAMS,
   type SnapshotTier,
   type StaticSnapshotData,
@@ -3049,6 +3050,79 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       send(connection, "medium", player(medium(1.5e9)));
       expect(controller.augmentationsView().progress?.countHold).toBeNull();
       expect(lines).toContain("augmentations: the hold for Daedalus's count is over: nobody works for The Black Hand");
+    });
+
+    test("the share bonus the batcher reports counts in A6's estimates (#345): The Black Hand 25 min off, held at ×1.6", () => {
+      // As above, but The Black Hand 25 minutes off at A5's rate without the share: past the hold's 20 minutes.
+      const TBH = "The Black Hand";
+      const shopOf = (faction: string) => augmentationsSoldBy(faction, 1, null);
+      const groupB = ["Chongqing", "New Tokyo", "Ishima"].flatMap(shopOf);
+      const fillers = AUGMENTATION_NAMES.filter(
+        (name) =>
+          isWorthInstalling(name, true) &&
+          ![...shopOf(TBH), ...shopOf("CyberSec"), ...groupB, "Neural Wit Amplifier"].includes(name),
+      );
+      const owned = Object.fromEntries(
+        [
+          ...shopOf(TBH).filter((name) => name !== TBH && name !== "NeuroFlux Governor"),
+          "Cranial Signal Processors - Gen I",
+          "Cranial Signal Processors - Gen II",
+          "NeuroFlux Governor",
+          ...fillers,
+        ]
+          .slice(0, 25)
+          .map((name) => [name, 1]),
+      );
+      const player = (data: ReturnType<typeof medium>) => ({
+        ...data,
+        player: {
+          ...data.player,
+          skills: { hacking: 2_500, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+          exp: { hacking: Math.exp(2_700 / 32) - 534.6 },
+          mults: { faction_rep: 1, hacking: 1 },
+        },
+      });
+      const rate = factionReputationPerSecond(
+        { skills: player(medium(0)).player.skills, mults: { faction_rep: 1 } },
+        "hacking",
+        { favor: 0, sourceFile15Level: 0, factionWorkRepGain: 1, focused: true, implant: false },
+      );
+      const slow = {
+        ...slowData(),
+        resetInfo: { ...slowData().resetInfo, ownedAugs: owned },
+        factions: {
+          backend: "sim",
+          state: {
+            joined: [
+              { name: "CyberSec", reputation: 18_750, favor: 0 },
+              { name: TBH, reputation: 100_000 - rate * 25 * 60, favor: 0 },
+            ],
+            invitations: [],
+            queuedAugmentations: ["Neural Wit Amplifier"],
+          },
+          problem: null,
+        },
+      };
+      store.setSetting(
+        "augmentations.online",
+        JSON.stringify({ lastAugReset: 0, onlineMs: 8 * 3_600_000, lastGameTimeMs: 7 * 3_600_000 }),
+      );
+      const controller = new DesiredStateController({ channel, store, installTiming: "count rule" });
+      const connection = connectAgent();
+      send(connection, "static", network);
+      sendAt(connection, "slow", slow, 7 * 3_600_000 + MINUTE);
+      send(connection, "medium", player(medium(1.5e9)));
+      expect(controller.augmentationsView().progress?.countHold).toBeNull();
+      // The batcher's health: share threads running, the bonus 1.6. A6's estimate counts it: 25 / 1.6 minutes, held.
+      const sharing = { wanted: true, threads: 1_000, ramGb: 4_000, hostsRamGb: 4_000, bonus: 1.6, roomGb: 0 };
+      const health = { ...newBatcherHealth("n00dles", "r", 1_000), state: "batching" as const, sharing };
+      send(connection, "fast", { degradedTiers: [], pageHeapUsedBytes: null, game: null, batcher: health });
+      send(connection, "medium", player(medium(1.5e9)));
+      expect(controller.augmentationsView().progress?.countHold).toMatchObject({
+        augmentation: TBH,
+        way: "work",
+        etaMs: expect.closeTo((25 / 1.6) * MINUTE, -3),
+      });
     });
 
     test("an install chosen: no cloud server at all, saying why, and the augmentation bought instead", () => {
