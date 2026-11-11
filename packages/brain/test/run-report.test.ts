@@ -33,6 +33,7 @@ import {
 } from "../src/run-report.ts";
 import { thinStore } from "../src/store-thinning.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
+import { writeWorldDaemonEnabled } from "../src/world-daemon.ts";
 import { staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const REPORT_CLI = path.resolve(import.meta.dirname, "../src/report-cli.ts");
@@ -3220,6 +3221,178 @@ describe("the World Daemon (#215)", () => {
       "world daemon stalled: w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed, from " +
         `${at(10 * MINUTE)} to at least ${at(15 * MINUTE)}`,
     );
+  });
+});
+
+describe("the levelling choice (#336)", () => {
+  /** BN4.1's last stretch (2026-11-10's live run): 27 h into the BitNode, 6 h 49 min since The Red Pill's install. */
+  const GAME_NOW = T0 + 30 * 60 * MINUTE;
+  const NODE_RESET = GAME_NOW - 27 * 60 * MINUTE;
+  const BN4_STATIC: StaticSnapshotData = {
+    servers: [
+      { ...staticServer("home"), purchasedByPlayer: true, moneyMax: 0 },
+      { ...staticServer("pserv-0"), purchasedByPlayer: true, moneyMax: 0 },
+      staticServer("joesguns", { minDifficulty: 5, baseDifficulty: 15, requiredHackingSkill: 10, moneyMax: 6.25e7 }),
+      staticServer("ecorp", { minDifficulty: 33, baseDifficulty: 99, requiredHackingSkill: 1100, moneyMax: 1.7e12 }),
+      // 3000 × BN4's WorldDaemonDifficulty 3 (`BitNode.tsx:660`).
+      staticServer("w0r1d_d43m0n", { minDifficulty: 1, baseDifficulty: 1, requiredHackingSkill: 9000, moneyMax: 0 }),
+    ],
+  };
+  const bn4Slow = (): SlowSnapshotData => ({
+    resetInfo: {
+      lastAugReset: GAME_NOW - 409 * MINUTE,
+      lastNodeReset: NODE_RESET,
+      currentNode: 4,
+      ownedAugs: { "The Red Pill": 1 },
+      ownedSF: { 1: 3 },
+      bitNodeOptions: {},
+    },
+    purchasedServers: ["pserv-0"],
+    factions: factionState({ joined: [{ name: "Daedalus", reputation: 1e10, favor: 0 }] }),
+  });
+  /**
+   * The last snapshot's figures (#336): hacking 6,779 at ×11.38, 6.34e10 experience rising `expPerSecond`, hacking_exp
+   * 19.06, $6.96e15; home 33.5m GB, the cloud servers' 26.2m; its speed taken so a joesguns weaken is 0.41 s.
+   */
+  function bn4Medium(
+    offsetMs: number,
+    expAt: (offsetMs: number) => number,
+    money = 6.96e15,
+    daemonRooted = true,
+  ): MediumSnapshotData {
+    const server = (hostname: string, maxRam: number, security = 1, moneyAvailable = 0) => ({
+      hostname,
+      maxRam,
+      cpuCores: 1,
+      hasAdminRights: hostname !== "w0r1d_d43m0n" || daemonRooted,
+      backdoorInstalled: false,
+      moneyAvailable,
+      hackDifficulty: security,
+    });
+    return {
+      player: {
+        money,
+        skills: { hacking: 6779, intelligence: 0, strength: 1 },
+        exp: { hacking: expAt(offsetMs) },
+        mults: {
+          hacking: 11.38,
+          hacking_exp: 19.06,
+          hacking_speed: 4.465,
+          hacking_chance: 3,
+          hacking_money: 20,
+          hacking_grow: 3,
+          faction_rep: 5,
+        },
+        city: "Sector-12",
+        factions: ["Daedalus"],
+        jobs: {},
+      },
+      hasTorRouter: true,
+      programs: [],
+      servers: [
+        server("home", 33.5e6),
+        server("pserv-0", 26.2e6),
+        // At its minimum security and maximum money: the grow (#339's re-review).
+        server("joesguns", 16, 5, 6.25e7),
+        server("ecorp", 0, 33),
+        server("w0r1d_d43m0n", 0),
+      ],
+    };
+  }
+  function bn4Run(
+    expAt: (offsetMs: number) => number,
+    money: (offsetMs: number) => number = () => 6.96e15,
+    rootedFromMs = 0,
+  ) {
+    event(0, "brainStarted", { release: "v1.0.1-19-g1d08268" });
+    for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
+    snapshot("static", 10 * SECOND, BN4_STATIC);
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 60 * SECOND) {
+      snapshot("slow", offsetMs, bn4Slow(), GAME_NOW - RUN_MS + offsetMs);
+    }
+    for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
+      const medium = bn4Medium(offsetMs, expAt, money(offsetMs), offsetMs >= rootedFromMs);
+      snapshot("medium", offsetMs, medium, GAME_NOW - RUN_MS + offsetMs);
+    }
+  }
+
+  test("BN4.1's shape: batching for money at 2.65e6/s, about 2,300 h, while levelling mode is about an hour: FAIL", () => {
+    bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6);
+    const { text, failures } = report();
+    expect(text).toMatch(
+      /levelling \(the hacking level all that's left since .*, #336\): batching for money about 2[0-9]{3}\.\d h, levelling mode about \d+ min, NeuroFlux Governor, then an install none \(no levelling choice in the window: a brain from before #336, or none yet\)/,
+    );
+    expect(text).toContain("the brain's choice: batching for money since");
+    expect(text).toContain("levelling's target joesguns; levelling's fitted factor not measured (1 taken, optimistic)");
+    const levelling = failures.filter((failure) => failure.startsWith("levelling:"));
+    expect(levelling).toEqual([
+      expect.stringMatching(
+        /^levelling: the brain on batching for money \(about 2[0-9]{3}\.\d h\) for 19 min 50 s, since .*, past the 10 min a choice takes, and levelling mode \(about \d+ min\) is shorter by more than 1\.25 times at its end$/,
+      ),
+      expect.stringMatching(
+        /^levelling: the brain's choice, batching for money, about 2[0-9]{3}\.\d h to w0r1d_d43m0n's level, past the 26 h 59 min the BitNode has taken so far: a hopeless estimate$/,
+      ),
+    ]);
+    // In sections 3 and 4.
+    expect(text).toContain(
+      "  the levelling choice (#336: the brain not on the shortest way to w0r1d_d43m0n's level for 10 min, or its " +
+        "choice's estimate past the BitNode's time so far):",
+    );
+  });
+
+  test("the World Daemon's switch off: the same two lines, warnings, not failures (money is what the owner asked for)", () => {
+    bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6);
+    writeWorldDaemonEnabled(store, false);
+    const { text, failures, warnings } = report();
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
+    const off = " (the World Daemon's switch is off now: the destroy isn't wanted, so a warning)";
+    expect(warnings.filter((warning) => warning.startsWith("levelling:"))).toEqual([
+      expect.stringMatching(/^levelling: the brain on batching for money .*/),
+      expect.stringMatching(/^levelling: the brain's choice, batching for money, .*/),
+    ]);
+    for (const warning of warnings.filter((each) => each.startsWith("levelling:")))
+      expect(warning.endsWith(off)).toBe(true);
+    expect(text).toContain(off);
+  });
+
+  test("w0r1d_d43m0n rooted 9 min 50 s before the window's end: the choice is shown, not yet failed", () => {
+    bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6, undefined, 10 * MINUTE + 10 * SECOND);
+    const { text, failures } = report();
+    expect(text).toContain("levelling (the hacking level all that's left since 2026-10-26T00:10:10.000Z, #336)");
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
+  });
+
+  test("the brain in levelling mode at the formula's rate: its fit near 1, nothing fails, no income expected of it", () => {
+    // Levelling from a minute in, at what the formula gives joesguns on the hosts and home beyond its 32 GB (with
+    // Singularity in BN4, its largest worker's beside them); the money flat from then.
+    // joesguns' grow, at its minimum security: 3.2 hacks' time (`Hacking.ts:83-87`).
+    const joesgunsPerThreadSecond = (7.5 * 19.06 * 0.4) / ((3.2 * 5 * 625) / (6779 + 50) / 4.465);
+    const home = Math.floor((33.5e6 - 32 - 33.9) / 1.75);
+    const predicted = joesgunsPerThreadSecond * (Math.floor(26.2e6 / 1.75) + Math.floor(16 / 1.75) + home);
+    const fromMs = MINUTE;
+    bn4Run(
+      (offsetMs) => 6.34e10 + Math.min(offsetMs, fromMs) * 2.65e3 + Math.max(0, offsetMs - fromMs) * predicted * 1e-3,
+      (offsetMs) => 6e15 + Math.min(offsetMs, fromMs) * 1e9,
+    );
+    event(fromMs, "levellingChosen", {
+      mode: "level",
+      from: "money",
+      estimates: { money: 8.3e6, level: 4600, install: null },
+      target: "joesguns",
+      money: { expPerSecond: 2.65e6, atLevel: 6779 },
+      factor: null,
+      neuroFluxLevels: null,
+      detail: "batching for money to levelling mode",
+    });
+    const { text, failures } = report();
+    expect(text).toContain("the brain's choice: levelling mode since");
+    expect(text).toMatch(/levelling's fitted factor 0\.9\d|levelling's fitted factor 1\.0\d/);
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
+    // The money stopped rising as levelling began: shown, not counted.
+    expect(text).toContain("(levelling mode, #336: no income expected, not counted)");
+    expect(failures.filter((failure) => failure.startsWith("income stalled"))).toEqual([]);
+    // The event in sections 3 and 4, not section 1's timeline.
+    expect(text).not.toContain("levellingChosen:");
   });
 });
 

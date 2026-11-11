@@ -372,7 +372,8 @@ export function buildDashboardStatus({
       intentOutcomes: (Array.isArray(fast?.intents) ? fast.intents : []).filter(
         (outcome) => typeof outcome?.id === "string" && typeof outcome.tries === "number",
       ),
-      hackLoopTarget: hackLoop.enabled ? hackLoop.target : null,
+      // Levelling mode (#336) earns experience, not money: no income is expected of it.
+      hackLoopTarget: hackLoop.enabled && hackLoop.levelling !== true ? hackLoop.target : null,
       income,
       cloudServerProblem: cloudServers.problem,
       refusedMessage: reportedRefusal(fast),

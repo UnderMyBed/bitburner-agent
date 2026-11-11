@@ -114,8 +114,8 @@ import {
   type StoredEvent,
   type TelemetryStore,
 } from "./telemetry-store.ts";
-import { BITNODE_DESTROY_SENT_EVENT_KIND } from "./world-daemon.ts";
-import { WORLD_DAEMON_EVENT_KINDS, WorldDaemonFold } from "./world-daemon-report.ts";
+import { BITNODE_DESTROY_SENT_EVENT_KIND, readWorldDaemonEnabled } from "./world-daemon.ts";
+import { levellingModeAt, WORLD_DAEMON_EVENT_KINDS, WorldDaemonFold } from "./world-daemon-report.ts";
 
 /** An Agent disconnect with no reconnect within this is a failure, unless the run ended there. */
 export const RECONNECT_WITHIN_MS = 60_000;
@@ -659,6 +659,8 @@ interface RunFacts extends RunWindow {
   hackLoopEnabled: boolean;
   /** The Augmentations switch, now (#222): likewise. */
   augmentationsEnabled: boolean;
+  /** The World Daemon's switch, now (#336's review): off, the levelling choice's failures are warnings. */
+  worldDaemonEnabled: boolean;
   /** The newest brain start in the day before the window, if any: the window may not be the whole run. */
   earlierBrainStartMs: number | null;
   /**
@@ -889,6 +891,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       cloudServerChanges: cloudServerChanges.changes,
       hackLoopEnabled: readHackLoopEnabled(store),
       augmentationsEnabled: readAugmentationsEnabled(store),
+      worldDaemonEnabled: readWorldDaemonEnabled(store),
       earlierBrainStartMs: earlierStarts.at(-1)?.atMs ?? null,
       thinningsBefore,
       hacking,
@@ -2144,6 +2147,9 @@ function healthSection(
       warnings,
       formatTime: formatIsoTime,
       bitNodeAt: (atMs) => facts.cycles.bitNodeIndexAt(atMs),
+      // The levelling choice's judgement (#336), on the window's last snapshots, and the switch it applies under.
+      snapshots: facts,
+      worldDaemonEnabled: facts.worldDaemonEnabled,
     }),
   );
 
@@ -2240,7 +2246,8 @@ function blockingEpisodes(facts: RunFacts): BlockingEpisode[] {
 
 /**
  * Income stalls. A failure only while the hack loop's switch is on (the dashboard's, now): with it off, money needn't
- * rise. A stall over a heartbeat gap says so, since the money between went unseen.
+ * rise; nor once levelling mode (#336) had the hosts as it became a stall, its 10 minutes on: levelling earns the
+ * hacking experience, not money. A stall over a heartbeat gap says so, since the money between went unseen.
  */
 function stallLines(facts: RunFacts, gaps: Gap[], failures: string[]): string[] {
   const heading =
@@ -2265,8 +2272,9 @@ function stallLines(facts: RunFacts, gaps: Gap[], failures: string[]): string[] 
     const line =
       `income stalled from ${formatIsoTime(stall.fromMs)} to ${end} (${formatDuration(stall.lengthMs)}): money ` +
       `${formatMoney(stall.moneyFrom)} → ${formatMoney(stall.moneyTo)}${overGaps}`;
-    lines.push(`    ${line}`);
-    if (facts.hackLoopEnabled) failures.push(line);
+    const levelling = levellingModeAt(facts.events, stall.fromMs + INCOME_STALLED_AFTER_MS) !== "money";
+    lines.push(`    ${line}${levelling ? " (levelling mode, #336: no income expected, not counted)" : ""}`);
+    if (facts.hackLoopEnabled && !levelling) failures.push(line);
   }
   if (stalls.length === 0) lines.push("    none");
   return lines;

@@ -1,0 +1,722 @@
+// Levelling (#336): the brain's side of planner v0's first decision. Its figures from the snapshots, the measured rate,
+// the rule's choice and hysteresis, and, through the desired state's controller and a real ControlChannel, every
+// branch that changes the hack loop, holds money or installs: levelling mode sent in the batcher's place, back to
+// money once the level isn't all that's left, A6's NeuroFlux Governor levels and install for the hacking level, none
+// without an offer, and money again after the install.
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { ControlChannel } from "@bitburner-agent/bridge";
+import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
+import {
+  CONTROL_PROTOCOL_VERSION,
+  type DesiredState,
+  encodeControlMessage,
+  type HackingTarget,
+  hackingExpOfLevel,
+  hackingLevelOfExp,
+  LEVEL_LOOP_RAM_GB,
+  LEVELLING_INSTALL_MS,
+  LEVELLING_REROOT_MS,
+  levellingPreparationMs,
+  type MediumSnapshotData,
+  neuroFluxMultipliers,
+  type SlowSnapshotData,
+  type SnapshotTier,
+  type StaticSnapshotData,
+} from "@bitburner-agent/core";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import {
+  AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+  readAugmentationCycle,
+  writeAugmentationsEnabled,
+} from "../src/augmentations.ts";
+import { BN1_HACKING } from "../src/batcher.ts";
+import { DesiredStateController, type RuleEvent } from "../src/desired-state.ts";
+import { HACK_LOOP_ENABLED_SETTING } from "../src/hack-loop.ts";
+import {
+  LEVELLING_CHOSEN_EVENT_KIND,
+  LEVELLING_SETTLE_MS,
+  LevellingRateWindow,
+  LevellingRule,
+  type LevellingRuleInputs,
+  levelAllThatsLeft,
+  levellingFiguresOf,
+  levellingInputsOf,
+  settleMsOf,
+} from "../src/levelling.ts";
+import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
+import { writeSwitch } from "../src/switches.ts";
+import { TelemetryStore } from "../src/telemetry-store.ts";
+import { worldDaemonPath, writeWorldDaemonEnabled } from "../src/world-daemon.ts";
+
+const SECOND = 1_000;
+const MINUTE = 60 * SECOND;
+const RED_PILL = "The Red Pill";
+
+/** The game's servers as the static snapshot has them: joesguns the levelling target, ecorp the batcher's. */
+const STATIC: StaticSnapshotData = {
+  servers: [
+    { hostname: "home", purchasedByPlayer: true, moneyMax: 0, minDifficulty: 1, requiredHackingSkill: 1 },
+    {
+      hostname: "n00dles",
+      purchasedByPlayer: false,
+      moneyMax: 1.75e6,
+      minDifficulty: 1,
+      baseDifficulty: 1,
+      requiredHackingSkill: 1,
+      numOpenPortsRequired: 0,
+      serverGrowth: 3000,
+    },
+    {
+      hostname: "joesguns",
+      purchasedByPlayer: false,
+      moneyMax: 6.25e7,
+      minDifficulty: 5,
+      baseDifficulty: 15,
+      requiredHackingSkill: 10,
+      numOpenPortsRequired: 0,
+      serverGrowth: 20,
+    },
+    {
+      hostname: "ecorp",
+      purchasedByPlayer: false,
+      moneyMax: 1.7e12,
+      minDifficulty: 33,
+      baseDifficulty: 99,
+      requiredHackingSkill: 1100,
+      numOpenPortsRequired: 5,
+      serverGrowth: 99,
+    },
+    {
+      hostname: "w0r1d_d43m0n",
+      purchasedByPlayer: false,
+      moneyMax: 0,
+      minDifficulty: 1,
+      baseDifficulty: 1,
+      requiredHackingSkill: 3000,
+      numOpenPortsRequired: 5,
+      serverGrowth: 0,
+    },
+  ],
+};
+
+/** The player at `level` (×2 its multiplier), its experience just past it, with `money`. */
+function player(level: number, money: number, expAbove = 0) {
+  return {
+    skills: { hacking: level, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+    exp: { hacking: hackingExpOfLevel(level, 2) + expAbove },
+    mults: {
+      hacking: 2,
+      hacking_exp: 1.5,
+      hacking_chance: 1,
+      hacking_speed: 1,
+      hacking_money: 1,
+      hacking_grow: 1,
+      faction_rep: 1,
+    },
+    money,
+    city: "Sector-12",
+    factions: ["Daedalus"],
+  };
+}
+
+/** A medium snapshot: w0r1d_d43m0n rooted or not, the cloud server and home of `homeGb`. */
+function medium({
+  level = 2000,
+  money = 1e6,
+  expAbove = 0,
+  rooted = true,
+  homeGb = 4096,
+  joesgunsSecurity = 5,
+  joesgunsMoney = 6.25e7,
+}: {
+  level?: number;
+  money?: number;
+  expAbove?: number;
+  rooted?: boolean;
+  homeGb?: number;
+  joesgunsSecurity?: number;
+  /** joesguns' money: its maximum by default, so (at its minimum security too) the grow. */
+  joesgunsMoney?: number;
+} = {}): MediumSnapshotData {
+  const server = (hostname: string, maxRam: number, hasAdminRights = true, hackDifficulty = 5, moneyAvailable = 0) => ({
+    hostname,
+    maxRam,
+    cpuCores: 1,
+    hasAdminRights,
+    backdoorInstalled: false,
+    moneyAvailable,
+    hackDifficulty,
+  });
+  return {
+    player: player(level, money, expAbove),
+    hasTorRouter: true,
+    programs: [],
+    servers: [
+      server("home", homeGb),
+      server("n00dles", 4, true, 1),
+      server("joesguns", 16, true, joesgunsSecurity, joesgunsMoney),
+      server("ecorp", 0, true, 33),
+      server("w0r1d_d43m0n", 0, rooted, 1),
+      server("pserv-0", 1024),
+    ],
+  };
+}
+
+/** A slow snapshot: The Red Pill installed (or not), `faction` joined with `reputation`, in BN1. */
+function slow({
+  redPill = true,
+  faction = "Daedalus",
+  reputation = 1e9,
+  lastAugReset = 0,
+}: {
+  redPill?: boolean;
+  faction?: string;
+  reputation?: number;
+  lastAugReset?: number;
+} = {}): SlowSnapshotData {
+  return {
+    resetInfo: {
+      lastAugReset,
+      lastNodeReset: 0,
+      currentNode: 1,
+      ownedAugs: redPill ? { [RED_PILL]: 1 } : {},
+      ownedSF: {},
+      bitNodeOptions: {},
+    },
+    purchasedServers: ["pserv-0"],
+    factions: {
+      backend: "sim",
+      state: { joined: [{ name: faction, reputation, favor: 0 }], invitations: [], queuedAugmentations: [] },
+      problem: null,
+    },
+  };
+}
+
+describe("levelling mode's figures (#336)", () => {
+  test("(c) after the install at the grow's rate, after its preparation at the levels' level and speed", () => {
+    // Weakened now (above its minimum): the target's operation the weaken, but (c)'s the grow, prepared first.
+    const figures = levellingFiguresOf(STATIC, medium({ joesgunsSecurity: 15 }), slow(), BN1_HACKING);
+    expect(figures?.target?.operation).toBe("weaken");
+    const inputs = levellingInputsOf(figures as NonNullable<typeof figures>, 3000, null, null, 5);
+    expect(inputs.install?.perThread.expPerSecond).toBe(figures?.afterInstall?.expPerThreadSecond);
+    expect((inputs.install?.perThread.expPerSecond ?? 0) / (figures?.target?.expPerThreadSecond ?? 1)).toBeCloseTo(
+      1.25,
+      12,
+    );
+    // The preparation: core's, at hacking from 0 experience at ×2 × 1.01^5 and the speed × 1.01^5, on home's threads.
+    const neuroFlux = neuroFluxMultipliers();
+    const after = {
+      skills: { hacking: hackingLevelOfExp(0, 2 * neuroFlux.hacking ** 5), intelligence: 0 },
+      mults: { hacking_chance: 1, hacking_speed: neuroFlux.hackingSpeed ** 5, hacking_money: 1, hacking_grow: 1 },
+    };
+    const expected = levellingPreparationMs(
+      figures?.afterInstall?.figures as HackingTarget,
+      after,
+      figures?.homeThreads ?? 0,
+    );
+    expect(inputs.install?.preparationMs).toBeCloseTo(expected, 6);
+    expect(expected).toBeGreaterThan(0);
+  });
+
+  test("the target computed (joesguns), the batcher's hosts and home's RAM beyond what it keeps, the player's", () => {
+    const figures = levellingFiguresOf(STATIC, medium(), slow(), BN1_HACKING);
+    expect(figures).toMatchObject({
+      target: { hostname: "joesguns" },
+      hosts: ["joesguns", "n00dles", "pserv-0"],
+      hostsGb: 16 + 4 + 1024,
+      homeGb: 4096,
+      homeKeptGb: SHARE_HOME_KEPT_GB,
+      homeThreads: Math.floor((4096 - SHARE_HOME_KEPT_GB) / LEVEL_LOOP_RAM_GB),
+      level: 2000,
+      levelMult: 2,
+    });
+    expect(figures?.threads).toBe(
+      Math.floor(16 / 1.75) + Math.floor(4 / 1.75) + Math.floor(1024 / 1.75) + (figures?.homeThreads ?? 0),
+    );
+    // The player's figures missing: none.
+    expect(levellingFiguresOf(STATIC, { ...medium(), player: {} }, slow(), BN1_HACKING)).toBeNull();
+    expect(levellingFiguresOf(null, medium(), slow(), BN1_HACKING)).toBeNull();
+  });
+
+  test("the level all that's left: The Red Pill installed, w0r1d_d43m0n rooted, its requirement read, the level short", () => {
+    const pathOf = (mediumData: MediumSnapshotData, slowData: SlowSnapshotData) =>
+      worldDaemonPath({ staticData: STATIC, mediumData, slowData, expPerSecond: null });
+    expect(levelAllThatsLeft(pathOf(medium(), slow()))).toBe(true);
+    expect(levelAllThatsLeft(pathOf(medium({ rooted: false }), slow()))).toBe(false);
+    expect(levelAllThatsLeft(pathOf(medium(), slow({ redPill: false })))).toBe(false);
+    expect(levelAllThatsLeft(pathOf(medium({ level: 3000 }), slow()))).toBe(false);
+    expect(levelAllThatsLeft(null)).toBe(false);
+  });
+
+  test("the measured rate: over the window, at its mean level; a minute first; a fall or a gap starts it again", () => {
+    const window = new LevellingRateWindow();
+    window.add(0, 1000, 100);
+    window.add(30 * SECOND, 4000, 100);
+    expect(window.measured()).toBeNull();
+    window.add(60 * SECOND, 7000, 102);
+    expect(window.measured()).toEqual({ expPerSecond: 100, atLevel: 100.5 });
+    window.add(70 * SECOND, 10, 1);
+    expect(window.measured()).toBeNull();
+  });
+
+  test("a mode settles a minute and the longest weaken still landing, at each target's security now", () => {
+    const figures = STATIC.servers[2] as HackingTarget;
+    const joesguns = { hostname: "joesguns", figures };
+    const settle = settleMsOf(medium(), BN1_HACKING, [joesguns]);
+    const weakenMs = ((4 * 5 * (2.5 * figures.requiredHackingSkill * 5 + 500)) / (2000 + 50)) * 1000;
+    expect(settle).toBeCloseTo(LEVELLING_SETTLE_MS + weakenMs, 6);
+    expect(settleMsOf(medium(), BN1_HACKING, [])).toBe(LEVELLING_SETTLE_MS);
+  });
+});
+
+/** Home's level loop threads in the test's figures: 4,096 GB less 32, at 1.75 GB. */
+const HOME_THREADS = Math.floor((4096 - SHARE_HOME_KEPT_GB) / 1.75);
+
+describe("the levelling rule (#336)", () => {
+  /** Its inputs over the snapshots: medium at `atMs` of the game's time, A6 offering `neuroFluxLevels`. */
+  function inputsAt(
+    atMs: number,
+    {
+      level = 2000,
+      expAbove = 0,
+      neuroFluxLevels = null as number | null,
+      installCommitted = false,
+      enabled = true,
+      slowData = slow(),
+      levelLoop = { sent: true, homeThreads: HOME_THREADS },
+      joesgunsSecurity = 5,
+      joesgunsMoney = 6.25e7,
+    } = {},
+  ): LevellingRuleInputs {
+    const mediumData = medium({ level, expAbove, joesgunsSecurity, joesgunsMoney });
+    return {
+      path: worldDaemonPath({ staticData: STATIC, mediumData, slowData, expPerSecond: null }),
+      enabled,
+      staticData: STATIC,
+      mediumData,
+      mediumGameTimeMs: atMs,
+      slowData,
+      hacking: BN1_HACKING,
+      neuroFluxLevels,
+      installCommitted,
+      batcherTarget: null,
+      levelLoop,
+      nowMs: atMs,
+    };
+  }
+  const events: RuleEvent[] = [];
+  const lines: string[] = [];
+  beforeEach(() => {
+    events.length = 0;
+    lines.length = 0;
+  });
+  const rule = () =>
+    new LevellingRule({ log: (line) => lines.push(line), emit: (event) => events.push(event as RuleEvent) });
+  const figures = levellingFiguresOf(STATIC, medium(), slow(), BN1_HACKING);
+  /** The formula's rate in levelling mode on the test's RAM: joesguns' grow. */
+  const predicted = (figures?.target?.expPerThreadSecond ?? 0) * (figures?.threads ?? 0);
+  /** A mode's settle here: a minute and joesguns' weaken at its minimum (no batcher). */
+  const SETTLE_MS = settleMsOf(medium(), BN1_HACKING, figures?.target ? [figures.target] : []);
+  /**
+   * Money's rate measured: medium snapshots every 10 s from 0, the experience rising `perSecond` (slow, as batching
+   * ecorp), until the mode changes or 4 minutes: the first update settles, then a minute's span.
+   */
+  function measureMoney(levelling: LevellingRule, perSecond: number, more: Parameters<typeof inputsAt>[1] = {}) {
+    let plan = levelling.update(inputsAt(0, more));
+    let atMs = 0;
+    for (; atMs <= 4 * MINUTE && plan.mode === "money"; atMs += 10 * SECOND) {
+      plan = levelling.update(inputsAt(atMs, { ...more, expAbove: (atMs / 1000) * perSecond }));
+    }
+    return { plan, switchedAtMs: atMs - 10 * SECOND };
+  }
+
+  test("money first, until its rate is measured once settled; then levelling mode, its target, operation, hosts", () => {
+    const levelling = rule();
+    expect(levelling.update(inputsAt(0))).toEqual({ mode: "money", levelling: null });
+    expect(levelling.view()).toMatchObject({ applies: true, mode: "money", estimates: { money: null } });
+    const { plan, switchedAtMs } = measureMoney(levelling, 10);
+    // The first update settled (a restarted brain's loops may still land), then a minute's span.
+    expect(switchedAtMs).toBeGreaterThanOrEqual(SETTLE_MS + MINUTE);
+    expect(switchedAtMs).toBeLessThan(SETTLE_MS + MINUTE + 10 * SECOND);
+    // joesguns at its minimum: the grow, 1.25 times the weaken's experience a thread-second.
+    expect(plan).toEqual({
+      mode: "level",
+      levelling: {
+        target: "joesguns",
+        hosts: ["joesguns", "n00dles", "pserv-0"],
+        homeKeptGb: SHARE_HOME_KEPT_GB,
+        operation: "grow",
+      },
+    });
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: LEVELLING_CHOSEN_EVENT_KIND,
+        mode: "level",
+        from: "money",
+        target: "joesguns",
+        money: expect.objectContaining({ expPerSecond: expect.closeTo(10, 6) }),
+        factor: null,
+      }),
+    ]);
+    expect(lines).toEqual([
+      expect.stringMatching(/^levelling: batching for money to levelling mode: batching for money about/),
+    ]);
+    expect(levelling.view().lines[1]).toContain("chosen: levelling mode on joesguns, growing it (the operation sent)");
+    expect(levelling.view().lines[1]).toContain("not measured yet (1 taken, optimistic)");
+  });
+
+  test("the operation: the grow at joesguns' minimum security, whatever its money; the weaken above it", () => {
+    const levelling = rule();
+    measureMoney(levelling, 10);
+    expect(levelling.update(inputsAt(5 * MINUTE, { joesgunsSecurity: 5.004 })).levelling?.operation).toBe("weaken");
+    expect(levelling.view().lines[1]).toContain("weakening it (the operation sent)");
+    // At its minimum security below its maximum money: the grow, whose one round fills it.
+    expect(levelling.update(inputsAt(5 * MINUTE + 10 * SECOND, { joesgunsMoney: 6e7 })).levelling?.operation).toBe(
+      "grow",
+    );
+    expect(levelling.update(inputsAt(5 * MINUTE + 20 * SECOND)).levelling?.operation).toBe("grow");
+    expect(levelling.view().lines[1]).toContain("growing it (the operation sent)");
+  });
+
+  test("the fit is for the threads running: home's loop at a tenth of its room, measured at its rate, fits 1", () => {
+    const levelling = rule();
+    const { switchedAtMs } = measureMoney(levelling, 10);
+    const homeThreads = Math.floor(HOME_THREADS / 10);
+    const running = (figures?.threads ?? 0) - HOME_THREADS + homeThreads;
+    const share = running / (figures?.threads ?? 1);
+    levelFor(levelling, switchedAtMs + 10 * SECOND, SETTLE_MS + 2 * MINUTE, share, { sent: true, homeThreads }, 3000);
+    expect(levelling.view().fit?.factor).toBeCloseTo(1, 2);
+  });
+
+  test("the first update settles: a restarted brain's level loops still landing aren't money's rate", () => {
+    const levelling = rule();
+    levelling.update(inputsAt(0));
+    // A burst as the old loops' last operations land, then batching's 10 a second.
+    for (let atMs = 10 * SECOND; atMs < SETTLE_MS; atMs += 10 * SECOND) {
+      levelling.update(inputsAt(atMs, { expAbove: 1e9 }));
+    }
+    let atMs = Math.ceil(SETTLE_MS / (10 * SECOND)) * 10 * SECOND;
+    const from = atMs;
+    for (; atMs <= from + 70 * SECOND; atMs += 10 * SECOND) {
+      levelling.update(inputsAt(atMs, { expAbove: 1e9 + ((atMs - from) / 1000) * 10 }));
+    }
+    expect(events.at(-1)).toMatchObject({ money: expect.objectContaining({ expPerSecond: expect.closeTo(10, 6) }) });
+  });
+
+  test("hysteresis: money stays while levelling mode isn't 1.25 times shorter", () => {
+    // Money's rate within a fifth of levelling mode's prediction: it stays.
+    const levelling = rule();
+    expect(measureMoney(levelling, predicted * 0.85).plan.mode).toBe("money");
+    expect(events).toEqual([]);
+  });
+
+  /** Levelling mode from `fromMs` on, the experience rising `share` of the formula's rate, `levelLoop` as given. */
+  function levelFor(
+    levelling: LevellingRule,
+    fromMs: number,
+    durationMs: number,
+    share: number,
+    levelLoop = { sent: true, homeThreads: HOME_THREADS },
+    expAt0 = 0,
+  ) {
+    for (let atMs = fromMs; atMs <= fromMs + durationMs; atMs += 10 * SECOND) {
+      levelling.update(inputsAt(atMs, { expAbove: expAt0 + ((atMs - fromMs) / 1000) * predicted * share, levelLoop }));
+    }
+  }
+
+  test("levelling mode's fit: its measured rate once settled, against the formula's for the RAM sent", () => {
+    const levelling = rule();
+    const { switchedAtMs } = measureMoney(levelling, 10);
+    // While it settles, the batcher's last waves land, a burst; then half the formula's rate: the factor 0.5.
+    const startMs = Math.ceil((switchedAtMs + SETTLE_MS) / (10 * SECOND)) * 10 * SECOND;
+    const burst = 3000 + 1e6;
+    for (let atMs = switchedAtMs + 10 * SECOND; atMs < startMs; atMs += 10 * SECOND) {
+      levelling.update(inputsAt(atMs, { expAbove: burst }));
+    }
+    levelFor(levelling, startMs, 2 * MINUTE, 0.5, undefined, burst);
+    expect(levelling.view().fit?.factor).toBeCloseTo(0.5, 2);
+    expect(levelling.view().lines[1]).toMatch(/fitted factor 0\.50 \(measured .*\/s, the formula .*\/s\)/);
+  });
+
+  test("the fit only while the level loop runs: not sent, or none of it on home where it has room; then it settles", () => {
+    for (const notRunning of [
+      { sent: false, homeThreads: 0 },
+      { sent: true, homeThreads: 0 },
+    ]) {
+      const levelling = rule();
+      const { switchedAtMs } = measureMoney(levelling, 10);
+      // The hack loop off (nothing sent), or home's loop not there: no experience comes, and none is measured.
+      levelFor(levelling, switchedAtMs + 10 * SECOND, 12 * MINUTE, 0, notRunning, 3000);
+      expect(levelling.view().fit).toBeNull();
+      // Running again: its first operations land a weaken's time on, nothing before; it settles first, then fits.
+      const runningFromMs = switchedAtMs + 13 * MINUTE;
+      for (let atMs = runningFromMs; atMs <= runningFromMs + SETTLE_MS + 2 * MINUTE; atMs += 10 * SECOND) {
+        const landingMs = Math.max(0, atMs - runningFromMs - 30 * SECOND);
+        levelling.update(inputsAt(atMs, { expAbove: 3000 + (landingMs / 1000) * predicted }));
+      }
+      expect(levelling.view().fit?.factor).toBeCloseTo(1, 2);
+    }
+  });
+
+  test("an install resets the fit (and money's rate): the new game's are measured afresh", () => {
+    const levelling = rule();
+    const { switchedAtMs } = measureMoney(levelling, 10);
+    levelFor(levelling, switchedAtMs + 10 * SECOND, SETTLE_MS + 2 * MINUTE, 0.5, undefined, 3000);
+    expect(levelling.view().fit?.factor).toBeCloseTo(0.5, 1);
+    levelling.update(inputsAt(switchedAtMs + 10 * MINUTE, { slowData: slow({ lastAugReset: 1 }) }));
+    expect(levelling.view().fit).toBeNull();
+    expect(levelling.mode()).toBe("money");
+  });
+
+  test("the install: chosen with A6's levels on offer, held while A6 commits; back to money after the reset", () => {
+    const levelling = rule();
+    // Levels on offer from the start: once money's rate is measured, the install is the shortest.
+    const { plan, switchedAtMs } = measureMoney(levelling, 10, { neuroFluxLevels: 30 });
+    expect(plan.mode).toBe("install");
+    expect((levelling.view().estimates?.install as number) * 1000).toBeGreaterThan(
+      LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS,
+    );
+    // Levelling mode meanwhile: the experience before the install is lost anyway.
+    expect(plan.levelling?.target).toBe("joesguns");
+    const at = (offsetMs: number) => switchedAtMs + offsetMs;
+    // A6 committed, its money spent on the levels (none on offer now): still the install.
+    expect(levelling.update(inputsAt(at(10 * SECOND), { neuroFluxLevels: null, installCommitted: true })).mode).toBe(
+      "install",
+    );
+    // Not committed, and nothing on offer: chosen afresh.
+    expect(levelling.update(inputsAt(at(20 * SECOND), { neuroFluxLevels: null })).mode).toBe("level");
+    // The reset: money, w0r1d_d43m0n not rooted yet.
+    const after = levelling.update(inputsAt(at(30 * SECOND), { slowData: slow({ lastAugReset: 99 * SECOND }) }));
+    expect(after.mode).toBe("money");
+  });
+
+  test("back to money once the level isn't all that's left: reached, or the World Daemon's switch off", () => {
+    for (const changes of [{ level: 3000 }, { enabled: false }]) {
+      const levelling = rule();
+      const { switchedAtMs } = measureMoney(levelling, 10);
+      expect(levelling.mode()).toBe("level");
+      expect(levelling.update(inputsAt(switchedAtMs + 10 * SECOND, changes))).toEqual({
+        mode: "money",
+        levelling: null,
+      });
+      expect(events.at(-1)).toMatchObject({ mode: "money", from: "level" });
+      expect(levelling.view()).toMatchObject({ applies: false, lines: [] });
+      events.length = 0;
+    }
+  });
+});
+
+describe("the controller (#336): every branch that changes the hack loop, holds money or installs", () => {
+  const TOKEN = "the-token";
+  let directory: string;
+  let store: TelemetryStore;
+  let channel: ControlChannel;
+  let sequenceNumber = 0;
+  beforeEach(() => {
+    directory = mkdtempSync(path.join(os.tmpdir(), "levelling-"));
+    store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+    channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+  });
+  afterEach(() => {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  function connectAgent(): MemoryConnection {
+    const connection = new MemoryConnection();
+    channel.accept(connection);
+    connection.receive(
+      encodeControlMessage({
+        protocolVersion: CONTROL_PROTOCOL_VERSION,
+        type: "hello",
+        token: TOKEN,
+        deploymentId: "deployment-a",
+        agentSessionId: "session-1",
+        game: { version: "3.0.1", versionNumber: 51, commit: "3162fd2", platform: "Steam" },
+      }),
+    );
+    return connection;
+  }
+  const send = (connection: MemoryConnection, tier: SnapshotTier, data: unknown, gameTimeMs: number) =>
+    connection.receive(
+      encodeControlMessage({
+        protocolVersion: CONTROL_PROTOCOL_VERSION,
+        type: "snapshot",
+        agentSessionId: "session-1",
+        tier,
+        sequenceNumber: ++sequenceNumber,
+        gameTimeMs,
+        data,
+      }),
+    );
+  const lastDesired = (connection: MemoryConnection) =>
+    connection
+      .sentMessages()
+      .filter((message) => message.type === "desiredState")
+      .at(-1) as unknown as DesiredState | undefined;
+  /**
+   * The Agent's snapshots for 3 minutes: experience rising slowly, as batching ecorp; the first update settles, then
+   * money's rate takes a minute.
+   */
+  function aMinuteOf(
+    connection: MemoryConnection,
+    { money = 1e6, slowData = slow(), fromMs = 1_000, level = 2000 } = {},
+  ) {
+    send(connection, "static", STATIC, fromMs);
+    send(connection, "slow", slowData, fromMs);
+    for (let atMs = fromMs; atMs <= fromMs + 3 * MINUTE; atMs += 10 * SECOND) {
+      send(connection, "medium", medium({ level, money, expAbove: (atMs - fromMs) / 100 }), atMs);
+      if (atMs % (60 * SECOND) === 1_000) send(connection, "slow", slowData, atMs);
+    }
+  }
+  /** The fast snapshot with the level loop's `threads` on home, or none. */
+  const fastWithHomeLoop = (threads: number) => ({
+    degradedTiers: [],
+    pageHeapUsedBytes: null,
+    game: {
+      money: 1e6,
+      homeRamUsed: 8,
+      homeMaxRam: 4096,
+      homeProcesses:
+        threads === 0
+          ? []
+          : [{ pid: 7, filename: "agent/0123456789ab/level-grow.js", threads, args: ["joesguns"], temporary: false }],
+    },
+    intents: [],
+    dialogs: { handled: [], blocking: null },
+  });
+
+  test("levelling mode goes in the batcher's place: the level loop on its hosts, home's kept RAM; no income expected", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    // A6 off: no install on offer, so levelling mode is the shortest.
+    writeAugmentationsEnabled(store, false);
+    aMinuteOf(connection);
+    const state = lastDesired(connection);
+    expect(state?.hackLoop).toEqual({
+      enabled: true,
+      target: "joesguns",
+      hosts: ["joesguns", "n00dles", "pserv-0"],
+      levelling: { homeKeptGb: SHARE_HOME_KEPT_GB, operation: "grow" },
+    });
+    expect(state?.batcher ?? null).toBeNull();
+    expect(controller.hackLoopView()).toMatchObject({ target: "joesguns", levelling: true });
+    expect(controller.batcherView().why).toBe("levelling mode on joesguns has its hosts (#336)");
+    expect(controller.levellingView()).toMatchObject({ applies: true, mode: "level", target: "joesguns" });
+    // The dashboard's path names the candidates and the choice.
+    expect(controller.worldDaemonView().lines).toContainEqual(
+      expect.stringMatching(/^levelling \(the hacking level all that's left, #336\): batching for money about/),
+    );
+  });
+
+  test("back to the hack loop and the batcher once the level isn't all that's left (the World Daemon's switch off)", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    writeAugmentationsEnabled(store, false);
+    aMinuteOf(connection);
+    expect(lastDesired(connection)?.hackLoop.levelling).toEqual({ homeKeptGb: SHARE_HOME_KEPT_GB, operation: "grow" });
+    writeWorldDaemonEnabled(store, false);
+    send(connection, "medium", medium({ level: 2000, expAbove: 3000 }), 200 * SECOND);
+    expect(lastDesired(connection)?.hackLoop.levelling).toBeUndefined();
+    expect(controller.levellingView().mode).toBe("money");
+    expect(controller.hackLoopView().levelling).toBeUndefined();
+  });
+
+  test("the install for the hacking level: A6 buys NeuroFlux Governor's levels, then installs; the reason said", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const events: RuleEvent[] = [];
+    controller.subscribe((event) => events.push(event));
+    const connection = connectAgent();
+    // $1t buys NeuroFlux Governor's levels at CyberSec (its reputation reaches them, after its own few augmentations,
+    // the set A6 buys first): the install is the shortest.
+    const slowData = slow({ faction: "CyberSec" });
+    aMinuteOf(connection, { money: 1e12, slowData });
+    send(connection, "medium", medium({ level: 2000, money: 1e12, expAbove: 3000 }), 200 * SECOND);
+    send(connection, "slow", slowData, 200 * SECOND);
+    const levellingEvents = events.filter((event) => event.type === LEVELLING_CHOSEN_EVENT_KIND);
+    expect(levellingEvents.at(-1)).toMatchObject({ mode: "install", neuroFluxLevels: expect.any(Number) });
+    const chosen = events.filter((event) => event.type === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND);
+    expect(chosen).toEqual([expect.objectContaining({ reason: "the hacking level" })]);
+    // Its purchases asked for at CyberSec, its set first, NeuroFlux Governor's levels after; the hack loop levelling
+    // meanwhile.
+    const state = lastDesired(connection);
+    expect(state?.intents).toContainEqual(
+      expect.objectContaining({
+        action: "purchaseAugmentation",
+        args: expect.objectContaining({ faction: "CyberSec" }),
+      }),
+    );
+    expect(controller.augmentationsView().committed).toBe(true);
+    // NeuroFlux Governor's levels counted at the commit, bought after the set, then the install.
+    expect(readAugmentationCycle(store)).toMatchObject({
+      reason: "the hacking level",
+      neuroFluxTarget: expect.any(Number),
+    });
+    expect(readAugmentationCycle(store)?.neuroFluxTarget).toBeGreaterThan(0);
+    expect(state?.hackLoop.levelling).toEqual({ homeKeptGb: SHARE_HOME_KEPT_GB, operation: "grow" });
+  });
+
+  test("the flip: the grow at minimum security below its money, the weaken once the grow raised it, then grow for good", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    writeAugmentationsEnabled(store, false);
+    aMinuteOf(connection);
+    // At its minimum security, at a 25th of its money (as an install leaves it): the grow.
+    send(connection, "medium", medium({ level: 2000, expAbove: 3000, joesgunsMoney: 2.5e6 }), 200 * SECOND);
+    expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("grow");
+    expect(controller.levellingView().lines[1]).toContain("growing it (the operation sent)");
+    // The round filled it and raised its security: the weaken.
+    send(connection, "medium", medium({ level: 2000, expAbove: 3100, joesgunsSecurity: 25 }), 210 * SECOND);
+    expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("weaken");
+    expect(controller.levellingView().lines[1]).toContain("weakening it (the operation sent)");
+    // Back at its minimum, its money at its maximum: the grow, which moves nothing now, so it stays.
+    for (let atMs = 220 * SECOND; atMs <= 320 * SECOND; atMs += 10 * SECOND) {
+      send(connection, "medium", medium({ level: 2000, expAbove: 3200 + atMs / 1000 }), atMs);
+      expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("grow");
+    }
+  });
+
+  test("the fit only while the level loop runs: with the hack loop off while levelling, none; on, with it on home, one", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    writeAugmentationsEnabled(store, false);
+    aMinuteOf(connection);
+    expect(controller.levellingView().mode).toBe("level");
+    // The hack loop switched off: levelling is chosen, but nothing runs, and the experience doesn't rise.
+    writeSwitch(store, HACK_LOOP_ENABLED_SETTING, false);
+    const fromMs = 200 * SECOND;
+    for (let atMs = fromMs; atMs <= fromMs + 12 * MINUTE; atMs += 10 * SECOND) {
+      send(connection, "fast", fastWithHomeLoop(0), atMs);
+      send(connection, "medium", medium({ level: 2000, expAbove: 3000 }), atMs);
+    }
+    expect(lastDesired(connection)?.hackLoop.enabled).toBe(false);
+    expect(controller.levellingView().fit).toBeNull();
+    expect(controller.levellingView().mode).toBe("level");
+    // On again, the loop on home in the fast snapshot: it settles, then fits.
+    writeSwitch(store, HACK_LOOP_ENABLED_SETTING, true);
+    const onMs = fromMs + 13 * MINUTE;
+    for (let atMs = onMs; atMs <= onMs + 4 * MINUTE; atMs += 10 * SECOND) {
+      send(connection, "fast", fastWithHomeLoop(2000), atMs);
+      send(connection, "medium", medium({ level: 2000, expAbove: 3000 + (atMs - onMs) }), atMs);
+    }
+    expect(controller.levellingView().fit?.measured).toBeCloseTo(1000, 6);
+  });
+
+  test("no install without A6's offer: the switch off, or no faction's reputation reaching a level", () => {
+    for (const setUp of [() => writeAugmentationsEnabled(store, false), () => {}]) {
+      const controller = new DesiredStateController({ channel, store });
+      const events: RuleEvent[] = [];
+      controller.subscribe((event) => events.push(event));
+      const connection = connectAgent();
+      setUp();
+      // Daedalus's reputation under a level's 500, or the switch off: nothing on offer.
+      aMinuteOf(connection, { money: 1e12, slowData: slow({ reputation: 100 }) });
+      expect(controller.levellingView().mode).toBe("level");
+      expect(events.filter((event) => event.type === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([]);
+      expect(controller.augmentationsView().committed).toBe(false);
+      writeAugmentationsEnabled(store, true);
+    }
+  });
+});

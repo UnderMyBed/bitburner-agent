@@ -113,6 +113,14 @@ export interface HackLoopState {
    * from one, says none.
    */
   hackThreads?: Record<string, number> | null;
+  /**
+   * Levelling mode (#336), or absent (null): the hack loop. On, every host of `hosts`, and home's RAM beyond
+   * `homeKeptGb` (what home keeps for the Agent and its workers), runs levelling mode's loop, which only weakens
+   * `target` (`operation` "weaken", or absent) or only grows it ("grow"), for the hacking experience. Only with the loop
+   * on and a target, and with neither `preparing` nor `hackThreads`. Absent is how an older brain, and safe mode's file
+   * from one, says none; an older Agent ignores it, and runs the hack loop against `target` on `hosts`.
+   */
+  levelling?: { homeKeptGb: number; operation?: "grow" | "weaken" } | null;
 }
 
 /** The desired state's batcher (#205): the host it runs on, and its config (core's `BatcherConfig`, #204). */
@@ -320,6 +328,12 @@ export function parseHackLoop(hackLoop: unknown): ParsedMessage<HackLoopState> {
   const allHosts = new Set([...hosts, ...(parsedPreparing.message?.hosts ?? [])]);
   const parsedHackThreads = parseHackThreads(hackThreads, allHosts);
   if (!parsedHackThreads.ok) return parsedHackThreads;
+  const parsedLevelling = parseLevelling((hackLoop as JsonObject).levelling, {
+    enabled,
+    target,
+    others: parsedPreparing.message !== null || parsedHackThreads.message !== null,
+  });
+  if (!parsedLevelling.ok) return parsedLevelling;
   return {
     ok: true,
     message: {
@@ -328,8 +342,34 @@ export function parseHackLoop(hackLoop: unknown): ParsedMessage<HackLoopState> {
       hosts: [...hosts],
       ...(parsedPreparing.message === null ? {} : { preparing: parsedPreparing.message }),
       ...(parsedHackThreads.message === null ? {} : { hackThreads: parsedHackThreads.message }),
+      ...(parsedLevelling.message === null ? {} : { levelling: parsedLevelling.message }),
     },
   };
+}
+
+/**
+ * `hackLoop.levelling` (#336), as `parseHackLoop` says: null for none (absent or null); else `homeKeptGb` a finite
+ * number of 0 or more, `operation` absent, "grow" or "weaken"; only with the loop on and a target, and neither
+ * `preparing` nor `hackThreads` (`others`).
+ */
+function parseLevelling(
+  levelling: unknown,
+  { enabled, target, others }: { enabled: boolean; target: string | null; others: boolean },
+): ParsedMessage<{ homeKeptGb: number; operation?: "grow" | "weaken" } | null> {
+  if (levelling === undefined || levelling === null) return { ok: true, message: null };
+  if (typeof levelling !== "object" || Array.isArray(levelling)) {
+    return { ok: false, reason: "hackLoop.levelling isn't an object" };
+  }
+  const { homeKeptGb, operation } = levelling as JsonObject;
+  if (typeof homeKeptGb !== "number" || !Number.isFinite(homeKeptGb) || homeKeptGb < 0) {
+    return { ok: false, reason: `hackLoop.levelling.homeKeptGb is ${describeValue(homeKeptGb)}` };
+  }
+  if (operation !== undefined && operation !== "grow" && operation !== "weaken") {
+    return { ok: false, reason: `hackLoop.levelling.operation is ${describeValue(operation)}` };
+  }
+  if (!enabled || target === null) return { ok: false, reason: "hackLoop.levelling with the loop off or no target" };
+  if (others) return { ok: false, reason: "hackLoop.levelling with preparing or hackThreads" };
+  return { ok: true, message: { homeKeptGb, ...(operation === undefined ? {} : { operation }) } };
 }
 
 /** `hackLoop.preparing` (#184), as `parseHackLoop` says: null for none. */
@@ -380,8 +420,8 @@ function parseHackThreads(hackThreads: unknown, hosts: Set<string>): ParsedMessa
 /**
  * A desired state's `batcher` (#205), against its hack loop: none when absent or null; else `runOn` a hostname and
  * `config` core's `BatcherConfig` (#204), its target and hosts names the protocol takes; only with the hack loop on,
- * and none of its hosts, nor the host it runs on, the hack loop's or the hack loop's preparing ones. Safe mode's file
- * uses it too.
+ * and none of its hosts, nor the host it runs on, the hack loop's or the hack loop's preparing ones; never with the hack
+ * loop levelling (#336). Safe mode's file uses it too.
  */
 export function parseBatcherState(batcher: unknown, hackLoop: HackLoopState): ParsedMessage<BatcherState | null> {
   if (batcher === undefined || batcher === null) return { ok: true, message: null };
@@ -397,6 +437,8 @@ export function parseBatcherState(batcher: unknown, hackLoop: HackLoopState): Pa
   }
   if (!isHostList(hosts)) return { ok: false, reason: "batcher.config.hosts isn't a list of hostnames" };
   if (!hackLoop.enabled) return { ok: false, reason: "batcher with the hack loop off" };
+  // Levelling mode (#336) takes the batcher's hosts and home's RAM.
+  if (hackLoop.levelling) return { ok: false, reason: "batcher with the hack loop levelling" };
   const loopHosts = new Set([...hackLoop.hosts, ...(hackLoop.preparing?.hosts ?? [])]);
   if (loopHosts.has(runOn)) return { ok: false, reason: `batcher.runOn is ${runOn}, a host of the hack loop` };
   const shared = hosts.find((host) => loopHosts.has(host));

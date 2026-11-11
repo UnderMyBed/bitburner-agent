@@ -7,6 +7,25 @@ import { deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts"
 
 /** Runs on the servers other than home, with the target and the threads it hacks with (#187) as its arguments. */
 export const HACK_LOOP_SCRIPT_NAME = "hack-loop.js";
+/**
+ * Levelling mode's loop (#336): weakens its target, its one argument, for ever, for the experience; started by
+ * `hack-loop-deploy.js` on the hosts and on home's RAM beyond what home keeps, in the hack loop's place. Not a bundle:
+ * the deploy worker writes it (`loopSourceOf`).
+ */
+export const LEVEL_LOOP_SCRIPT_NAME = "level-loop.js";
+/**
+ * Levelling mode's grow loop (#336): grows its target for ever, in the level loop's place once the target is at its
+ * minimum security (once its money is at its maximum, a grow adds no security, `Server/ServerHelpers.ts:201-212`); it
+ * earns 1.25 times a weaken's experience a thread-second. A script of its own: one calling both would cost 0.15 GB a
+ * thread more. Not a bundle either.
+ */
+export const LEVEL_GROW_SCRIPT_NAME = "level-grow.js";
+/**
+ * Their RAM, GB a thread: 1.6 base + `weaken`'s or `grow`'s 0.15 (RamCostGenerator.ts:11, :18, :20), as the game's
+ * calculator measures `loopSourceOf`'s (the ingame ram-budget test). On the hack loop's 2.4 GB, 27% fewer threads
+ * would fit.
+ */
+export const LEVEL_LOOP_RAM_GB = 1.75;
 /** Home worker: roots every server it can with the programs on home. */
 export const HACK_LOOP_ROOT_WORKER_NAME = "hack-loop-root.js";
 /** Home worker: starts and stops the loops on the rooted servers, as the desired state says. */
@@ -61,20 +80,34 @@ export interface HackLoopDeployReport {
 }
 
 /**
- * Any deployment's hack loop: `agent/<deploymentId>/hack-loop.js`, in a folder the deployer generated. Only these are
- * ever stopped, never a script in a player's own `agent/<name>/`.
+ * Any deployment's hack loop: `agent/<deploymentId>/hack-loop.js`, or levelling mode's `level-loop.js` or
+ * `level-grow.js` (#336), in a folder the deployer generated. Only these are ever stopped, never a script in a player's
+ * own `agent/<name>/`.
  */
 export function isHackLoopFile(filePath: string): boolean {
   const deploymentId = deploymentIdOfPath(filePath);
   return (
-    deploymentId !== null && isGeneratedDeploymentId(deploymentId) && filePath.endsWith(`/${HACK_LOOP_SCRIPT_NAME}`)
+    deploymentId !== null &&
+    isGeneratedDeploymentId(deploymentId) &&
+    [HACK_LOOP_SCRIPT_NAME, LEVEL_LOOP_SCRIPT_NAME, LEVEL_GROW_SCRIPT_NAME].some((name) =>
+      filePath.endsWith(`/${name}`),
+    )
   );
 }
+
+/**
+ * The deploy worker's second argument in levelling mode (#336): the third is then home's kept RAM, GB, and the fourth
+ * the operation, `"grow"` or `"weaken"`.
+ */
+const LEVELLING_ARGUMENT = "levelling";
 
 /**
  * The deploy worker's arguments (#184, #187): whether the loop should run, then each host followed by its target and
  * its hack threads (0: no cap, all its threads hack). Off, or on with no target, names no host. Each host's own target
  * lets part of the hosts prepare the next one; its own hack threads keep the hosts from hacking their target dry.
+ * In levelling mode (#336, `levelling`), `"levelling"`, home's kept RAM and the operation come first (absent, the
+ * weaken), then each host and home, each with the target and 0: the level or grow loop on each, on home only beyond the
+ * RAM it keeps.
  */
 export function hackLoopDeployArguments(hackLoop: {
   enabled: boolean;
@@ -82,30 +115,56 @@ export function hackLoopDeployArguments(hackLoop: {
   hosts: string[];
   preparing?: { target: string; hosts: string[] } | null;
   hackThreads?: Record<string, number> | null;
+  levelling?: { homeKeptGb: number; operation?: "grow" | "weaken" } | null;
 }): (string | boolean | number)[] {
   if (!hackLoop.enabled || hackLoop.target === null) return [hackLoop.enabled];
+  const { target, levelling } = hackLoop;
+  if (levelling) {
+    const hosts = hackLoop.hosts.includes("home") ? hackLoop.hosts : [...hackLoop.hosts, "home"];
+    const operation = levelling.operation ?? "weaken";
+    return [true, LEVELLING_ARGUMENT, levelling.homeKeptGb, operation, ...hosts.flatMap((host) => [host, target, 0])];
+  }
   const hackThreads = new Map(Object.entries(hackLoop.hackThreads ?? {}));
-  const loopOf = (target: string) => (host: string) => [host, target, hackThreads.get(host) ?? 0];
-  const loops = hackLoop.hosts.flatMap(loopOf(hackLoop.target));
+  const loopOf = (loopTarget: string) => (host: string) => [host, loopTarget, hackThreads.get(host) ?? 0];
+  const loops = hackLoop.hosts.flatMap(loopOf(target));
   if (hackLoop.preparing) loops.push(...hackLoop.preparing.hosts.flatMap(loopOf(hackLoop.preparing.target)));
   return [true, ...loops];
 }
 
-/** A host's loop, as the deploy worker reads its arguments: its target, and its hack threads (null: all of them). */
+/**
+ * A host's loop, as the deploy worker reads its arguments: its target, and its hack threads (null: all of them); in
+ * levelling mode (#336), the level loop, with the RAM home keeps.
+ */
 export interface HostHackLoop {
   target: string;
   hackThreads: number | null;
+  /** Levelling mode (#336): its loop on this host, home's kept RAM, GB, and the operation; absent for the hack loop. */
+  levelling?: { homeKeptGb: number; operation: "grow" | "weaken" };
 }
 
 /** The deploy worker's arguments read back: each host's loop, none when the loop shouldn't run. */
 export function hackLoopsByHost(workerArguments: unknown[]): Map<string, HostHackLoop> {
   const loops = new Map<string, HostHackLoop>();
   if (workerArguments[0] !== true) return loops;
-  for (let index = 1; index + 1 < workerArguments.length; index += 3) {
+  const keptGb = workerArguments[2];
+  // Home's kept RAM unread: none of home is used.
+  // The operation unread: the weaken, which keeps the target's security at its minimum.
+  const levelling =
+    workerArguments[1] === LEVELLING_ARGUMENT
+      ? {
+          homeKeptGb: typeof keptGb === "number" && keptGb >= 0 ? keptGb : Number.POSITIVE_INFINITY,
+          operation: workerArguments[3] === "grow" ? ("grow" as const) : ("weaken" as const),
+        }
+      : null;
+  for (let index = levelling === null ? 1 : 4; index + 1 < workerArguments.length; index += 3) {
     const hackThreads = workerArguments[index + 2];
     loops.set(String(workerArguments[index]), {
       target: String(workerArguments[index + 1]),
-      hackThreads: Number.isSafeInteger(hackThreads) && (hackThreads as number) >= 1 ? (hackThreads as number) : null,
+      hackThreads:
+        levelling === null && Number.isSafeInteger(hackThreads) && (hackThreads as number) >= 1
+          ? (hackThreads as number)
+          : null,
+      ...(levelling === null ? {} : { levelling }),
     });
   }
   return loops;
@@ -151,3 +210,82 @@ export function growthLogPerThread(
 
 /** The game's `ServerMaxGrowthLog`, log1p(0.0035) (Server/data/Constants.ts:8). */
 const MAX_GROWTH_LOG = Math.log1p(0.0035);
+
+/** The file a host's loop runs (#336): the hack loop's, or levelling mode's level or grow loop. */
+export function loopScriptNameOf(loop: HostHackLoop | undefined): string {
+  if (loop?.levelling === undefined) return HACK_LOOP_SCRIPT_NAME;
+  return loop.levelling.operation === "grow" ? LEVEL_GROW_SCRIPT_NAME : LEVEL_LOOP_SCRIPT_NAME;
+}
+
+/**
+ * The source the deploy worker writes to home as a host's loop (#339), or null: the hack loop's is a bundle. Levelling
+ * mode's loops aren't: the deployer pushes and RAM-checks every bundle at each deploy, so a bundle of theirs would
+ * change the deploy outside levelling too (in the simulator, two of them started the Agent 1.6 s later and moved the
+ * money suites' figures, #341). Written only when levelling is sent, so it never touches the money path. The
+ * operation on the loop's one argument, for ever, and no other NS function: `LEVEL_LOOP_RAM_GB`.
+ */
+export function loopSourceOf(loop: HostHackLoop | undefined): string | null {
+  if (loop?.levelling === undefined) return null;
+  const operation = loop.levelling.operation === "grow" ? "grow" : "weaken";
+  return [
+    `// ${loopScriptNameOf(loop)}: levelling mode's loop (#336), written by hack-loop-deploy.js.`,
+    "export async function main(ns) {",
+    '  ns.disableLog("ALL");',
+    "  const target = String(ns.args[0]);",
+    `  for (;;) await ns.${operation}(target);`,
+    "}",
+    "",
+  ].join("\n");
+}
+
+/**
+ * The loop the deploy worker keeps on `hostname` (#336): its loop in the arguments, but on home only levelling mode's,
+ * where the hack loop never runs (the Agent's home); none, so ours there are stopped, otherwise.
+ */
+export function hostLoopOf(loops: Map<string, HostHackLoop>, hostname: string): HostHackLoop | undefined {
+  const loop = loops.get(hostname);
+  return hostname === "home" && loop?.levelling === undefined ? undefined : loop;
+}
+
+/**
+ * The RAM a host keeps from our loop, GB (#336): on home, the brain's word in levelling mode (unread or not
+ * levelling: all of it); elsewhere none.
+ */
+export function keptGbOf(hostname: string, loop: HostHackLoop | undefined): number {
+  return hostname === "home" ? (loop?.levelling?.homeKeptGb ?? Number.POSITIVE_INFINITY) : 0;
+}
+
+/**
+ * The threads our loop may hold on a host (#336, #211): its free RAM with our loop's own (`oursGb`) counted free, less
+ * what it keeps, in whole threads of `scriptGb`. On home, what the other scripts use comes first, then the kept RAM:
+ * the Agent and its workers keep it beside whatever runs as the loop starts.
+ */
+export function loopThreadsRoom({
+  maxGb,
+  usedGb,
+  oursGb,
+  keptGb,
+  scriptGb,
+}: {
+  maxGb: number;
+  usedGb: number;
+  oursGb: number;
+  keptGb: number;
+  scriptGb: number;
+}): number {
+  if (!(scriptGb > 0)) return 0;
+  const room = Math.floor((maxGb - (usedGb - oursGb) - keptGb) / scriptGb);
+  return Number.isFinite(room) ? Math.max(0, room) : 0;
+}
+
+/**
+ * Whether a running loop is started again at full size (#211, #336): once its room holds more threads than it has, by
+ * one elsewhere (the batcher's operations landed after it was turned off); on home by as many as the kept RAM holds, so
+ * the Agent's workers coming and going (each a few GB, within the kept RAM) don't restart it every convergence, and one
+ * that ran as it started, ended since, resizes it once.
+ */
+export function restartsAtFullSize(room: number, running: number, keptGb: number, scriptGb: number): boolean {
+  if (!(running > 0) || !(scriptGb > 0)) return false;
+  const margin = Number.isFinite(keptGb) ? Math.max(1, Math.floor(keptGb / scriptGb)) : 1;
+  return room - running >= margin;
+}

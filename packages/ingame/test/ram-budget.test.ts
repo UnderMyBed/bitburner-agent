@@ -14,6 +14,10 @@ import {
   gangWorkerFileNames,
   HACK_LOOP_RAM_BUDGET_GB,
   homeWorkerFileNames,
+  LEVEL_GROW_SCRIPT_NAME,
+  LEVEL_LOOP_RAM_GB,
+  LEVEL_LOOP_SCRIPT_NAME,
+  loopSourceOf,
   SHARE_RAM_GB,
   SHARE_SCRIPT_NAME,
   singularityWorkerFileNames,
@@ -92,6 +96,23 @@ test("the Agent's budget plus its largest gang worker's fits BN2's home with SF1
 
 test("the loop's budget is core's, by which the brain counts a host's threads (#187)", () => {
   expect(budgets["hack-loop.js"]).toBe(HACK_LOOP_RAM_BUDGET_GB);
+});
+
+test("levelling mode's loops (#336) aren't bundles, and cost core's budget, by which the brain counts their threads", async () => {
+  // Each bundle adds its push and RAM check to every deploy, so outside levelling the deploy would differ from the one
+  // before levelling (#339): the deploy worker writes a loop's source to home when levelling is sent, and only then.
+  const { manifest } = await build();
+  expect(Object.keys(manifest.files)).not.toContain(LEVEL_LOOP_SCRIPT_NAME);
+  expect(Object.keys(manifest.files)).not.toContain(LEVEL_GROW_SCRIPT_NAME);
+  const simulation = await start(NEW_GAME);
+  for (const [fileName, operation] of [
+    [LEVEL_LOOP_SCRIPT_NAME, "weaken"],
+    [LEVEL_GROW_SCRIPT_NAME, "grow"],
+  ] as const) {
+    const source = loopSourceOf({ target: "joesguns", hackThreads: null, levelling: { homeKeptGb: 32, operation } });
+    await simulation.writeFile("home", fileName, source as string);
+    expect(await simulation.staticRamUsage("home", fileName), fileName).toBe(LEVEL_LOOP_RAM_GB);
+  }
 });
 
 test("the batch operation scripts' budgets are core's, by which the batcher and its plan count threads (#204)", () => {

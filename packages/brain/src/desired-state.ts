@@ -25,8 +25,11 @@ import {
   type IntentOutcome,
   intentId,
   isBitNodeNumber,
+  isHackLoopFile,
   isIrreversibleIntent,
   type JoinedFaction,
+  LEVEL_GROW_SCRIPT_NAME,
+  LEVEL_LOOP_SCRIPT_NAME,
   MAX_INTENTS,
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
@@ -107,6 +110,7 @@ import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackL
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type InvitationEvent, type InvitationInputs, InvitationRule, type InvitationView } from "./invitations.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
+import { type LevellingEvent, type LevellingPlan, LevellingRule, type LevellingView } from "./levelling.ts";
 import {
   type ResetSentNote,
   readManualIntents,
@@ -178,6 +182,11 @@ export interface HackLoopView {
   hackThreads: number | null;
   /** The next target, being prepared on these hosts while the others earn (#184), or null, with its hack threads. */
   preparing: { target: string; hosts: string[]; hackThreads: number | null } | null;
+  /**
+   * Levelling mode (#336): the hosts weaken `target` for the hacking experience, not money, so no income is expected;
+   * absent, the hack loop (or the batcher).
+   */
+  levelling?: boolean;
 }
 
 /**
@@ -244,7 +253,13 @@ export interface CloudServersView {
 }
 
 /** The rules' events, for the store (#203, #210, #215, #228), and the stop at the BitNode's end (#303). */
-export type RuleEvent = FactionWorkEvent | AugmentationEvent | WorldDaemonEvent | InvitationEvent | BitNodeEndEvent;
+export type RuleEvent =
+  | FactionWorkEvent
+  | AugmentationEvent
+  | WorldDaemonEvent
+  | InvitationEvent
+  | BitNodeEndEvent
+  | LevellingEvent;
 
 /** What the dashboard shows of the stop at the BitNode's end (#303). */
 export interface StopAtBitNodeEndView {
@@ -425,6 +440,9 @@ export class DesiredStateController {
   /** The World Daemon (#215): the rule, and whether it asks for the destroy. */
   readonly #worldDaemon: WorldDaemonRule;
   #worldDaemonDestroy = false;
+  /** The planner's levelling choice (#336): the rule, and its plan as of the last update. */
+  readonly #levelling: LevellingRule;
+  #levellingPlan: LevellingPlan = { mode: "money", levelling: null };
   /** The BitNode whose BN1-only assumptions (#321) were last logged: logged again only for another. */
   #assumptionsLoggedFor: number | null = null;
   /** `HACKING_MULTIPLIERS_UNREAD` logged, until a slow snapshot says the BitNode: once, not every update. */
@@ -462,6 +480,7 @@ export class DesiredStateController {
     this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event) });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
+    this.#levelling = new LevellingRule({ log, emit: (event) => this.#emit(event) });
     this.#invitations = new InvitationRule({ log, emit: (event) => this.#emit(event) });
     this.#bitNodeEnd = new BitNodeEndWatch({ log, emit: (event) => this.#emit(event) });
     this.#resetSent = readResetSentNote(store);
@@ -678,10 +697,35 @@ export class DesiredStateController {
     return this.intentsView().find((view) => view.id === CLOSE_GAME_INTENT.id)?.waitingFor ?? "not sent yet";
   }
 
-  /** What the dashboard shows of the path to the World Daemon (#215). */
+  /**
+   * Whether levelling mode's loop runs (#336's review): the state last sent levels with the hack loop on, and the threads
+   * the fast snapshot shows of levelling mode's loops on home (the Agent's word, so checked).
+   */
+  #levelLoopRunning(): { sent: boolean; homeThreads: number } {
+    const hackLoop = this.#desired?.hackLoop;
+    const processes = this.#fastData?.game?.homeProcesses;
+    let homeThreads = 0;
+    for (const process of Array.isArray(processes) ? processes : []) {
+      const { filename, threads } = process ?? {};
+      if (typeof filename !== "string" || typeof threads !== "number" || !isHackLoopFile(filename)) continue;
+      if (filename.endsWith(`/${LEVEL_LOOP_SCRIPT_NAME}`) || filename.endsWith(`/${LEVEL_GROW_SCRIPT_NAME}`)) {
+        homeThreads += threads;
+      }
+    }
+    // Levelling is only ever sent with the hack loop on (the protocol refuses it off).
+    return { sent: hackLoop?.levelling != null, homeThreads };
+  }
+
+  /** The planner's levelling choice (#336): the candidates, the choice and the fitted factor. */
+  levellingView(): LevellingView {
+    return this.#levelling.view();
+  }
+
+  /** What the dashboard shows of the path to the World Daemon (#215), the levelling choice's lines with it (#336). */
   worldDaemonView(): WorldDaemonView {
     const owners = readManualIntents(this.#store).find((each) => each.action === "destroyBitNode");
-    const view = this.#worldDaemon.view();
+    const daemon = this.#worldDaemon.view();
+    const view = { ...daemon, lines: [...daemon.lines, ...this.#levelling.view().lines] };
     // The owner's queued destroy goes instead (#321): the dashboard names the BitNode it enters.
     return owners?.action === "destroyBitNode"
       ? { ...view, ownersDestroy: true, nextBitNode: owners.args.nextBitNode, replay: null, skipped: null }
@@ -979,6 +1023,7 @@ export class DesiredStateController {
       hosts: enabled ? (hackLoop?.hosts ?? []) : [],
       hackThreads: enabled ? hackThreadsOn(hackLoop?.hosts ?? []) : null,
       preparing: preparing === null ? null : { ...preparing, hackThreads: hackThreadsOn(preparing.hosts) },
+      ...(enabled && hackLoop?.levelling ? { levelling: true } : {}),
     };
   }
 
@@ -1451,15 +1496,18 @@ export class DesiredStateController {
   #withBatcher(
     hackLoop: DesiredState["hackLoop"],
     factionWorking: boolean,
+    levelling: LevellingPlan["levelling"] = null,
   ): Pick<DesiredState, "hackLoop" | "batcher"> {
-    const result = this.#chooseMode(hackLoop, factionWorking);
+    const result = this.#chooseMode(hackLoop, factionWorking, levelling);
     const sent = result.batcher;
     const mode =
-      sent === undefined || sent === null
-        ? `batcher: the hack loop hacks${this.#batcherWhy === null ? "" : `, not the batcher: ${this.#batcherWhy}`}`
-        : `batcher: batches ${sent.config.target}` +
-          (sent.config.next === undefined ? "" : `, preparing ${sent.config.next.target} next`) +
-          (sent.config.sharing === undefined ? "" : ", sharing its spare RAM");
+      levelling !== null
+        ? `batcher: not sent, levelling mode on ${levelling.target} has its hosts (#336)`
+        : sent === undefined || sent === null
+          ? `batcher: the hack loop hacks${this.#batcherWhy === null ? "" : `, not the batcher: ${this.#batcherWhy}`}`
+          : `batcher: batches ${sent.config.target}` +
+            (sent.config.next === undefined ? "" : `, preparing ${sent.config.next.target} next`) +
+            (sent.config.sharing === undefined ? "" : ", sharing its spare RAM");
     if (mode !== this.#batcherMode) {
       // Not before the switch is first on: the hack loop is the default's mode then.
       if (this.#batcherMode !== null || (sent !== undefined && sent !== null)) this.#log(mode);
@@ -1468,9 +1516,25 @@ export class DesiredStateController {
     return result;
   }
 
-  #chooseMode(hackLoop: DesiredState["hackLoop"], factionWorking: boolean): Pick<DesiredState, "hackLoop" | "batcher"> {
+  #chooseMode(
+    hackLoop: DesiredState["hackLoop"],
+    factionWorking: boolean,
+    levelling: LevellingPlan["levelling"],
+  ): Pick<DesiredState, "hackLoop" | "batcher"> {
     this.#batcherWhy = null;
     this.#shareWhy = "the batcher isn't sent";
+    // Levelling mode (#336): the level loop on the batcher's hosts and home's RAM beyond what it keeps, no batcher.
+    if (levelling !== null) {
+      this.#batcherWhy = `levelling mode on ${levelling.target} has its hosts (#336)`;
+      return {
+        hackLoop: {
+          enabled: true,
+          target: levelling.target,
+          hosts: levelling.hosts,
+          levelling: { homeKeptGb: levelling.homeKeptGb, operation: levelling.operation },
+        },
+      };
+    }
     if (!readBatcherEnabled(this.#store) || this.#staticData === null || this.#mediumData === null) return { hackLoop };
     if (hackLoop.target === null) {
       this.#batcherWhy = "no target yet";
@@ -1600,6 +1664,8 @@ export class DesiredStateController {
       holdWork: { owners: readOwnersWork(this.#store), brainWorks: readFactionWorkEnabled(this.#store) },
       gangShop,
       gangUnread: this.#gang.gangUnread(),
+      // The planner's levelling choice (#336), as of the last update: NeuroFlux Governor's levels and an install.
+      levellingInstall: this.#levelling.mode() === "install",
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;
@@ -1623,6 +1689,23 @@ export class DesiredStateController {
       slowGameTimeMs: this.#slowGameTimeMs,
       // A6 holding installs for it there (#335's review): the reputation not rising is then loud.
       redPillHeldAtGang: this.#augmentations.redPillHeldAtGang(),
+    });
+    // The planner's levelling choice (#336), on A8's path as it now reads, and A6's offer of NeuroFlux Governor levels.
+    const batcherConfig = this.#desired?.batcher?.config ?? null;
+    this.#levellingPlan = this.#levelling.update({
+      path: this.#worldDaemon.view().path,
+      enabled: readWorldDaemonEnabled(this.#store),
+      staticData: this.#staticData,
+      mediumData: this.#mediumData,
+      mediumGameTimeMs: this.#mediumGameTimeMs,
+      slowData: this.#slowData,
+      // The BitNode's, unlogged here: the hack loop's and the batcher's plans log what's taken as BN1's (#321).
+      hacking: bitNodeHackingOf(this.#slowData?.resetInfo?.currentNode).multipliers,
+      neuroFluxLevels: this.#augmentations.neuroFluxOffer(),
+      installCommitted: augmentations.committed,
+      batcherTarget: batcherConfig === null ? null : { hostname: batcherConfig.target, figures: batcherConfig.figures },
+      levelLoop: this.#levelLoopRunning(),
+      nowMs: this.#lastEventAtMs,
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({
@@ -1743,7 +1826,11 @@ export class DesiredStateController {
       this.#lastSetHackTarget = lastSet;
       this.#lastSetHackTargetResetAt = resetAt ?? this.#lastSetHackTargetResetAt;
       const factionWorking = factionWorkGoingOn(work, this.#fastData?.work);
-      this.#desired = { ...this.#withBatcher({ enabled: true, ...hackLoop }, factionWorking), intents, ...workAndTtl };
+      this.#desired = {
+        ...this.#withBatcher({ enabled: true, ...hackLoop }, factionWorking, this.#levellingPlan.levelling),
+        intents,
+        ...workAndTtl,
+      };
     }
     this.#channel.setDesiredState(this.#desired);
     // The close of the game going out (#303), past its gate, in a desired state sent (none goes before the Agent's
