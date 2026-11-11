@@ -408,10 +408,10 @@ describe("the rows and the comparison", () => {
   });
 });
 
-// Its bound (#340's review): batches on home's RAM after the install make the hour's work heavier. Seed 1 locally ran in
-// 48.6 s of real time with `batcher.home` on and 28.0 s off, with 21,561 batches against 11,839, 305,039 timers fired
-// against 190,290, and 5.9 s of the brain's CPU against 3.6 s: in proportion to the batches. CI ran main's in 107 s,
-// about twice local, so about 100-120 s now: 300 s leaves the headroom 180 s no longer did.
+// Its bound (#340's review): batches on home's RAM after the install make the hour's work heavier. Seed 1 locally
+// ran in 48.6 s of real time with `batcher.home` on and 28.0 s off, with 21,561 batches against 11,839, 305,039
+// timers fired against 190,290, and 5.9 s of the brain's CPU against 3.6 s: in proportion to the batches. CI ran
+// main's in 107 s, about twice local, so about 100-120 s now: 300 s leaves the headroom 180 s no longer did.
 test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the game's own summary, printed as a row", {
   timeout: 300_000,
 }, async () => {
