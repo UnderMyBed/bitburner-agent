@@ -1505,9 +1505,10 @@ export interface BatcherHealth {
    * Home's RAM, with home among its hosts (#340), at its last loop: `gb` all of it, `keptGb` what it keeps for the
    * Agent (the config's `homeKeptGb`), `freeGb` free beyond that (beside the Agent, its operations and its share
    * threads), `batchesGb` its operations' parts there (batches and preparation waves), and `ramBound`, the config's.
-   * Absent while home isn't a host, and from an older batcher.
+   * Null while home isn't a host (#340's re-review: a batcher since #340, so the run report can tell home left out);
+   * absent from an older batcher.
    */
-  home?: BatcherHomeRam;
+  home?: BatcherHomeRam | null;
   /**
    * Operations that found no room at their time and waited for it (#246), then started: how many, the run's longest
    * wait so far, ms (null before one), and the last `BATCH_WAITS_KEPT`, oldest first, each with what held the RAM at

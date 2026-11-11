@@ -50,6 +50,14 @@ export function readBatcherOnHome(store: TelemetryStore): boolean {
 }
 
 /**
+ * Whether home is the batcher's to count (#340's re-review): its switch on and the batcher's too. The hacking ceiling's
+ * RAM and the run report's `home missing from the batches` read it; with the batcher off, home is the Agent's.
+ */
+export function batcherOnHome(store: TelemetryStore): boolean {
+  return readBatcherOnHome(store) && readBatcherEnabled(store);
+}
+
+/**
  * What home keeps for the Agent and its workers, GB: a fresh save's 8, of which the Agent and its largest worker take
  * 7.55 (architecture §14, Q1). The batcher runs on home only with its budget free beyond it: home of 16 GB or more.
  */

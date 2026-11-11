@@ -1364,10 +1364,11 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
 
   /**
    * Home's RAM in its health (#340), with home among its hosts: all of it, what it keeps, free beyond that, its
-   * operations' parts there (batches and preparation waves), and the config's `ramBound`; undefined (absent) otherwise.
+   * operations' parts there (batches and preparation waves), and the config's `ramBound`; null otherwise (#340's
+   * re-review: home left out, not an older batcher's silence).
    */
-  const homeHealth = (): BatcherHomeRam | undefined => {
-    if (!hosts.includes("home")) return undefined;
+  const homeHealth = (): BatcherHomeRam | null => {
+    if (!hosts.includes("home")) return null;
     const gb = ns.getServerMaxRam("home");
     const keptGb = keptGbOn("home");
     let batchesGb = 0;

@@ -152,7 +152,9 @@ test.each(SEEDS)(
     // Neither arm late, lost or short; the report's home line, and none of its home failures.
     for (const arm of [without, withHome]) {
       expect(arm.health).toMatchObject({ late: 0, lost: 0, batchesShort: 0 });
-      expect(arm.report.failures.filter((failure) => /^batches left home idle/.test(failure))).toEqual([]);
+      expect(
+        arm.report.failures.filter((failure) => /^batches left home idle|^home missing from the batches/.test(failure)),
+      ).toEqual([]);
     }
     expect(homeLine).toBeDefined();
   },

@@ -116,7 +116,10 @@ export function homeKeptGbOf(singularityMultiplier: number | null): number {
  * `shareBonus`, `NetworkShare/Share.ts:22-24,43-48`) less 1, as reputation a second is the bonus times
  * (`PersonObjects/formulas/reputation.ts:15-22`). Run #3's late shape, a 64 TB home beside 1.6 PB of cloud servers,
  * gains at most 4% income against x1.388's 38.8%: home shares. After an install, with home most of the RAM, the batches
- * gain several times over: home batches. Without income without home (none planned), home batches.
+ * gain several times over: home batches. Without income without home (none planned), home batches. Its limit: it counts
+ * home's bonus alone, not what home adds beside the hosts' share threads (the bonus is a log of all the threads: with
+ * 10,000 on the hosts and 1,000 on home, home adds 0.26%, where this counts 27.6%), so it's right where the hosts
+ * barely share, as after an install, and favours sharing on home where they share a lot.
  */
 export function homeBatchesWhileSharing({
   withHomeIncomePerSecond,

@@ -459,6 +459,8 @@ test.each([
 test("batching, it sleeps on the monotonic clock until its next order (#251): a minute's timers, a few a second, no spin", async () => {
   const simulation = await gameWithScripts();
   await batchingBatcher(simulation);
+  // Home not among its hosts: its health says so, `home: null` (#340's re-review), not absent as an older batcher's.
+  expect((await healthOf(simulation)).home).toBeNull();
   const firedBefore = await simulation.diagnostics.timersFired();
   await simulation.advance(60_000);
   const fired = (await simulation.diagnostics.timersFired()) - firedBefore;

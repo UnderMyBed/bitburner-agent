@@ -17,7 +17,7 @@ import {
 import { donationStatus } from "../augmentation-report.ts";
 import type { AugmentationsView, InstallAwaitingRestart } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
-import { type BatcherView, batcherNotRunning, batcherOutOfStep, readBatcherOnHome } from "../batcher.ts";
+import { type BatcherView, batcherNotRunning, batcherOnHome, batcherOutOfStep } from "../batcher.ts";
 import type { DataBackupProblem } from "../data-backup.ts";
 import type {
   CloudServersView,
@@ -459,7 +459,7 @@ export function buildDashboardStatus({
       mediumData: medium,
       bitNode: bitNodeOf(slow?.data),
       // Home among the batcher's hosts (#340's review): its RAM beyond what it keeps is theirs.
-      homeKeptGb: readBatcherOnHome(store)
+      homeKeptGb: batcherOnHome(store)
         ? homeKeptGbOf(singularityRamMultiplierOf((slow?.data as SlowSnapshotData | undefined) ?? null))
         : null,
     }),

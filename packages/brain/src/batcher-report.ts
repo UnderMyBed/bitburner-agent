@@ -42,6 +42,8 @@ export interface BatcherPoint {
   health: unknown;
   /** The deploy worker's last report while the batcher was wanted (#211); absent from an older Agent. */
   deploy?: unknown;
+  /** Home's RAM in the fast snapshot then (`game.homeMaxRam`, #340's re-review); absent where it doesn't say. */
+  homeMaxRamGb?: unknown;
 }
 
 /** The counts added up per hour. */
@@ -89,6 +91,57 @@ export const HOME_BATCHES_IDLE_FREE_FRACTION = 0.5;
 export const HOME_BATCHES_IDLE_AFTER_MS = 10 * 60_000;
 /** Fast snapshots (every 2 s) further apart than this are a gap: a stretch of home idle ends there. */
 const HOME_IDLE_GAP_MS = 10_000;
+/** Batching this long without home above its reserve among its hosts (#340's re-review): `home missing from the batches`. */
+export const HOME_MISSING_AFTER_MS = 10 * 60_000;
+
+/**
+ * Stretches of `HOME_MISSING_AFTER_MS` or more (#340's re-review) batching with home left out of the batcher's hosts
+ * (its health's `home` null: a batcher since #340), while home's RAM in the fast snapshot is above its reserve then
+ * (`reserveGbAt`, what home keeps and the batcher's budget) and nothing asks the batcher to share (the placeholder,
+ * `homeBatchesWhileSharing`, may keep home sharing then): `home missing from the batches`, a failure each. The
+ * brain's plan left home out (`batcherRoomOf`, its switch on and the batcher too: `expected` given). Each stretch
+ * ends at a gap in the fast snapshots or an install (`resetsMs`), so one right after an install starts afresh.
+ */
+function homeMissingLines(
+  points: BatcherPoint[],
+  failures: string[],
+  resetsMs: readonly number[],
+  expected: { reserveGbAt: (atMs: number) => number },
+): string[] {
+  const lines: string[] = [];
+  let from: { atMs: number; homeGb: number; reserveGb: number } | null = null;
+  let toMs = 0;
+  const close = () => {
+    if (from !== null && toMs - from.atMs >= HOME_MISSING_AFTER_MS) {
+      const line =
+        `home missing from the batches from ${formatIsoTime(from.atMs)} to ${formatIsoTime(toMs)} ` +
+        `(${formatDuration(toMs - from.atMs)}): batching, with home's ${gigabytes(from.homeGb)} above the ` +
+        `${gigabytes(from.reserveGb)} it keeps and the batcher's, and nothing asking it to share`;
+      lines.push(`  ${line}`);
+      failures.push(line);
+    }
+    from = null;
+  };
+  for (const { atMs, health: value, homeMaxRamGb } of points) {
+    const health = healthOf(value);
+    const reserveGb = expected.reserveGbAt(atMs);
+    const missing =
+      health !== null &&
+      health.state === "batching" &&
+      health.home === null &&
+      health.sharing?.wanted !== true &&
+      typeof homeMaxRamGb === "number" &&
+      homeMaxRamGb > reserveGb;
+    const broken =
+      missing && from !== null && (atMs - toMs > HOME_IDLE_GAP_MS || resetsMs.some((ms) => toMs < ms && ms <= atMs));
+    if (!missing || broken) close();
+    if (!missing) continue;
+    from ??= { atMs, homeGb: homeMaxRamGb as number, reserveGb };
+    toMs = atMs;
+  }
+  close();
+  return lines;
+}
 
 const gigabytes = (ram: number) => `${Math.round(ram).toLocaleString("en-US")} GB`;
 
@@ -109,9 +162,11 @@ function homeOf(health: BatcherHealth): NonNullable<BatcherHealth["home"]> | nul
  * `HOME_BATCHES_IDLE_FREE_FRACTION` of what home may give free, while the plan sent was held to the RAM throughout
  * (#340's review: the config's `ramBound`, core's `isPlanRamBound`: its income below what its target's money allows,
  * so more RAM would earn more), or batches were trimmed or short of RAM (their counts rose within it):
- * `batches left home idle`, a failure each. Either way the batches wanted RAM home had: the brain's plan sized without
- * home, or the Agent's batcher not using it. Idle alone isn't one: a plan bounded by its target's money leaves home
- * idle that no batch wants.
+ * `batches left home idle`, a failure each. Either way the batches wanted RAM home had: home listed among the hosts,
+ * but the plan or the placement leaving it out untrimmed (#340's re-review: a plan that leaves home out of the hosts,
+ * or keeps too much of it, can't show here, as there's no `home` or both sides take it off; that's
+ * `home missing from the batches`). Idle alone isn't one: a plan bounded by its target's money leaves home idle that
+ * no batch wants.
  */
 function homeLines(healths: { atMs: number; health: BatcherHealth }[], failures: string[]): string[] {
   const label = "  home among its hosts (#340)";
@@ -1124,6 +1179,7 @@ export function batcherSection(
   resetsMs: readonly number[] = [],
   incidentContext: IncidentContext = { incidents: [], weakenMs: () => null, warnings: [] },
   stuck?: { incomes: BatcherTargetIncomes; cycleLabelAt?: (atMs: number) => string },
+  homeExpected?: { reserveGbAt: (atMs: number) => number },
 ): string[] {
   const lines = ["6. The batcher (#205, #206)"];
   const notRunning = notRunningLines(points, failures);
@@ -1339,6 +1395,7 @@ export function batcherSection(
           `most levels forecast between a hack's start and its landing: ${mostRise}`,
   );
   lines.push(...homeLines(healths, failures));
+  if (homeExpected !== undefined) lines.push(...homeMissingLines(points, failures, resetsMs, homeExpected));
   lines.push(...moveLines(moveFold.moves(resetsMs), moveFold.reporting, failures));
   if (stuck !== undefined) {
     const stuckLooks = healths.map(({ atMs, health }) => ({ atMs, target: health.target }));

@@ -598,6 +598,51 @@ describe("the run report's section", () => {
     expect(gapped).toEqual([]);
   });
 
+  test("home missing from the batches (#340's re-review): 10 minutes batching without home above its reserve fails", () => {
+    // A batcher since #340 says `home: null` while home isn't one of its hosts; home 4 TB, its reserve 35.85 GB.
+    const reserve = { reserveGbAt: () => 32 + BATCHER_RAM_BUDGET_GB };
+    const missing = (minutes: number, of: (index: number) => Partial<BatcherHealth> = () => ({}), homeGb = 4_096) =>
+      Array.from({ length: Math.round(minutes * 30) + 1 }, (_, index) => ({
+        atMs: at(index / 30),
+        health: health("a", { home: null, ...of(index) }),
+        homeMaxRamGb: homeGb,
+      }));
+    const failuresOf = (
+      points: ReturnType<typeof missing>,
+      expected: typeof reserve | null = reserve,
+      resetsMs: number[] = [],
+    ) => {
+      const found: string[] = [];
+      const lines = batcherSection(points, found, [], resetsMs, undefined, undefined, expected ?? undefined);
+      return { found: found.filter((line) => line.startsWith("home missing from the batches")), lines };
+    };
+    const failure =
+      "home missing from the batches from 2026-01-01T00:00:00.000Z to 2026-01-01T00:10:00.000Z (10 min): batching, " +
+      "with home's 4,096 GB above the 36 GB it keeps and the batcher's, and nothing asking it to share";
+    const fired = failuresOf(missing(10));
+    expect(fired.found).toEqual([failure]);
+    expect(fired.lines).toContain(`  ${failure}`);
+    // A moment under 10 minutes; preparing; sharing asked (the placeholder may keep home sharing); home within what it
+    // keeps and the batcher's; its switch or the batcher off (no reserve given); an older batcher (no `home` at all):
+    // quiet.
+    expect(failuresOf(missing(9.9)).found).toEqual([]);
+    expect(failuresOf(missing(12, () => ({ state: "preparing" }))).found).toEqual([]);
+    expect(
+      failuresOf(
+        missing(12, () => ({ sharing: { wanted: true, threads: 0, ramGb: 0, hostsRamGb: 0, bonus: 1, roomGb: 0 } })),
+      ).found,
+    ).toEqual([]);
+    expect(failuresOf(missing(12, () => ({}), 32 + BATCHER_RAM_BUDGET_GB)).found).toEqual([]);
+    expect(failuresOf(missing(12), null).found).toEqual([]);
+    const older = missing(12).map((point) => ({ ...point, health: { ...point.health, home: undefined } }));
+    expect(failuresOf(older).found).toEqual([]);
+    // Right after an install: the stretch starts again from it, so 6 minutes either side of one is quiet.
+    expect(failuresOf(missing(12), reserve, [at(6)]).found).toEqual([]);
+    // Home among its hosts (its `home`): quiet, whatever its RAM.
+    const among = missing(12, () => ({ home: { gb: 4_096, keptGb: 32, freeGb: 0, batchesGb: 4_000 } }));
+    expect(failuresOf(among).found).toEqual([]);
+  });
+
   test("not run: says so", () => {
     expect(
       batcherSection([

@@ -125,7 +125,8 @@ test.each(SEEDS)(
     expect(healths.length).toBeGreaterThan(100);
     for (const used of cloudUse) expect(used).toBeGreaterThan(0.82);
     for (const { atMs, health: each } of healths) {
-      expect(each.home, `at ${atMs}`).toBeUndefined();
+      // Not among its hosts: `home` null (#340's re-review).
+      expect(each.home, `at ${atMs}`).toBeNull();
       expect(each.sharing?.homeGb, `at ${atMs}`).toBe(HOME_GB);
       expect(each, `at ${atMs}`).toMatchObject({ late: 0, lost: 0, desyncs: 0, batchesShort: 0, outOfBounds: 0 });
     }
