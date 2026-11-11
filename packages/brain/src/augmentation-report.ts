@@ -2,7 +2,9 @@
 // decisions, progress on the count rule (#222), purchases, installs sent and cycles called off), with the failures: a
 // purchase not queued, an install sent with no reset seen after it, an install reported done with no reset after it,
 // and a cycle overdue its install (#222). Donations (#225): each made, and two failures: a donation the faction state
-// never showed, and donations unused (one within reach for 30 minutes online with the brain counting none).
+// never showed, and donations unused (one within reach for 30 minutes online with the brain counting none). The
+// planner's install timing (#343): its estimates with each install chosen and progress, and three failures: an install
+// short of Daedalus's count without them, a NeuroFlux-only install short of it, and a wait overdue (the brain's event).
 import {
   acceptsDonations,
   augmentationBitNodeMultipliers,
@@ -36,6 +38,7 @@ import {
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
   AUGMENTATION_PROGRESS_EVENT_KIND,
+  AUGMENTATION_WAIT_OVERDUE_EVENT_KIND,
   advanceOnlineClock,
   describeDonation,
   describeProgress,
@@ -57,6 +60,7 @@ export const AUGMENTATION_EVENT_KINDS = [
   AUGMENTATION_INSTALL_NOT_RESET_EVENT_KIND,
   AUGMENTATION_DONATED_EVENT_KIND,
   AUGMENTATION_DONATION_FAILED_EVENT_KIND,
+  AUGMENTATION_WAIT_OVERDUE_EVENT_KIND,
 ];
 
 /**
@@ -157,8 +161,15 @@ function describeStoredProgress(fields: Record<string, unknown>): string {
       ? `; install countdown${countdown.quick === true ? " (a quick install)" : ""}, ${formatEta(countdown.endsInMs)} ` +
         "left"
       : "") +
-    (typeof fields.held === "string" ? `; held: ${fields.held}` : "")
+    (typeof fields.held === "string" ? `; held: ${fields.held}` : "") +
+    timingWords(fields.timing, "; the planner: ")
   );
+}
+
+/** A stored install timing's words (#343), after `prefix`; "" where there's none. */
+function timingWords(timing: unknown, prefix: string): string {
+  const words = fieldsOf(timing).words;
+  return typeof words === "string" ? `${prefix}${words}` : "";
 }
 
 /** A donation not shown, or an install with no reset, in words: section 3 lists each, summarised or not (#245). */
@@ -497,8 +508,11 @@ export class AugmentationTimeline {
             describeStoredReason(fields) +
             (Array.isArray(fields.donations) && fields.donations.length > 0
               ? `; donating first: ${fields.donations.map((each) => describeDonation(fieldsOf(each) as never)).join(", ")}`
-              : ""),
+              : "") +
+            timingWords(fields.timing, "; the planner: "),
         });
+      } else if (kind === AUGMENTATION_WAIT_OVERDUE_EVENT_KIND) {
+        entries.push({ atMs, text: describeWaitOverdue(fields) });
       } else if (kind === AUGMENTATION_DONATED_EVENT_KIND) {
         entries.push({
           atMs,
@@ -669,6 +683,7 @@ export class AugmentationTimeline {
     if (notSeen === 0) lines.push("    none");
     lines.push(...this.#overdueLines(events, { augmentationsEnabled, failures, formatTime }));
     lines.push(...this.#donationLines(events, { augmentationsEnabled, failures, formatTime }));
+    lines.push(...timingLines(events, { failures, formatTime }));
     return lines;
   }
 
@@ -818,4 +833,52 @@ export class AugmentationTimeline {
     if (overdue === 0) lines.push("    none");
     return lines;
   }
+}
+
+/** A wait overdue (#343), in words: when it began, its first τ, the n it waited for, and the planner's figures now. */
+function describeWaitOverdue(fields: Record<string, unknown>): string {
+  const eta = (ms: unknown) => formatEta(isFiniteNumber(ms) ? ms : null);
+  return (
+    `wait overdue: the planner's wait for Daedalus's count from ${eta(fields.sinceOnlineMs)} online, for ` +
+    `${String(fields.untilAdding)} new at an install in ~${eta(fields.firstTauMs)}, still short at ` +
+    `${eta(fields.onlineMs)} online${timingWords(fields.timing, ": ")}`
+  );
+}
+
+/**
+ * The planner's install timing's failures (#343), section 4's: an install chosen short of Daedalus's count (the event's
+ * `short`, this brain's) without the planner's estimates; one short of it adding nothing to it (NeuroFlux Governor's
+ * levels alone, installed already: `timing.adding` 0); and each wait the brain found overdue (its event). Each is the
+ * brain's own error, so a failure whatever the switch says now. None, no lines: the report's length bounds (#245).
+ */
+function timingLines(
+  events: readonly StoredEvent[],
+  { failures, formatTime }: { failures: string[]; formatTime: (ms: number) => string },
+): string[] {
+  const lines = ["  the planner's install timing short of Daedalus's count (#343):"];
+  const add = (atMs: number, line: string) => {
+    lines.push(`    ${formatTime(atMs)}  ${line}`);
+    failures.push(line);
+  };
+  for (const { atMs, kind, detail } of events) {
+    const fields = fieldsOf(detail);
+    if (kind === AUGMENTATION_WAIT_OVERDUE_EVENT_KIND) {
+      add(atMs, describeWaitOverdue(fields));
+      continue;
+    }
+    if (kind !== AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND) continue;
+    const short = shortOf(fields.short);
+    if (short === null) continue;
+    const count = `${short.installed} of ${short.required} installed`;
+    const timing = fieldsOf(fields.timing);
+    if (!isFiniteNumber(timing.adding)) {
+      add(
+        atMs,
+        `install short of Daedalus's count without the planner's estimates: ${count}, ${describeStoredReason(fields)}`,
+      );
+    } else if (timing.adding === 0) {
+      add(atMs, `NeuroFlux-only install short of Daedalus's count: ${count}, nothing new to it`);
+    }
+  }
+  return lines.length === 1 ? [] : lines;
 }

@@ -10,6 +10,7 @@ import {
   type DeployerEvent,
   type InGameBuild,
 } from "@bitburner-agent/bridge";
+import type { InstallTimingPolicy } from "../../src/augmentations.ts";
 import { DesiredStateController } from "../../src/desired-state.ts";
 import { readPinnedDefinitions } from "../../src/in-game-build.ts";
 import { IncomeWatch } from "../../src/income-watch.ts";
@@ -80,6 +81,7 @@ export function startBrainInSimulation(
     pinnedDefinitions = readPinnedDefinitions(),
     data,
     withDesiredState = false,
+    installTiming = "planner",
   }: {
     build: InGameBuild;
     token?: string;
@@ -94,6 +96,8 @@ export function startBrainInSimulation(
      * default, so the M2 suites see the observe-only skeleton they test.
      */
     withDesiredState?: boolean;
+    /** Who times installs short of Daedalus's count (#343): the planner, as main.ts has it; the count rule for an A/B. */
+    installTiming?: InstallTimingPolicy;
   },
 ): BrainInSimulation {
   const channel = data
@@ -119,6 +123,7 @@ export function startBrainInSimulation(
       store: data.store,
       saveBackups,
       log: (line) => logLines.push(line),
+      installTiming,
     });
   }
   const controller = desiredStateController;

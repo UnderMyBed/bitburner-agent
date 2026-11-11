@@ -39,6 +39,7 @@ import {
   describeReason,
   earnedOf,
   formatEta,
+  type InstallTimingPolicy,
   purchaseIntent,
   readAugmentationCycle,
   readAugmentationsEnabled,
@@ -106,8 +107,18 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-const newRule = () =>
-  new AugmentationRule({ store, log: (line) => lines.push(line), emit: (event) => events.push(event) });
+/**
+ * The rule, its install timing short of Daedalus's count the count rule's (#343: the A/B's baseline), so these tests
+ * work the count rule, its countdown and decision 56's hold on this file's fixture, short of the count (nothing
+ * installed, Daedalus not inviting): the count rule's own path once the count is met. The planner's are its own tests.
+ */
+const newRule = (installTiming: InstallTimingPolicy = "count rule") =>
+  new AugmentationRule({
+    store,
+    log: (line) => lines.push(line),
+    emit: (event) => events.push(event),
+    installTiming,
+  });
 
 /** A medium snapshot: hacking `hacking` (its experience at multiplier 1), the money, home's RAM, in Sector-12. */
 function medium({ hacking = 300, money = 0, homeRam = 1024 } = {}): MediumSnapshotData {
@@ -339,6 +350,8 @@ describe("the count rule (#222)", () => {
       barWithNeuroFlux: 9,
       reason: "count reached",
       donations: [],
+      // Short of Daedalus's count (#343): the run report fails an install there without the planner's estimates.
+      short: { installed: 0, required: 30 },
     });
     expect(lines.at(-1)).toBe(
       `augmentations: install chosen, 6.0 h online this cycle: buying ${FIVE.join(", ")} ($447,170,900), the count ` +
@@ -2331,6 +2344,8 @@ describe("held for Daedalus's count (#243)", () => {
       way: "work",
       etaMs: expect.closeTo(17 * MINUTE, -3),
       money: BLACK_HAND_MONEY,
+      // The work's time alone (#343: the planner adds up the work one faction at a time).
+      workMs: expect.closeTo(17 * MINUTE, -3),
       leftMs: 20 * MINUTE,
     });
     expect(view.waitingFor).toBe(`the install held for Daedalus's count: ${view.progress?.held}`);
@@ -2899,5 +2914,236 @@ describe("brain against the fast model (#263): the A6 state the model copies, on
     expect(model.SHARE_HOME_KEPT_GB).toBe(SHARE_HOME_KEPT_GB);
     // Home's RAM in use beside the share: the Agent's and its largest fresh-save worker's.
     expect(model.HOME_USED_BY_THE_AGENT_GB).toBe(HOME_KEPT_FOR_THE_AGENT_GB);
+  });
+});
+
+describe("the planner times installs short of Daedalus's count (#343)", () => {
+  const TBH = "The Black Hand";
+  const BLACK_HAND_SHOP = augmentationsSoldBy(TBH, 1, null);
+  const CYBERSEC_SHOP = augmentationsSoldBy("CyberSec", 1, null);
+  const FILLERS = AUGMENTATION_NAMES.filter(
+    (name) =>
+      isWorthInstalling(name, true) &&
+      !BLACK_HAND_SHOP.includes(name) &&
+      !CYBERSEC_SHOP.includes(name) &&
+      name !== "Neural Wit Amplifier",
+  );
+  const THREE = ["BitWire", "Synaptic Enhancement Implant", "Neurotrainer I"];
+  /**
+   * Run #3's BN1.2 17:49 (2026-11-05), as #243's tests have it: 25 installed (NeuroFlux Governor among them), Neural
+   * Wit Amplifier queued and CyberSec's other three reached, so an install adds 4: 29 of 30. The 30th is "The Black
+   * Hand" (100,000 reputation), by work.
+   */
+  const OWNED: Record<string, number> = Object.fromEntries(
+    [...BLACK_HAND_SHOP.filter((name) => name !== TBH && name !== NFG), GEN_I, GEN_II, NFG, ...FILLERS]
+      .slice(0, 25)
+      .map((name) => [name, name === NFG ? 5 : 1]),
+  );
+  /** CyberSec's whole shop owned in place of three fillers: only NeuroFlux Governor's levels left to buy there. */
+  const ALL_CYBERSEC: Record<string, number> = Object.fromEntries([
+    ...Object.entries(OWNED).filter(
+      ([name]) =>
+        !FILLERS.filter((each) => Object.hasOwn(OWNED, each))
+          .slice(-3)
+          .includes(name),
+    ),
+    ...THREE.map((name) => [name, 1] as const),
+  ]);
+  const THREE_COST = 10e6 * 1.9 + 7.5e6 * 1.9 ** 2 + 4e6 * 1.9 ** 3;
+  const WITH_BLACK_HAND = 550e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
+  const MONEY = WITH_BLACK_HAND + 10e6;
+  const playerWith = (money: number) => medium({ hacking: 2_500, money });
+  function slowWith({
+    reputation = 0,
+    queued = ["Neural Wit Amplifier"],
+    invitations = [] as string[],
+    ownedAugs = OWNED,
+  } = {}): SlowSnapshotData {
+    const data = slow({
+      joined: [
+        { name: "CyberSec", reputation: 18_750, favor: 0 },
+        { name: TBH, reputation, favor: 0 },
+      ],
+      queued,
+      ownedAugs,
+    });
+    const state = data.factions?.state as FactionState;
+    return { ...data, factions: { backend: "sim", state: { ...state, invitations }, problem: null } };
+  }
+  const RATE = (
+    bestWorkRate(
+      workingPersonOf(playerWith(0)) as WorkingPerson,
+      { name: TBH, reputation: 0, favor: 0 },
+      workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow()),
+    ) as { perSecond: number }
+  ).perSecond;
+  const reputationFor = (etaMs: number) => 100_000 - (RATE * etaMs) / 1000;
+  /** The planner's rule, `minutes` online this cycle so far (the next slow snapshot a minute on). */
+  const plannerAt = (minutes: number) => {
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: 0, onlineMs: minutes * MINUTE, lastGameTimeMs: gameTimeMs }),
+    );
+    rule = newRule("planner");
+  };
+  const minuteOn = (
+    fields: Parameters<typeof slowWith>[0] = {},
+    money = MONEY,
+    more: Partial<AugmentationInputs> = {},
+  ) => {
+    gameTimeMs += MINUTE;
+    return update({ slowData: slowWith(fields), mediumData: playerWith(money), ...more });
+  };
+  const chosen = () => events.filter((event) => event.type === "augmentationInstallChosen");
+  const overdue = () => events.filter((event) => event.type === "augmentationWaitOverdue");
+
+  test("29 of 30, The Black Hand 17 min off by work, 28 min online: the planner waits; no countdown, no install", () => {
+    expect(Object.keys(OWNED)).toHaveLength(25);
+    plannerAt(27);
+    const ask = minuteOn({ reputation: reputationFor(17 * MINUTE) });
+    expect(ask).toEqual({ intent: null, install: false, committed: false });
+    const progress = rule.view().progress;
+    expect(progress?.timing).toEqual({
+      needed: 5,
+      adding: 4,
+      onlineMs: 28 * MINUTE,
+      candidates: [
+        { k: 0, tauMs: 0, estimateMs: 28 * MINUTE },
+        { k: 1, tauMs: expect.closeTo(17 * MINUTE, -3), estimateMs: expect.closeTo(17 * MINUTE, -3) },
+      ],
+      choice: 1,
+      next: [{ augmentation: TBH, faction: TBH, way: "work", tauMs: expect.closeTo(17 * MINUTE, -3) }],
+      words:
+        "25 of 30 installed, 4 new at an install, 28 min online this cycle; to Daedalus's count: install now 28 min, " +
+        "wait for The Black Hand (17 min, by work at The Black Hand) 17 min; chosen: wait for 1",
+    });
+    expect(progress).toMatchObject({ reason: null, countdown: null, countHold: null, held: null });
+    expect(rule.view().waitingFor).toBe(`the planner's time to Daedalus's count: ${progress?.timing?.words}`);
+    expect(lines).toEqual([`augmentations: the planner's install timing: ${progress?.timing?.words}`]);
+    expect(progressEvents().at(-1)).toMatchObject({ timing: { choice: 1 } });
+    // A5 works for The Black Hand; the travel for invitations goes on. 17 minutes is past the lookahead's 15: no money
+    // held back.
+    expect(rule.countHoldTarget()).toEqual({ faction: TBH, augmentation: TBH });
+    expect(rule.countdownUnderWay()).toBe(false);
+    expect(rule.reserve()).toBe(0);
+    expect(chosen()).toEqual([]);
+    // Within the lookahead's 15 minutes, the set's and The Black Hand's money is held from cloud servers and home RAM.
+    minuteOn({ reputation: reputationFor(10 * MINUTE) });
+    expect(rule.view().progress?.timing?.choice).toBe(1);
+    expect(rule.reserve()).toBeCloseTo(WITH_BLACK_HAND, 0);
+    expect(rule.countdownReserve()).toBe(rule.reserve());
+    // A wait never installs, and the choice unchanged isn't logged again.
+    expect(chosen()).toEqual([]);
+    expect(lines).toHaveLength(1);
+  });
+
+  test("The Black Hand 30 min off at 28 min: install now, at once, its estimates in the event, the log and the note", () => {
+    plannerAt(27);
+    const ask = minuteOn({ reputation: reputationFor(30 * MINUTE) });
+    expect(ask).toMatchObject({ install: false, committed: true });
+    expect(readAugmentationCycle(store)).toMatchObject({ reason: "Daedalus's count" });
+    const event = chosen().at(-1);
+    expect(event).toMatchObject({
+      reason: "Daedalus's count",
+      set: THREE.map((augmentation) => ({ augmentation })),
+      cost: expect.closeTo(THREE_COST, 0),
+      queued: ["Neural Wit Amplifier"],
+      short: { installed: 25, required: 30 },
+      timing: {
+        needed: 5,
+        adding: 4,
+        onlineMs: 28 * MINUTE,
+        candidates: [
+          { k: 0, estimateMs: 28 * MINUTE },
+          { k: 1, estimateMs: expect.closeTo(30 * MINUTE, -3) },
+        ],
+        choice: 0,
+      },
+    });
+    const words = (event as unknown as { timing: { words: string } }).timing.words;
+    expect(words).toMatch(/; chosen: install now$/);
+    // No countdown: the planner's install goes at once.
+    expect(lines).toEqual([
+      `augmentations: install chosen, 28 min online this cycle: buying ${THREE.join(", ")} ` +
+        `(${dollars(THREE_COST)}), Daedalus's count: the planner's shortest time to it is installing now (#343); ${words}`,
+    ]);
+    expect(rule.reserve()).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test("its reputation reached: the set meets the count (n ≥ N), installed at once with all five, 30 of 30", () => {
+    plannerAt(27);
+    minuteOn({ reputation: reputationFor(10 * MINUTE) });
+    expect(rule.view().progress?.timing?.choice).toBe(1);
+    minuteOn({ reputation: 100_000 });
+    expect(chosen().at(-1)).toMatchObject({
+      reason: "Daedalus's count",
+      timing: { needed: 5, adding: 5, candidates: [{ k: 0, estimateMs: 0 }], choice: 0 },
+    });
+    const set = (chosen().at(-1) as unknown as { set: { augmentation: string }[] }).set;
+    expect(set.map((each) => each.augmentation).sort()).toEqual([TBH, ...THREE].sort());
+    expect(overdue()).toEqual([]);
+  });
+
+  test("nothing new to the count (NeuroFlux Governor's levels alone): never an install, where the count rule did", () => {
+    // CyberSec's shop owned: only NeuroFlux Governor's levels to buy with $1t; The Black Hand at 0.
+    const nothingNew = { ownedAugs: ALL_CYBERSEC, queued: [] as string[], reputation: 0 };
+    expect(Object.keys(ALL_CYBERSEC)).toHaveLength(25);
+    plannerAt(16 * 60);
+    minuteOn(nothingNew, 1e12);
+    expect(rule.view().progress?.affordableWithNeuroFlux).toBeGreaterThanOrEqual(4);
+    expect(rule.view().progress?.timing).toMatchObject({
+      adding: 0,
+      candidates: [{ k: 1, tauMs: expect.closeTo((100_000 / RATE) * 1000, -3) }],
+      choice: 1,
+    });
+    // Nobody working for The Black Hand: nothing to wait for at a rate known either; still no install.
+    minuteOn(nothingNew, 1e12, { holdWork: { owners: null, brainWorks: false } });
+    expect(rule.view().progress?.timing).toMatchObject({ adding: 0, candidates: [], choice: null });
+    expect(rule.view().waitingFor).toMatch(/; chosen: nothing new to install, and nothing to come at the rates known$/);
+    expect(rule.countHoldTarget()).toBeNull();
+    expect(rule.reserve()).toBe(0);
+    expect(chosen()).toEqual([]);
+    // The count rule's (the A/B's baseline): 16 h online, the levels over its bar, a NeuroFlux-only install.
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: 0, onlineMs: 16 * HOUR, lastGameTimeMs: gameTimeMs }),
+    );
+    rule = newRule("count rule");
+    minuteOn(nothingNew, 1e12);
+    expect(rule.view().progress).toMatchObject({ reason: "count reached", affordable: 0 });
+    expect(rule.view().progress?.timing).toBeUndefined();
+  });
+
+  test("a wait still short at twice its first τ and 10 minutes: overdue, once, the event and the log line", () => {
+    plannerAt(27);
+    // The Black Hand's reputation never moves (the work isn't counted): its τ stays 10 minutes, the wait goes on.
+    const stuck = reputationFor(10 * MINUTE);
+    for (let minute = 0; minute < 30; minute += 1) minuteOn({ reputation: stuck });
+    expect(rule.view().progress?.timing?.choice).toBe(1);
+    expect(overdue()).toEqual([]);
+    minuteOn({ reputation: stuck });
+    expect(overdue()).toEqual([
+      expect.objectContaining({
+        onlineMs: 58 * MINUTE,
+        sinceOnlineMs: 28 * MINUTE,
+        firstTauMs: expect.closeTo(10 * MINUTE, -3),
+        untilAdding: 5,
+        timing: expect.objectContaining({ choice: 1 }),
+      }),
+    ]);
+    expect(lines.at(-1)).toMatch(
+      /^augmentations: WAIT OVERDUE: the planner's wait for Daedalus's count, from 28 min online, expected 5 new at an install in ~10 min, still 4 at 58 min online: the estimate was wrong; 25 of 30/,
+    );
+    for (let minute = 0; minute < 5; minute += 1) minuteOn({ reputation: stuck });
+    expect(overdue()).toHaveLength(1);
+    expect(chosen()).toEqual([]);
+  });
+
+  test("Daedalus inviting (the count met): the count rule times installs, as before; the planner doesn't", () => {
+    plannerAt(10 * 60);
+    minuteOn({ reputation: reputationFor(5 * MINUTE), invitations: ["Daedalus"] });
+    expect(rule.view().progress).toMatchObject({ short: null, reason: "count reached" });
+    expect(rule.view().progress?.timing).toBeUndefined();
+    expect(rule.view().progress?.countdown).not.toBeNull();
   });
 });

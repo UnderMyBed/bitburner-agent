@@ -543,10 +543,13 @@ function render(status) {
             "div",
             `Affordable: ${progress.affordable} new augmentations, ${progress.affordableWithNeuroFlux} with NeuroFlux${(progress.byDonation ?? 0) > 0 ? ` (${progress.byDonation} by donation)` : ""}; ${augmentationEta(progress.onlineMs)} online this cycle`,
           ),
-          element(
-            "div",
-            `Install at: ${fallsText(progress.bar, progress.barFallsInMs)}; with NeuroFlux ${fallsText(progress.barWithNeuroFlux, progress.barWithNeuroFluxFallsInMs)}`,
-          ),
+          // Short of Daedalus's count the planner times installs (#343): its estimates, not the count rule's bars.
+          (progress.timing ?? null) === null
+            ? element(
+                "div",
+                `Install at: ${fallsText(progress.bar, progress.barFallsInMs)}; with NeuroFlux ${fallsText(progress.barWithNeuroFlux, progress.barWithNeuroFluxFallsInMs)}`,
+              )
+            : element("div", `The planner: ${progress.timing.words}`),
           ...(progress.countdown === null
             ? []
             : [

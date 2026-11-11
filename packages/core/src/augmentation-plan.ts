@@ -525,7 +525,9 @@ export function affordableCounts({
  * Why an install is chosen (#222). "The Red Pill" is the brain's own (#215): reached or queued, it links w0r1d_d43m0n
  * once installed; and "Daedalus donations" (#225): Daedalus's reputation unlocks its donations at the next install, so
  * The Red Pill's is bought; and "the hacking level" (#336): The Red Pill installed, the planner's levelling choice is
- * NeuroFlux Governor's levels and an install, the shortest way to w0r1d_d43m0n's level. `installRule` gives none.
+ * NeuroFlux Governor's levels and an install, the shortest way to w0r1d_d43m0n's level; and "Daedalus's count" (#343):
+ * short of Daedalus's count, the planner's install timing (core's install-timing.ts) chose to install now, the
+ * shortest way to the count. `installRule` gives none of these.
  */
 export type InstallReason =
   | "count reached"
@@ -533,7 +535,8 @@ export type InstallReason =
   | "nothing left"
   | "The Red Pill"
   | "Daedalus donations"
-  | "the hacking level";
+  | "the hacking level"
+  | "Daedalus's count";
 
 export interface InstallRuleInputs extends InstallCounts {
   /** The game's time the brain saw online since the last install: the bars' clock. */

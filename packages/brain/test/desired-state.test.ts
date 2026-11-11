@@ -28,6 +28,7 @@ import {
 } from "@bitburner-agent/core";
 import { holdsOf, installDecision, NO_HOLDS, nextPurchase, type Purchase, type Purse } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { InstallTimingPolicy } from "../src/augmentations.ts";
 import { HACKING_MULTIPLIERS_UNREAD } from "../src/batcher.ts";
 import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
@@ -909,11 +910,19 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     return { saveBackups: { backupNow }, backupNow, settleBackup, settleNewestBackup };
   }
 
-  /** An Agent connected with its static snapshot sent, the hack loop off so the intents go without a medium one. */
-  function connectedWithLoopOff() {
+  /**
+   * An Agent connected with its static snapshot sent, the hack loop off so the intents go without a medium one. Its
+   * augmentation tests work the count rule short of Daedalus's count (#343: the A/B's baseline), but the planner's.
+   */
+  function connectedWithLoopOff(installTiming: InstallTimingPolicy = "count rule") {
     store.setSetting("hackLoop.enabled", "false");
     const backups = standInBackups();
-    const controller = new DesiredStateController({ channel, store, saveBackups: backups.saveBackups });
+    const controller = new DesiredStateController({
+      channel,
+      store,
+      saveBackups: backups.saveBackups,
+      installTiming,
+    });
     const connection = connectAgent();
     send(connection, "static", network);
     const sentIds = () =>
@@ -1334,6 +1343,48 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       // Reported done: the next goes at once, from the fast snapshot.
       reportedDone(connection, buy(FIVE[0] as string).id);
       expect(sentIds()).toEqual([buy(FIVE[1] as string).id]);
+    });
+
+    test("the planner (#343): a wait sends nothing; its install now goes at once, through the gate and a backup", async () => {
+      const { controller, connection, sentIds, backupNow, settleBackup } = connectedWithLoopOff("planner");
+      const sent: unknown[] = [];
+      controller.subscribe((event) => isInvitationEvent(event) || sent.push(event));
+      // Short of Daedalus's count (nothing installed), CyberSec at 0: nothing new to install, so no install candidate;
+      // the five to come by A5's work. However long, nothing of A6's goes out.
+      const atZero = slowWith();
+      send(connection, "slow", {
+        ...atZero,
+        factions: {
+          ...atZero.factions,
+          state: { ...atZero.factions.state, joined: [{ name: "CyberSec", reputation: 0, favor: 0 }] },
+        },
+      });
+      send(connection, "medium", richMedium(0));
+      expect(controller.augmentationsView().progress?.timing).toMatchObject({ needed: 30, adding: 0 });
+      expect(controller.augmentationsView().progress?.timing?.choice).not.toBe(0);
+      expect(controller.augmentationsView()).toMatchObject({ committed: false });
+      expect(sentIds().filter((id) => id === INSTALL.id || id.startsWith("purchaseAugmentation"))).toEqual([]);
+      // The five bought already (the owner's, say): 5 new of 30, the install now the shortest (0 online this cycle).
+      send(connection, "slow", slowWith(FIVE));
+      send(connection, "medium", richMedium(0));
+      expect(controller.augmentationsView()).toMatchObject({ committed: true });
+      expect(controller.augmentationsView().progress).toBeNull();
+      send(connection, "medium", richMedium(0));
+      expect(backupNow).toHaveBeenCalledTimes(1);
+      await settleBackup(SAVED);
+      expect(sentIds()).toEqual([INSTALL.id]);
+      expect(sent).toContainEqual(
+        expect.objectContaining({
+          type: "augmentationInstallChosen",
+          reason: "Daedalus's count",
+          short: { installed: 0, required: 30 },
+          timing: expect.objectContaining({ needed: 30, adding: 5, choice: 0 }),
+        }),
+      );
+      expect(sent).toContainEqual(
+        expect.objectContaining({ type: "augmentationInstallSent", source: "brain", queued: FIVE }),
+      );
+      expect(sent.filter((event) => (event as { type: string }).type === "augmentationInstallChosen")).toHaveLength(1);
     });
 
     test("purchases reported done after the medium snapshot: their money taken off it (#213 re-review)", () => {
@@ -2589,6 +2640,8 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     );
   });
 
+  // The count rule's money held, short of Daedalus's count: its controllers' `installTiming` is "count rule" (#343: the
+  // A/B's baseline); the planner's wait holds money only within the lookahead (augmentations.test.ts).
   describe("with augmentations (#210)", () => {
     /**
      * A slow snapshot 7 h into the cycle, `minute` minutes on: the joined factions, and the hacking money earned since the
@@ -2634,7 +2687,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       joined: { name: string; reputation: number }[],
       earnedPerSecond = 20_000,
     ) => {
-      const controller = new DesiredStateController({ channel, store });
+      const controller = new DesiredStateController({ channel, store, installTiming: "count rule" });
       const connection = connectAgent();
       send(connection, "static", network);
       for (let minute = 0; minute <= 10; minute++) {
@@ -2686,7 +2739,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     });
 
     test("the install's countdown (#222): the counted purchases' money held from cloud servers and home RAM", () => {
-      const controller = new DesiredStateController({ channel, store });
+      const controller = new DesiredStateController({ channel, store, installTiming: "count rule" });
       const connection = connectAgent();
       send(connection, "static", network);
       sendAt(connection, "slow", slowAt(EIGHT), 7 * 3_600_000);
@@ -2707,7 +2760,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     });
 
     test("brain against the fast model (#263): in the countdown, home's RAM under the held money waits; off, it goes", () => {
-      const controller = new DesiredStateController({ channel, store });
+      const controller = new DesiredStateController({ channel, store, installTiming: "count rule" });
       const connection = connectAgent();
       send(connection, "static", network);
       sendAt(connection, "slow", slowAt(EIGHT), 7 * 3_600_000);
@@ -2795,7 +2848,12 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
         JSON.stringify({ lastAugReset: 0, onlineMs: 8 * 3_600_000, lastGameTimeMs: 7 * 3_600_000 }),
       );
       const lines: string[] = [];
-      const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+      const controller = new DesiredStateController({
+        channel,
+        store,
+        log: (line) => lines.push(line),
+        installTiming: "count rule",
+      });
       const connection = connectAgent();
       send(connection, "static", network);
       sendAt(connection, "slow", slow, 7 * 3_600_000 + MINUTE);

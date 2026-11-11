@@ -48,6 +48,16 @@
 // - The planner's levelling install (#336, ./levelling.ts): The Red Pill installed and every install held for the
 //   destroy, A6 offers the NeuroFlux Governor levels the money buys (`neuroFluxOffer`); once the planner chooses them,
 //   the install is chosen at once (`reason` "the hacking level"), the destroy's hold set aside for it.
+// - The planner times installs short of Daedalus's count (#343, owner decision 67; core's install-timing.ts), in place
+//   of the count rule, its quick install and the hold for the count (decisions 51 and 56): install now (the set's n new
+//   to the count) or wait for the next k countables (`countablesToCome`, `nextCountables`), the least estimated time to
+//   the count chosen, at every update. Installing now is chosen at once (`reason` "Daedalus's count"), never with
+//   nothing new to the count (a NeuroFlux-only install). Waiting holds the set's and the k's money back from cloud
+//   servers and home RAM only within the lookahead's 15 minutes, has A5 work for the first of them by work, and a wait
+//   still short at twice its first τ and the income's window (10 minutes) is `augmentationWaitOverdue` (an event, a log
+//   line, a run report failure). Once the count is met (Daedalus inviting or joined), or never short (The Red Pill
+//   elsewhere), the count rule times installs as before, with The Red Pill's way, Daedalus donations and levelling.
+//   The count rule short of the count stays only as the A/B's baseline (`installTiming` "count rule", tests alone).
 import {
   type AugmentationPurchaseState,
   type AugmentationSet,
@@ -81,12 +91,16 @@ import {
   type HoldWork,
   INSTALL_COUNTDOWN_MS,
   type InstallReason,
+  type InstallTiming,
   type Intent,
   installJudgement,
+  installTiming,
   intentId,
   type JoinedFaction,
   type MediumSnapshotData,
   NEUROFLUX_GOVERNOR,
+  type NextCountable,
+  nextCountables,
   purchaseSequenceCost,
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
@@ -185,6 +199,32 @@ export const AUGMENTATION_PROGRESS_COUNTS_EVERY_MS = 5 * 60_000;
  */
 export const AUGMENTATION_DONATED_EVENT_KIND = "augmentationDonated";
 export const AUGMENTATION_DONATION_FAILED_EVENT_KIND = "augmentationDonationFailed";
+/**
+ * The planner's wait for Daedalus's count (#343) still short of the countables it waited for at twice its first τ and
+ * `INSTALL_WAIT_OVERDUE_SLACK_MS` online: the estimate was wrong. Once a wait; a run report failure.
+ */
+export const AUGMENTATION_WAIT_OVERDUE_EVENT_KIND = "augmentationWaitOverdue";
+/**
+ * The overdue wait's slack beyond twice its τ (#343): the income's window, 10 minutes
+ * (`AUGMENTATION_INCOME_WINDOW_MS`), which a restart or a gap takes to measure again, the money's τ never until then.
+ */
+export const INSTALL_WAIT_OVERDUE_SLACK_MS = AUGMENTATION_INCOME_WINDOW_MS;
+
+/**
+ * Who times installs short of Daedalus's count (#343): the planner (the brain's), or the count rule with decision 56's
+ * hold, as before #343, kept as the A/B's baseline (decision 67, point 6): a test's choice alone.
+ */
+export type InstallTimingPolicy = "planner" | "count rule";
+
+/**
+ * The planner's install timing as the progress, the event and the dashboard give it (#343): core's `InstallTiming`
+ * (N, n, T, each candidate's τ and estimate, the choice), the next countables in turn (each one's τ, how it comes), and
+ * the words.
+ */
+export type InstallTimingView = InstallTiming & {
+  next: Pick<NextCountable, "augmentation" | "faction" | "way" | "tauMs">[];
+  words: string;
+};
 
 /** The install of the queued augmentations (#164), as the rule asks for it: the owner's has the same id. */
 export const AUGMENTATION_INSTALL_INTENT: Intent = {
@@ -224,6 +264,8 @@ export interface AugmentationProgress {
    * what's left of the hold's window; null when not. Absent in an earlier brain's progress.
    */
   countHold?: CountHoldView | null;
+  /** Short of Daedalus's count, the planner's install timing (#343); null or absent when it doesn't time installs. */
+  timing?: InstallTimingView | null;
 }
 
 /** An install held for Daedalus's count (#243), as the progress gives it. */
@@ -248,6 +290,20 @@ export type AugmentationEvent =
       reason: InstallReason;
       /** The donations the commit makes first, one a faction (#225). */
       donations: Donation[];
+      /** Short of Daedalus's count (#343): installed of required. Absent when not, or in an earlier brain's event. */
+      short?: Pick<DaedalusCount, "installed" | "required">;
+      /** The planner's install timing that chose it (#343), short of the count. Absent otherwise. */
+      timing?: InstallTimingView;
+    }
+  | {
+      type: typeof AUGMENTATION_WAIT_OVERDUE_EVENT_KIND;
+      atMs: number;
+      /** The time online this cycle now, and when the wait began; its first τ, and the n it waits to reach. */
+      onlineMs: number;
+      sinceOnlineMs: number;
+      firstTauMs: number;
+      untilAdding: number;
+      timing: InstallTimingView;
     }
   | {
       type: typeof AUGMENTATION_DONATED_EVENT_KIND;
@@ -698,6 +754,9 @@ export function describeReason(reason: InstallReason | string, figures: Partial<
   }
   if (reason === "nothing left") return "nothing else worth installing at the joined factions";
   if (reason === "The Red Pill") return "The Red Pill reached: it links w0r1d_d43m0n once installed";
+  if (reason === "Daedalus's count") {
+    return "Daedalus's count: the planner's shortest time to it is installing now (#343)";
+  }
   if (reason === "the hacking level") {
     return (
       `the hacking level: the planner's shortest way to w0r1d_d43m0n's is NeuroFlux Governor's levels, then an ` +
@@ -812,6 +871,37 @@ export function describeCountHold(hold: CountHoldView, count: Pick<DaedalusCount
   );
 }
 
+/**
+ * The planner's install timing in words (#343), for the log, the dashboard and the report: "25 of 30 installed, 4 new
+ * at an install, 28 min online this cycle; to Daedalus's count: install now 28 min, wait for The Black Hand (17 min, by
+ * work at The Black Hand) 17 min; chosen: wait for 1".
+ */
+export function describeInstallTiming(
+  timing: Omit<InstallTimingView, "words">,
+  count: Pick<DaedalusCount, "installed" | "required">,
+): string {
+  const how = ({ way, faction }: { way: string; faction: string }) =>
+    way === "work" ? `by work at ${faction}` : way === "donation" ? `by a donation to ${faction}` : `at ${faction}`;
+  const candidates = timing.candidates.map(({ k, tauMs, estimateMs }) => {
+    if (k === 0) return `install now ${formatEta(estimateMs)}`;
+    const kth = timing.next[k - 1];
+    const which =
+      kth === undefined ? `the next ${k}` : k === 1 ? kth.augmentation : `the next ${k}, to ${kth.augmentation}`;
+    return `wait for ${which} (${formatEta(tauMs)}${kth === undefined ? "" : `, ${how(kth)}`}) ${formatEta(estimateMs)}`;
+  });
+  const chosen =
+    timing.choice === null
+      ? "nothing new to install, and nothing to come at the rates known"
+      : timing.choice === 0
+        ? "install now"
+        : `wait for ${timing.choice}`;
+  return (
+    `${count.installed} of ${count.required} installed, ${timing.adding} new at an install, ` +
+    `${formatEta(timing.onlineMs)} online this cycle; to Daedalus's count: ${candidates.join(", ") || "no estimate"}; ` +
+    `chosen: ${chosen}`
+  );
+}
+
 /** The intent buying `augmentation` from `faction` (`level` 1 but for NeuroFlux Governor). */
 export function purchaseIntent(faction: string, augmentation: string, level: number): Intent {
   const args = { faction, augmentation, level };
@@ -905,6 +995,23 @@ export class AugmentationRule {
   #countHeld: CountHoldView | null = null;
   /** This update logged the hold's end (#243 review): `update` logs one on any other path. */
   #countHoldEndLogged = false;
+  /** Who times installs short of Daedalus's count (#343): the planner, or (the A/B's baseline) the count rule. */
+  readonly #timingPolicy: InstallTimingPolicy;
+  /** The planner's choice and n as last decided (#343), or null when it isn't timing installs: logged as they change. */
+  #timingLogged: string | null = null;
+  /** The countables the planner's wait waits for (#343), as last decided: A5's work target, the reserve's. */
+  #waitedFor: NextCountable[] = [];
+  /**
+   * The planner's wait under way (#343): its cycle, when it began (online), its first τ, the n it waits to reach, and
+   * whether it's been found overdue. In memory: a restarted brain's wait begins again.
+   */
+  #wait: {
+    lastAugReset: number;
+    sinceOnlineMs: number;
+    firstTauMs: number;
+    untilAdding: number;
+    overdue: boolean;
+  } | null = null;
   /** A decision made since the brain started: a hold's window open at the first is a restarted brain's hold. */
   #decidedOnce = false;
   /** Daedalus's $100b, held back for its invitation (#215), or 0: home RAM keeps it too (#215 review). */
@@ -935,14 +1042,18 @@ export class AugmentationRule {
     store,
     log = () => {},
     emit = () => {},
+    installTiming: timingPolicy = "planner",
   }: {
     store: TelemetryStore;
     log?: (line: string) => void;
     emit?: (event: AugmentationEvent) => void;
+    /** Who times installs short of Daedalus's count (#343): the planner unless a test asks for the count rule. */
+    installTiming?: InstallTimingPolicy;
   }) {
     this.#store = store;
     this.#log = log;
     this.#emit = emit;
+    this.#timingPolicy = timingPolicy;
     readAugmentationCycle(store);
     readCountHold(store);
     this.#onlineClock = readOnlineClock(store);
@@ -983,10 +1094,12 @@ export class AugmentationRule {
   /**
    * The money held in the install's countdown (#222): what the counted purchases cost, from cloud servers (`reserve`)
    * and home RAM alike, as the legacy scripts' reserve.txt holds it from every purchase (`autopilot.js:983`); while an
-   * install is held for Daedalus's count (#243), the set's and the one it waits for; else 0.
+   * install is held for Daedalus's count (#243), the set's and the one it waits for; while the planner waits for the
+   * count (#343), the set's and those it waits for, within the lookahead (else 0); else 0.
    */
   countdownReserve(): number {
-    return this.#enabled && (this.#countdown !== null || this.#countHeld !== null) ? this.#view.reserve : 0;
+    const holding = this.#countdown !== null || this.#countHeld !== null || this.#waitedFor.length > 0;
+    return this.#enabled && holding ? this.#view.reserve : 0;
   }
 
   /**
@@ -1000,9 +1113,10 @@ export class AugmentationRule {
   /**
    * The faction and augmentation an install held for Daedalus's count waits on by work (#243 review), for A5 to work
    * for (the owner's work and A5's switch still win); null when none is held, or the hold waits on a donation or money.
+   * The planner's wait for the count (#343) likewise: the first of the countables it waits for by work.
    */
   countHoldTarget(): { faction: string; augmentation: string } | null {
-    const held = this.#countHeld;
+    const held = this.#countHeld ?? this.#waitedFor.find((each) => each.way === "work") ?? null;
     return held?.way === "work" ? { faction: held.faction, augmentation: held.augmentation } : null;
   }
 
@@ -1066,6 +1180,7 @@ export class AugmentationRule {
     // Held again only by this update's decision (#243); a hold's end is logged whatever the path (#243 review).
     const countHeldBefore = this.#countHeld;
     this.#countHeld = null;
+    this.#waitedFor = [];
     this.#countHoldEndLogged = false;
     const ask = this.#updateOnce(inputs, countHeldBefore);
     if (countHeldBefore !== null && this.#countHeld === null && !this.#countHoldEndLogged) {
@@ -1217,6 +1332,42 @@ export class AugmentationRule {
       if (old > 0) this.#incomeSamples = this.#incomeSamples.slice(old);
     }
     this.#confirmQueued(slowData, atMs);
+  }
+
+  /**
+   * The planner's wait (#343): one begins at a wait chosen with none under way in the cycle, waiting for the n the set
+   * then adds plus k, its first τ the k-th's; it's over at an install chosen, or once n reaches that. Still under way
+   * at twice its first τ and `INSTALL_WAIT_OVERDUE_SLACK_MS` online from its start, the estimate was wrong: once,
+   * `augmentationWaitOverdue` and a log line (a run report failure). Nothing to install or wait for meanwhile is still
+   * the wait's.
+   */
+  #watchWait(timing: InstallTimingView, lastAugReset: number, atMs: number): void {
+    const { choice, adding, onlineMs } = timing;
+    let wait = this.#wait?.lastAugReset === lastAugReset ? this.#wait : null;
+    if (wait !== null && (choice === 0 || adding >= wait.untilAdding)) wait = null;
+    if (wait === null && choice !== null && choice > 0) {
+      const firstTauMs = timing.candidates.find((candidate) => candidate.k === choice)?.tauMs ?? 0;
+      wait = { lastAugReset, sinceOnlineMs: onlineMs, firstTauMs, untilAdding: adding + choice, overdue: false };
+    }
+    this.#wait = wait;
+    if (wait === null || wait.overdue) return;
+    if (onlineMs < wait.sinceOnlineMs + 2 * wait.firstTauMs + INSTALL_WAIT_OVERDUE_SLACK_MS) return;
+    wait.overdue = true;
+    const { sinceOnlineMs, firstTauMs, untilAdding } = wait;
+    this.#emit({
+      type: AUGMENTATION_WAIT_OVERDUE_EVENT_KIND,
+      atMs,
+      onlineMs,
+      sinceOnlineMs,
+      firstTauMs,
+      untilAdding,
+      timing,
+    });
+    this.#log(
+      `augmentations: WAIT OVERDUE: the planner's wait for Daedalus's count, from ${formatEta(sinceOnlineMs)} online, ` +
+        `expected ${untilAdding} new at an install in ~${formatEta(firstTauMs)}, still ${adding} at ` +
+        `${formatEta(onlineMs)} online: the estimate was wrong; ${timing.words}`,
+    );
   }
 
   /**
@@ -1551,6 +1702,7 @@ export class AugmentationRule {
         held: string | null,
         reason: InstallReason | null = rule.reason,
         countHold: CountHoldView | null = null,
+        timing: InstallTimingView | null = null,
       ): AugmentationProgress => ({
         lastAugReset: resetInfo.lastAugReset,
         affordable: rule.affordable,
@@ -1576,6 +1728,7 @@ export class AugmentationRule {
         setCost: set.money + set.donationMoney,
         short: short ? { installed: count.installed, required: count.required } : null,
         countHold,
+        ...(timing === null ? {} : { timing }),
       });
       const notCommittedDonations = { ...notCommitted, donations: counts.donations };
       let endgame = endgame0;
@@ -1625,13 +1778,81 @@ export class AugmentationRule {
       // has reached Daedalus's hacking or combat requirement (#243 review), so the count is what's missing.
       const setNames = set.purchases.map((purchase) => purchase.name);
       const installing = [...installable, ...setNames, ...(counts.neuroFluxLevels > 0 ? [NEUROFLUX_GOVERNOR] : [])];
+      // Short of Daedalus's count, the planner times installs (#343): install now, or wait for the next k countables,
+      // the least estimated time to the count chosen, decided again at every update.
+      const planned = this.#timingPolicy === "planner" && short && endgame.kind === "none";
+      let timing: InstallTimingView | null = null;
+      if (!planned) {
+        this.#wait = null;
+        this.#timingLogged = null;
+      } else {
+        const income = this.#income();
+        const toCome = countablesToCome({
+          sold,
+          state: purchaseState,
+          set,
+          joined,
+          shops,
+          terms,
+          person: player.person,
+          conditions: workConditionsOf(resetInfo, slowData),
+          work: holdWork,
+          money: budget,
+          income,
+        });
+        const needed = count.required - count.installed;
+        // New to the count: NeuroFlux Governor's levels only while none is installed (one entry).
+        const adding = countAfterInstall(ownedAugs, installing) - count.installed;
+        const next = nextCountables({
+          toCome,
+          set,
+          state: purchaseState,
+          money: budget,
+          income,
+          upTo: Math.max(0, needed - adding),
+        });
+        const figures = {
+          ...installTiming({ needed, adding, onlineMs, next }),
+          next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
+        };
+        timing = { ...figures, words: describeInstallTiming(figures, count) };
+        this.#watchWait(timing, resetInfo.lastAugReset, atMs);
+        // A wait (or nothing) logged as the choice or n changes; an install, in its own line.
+        const logged = `${timing.choice} ${timing.adding}`;
+        if (logged !== this.#timingLogged && timing.choice !== 0) {
+          this.#log(`augmentations: the planner's install timing: ${timing.words}`);
+        }
+        this.#timingLogged = logged;
+        if (timing.choice !== 0) {
+          // Waiting (or nothing to install or wait for): the set's and the waited-for's money held back only for a wait
+          // within the lookahead's 15 minutes (A2's payback limit, as before the countdown, #213 review).
+          this.#cancelCountdown("the planner times installs short of Daedalus's count");
+          const waitedFor = timing.choice === null ? [] : next.slice(0, timing.choice);
+          this.#waitedFor = waitedFor;
+          const last = waitedFor.at(-1);
+          const reserve =
+            last !== undefined && last.tauMs <= AUGMENTATION_RESERVE_LOOKAHEAD_MS
+              ? set.money + set.donationMoney + last.addedMoney
+              : 0;
+          const waiting = progress(null, null, null, timing);
+          this.#recordProgress(waiting, `timing: ${timing.choice}`, atMs);
+          return this.#ask(null, {
+            ...notCommittedDonations,
+            progress: waiting,
+            reserve,
+            waitingFor: `the planner's time to Daedalus's count: ${timing.words}`,
+          });
+        }
+        // Installing now: the progress it's chosen on, for the run report (the counts and donations, as a countdown's).
+        this.#recordProgress(progress(null, "Daedalus's count", null, timing), `timing: ${timing.choice}`, atMs);
+      }
       const stored = readCountHold(this.#store);
       const heldSinceOnlineMs = stored?.lastAugReset === resetInfo.lastAugReset ? stored.sinceOnlineMs : null;
       const windowOpen = heldSinceOnlineMs !== null && onlineMs < heldSinceOnlineMs + DAEDALUS_COUNT_HOLD_MS;
       const firstDecision = !this.#decidedOnce;
       this.#decidedOnce = true;
       const countHold =
-        short && countdownReason !== null && endgame.kind !== "redPill" && !forLevel
+        !planned && short && countdownReason !== null && endgame.kind !== "redPill" && !forLevel
           ? daedalusCountHold({
               installed: ownedAugs,
               installing,
@@ -1681,7 +1902,7 @@ export class AugmentationRule {
       }
       // Its end, logged: held at the last update, or (a restarted brain's first decision) its window open and its end
       // not logged before the restart (the store says).
-      if (countHeldBefore !== null || (firstDecision && windowOpen && stored?.ended !== true)) {
+      if (countHeldBefore !== null || (!planned && firstDecision && windowOpen && stored?.ended !== true)) {
         const countAfter = countAfterInstall(ownedAugs, installing);
         const holdLength = formatEta(DAEDALUS_COUNT_HOLD_MS);
         const endReason = !short
@@ -1713,6 +1934,10 @@ export class AugmentationRule {
         // The planner's levelling install (#336): at once, as The Red Pill's; A6 buys the levels, then installs.
         this.#cancelCountdown("the planner's levelling install, at once");
         reason = "the hacking level";
+      } else if (planned) {
+        // The planner's install for Daedalus's count (#343): at once, as levelling's; never with nothing new to it.
+        this.#cancelCountdown("the planner's install for Daedalus's count, at once");
+        reason = "Daedalus's count";
       } else if (countdownReason === null) {
         this.#cancelCountdown(`the rule no longer says install: ${describeCounts(rule)}`);
         // Held back from cloud servers only for an install the rule would choose with A2's payback limit's more income:
@@ -1832,12 +2057,16 @@ export class AugmentationRule {
         barWithNeuroFlux: rule.barWithNeuroFlux,
         reason,
         donations,
+        ...(short ? { short: { installed: count.installed, required: count.required } } : {}),
+        ...(timing === null ? {} : { timing }),
       });
+      this.#wait = null;
       this.#log(
         `augmentations: install chosen, ${formatEta(onlineMs)} online this cycle: buying ` +
           `${setView.map((each) => each.augmentation).join(", ") || "nothing more"} (${formatMoney(set.money)}), ` +
           (donations.length === 0 ? "" : `donating ${donations.map(describeDonation).join(", ")} first, `) +
-          describeReason(reason, rule),
+          describeReason(reason, rule) +
+          (timing === null ? "" : `; ${timing.words}`),
       );
     }
 

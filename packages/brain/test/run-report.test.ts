@@ -2133,6 +2133,90 @@ describe("augmentations and the reset (#210)", () => {
     });
     expect(report.failures.filter((failure) => failure.startsWith("install not seen done"))).toHaveLength(1);
   });
+
+  describe("the planner's install timing short of Daedalus's count (#343)", () => {
+    const SHORT = { installed: 25, required: 30 };
+    const timing = (fields: Record<string, unknown> = {}) => ({
+      needed: 5,
+      adding: 1,
+      onlineMs: 28 * MINUTE,
+      candidates: [{ k: 0, tauMs: 0, estimateMs: 112 * MINUTE }],
+      choice: 0,
+      next: [],
+      words: "25 of 30 installed, 1 new at an install, 28 min online this cycle; to Daedalus's count: …",
+      ...fields,
+    });
+    const failuresOf = (report: ReturnType<typeof augmentationRun>) =>
+      report.failures.filter((failure) => !failure.startsWith("install not seen done"));
+
+    test("its estimates with each install chosen and progress; an install with them is no failure", () => {
+      const report = augmentationRun({
+        events: [
+          [MINUTE, "augmentationProgress", progress({ timing: timing({ choice: 1, words: "… chosen: wait for 1" }) })],
+          [
+            2 * MINUTE,
+            "augmentationInstallChosen",
+            { ...CHOSEN, reason: "Daedalus's count", short: SHORT, timing: timing() },
+          ],
+        ],
+      });
+      expect(report.text).toContain("; the planner: … chosen: wait for 1");
+      expect(report.text).toContain(
+        "install chosen, 2.0 h online this cycle: buying BitWire ($10,000,000); Daedalus's count: the planner's " +
+          "shortest time to it is installing now (#343); the planner: 25 of 30 installed, 1 new at an install",
+      );
+      // Nothing failing, no lines: the report's length bounds (#245).
+      expect(report.text).not.toContain("the planner's install timing short of Daedalus's count (#343)");
+      expect(failuresOf(report)).toEqual([]);
+    });
+
+    test("fails an install short of the count without its estimates, and one adding nothing to the count", () => {
+      const report = augmentationRun({
+        events: [
+          [2 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "count reached", short: SHORT }],
+          [
+            3 * MINUTE,
+            "augmentationInstallChosen",
+            { ...CHOSEN, set: [], cost: 0, reason: "Daedalus's count", short: SHORT, timing: timing({ adding: 0 }) },
+          ],
+          // An earlier brain's, its count not stored: not judged.
+          [4 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "count reached" }],
+        ],
+      });
+      expect(failuresOf(report)).toEqual([
+        "install short of Daedalus's count without the planner's estimates: 25 of 30 installed, the count reached: 1 " +
+          "of 7 new augmentations affordable (3 of 11 with NeuroFlux)",
+        "NeuroFlux-only install short of Daedalus's count: 25 of 30 installed, nothing new to it",
+      ]);
+      expect(report.text).toContain(
+        `    ${at(3 * MINUTE)}  NeuroFlux-only install short of Daedalus's count: 25 of 30 installed, nothing new to it`,
+      );
+    });
+
+    test("fails a wait the brain found overdue, listed with the decisions too", () => {
+      const report = augmentationRun({
+        events: [
+          [
+            10 * MINUTE,
+            "augmentationWaitOverdue",
+            {
+              onlineMs: 58 * MINUTE,
+              sinceOnlineMs: 28 * MINUTE,
+              firstTauMs: 10 * MINUTE,
+              untilAdding: 5,
+              timing: timing({ choice: 1, adding: 4, words: "25 of 30 installed, 4 new …; chosen: wait for 1" }),
+            },
+          ],
+        ],
+      });
+      const line =
+        "wait overdue: the planner's wait for Daedalus's count from 28 min online, for 5 new at an install in ~10 min, " +
+        "still short at 58 min online: 25 of 30 installed, 4 new …; chosen: wait for 1";
+      expect(failuresOf(report)).toEqual([line]);
+      // Section 3's decisions, section 4's, and the failures' list.
+      expect(report.text.split("\n").filter((each) => each.endsWith(line))).toHaveLength(3);
+    });
+  });
 });
 
 describe("donations (#225)", () => {
