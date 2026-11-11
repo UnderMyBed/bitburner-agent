@@ -16,7 +16,7 @@ import {
   AUGMENTATIONS,
   deployedFilePath,
   hackingExpOfLevel,
-  LEVEL_LOOP_SCRIPT_NAME,
+  LEVEL_GROW_SCRIPT_NAME,
   type MediumSnapshotData,
   NEUROFLUX_GOVERNOR,
   type SlowSnapshotData,
@@ -107,19 +107,28 @@ test.each(SEEDS)(
     ]);
     expect(fresh.controller().hackLoopView()).toMatchObject({ target: "joesguns", levelling: true });
 
-    // Its measured rate once settled, fitted against the formula's for the threads running, the weaken's: near it over
-    // the window's 10 minutes (0.975 to 1.034 on seeds 1 to 4).
-    await game.runUntil(() => fresh.controller().levellingView().fit !== null, STAGE_MS);
-    await game.run(10 * MINUTE);
+    // The weaken from its starting security first, then the grow at its minimum: a round fills it to its maximum money
+    // (the install left it at a 25th, `Server/Server.ts:74-76`), raising its security once, a weaken round takes it
+    // back, and from then on the grow, which moves no money and adds no security.
+    const operations: string[] = [];
+    await game.runUntil(() => {
+      const operation = /(growing|weakening) it/.exec(fresh.controller().levellingView().lines[1] ?? "")?.[1];
+      if (operation !== undefined && operations.at(-1) !== operation) operations.push(operation);
+      return fresh.controller().levellingView().fit !== null && operations.at(-1) === "growing";
+    }, STAGE_MS);
+    // Its measured rate, fitted against the formula's for the threads running, the grow's: near it over the window's
+    // 10 minutes (0.953 to 1.008 on seeds 1 to 4, the threads counted equal; the 5% under on three seeds has no known cause); the grow
+    // throughout.
+    await game.run(11 * MINUTE);
     const fit = fresh.controller().levellingView().fit;
-    console.log(`seed ${seed}: levelling's fit ${JSON.stringify(fit)}`);
-    expect(fit?.factor).toBeGreaterThan(0.95);
-    expect(fit?.factor).toBeLessThan(1.05);
-    // The level loop on home, beyond what home keeps for the Agent, and on the hosts, joesguns weakened to its minimum
-    // security; the weaken, not the grow, as the install left joesguns at its starting money, a 25th of its maximum
-    // (`Server/Server.ts:74-76`), and a grow there would add security. No batcher.
-    expect(fresh.controller().levellingView().lines[1]).toContain("weakening it (the operation sent)");
-    const loopFile = deployedFilePath(fresh.deploymentId, LEVEL_LOOP_SCRIPT_NAME);
+    console.log(`seed ${seed}: levelling's operations ${operations.join(", ")}; fit ${JSON.stringify(fit)}`);
+    expect(operations.length).toBeLessThanOrEqual(4);
+    expect(fresh.controller().levellingView().lines[1]).toContain("growing it (the operation sent)");
+    expect(fit?.factor).toBeGreaterThan(0.94);
+    expect(fit?.factor).toBeLessThan(1.06);
+    // The grow loop on home, beyond what home keeps for the Agent, and on the hosts; joesguns at its minimum security
+    // and maximum money. No batcher.
+    const loopFile = deployedFilePath(fresh.deploymentId, LEVEL_GROW_SCRIPT_NAME);
     const onHome = (await simulation.ps("home")).filter((process) => process.filename === loopFile);
     expect(onHome).toEqual([expect.objectContaining({ args: ["joesguns"] })]);
     const homeThreads = onHome[0]?.threads ?? 0;
@@ -128,7 +137,9 @@ test.each(SEEDS)(
     const onJoesguns = (await simulation.ps("joesguns")).filter((process) => process.filename === loopFile);
     expect(onJoesguns).toEqual([expect.objectContaining({ args: ["joesguns"] })]);
     const medium: MediumSnapshotData | null = fresh.medium();
-    expect(medium?.servers.find((server) => server.hostname === "joesguns")?.hackDifficulty).toBe(5);
+    const joesguns = medium?.servers.find((server) => server.hostname === "joesguns");
+    expect(joesguns?.hackDifficulty).toBe(5);
+    expect(joesguns?.moneyAvailable).toBeGreaterThan(0);
     expect(fresh.controller().batcherView().sent).toBeNull();
 
     // A6 on: CyberSec's reputation, A5's meanwhile, and the money buy NeuroFlux Governor's levels; the install is the

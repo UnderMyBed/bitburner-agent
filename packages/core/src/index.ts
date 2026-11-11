@@ -631,6 +631,7 @@ export {
   levelLoopThreads,
   levellingEstimates,
   levellingExpPerThreadSecond,
+  levellingPreparationMs,
   neuroFluxMultipliers,
   secondsToHackingLevel,
   shortestLevellingCandidate,

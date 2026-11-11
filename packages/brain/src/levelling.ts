@@ -21,7 +21,9 @@ import {
   type BitNodeHackingMultipliers,
   chooseLevelling,
   chooseLevellingTarget,
+  type HackingPlayer,
   type HackingTarget,
+  hackingLevelOfExp,
   LEVEL_LOOP_RAM_GB,
   LEVELLING_CANDIDATES,
   type LevellingCandidate,
@@ -31,7 +33,9 @@ import {
   type LevellingRate,
   levelLoopThreads,
   levellingEstimates,
+  levellingPreparationMs,
   type MediumSnapshotData,
+  neuroFluxMultipliers,
   operationTimeMs,
   type SlowSnapshotData,
   type StaticSnapshotData,
@@ -97,7 +101,9 @@ export function levelAllThatsLeft(path: WorldDaemonPath | null): boolean {
 export interface LevellingFigures {
   /**
    * The target, its operation's experience a thread-second at its minimum security, and the operation: the one sent, a
-   * grow only where the medium snapshot shows the target at its minimum security and maximum money.
+   * grow where the medium snapshot shows the target at its minimum security, whatever its money (core's
+   * `chooseLevellingTarget`: one round fills it, the security rises once, a weaken round takes it back, then grow for
+   * good).
    */
   target: {
     hostname: string;
@@ -105,8 +111,10 @@ export interface LevellingFigures {
     expPerThreadSecond: number;
     operation: LevellingOperation;
   } | null;
-  /** The best weaken's experience a thread-second: (c)'s, after an install leaves every server below its money. */
-  weakenExpPerThreadSecond: number | null;
+  /** (c)'s target, the best grow at its minimum security, as after the install's preparation; null with none. */
+  afterInstall: { figures: HackingTarget; expPerThreadSecond: number } | null;
+  /** The player's hacking figures now, for (c)'s preparation at the levels' speed. */
+  player: HackingPlayer;
   /** The batcher's hosts (`hackLoopHosts`), their RAM, and home's RAM and what it keeps, GB. */
   hosts: string[];
   hostsGb: number;
@@ -166,22 +174,27 @@ export function levellingFiguresOf(
   const homeGb = mediumData.servers.find((server) => server?.hostname === "home")?.maxRam;
   const homeKeptGb = homeKeptGbOf(singularityRamMultiplierOf(slowData));
   const homeThreads = isFiniteNumber(homeGb) ? threadsThatFit(Math.max(0, homeGb - homeKeptGb), LEVEL_LOOP_RAM_GB) : 0;
-  // A grow only at the target's minimum security and maximum money, where it adds no security (#339's re-review).
+  // The grow at the target's minimum security, whatever its money (#339's third pass): the weaken first, then a flip or
+  // two at most (core's `chooseLevellingTarget`).
   const now = new Map(mediumData.servers.map((server) => [server?.hostname, server]));
   const mayGrow = ({ hostname, figures }: { hostname: string; figures: HackingTarget }) => {
     const server = now.get(hostname);
     return (
-      isFiniteNumber(server?.hackDifficulty) &&
-      server.hackDifficulty <= figures.minDifficulty &&
-      isFiniteNumber(server.moneyAvailable) &&
-      figures.moneyMax > 0 &&
-      server.moneyAvailable >= figures.moneyMax
+      figures.moneyMax > 0 && isFiniteNumber(server?.hackDifficulty) && server.hackDifficulty <= figures.minDifficulty
     );
   };
+  const afterInstall = chooseLevellingTarget(
+    targets.filter((target) => target.figures.moneyMax > 0),
+    player,
+    hackingExp,
+  );
   return {
     target: chooseLevellingTarget(targets, player, hackingExp, mayGrow),
-    weakenExpPerThreadSecond:
-      chooseLevellingTarget(targets, player, hackingExp, () => false)?.expPerThreadSecond ?? null,
+    afterInstall:
+      afterInstall === null
+        ? null
+        : { figures: afterInstall.figures, expPerThreadSecond: afterInstall.expPerThreadSecond },
+    player,
     hosts: hosts.map(({ hostname }) => hostname),
     hostsGb: hosts.reduce((total, { ram }) => total + ram, 0),
     homeGb: isFiniteNumber(homeGb) ? homeGb : 0,
@@ -207,10 +220,19 @@ export function levellingInputsOf(
 ): LevellingInputs {
   const { target, level } = figures;
   const perThread = target === null ? null : { expPerSecond: target.expPerThreadSecond, atLevel: level };
-  const afterInstall =
-    figures.weakenExpPerThreadSecond === null
-      ? null
-      : { expPerSecond: figures.weakenExpPerThreadSecond, atLevel: level };
+  const after = figures.afterInstall;
+  const afterInstall = after === null ? null : { expPerSecond: after.expPerThreadSecond, atLevel: level };
+  // The preparation at the level and speed the levels give from 0 experience (core's `levellingPreparationMs`).
+  const preparationMs = (levels: number) => {
+    if (after === null) return 0;
+    const neuroFlux = neuroFluxMultipliers();
+    const player = figures.player;
+    const afterPlayer = {
+      skills: { ...player.skills, hacking: hackingLevelOfExp(0, figures.levelMult * neuroFlux.hacking ** levels) },
+      mults: { ...player.mults, hacking_speed: player.mults.hacking_speed * neuroFlux.hackingSpeed ** levels },
+    };
+    return levellingPreparationMs(after.figures, afterPlayer, figures.homeThreads);
+  };
   return {
     exp: figures.exp,
     level,
@@ -224,7 +246,12 @@ export function levellingInputsOf(
     install:
       afterInstall === null || neuroFluxLevels === null || neuroFluxLevels <= 0
         ? null
-        : { levels: neuroFluxLevels, homeThreads: figures.homeThreads, perThread: afterInstall },
+        : {
+            levels: neuroFluxLevels,
+            homeThreads: figures.homeThreads,
+            perThread: afterInstall,
+            preparationMs: preparationMs(neuroFluxLevels),
+          },
   };
 }
 

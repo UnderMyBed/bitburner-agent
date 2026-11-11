@@ -19,9 +19,10 @@
  */
 import { AUGMENTATIONS } from "./augmentation-data.ts";
 import { NEUROFLUX_GOVERNOR } from "./augmentations.ts";
-import { hackingExpOfLevel, hackingLevelOfExp, operationExpPerThread, threadsThatFit } from "./batcher.ts";
-import { LEVEL_LOOP_RAM_GB } from "./hack-loop.ts";
+import { growThreads, hackingExpOfLevel, hackingLevelOfExp, operationExpPerThread, threadsThatFit } from "./batcher.ts";
+import { growthLogPerThread, LEVEL_LOOP_RAM_GB } from "./hack-loop.ts";
 import {
+  GROW_SECURITY_PER_THREAD,
   GROW_TIME_PER_HACK_TIME,
   type HackingPlayer,
   type HackingTarget,
@@ -95,10 +96,12 @@ export function levellingExpPerThreadSecond(
  * the most experience a thread-second (`levellingExpPerThreadSecond`), ties to the first hostname and to the grow;
  * null with none above 0. Computed, never named: in BN1 and BN4 it's joesguns (base difficulty 15, minimum 5, required
  * 10), as `7.5 / 625` beats every other server's `(3 + 0.3 × base) / (2.5 × required × minimum + 500)`, whatever the
- * level and the speed, which only scale them all; and the grow, 1.25 times the weaken on every server. A grow keeps
- * its target's security only at its minimum security and maximum money (below it, a grow adds 0.004 a thread,
- * `Server/ServerHelpers.ts:201-212`), so a target grows only where `mayGrow` says it's there (the brain's medium
- * snapshot); elsewhere, the weaken (all may, absent).
+ * level and the speed, which only scale them all; and the grow, 1.25 times the weaken on every server. A target
+ * grows only where `mayGrow` says (the brain: at its minimum security, whatever its money); elsewhere, the weaken (all
+ * may, absent). Below its maximum money a grow adds 0.004 security a thread used (`Server/ServerHelpers.ts:201-212`),
+ * but on millions of threads one round fills it: the security rises once, a weaken round takes it back, and at its
+ * maximum money a grow moves no money, so adds no security, for good. At most a flip or two, each losing a round in
+ * flight (`levellingPreparationMs`).
  */
 export function chooseLevellingTarget<Target extends { hostname: string; figures: HackingTarget }>(
   targets: readonly Target[],
@@ -122,6 +125,33 @@ export function chooseLevellingTarget<Target extends { hostname: string; figures
     }
   }
   return best;
+}
+
+/**
+ * The time to prepare `target` for the grow loop, ms, from its starting security and money (after an install, the
+ * servers made afresh, `Prestige.ts:74`, `:98`): a weaken round at its starting security (its base difficulty) to its
+ * minimum (`threads` × 0.05 a thread take it there at once on any RAM levelling has), a grow round at its minimum
+ * from a 25th of its maximum money (`Server/Server.ts:74-76`, BN1's ratio: elsewhere the start is a larger share,
+ * so fewer threads used, and this is cautious) to its maximum, adding 0.004 security a thread it uses (core's
+ * `growThreads`, `Server/ServerHelpers.ts:201-212`), then a weaken round at that security back to its minimum. Each at
+ * `player`'s level and speed (`Hacking.ts:60-94`). From then on, at its maximum money, a grow adds no security.
+ */
+export function levellingPreparationMs(target: HackingTarget, player: HackingPlayer, threads: number): number {
+  const required = target.requiredHackingSkill;
+  const hackMs = (security: number) =>
+    hackTimeSeconds({ hackDifficulty: security, requiredHackingSkill: required }, player) * 1000;
+  const start = typeof target.baseDifficulty === "number" ? target.baseDifficulty : 3 * target.minDifficulty;
+  const growthLog = growthLogPerThread(
+    { serverGrowth: target.serverGrowth, hackDifficulty: target.minDifficulty },
+    { mults: { hacking_grow: player.mults.hacking_grow } },
+  );
+  const used = Math.min(threads, growThreads(target.moneyMax / 25, target.moneyMax, target.moneyMax, growthLog));
+  const raised = target.minDifficulty + GROW_SECURITY_PER_THREAD * (Number.isFinite(used) ? used : threads);
+  return (
+    WEAKEN_TIME_PER_HACK_TIME * hackMs(Math.max(start, target.minDifficulty)) +
+    GROW_TIME_PER_HACK_TIME * hackMs(target.minDifficulty) +
+    WEAKEN_TIME_PER_HACK_TIME * hackMs(Math.min(100, raised))
+  );
 }
 
 /** The level loop's threads on hosts with this much RAM each, GB: each one's whole threads (`threadsThatFit`). */
@@ -190,11 +220,11 @@ export interface LevellingInputs {
   /**
    * (c) NeuroFlux Governor's levels the money buys (A6's count, donations included: decision 53), home's level loop
    * threads (home's RAM is kept through an install, `Prestige.ts`), and one thread's predicted rate on the levelling
-   * target after it (before the levels): a weaken's, as the install leaves every server below its maximum money
-   * (the servers made afresh at their starting money, `Prestige.ts:74`, `:98`; `Server/Server.ts:74-76`); null with no
-   * levels to buy or no levelling target.
+   * target after it (before the levels): the grow's, after the target's preparation (`preparationMs`,
+   * `levellingPreparationMs`), as the install leaves every server at its starting security and money (the servers
+   * made afresh, `Prestige.ts:74`, `:98`; `Server/Server.ts:74-76`); null with no levels to buy or no levelling target.
    */
-  install: { levels: number; homeThreads: number; perThread: LevellingRate } | null;
+  install: { levels: number; homeThreads: number; perThread: LevellingRate; preparationMs?: number } | null;
 }
 
 /** Each candidate's estimated seconds to the level, null where it has none (unmeasured, or not on offer). */
@@ -202,8 +232,8 @@ export type LevellingEstimates = Record<LevellingCandidate, number | null>;
 
 /**
  * The candidates' estimates (#336): (a) at its measured rate; (b) at the formula's prediction times its fitted factor;
- * (c) the install's own time and w0r1d_d43m0n's root again (`LEVELLING_REROOT_MS`, one live BN4 measurement), then
- * from 0 experience at the multipliers the levels give (`levelMult`, `hacking_exp` and `hacking_speed` × NeuroFlux
+ * (c) the install's own time, w0r1d_d43m0n's root again (`LEVELLING_REROOT_MS`, one live BN4 measurement) and the
+ * target's preparation for the grow (`preparationMs`: its experience left out, cautious), then from 0 experience at the multipliers the levels give (`levelMult`, `hacking_exp` and `hacking_speed` × NeuroFlux
  * Governor's each, `neuroFluxMultipliers`), at (b)'s factor, on home's threads alone. Left out of (c): the cloud servers
  * bought back, the experience while w0r1d_d43m0n is rooted again, and the set's other augmentations A6 buys first (all
  * cautious).
@@ -232,7 +262,7 @@ export function levellingEstimates(inputs: LevellingInputs): LevellingEstimates 
       atLevel: offer.perThread.atLevel,
     };
     install =
-      (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS) / 1000 +
+      (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS + (offer.preparationMs ?? 0)) / 1000 +
       secondsToHackingLevel(0, required, levelMult * neuroFlux.hacking ** offer.levels, rate);
   }
   return { money, level, install };
