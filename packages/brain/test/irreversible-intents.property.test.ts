@@ -11,6 +11,8 @@
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
+  AUGMENTATION_NAMES,
+  augmentationsSoldBy,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
@@ -65,6 +67,21 @@ const CYBERSEC_FIVE = [
   "Synaptic Enhancement Implant",
   "Neurotrainer I",
 ];
+/**
+ * Installed in a run where the brain installs (#343): 25 that CyberSec doesn't sell, so CyberSec's five make Daedalus's
+ * 30 and the planner installs at once, whatever the income. Short of the count by less, it holds installing now until
+ * 10 minutes of slow snapshots measure the income, which a run's few minutes of the game's time never reach.
+ */
+const TWENTY_FIVE_INSTALLED: Record<string, number> = Object.fromEntries(
+  AUGMENTATION_NAMES.filter(
+    (name) =>
+      !augmentationsSoldBy("CyberSec", 1, null).includes(name) &&
+      name !== "NeuroFlux Governor" &&
+      name !== "The Red Pill",
+  )
+    .slice(0, 25)
+    .map((name) => [name, 1]),
+);
 /** Whether `id` is an install's or a destroy's: the brain's own resets, when not the owner's (#210, #215). */
 const isReset = (id: string) => id === "installAugmentations()" || id.startsWith("destroyBitNode(");
 
@@ -267,6 +284,7 @@ async function play(brainsReset: "none" | "install" | "destroy", steps: Step[]):
     const data = slowData();
     if (brainsReset === "destroy") data.resetInfo = { ...data.resetInfo, ownedAugs: { "The Red Pill": 1 } };
     const installs = brainsReset === "install";
+    if (installs) data.resetInfo = { ...data.resetInfo, ownedAugs: TWENTY_FIVE_INSTALLED };
     data.factions = {
       backend: "sim",
       state: {

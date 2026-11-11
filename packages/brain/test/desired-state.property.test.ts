@@ -18,6 +18,8 @@
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
+  AUGMENTATION_NAMES,
+  augmentationsSoldBy,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
@@ -51,6 +53,21 @@ const CYBERSEC_FIVE = [
   "Synaptic Enhancement Implant",
   "Neurotrainer I",
 ];
+/**
+ * Installed in a run where the brain installs (#343): 25 that CyberSec doesn't sell, so CyberSec's five make Daedalus's
+ * 30 and the planner installs at once, whatever the income. Short of the count by less, it holds installing now until
+ * 10 minutes of slow snapshots measure the income, which a run's few minutes of the game's time never reach.
+ */
+const TWENTY_FIVE_INSTALLED: Record<string, number> = Object.fromEntries(
+  AUGMENTATION_NAMES.filter(
+    (name) =>
+      !augmentationsSoldBy("CyberSec", 1, null).includes(name) &&
+      name !== "NeuroFlux Governor" &&
+      name !== "The Red Pill",
+  )
+    .slice(0, 25)
+    .map((name) => [name, 1]),
+);
 const intentOf = (request: IntentRequest): Intent => ({ ...request, id: intentId(request.action, request.args) });
 /** Every action; three joins (Sector-12 and Chongqing are enemies, so irreversible; CyberSec isn't); two destroys. */
 const OWNER_INTENTS: Intent[] = [
@@ -375,12 +392,13 @@ async function play(
   };
   const slowWith = (invited: string[]) => {
     const data = slowData();
+    const brainInstalls = brainsReset === "install" && rulesOn;
     data.resetInfo = {
       ...data.resetInfo,
       ...gameResets,
       ...(standInGame.redPill ? { ownedAugs: { "The Red Pill": 1 } } : {}),
+      ...(brainInstalls ? { ownedAugs: TWENTY_FIVE_INSTALLED } : {}),
     };
-    const brainInstalls = brainsReset === "install" && rulesOn;
     data.factions = {
       backend: "sim",
       state: {
