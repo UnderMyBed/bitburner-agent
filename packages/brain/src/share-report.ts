@@ -38,6 +38,8 @@ interface Point {
   /** Batches trimmed for the share's threads on the batches' hosts (#232's review); 0 from an older batcher. */
   trimmedBySharing: number;
   sharing: SharingHealth | null;
+  /** Home among the batcher's hosts (#340), its health's `home`: it shares as they do, not beside them. */
+  homeAmongHosts: boolean;
 }
 
 /** A reading of the brain's worked faction's reputation, from a slow snapshot. */
@@ -81,6 +83,7 @@ function pointsOf(points: { atMs: number; health: unknown }[]): Point[] {
         short: count(fields.batchesShort),
         trimmedBySharing: count(fields.batchesTrimmedBySharing),
         sharing: stale ? null : sharingOf(health),
+        homeAmongHosts: fields.home !== undefined && fields.home !== null,
       },
     ];
   });
@@ -174,10 +177,15 @@ function askedLines(points: Point[]): string[] {
  * Stretches asked with over `HOME_IDLE_FREE_FRACTION` of what home may share (its RAM beyond what it keeps, a thread
  * or more) free (#242), as the batcher's health has it, of `HOME_IDLE_AFTER_MS` or more: `share left home idle`, a
  * failure each. Whatever the batcher's room says: run #3's room was 0 while home sat idle. From an older batcher alone,
- * which doesn't say home's RAM, not judged.
+ * which doesn't say home's RAM, not judged; nor while home is among the batcher's hosts (#340), where it batches first
+ * and shares as they do, and the batcher section judges it idle (`batches left home idle`).
  */
 function homeIdleLines(points: Point[], failures: string[]): string[] {
+  const asHost = points.some((point) => point.homeAmongHosts && point.sharing?.wanted === true);
+  const asHostLine =
+    "    home idle while asked, among the batcher's hosts (#340): shared as they are, judged with the batches";
   if (!points.some((point) => point.sharing?.homeGb !== undefined)) {
+    if (asHost) return [asHostLine];
     return askedAtAll(points)
       ? ["    home idle while asked (#242): not judged: a batcher before #242 doesn't say home's RAM"]
       : [];
@@ -214,6 +222,7 @@ function homeIdleLines(points: Point[], failures: string[]): string[] {
   if (lines.length === 0) {
     lines.push("    home idle while asked (over half of what it may share free, for 5 minutes, #242): never");
   }
+  if (asHost) lines.push(asHostLine);
   return lines;
 }
 

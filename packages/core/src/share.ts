@@ -80,11 +80,11 @@ export interface HostRamUse {
  * (theirs and the next target's, `shareReserveGb`), no more than takes their use to `SHARE_MOST_USE` of their RAM; and
  * that of any other host (home, beside them), less `homeKeptGb` on home (the Agent's and its workers'). The cap counts
  * the batches' hosts alone (#242): it leaves the batches room on their own hosts, and home's share can't take theirs
- * (#230). Counted over all the hosts, it let run #3's batches on over about 82% of 26.2 PB of cloud servers leave
- * 0.5–1 PB of home idle for 51 minutes. At most `mostThreads` threads (a round takes half of what the share may hold,
- * #242). The other hosts first, then the batches' hosts with the least free first, so the large keep room for whole
- * batch operations (`placeThreads`), never more on them than their room; whole threads (`threadsThatFit`). None when
- * the room holds no thread.
+ * (#230); home among them (#340) counts its RAM less what it keeps. Counted over all the hosts, it let run #3's
+ * batches on over about 82% of 26.2 PB of cloud servers leave 0.5–1 PB of home idle for 51 minutes. At most
+ * `mostThreads` threads (a round takes half of what the share may hold, #242). The other hosts first, then the
+ * batches' hosts with the least free first, so the large keep room for whole batch operations (`placeThreads`), never
+ * more on them than their room; whole threads (`threadsThatFit`). None when the room holds no thread.
  */
 export function shareRound(
   hosts: readonly HostRamUse[],
@@ -101,7 +101,8 @@ export function shareRound(
   let otherFreeGb = 0;
   for (const each of hosts) {
     if (forBatches(each)) {
-      batchesTotalGb += each.maxGb;
+      // Home among them (#340's review): its RAM less what it keeps, which neither the batches nor the share take.
+      batchesTotalGb += each.maxGb - (each.host === "home" ? Math.min(each.maxGb, Math.max(0, homeKeptGb)) : 0);
       batchesUsedGb += each.usedGb;
       batchesFreeGb += freeOf(each);
     } else {

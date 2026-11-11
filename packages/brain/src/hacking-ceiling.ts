@@ -19,6 +19,7 @@ import { MEDIUM_SNAPSHOT_GAP_MS } from "./backdoors.ts";
 import { bitNodeHackingOf } from "./batcher.ts";
 import { formatIsoTime } from "./gap-report.ts";
 import { chooseHackHosts } from "./hack-loop.ts";
+import { homeKeptGbOf, singularityRamMultiplierOf } from "./share.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 
 /** The ceilings at one snapshot, or why they can't be said. */
@@ -97,8 +98,10 @@ function ramOf(servers: (MediumServer | undefined)[]): { usableGb: number; ramGb
  * The ceilings now (#196). The targets are the game's servers rooted, with money (core's figures are 0 for one needing
  * more hacking than the player has: a hack thread's share is 0 there, Hacking.ts:52).
  * - **The score, on the brain's hacking RAM:** the hack loop's hosts (`chooseHackHosts`, `hackLoopHosts`'s names,
- *   the brain's cloud servers among them since #194), the RAM their whole threads can use in the medium snapshot
- *   (`usableRamGb`), times the best target's batcher ceiling and, beside it, its hacking ceiling.
+ *   the brain's cloud servers among them since #194), and with `homeKeptGb` (#340's review: home among the batcher's
+ *   hosts, its switch on) home's RAM beyond it, the RAM their whole threads can use in the medium snapshot
+ *   (`usableRamGb`), times the best target's batcher ceiling and, beside it, its hacking ceiling. Home's cores are left
+ *   out of it, as the batcher's plan leaves them (cautious there; here, a ceiling a little low).
  * - **The bound, on all the RAM a script could run on:** every rooted server's, home's and the player's own included,
  *   times the best target's hacking ceiling. The owner's scripts, a terminal `hack` and A7 on home all count in what
  *   hacking earns, so all count here.
@@ -112,6 +115,7 @@ export function hackingCeiling(
   mediumData: MediumSnapshotData | null | undefined,
   bitNode: number | null,
   incomes?: Map<string, number>,
+  homeKeptGb: number | null = null,
 ): HackingCeiling {
   if (!Array.isArray(staticData?.servers)) return { known: false, reason: "no static snapshot" };
   if (!Array.isArray(mediumData?.servers)) return { known: false, reason: "no medium snapshot" };
@@ -154,6 +158,13 @@ export function hackingCeiling(
   };
   const hostNames = chooseHackHosts(staticData, mediumData);
   const hosts = ramOf(hostNames.map((hostname) => now.get(hostname)));
+  // Home's RAM beyond what it keeps, with home among the batcher's hosts (#340's review), at the hosts' cores.
+  const homeRam = now.get("home")?.maxRam;
+  const homeBatchGb = homeKeptGb === null || !isNumber(homeRam) ? 0 : Math.max(0, homeRam - homeKeptGb);
+  if (homeBatchGb > 0) {
+    hosts.ramGb += homeBatchGb;
+    hosts.usableGb += usableRamGb(homeBatchGb);
+  }
   const rootedServers = mediumData.servers.filter(
     (server) => server?.hasAdminRights === true && isNumber(server.maxRam) && server.maxRam > 0,
   );
@@ -170,7 +181,7 @@ export function hackingCeiling(
     batcherIncomePerSecond: hosts.usableGb * batcher.perGigabyteSecond,
     target: batcher.target,
     incomePerSecond: hosts.usableGb * best(hackingIncomePerGigabyteSecond, hosts.cores).perGigabyteSecond,
-    hostCount: hostNames.length,
+    hostCount: hostNames.length + (homeBatchGb > 0 ? 1 : 0),
     hostRamGb: hosts.ramGb,
     boundIncomePerSecond: rooted.usableGb * best(hackingIncomePerGigabyteSecond, rooted.cores).perGigabyteSecond,
     rootedCount: rootedServers.length,
@@ -320,6 +331,7 @@ export function hackingView({
   staticData,
   mediumData,
   bitNode,
+  homeKeptGb = null,
 }: {
   store: TelemetryStore;
   environment: Environment;
@@ -328,6 +340,8 @@ export function hackingView({
   mediumData: MediumSnapshotData | null | undefined;
   /** The BitNode the newest slow snapshot shows (#321), for its hacking multipliers; null without one. */
   bitNode: number | null;
+  /** What home keeps, with home among the batcher's hosts (#340's review), or null: its RAM beyond it is the hosts'. */
+  homeKeptGb?: number | null;
 }): HackingView {
   const points: HackingMoneyPoint[] = [];
   const window = { environment, tier: "slow", sinceMs: nowMs - DASHBOARD_HACKING_WINDOW_MS, untilMs: nowMs };
@@ -335,7 +349,7 @@ export function hackingView({
     const money = hackingMoneyOf(data as SlowSnapshotData);
     if (money !== null) points.push({ atMs: receivedAtMs, ...money });
   }
-  const ceiling = hackingCeiling(staticData, mediumData, bitNode);
+  const ceiling = hackingCeiling(staticData, mediumData, bitNode, undefined, homeKeptGb);
   const incomePerSecond = hackingIncomePerSecond(points);
   const ofCeilings =
     incomePerSecond !== null && ceiling.known && ceiling.batcherIncomePerSecond > 0
@@ -400,9 +414,18 @@ export class HackingFold {
   /** Each medium snapshot's targets' batcher incomes on the hosts' RAM (#275): section 6's stuck target check. */
   readonly targetIncomes = new BatcherTargetIncomes();
 
-  /** `ignored`: the player's own servers, whose money isn't hacked. */
-  constructor(ignored: ReadonlySet<string>) {
+  /** Each slow snapshot's Singularity RAM multiplier, or null (#340's review): what home keeps then. */
+  readonly #singularity: { atMs: number; multiplier: number | null }[] = [];
+  readonly #homeOn: boolean;
+
+  /**
+   * `ignored`: the player's own servers, whose money isn't hacked. `homeOn` (#340's review): home among the batcher's
+   * hosts (its switch, `batcher.home`, as the store has it now), so its RAM beyond what it keeps (`homeKeptGbOf`,
+   * with the Singularity worker of the slow snapshot then) counts with the hosts'.
+   */
+  constructor(ignored: ReadonlySet<string>, { homeOn = false }: { homeOn?: boolean } = {}) {
     this.#ignored = ignored;
+    this.#homeOn = homeOn;
   }
 
   addStatic(atMs: number, data: StaticSnapshotData): void {
@@ -414,6 +437,7 @@ export class HackingFold {
     this.#slowCount++;
     const bitNode = (data?.resetInfo as { currentNode?: unknown } | undefined)?.currentNode;
     if (isNumber(bitNode)) this.#bitNodes.push({ atMs, bitNode });
+    this.#singularity.push({ atMs, multiplier: singularityRamMultiplierOf(data) });
     const money = hackingMoneyOf(data);
     if (money === null) return;
     const point = { atMs, ...money };
@@ -429,7 +453,10 @@ export class HackingFold {
     const incomes = new Map<string, number>();
     // The BitNode then (#321): the newest slow snapshot's by then, else the first's (the slow snapshots come first).
     const bitNodeThen = (this.#bitNodes.filter((each) => each.atMs <= atMs).at(-1) ?? this.#bitNodes[0])?.bitNode;
-    const ceiling = hackingCeiling(staticThen?.data, data, bitNodeThen ?? null, incomes);
+    const singularityThen = (this.#singularity.filter((each) => each.atMs <= atMs).at(-1) ?? this.#singularity[0])
+      ?.multiplier;
+    const homeKeptGb = this.#homeOn ? homeKeptGbOf(singularityThen ?? null) : null;
+    const ceiling = hackingCeiling(staticThen?.data, data, bitNodeThen ?? null, incomes, homeKeptGb);
     this.#ceilings.push({ atMs, ceiling });
     const hacking = (data.player as { skills?: { hacking?: unknown } } | undefined)?.skills?.hacking;
     this.targetIncomes.add(atMs, ceiling.known ? incomes : null, isNumber(hacking) ? hacking : null);

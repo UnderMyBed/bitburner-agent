@@ -3,6 +3,7 @@
 // the brain already stores (snapshots, events, and the hack loop's and augmentations' switches), in one read
 // transaction, folding the snapshots row by row so a long run's window never sits in memory whole.
 import {
+  BATCHER_RAM_BUDGET_GB,
   bitNodeAssumptions,
   bitNodePriceMultipliers,
   type FactionState,
@@ -27,6 +28,7 @@ import {
 } from "./augmentation-report.ts";
 import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
+import { batcherOnHome } from "./batcher.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
 import {
   BITNODE_END_EVENT_KINDS,
@@ -99,6 +101,7 @@ import {
   RESTART_FELL_BACK_EVENT_KIND,
   WORK_PROMOTION_EVENT_KIND,
 } from "./record-channel-events.ts";
+import { homeKeptGbOf, singularityRamMultiplierOf } from "./share.ts";
 import {
   describeThinning,
   STORE_THINNED_EVENT_KIND,
@@ -515,6 +518,8 @@ interface FastPoint {
   degradedTiers: unknown;
   pageHeapUsedBytes: unknown;
   homeRamUsed: unknown;
+  /** Home's RAM (#340's re-review): section 6's `home missing from the batches`. */
+  homeMaxRam: unknown;
   intents: IntentOutcome[];
   blocking: unknown;
   /** Absent from an older Agent. */
@@ -638,6 +643,8 @@ interface RunFacts extends RunWindow {
   slowLast: SlowSnapshotData | undefined;
   /** The installs' times, the slow snapshots' `lastAugReset`s: section 6 joins no move across one (#237's review). */
   resetsMs: number[];
+  /** Each slow snapshot's Singularity RAM multiplier, or null (#340's re-review): what home keeps then. */
+  singularity: { atMs: number; multiplier: number | null }[];
   /** The faction state over the slow snapshots (#197). */
   factionState: FactionStateFolding;
   /** The joins and the brain's faction work (#203), over the events and the medium and slow snapshots. */
@@ -693,7 +700,9 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     let snapshotCount = 0;
     // The player's servers first, from the static and slow snapshots, so the medium ones can be read in one pass.
     const playersServers = new Set(["home"]);
-    const hacking = new HackingFold(playersServers);
+    // Home among the batcher's hosts (#340's review), as its switch and the batcher's stand now: its RAM beyond what it
+    // keeps is theirs.
+    const hacking = new HackingFold(playersServers, { homeOn: batcherOnHome(store) });
     // The servers' fixed figures for the hacking ceilings, as of the window's start: the Agent sends them once (#196).
     const staticBefore = store.latestSnapshotBefore({ ...window, tier: "static", beforeMs: window.sinceMs });
     const weakenTimes = new WeakenTimes();
@@ -742,6 +751,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     let slowFirst: SlowSnapshotData | undefined;
     let slowLast: SlowSnapshotData | undefined;
     const resetsMs = new Set<number>();
+    const singularity: { atMs: number; multiplier: number | null }[] = [];
     const cloudServers = new Set<string>();
     const factionState = new FactionStateFolding();
     const augmentations = new AugmentationTimeline();
@@ -757,6 +767,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       slowLast = data;
       const lastAugReset = data.resetInfo?.lastAugReset;
       if (typeof lastAugReset === "number" && Number.isFinite(lastAugReset)) resetsMs.add(lastAugReset);
+      singularity.push({ atMs, multiplier: singularityRamMultiplierOf(data) });
       factionState.add(atMs, data);
       cycles.addSlow(atMs, gameTimeMs, data);
       worldDaemon.addSlow(gameTimeMs);
@@ -840,6 +851,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
         degradedTiers: data.degradedTiers,
         pageHeapUsedBytes: data.pageHeapUsedBytes,
         homeRamUsed: data.game?.homeRamUsed,
+        homeMaxRam: data.game?.homeMaxRam,
         intents: Array.isArray(data.intents) ? data.intents.filter((outcome) => typeof outcome?.id === "string") : [],
         blocking: data.dialogs?.blocking,
         work: data.work,
@@ -880,6 +892,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       slowFirst,
       slowLast,
       resetsMs: [...resetsMs],
+      singularity,
       factionState,
       factionWork,
       augmentations,
@@ -980,13 +993,29 @@ export function runReport(
     ),
     "",
     ...batcherSection(
-      facts.fast.map(({ atMs, batcher, batcherDeploy }) => ({ atMs, health: batcher, deploy: batcherDeploy })),
+      facts.fast.map(({ atMs, batcher, batcherDeploy, homeMaxRam }) => ({
+        atMs,
+        health: batcher,
+        deploy: batcherDeploy,
+        homeMaxRamGb: homeMaxRam,
+      })),
       failures,
       facts.factionWork.readings,
       facts.resetsMs,
       { incidents, weakenMs: (target, atMs) => facts.weakenTimes.weakenMs(target, atMs), warnings },
       // A batcher stuck on a poor target (#275), by section 5's medium snapshots' incomes and 2b's cycles.
       { incomes: facts.hacking.targetIncomes, cycleLabelAt: (atMs) => facts.cycles.cycleLabelAt(atMs) },
+      // Home missing from the batches (#340's re-review), while its switch and the batcher's are on: its reserve then,
+      // what it keeps with the Singularity worker of the slow snapshot by then, and the batcher's budget.
+      batcherOnHome(store)
+        ? {
+            reserveGbAt: (atMs: number) =>
+              homeKeptGbOf(
+                (facts.singularity.filter((each) => each.atMs <= atMs).at(-1) ?? facts.singularity[0])?.multiplier ??
+                  null,
+              ) + BATCHER_RAM_BUDGET_GB,
+          }
+        : undefined,
     ),
     "",
     ...facts.gang.section(failures, window.untilMs, facts.events),

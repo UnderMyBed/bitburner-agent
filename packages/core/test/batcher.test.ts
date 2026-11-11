@@ -36,9 +36,12 @@ import {
   hackThreadsAtLaunch,
   hackThreadsForShare,
   hackWaitsForItsBatch,
+  hostKeptGb,
   isBackInStep,
   isBatcherFile,
   isOutsideBounds,
+  isOwnBatchOperation,
+  isPlanRamBound,
   isTargetPrepared,
   LANDING_LOST_AFTER_MS,
   LandingWatch,
@@ -1293,6 +1296,18 @@ describe("parseBatcherConfig", () => {
   });
 });
 
+describe("isOwnBatchOperation (#340's review)", () => {
+  test("this deployment's batch-hack, -grow and -weaken.js; never another's, the batcher, the share or a loop", () => {
+    for (const name of ["batch-hack.js", "batch-grow.js", "batch-weaken.js"]) {
+      expect(isOwnBatchOperation(`agent/0123456789ab/${name}`, "0123456789ab")).toBe(true);
+      expect(isOwnBatchOperation(`agent/ba9876543210/${name}`, "0123456789ab")).toBe(false);
+    }
+    for (const name of ["batcher.js", "batch-share.js", "hack-loop.js", "level-loop.js"]) {
+      expect(isOwnBatchOperation(`agent/0123456789ab/${name}`, "0123456789ab")).toBe(false);
+    }
+  });
+});
+
 describe("isBatcherFile (#205)", () => {
   test("a deployment's batcher, in a folder the deployer generated; never a player's own, nor another script", () => {
     expect(isBatcherFile("agent/0123456789ab/batcher.js")).toBe(true);
@@ -1366,6 +1381,66 @@ describe("the config's next target (#206)", () => {
 
   test("a new batcher's health has no next yet", () => {
     expect(newBatcherHealth("joesguns", "r1", 5).next).toBeNull();
+  });
+});
+
+describe("home among the config's hosts (#340)", () => {
+  const config = {
+    target: "joesguns",
+    figures: joesguns,
+    player: { intelligence: 0, mults: CONFIG_MULTS },
+    hosts: ["foodnstuff", "home"],
+    hackShare: 0.05,
+    spacingMs: 5_000,
+  };
+
+  test("what home keeps taken as given, 0 or more; absent, none", () => {
+    expect(parseBatcherConfig({ ...config, homeKeptGb: 32 })).toEqual({
+      ok: true,
+      config: { ...config, homeKeptGb: 32 },
+    });
+    expect(parseBatcherConfig({ ...config, homeKeptGb: 0 })).toEqual({
+      ok: true,
+      config: { ...config, homeKeptGb: 0 },
+    });
+    expect(parseBatcherConfig(config)).toEqual({ ok: true, config });
+  });
+
+  test.each([-1, "32", null, Number.POSITIVE_INFINITY])("refused: homeKeptGb %j", (homeKeptGb) => {
+    const parsed = parseBatcherConfig({ ...config, homeKeptGb });
+    expect(parsed).toEqual({ ok: false, reason: "the config's homeKeptGb isn't a number of 0 or more" });
+  });
+
+  test("what a host keeps from the batches: home its homeKeptGb, none without it; any other host none", () => {
+    expect(hostKeptGb("home", { homeKeptGb: 32 })).toBe(32);
+    expect(hostKeptGb("home", {})).toBe(0);
+    expect(hostKeptGb("foodnstuff", { homeKeptGb: 32 })).toBe(0);
+  });
+
+  test("the plan's ramBound (#340's review): taken as true or false, absent from an older brain; else refused", () => {
+    for (const ramBound of [true, false]) {
+      expect(parseBatcherConfig({ ...config, ramBound })).toEqual({ ok: true, config: { ...config, ramBound } });
+    }
+    expect(parseBatcherConfig({ ...config, ramBound: "yes" })).toEqual({
+      ok: false,
+      reason: "the config's ramBound isn't true or false",
+    });
+  });
+
+  test("isPlanRamBound: a plan on little RAM is; on unbounded RAM, the target's money bounds it, and it isn't", () => {
+    for (const [target, level] of [
+      [n00dles, 50],
+      [joesguns, 100],
+      [joesguns, 2_000],
+    ] as const) {
+      const unbounded = batchPlan(target, player(level), 1e12) as NonNullable<ReturnType<typeof batchPlan>>;
+      expect(isPlanRamBound(target, player(level), unbounded.hackShare, unbounded.spacingMs)).toBe(false);
+      const small = batchPlan(target, player(level), 64) as NonNullable<ReturnType<typeof batchPlan>>;
+      expect(isPlanRamBound(target, player(level), small.hackShare, small.spacingMs)).toBe(true);
+      // One more spacing, or a hair less share, is held to the RAM.
+      expect(isPlanRamBound(target, player(level), unbounded.hackShare, unbounded.spacingMs + 1)).toBe(true);
+      expect(isPlanRamBound(target, player(level), unbounded.hackShare * 0.99, unbounded.spacingMs)).toBe(true);
+    }
   });
 });
 

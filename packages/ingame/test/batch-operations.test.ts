@@ -459,6 +459,8 @@ test.each([
 test("batching, it sleeps on the monotonic clock until its next order (#251): a minute's timers, a few a second, no spin", async () => {
   const simulation = await gameWithScripts();
   await batchingBatcher(simulation);
+  // Home not among its hosts: its health says so, `home: null` (#340's re-review), not absent as an older batcher's.
+  expect((await healthOf(simulation)).home).toBeNull();
   const firedBefore = await simulation.diagnostics.timersFired();
   await simulation.advance(60_000);
   const fired = (await simulation.diagnostics.timersFired()) - firedBefore;
@@ -2545,3 +2547,84 @@ test("with the holds before #253, an order that finds its batch gone is counted,
   expect(health.batchesStarted).toBeGreaterThan(0);
   expect(health.ordersDropped).toBeGreaterThan(0);
 });
+
+test.each([
+  // Home of 128 GB keeping 64, the plan on 128 of it: the batches want more than home gives, and fill it to what it
+  // keeps.
+  ["not sharing, wanting more than home gives", 128, 64, false],
+  // Home of 512 GB keeping 128, the plan on 128 of it, the brain's reserve 0: the share takes the room beside what the
+  // batches will hold (#232), to the 80% cap, which counts home's RAM less what it keeps (#340's review): 80% of
+  // 544 - 128 GB, 332.8 GB in use, so 211.2 GB free of the hosts' and home's.
+  ["sharing", 512, 128, true],
+])(
+  "home among its hosts (#340), %s: the batches on it but for what it keeps, the share beside them, none short",
+  {
+    timeout: 120_000,
+  },
+  async (_, homeGb, KEPT_GB, sharingAsked) => {
+    const simulation = await gameWithScripts();
+    // What home keeps for the Agent, free beside all that runs there (the batcher's own script too). The plan on the
+    // two hosts' 32 GB and 128 of home's, so the batches need home.
+    await simulation.diagnostics.setHomeRam(homeGb);
+    const atFifty = { skills: { hacking: 50, intelligence: 0 }, mults: MULTS };
+    const plan = batchPlan(N00DLES, atFifty, batchRamGb([16, 16, 128]));
+    if (plan === null) throw new Error("no plan for n00dles on home");
+    // Sharing's homeKeptGb below the config's: with home among the hosts, the share keeps the config's (#340's review:
+    // one figure), so home's kept RAM stays free whatever sharing says.
+    const sharing = { reserveGb: 0, homeKeptGb: 8, cores: {} };
+    const config: BatcherConfig = {
+      ...n00dlesConfig(),
+      hosts: [...OPERATION_HOSTS, "home"],
+      homeKeptGb: KEPT_GB,
+      ramBound: true,
+      hackShare: plan.hackShare,
+      spacingMs: plan.spacingMs,
+      ...(sharingAsked ? { sharing } : {}),
+    };
+    await batchingBatcher(simulation, config);
+    // free-ram.js runs on home as it looks, as the Agent's workers would: in what home keeps.
+    const helperGb = await simulation.staticRamUsage("home", "free-ram.js");
+    let leastFreeGb = Number.POSITIVE_INFINITY;
+    let mostBatchesGb = 0;
+    let homeShareThreads = 0;
+    for (let look = 0; look < 60; look += 1) {
+      await simulation.advance(2_000);
+      const { pid } = await simulation.run("home", "free-ram.js", { args: ["home"] });
+      await simulation.advance(1);
+      const free = JSON.parse(await printed(simulation, pid)) as Record<string, number>;
+      leastFreeGb = Math.min(leastFreeGb, (free.home as number) + helperGb);
+      const health = await healthOf(simulation);
+      // The config's ramBound echoed (#340's review), for the run report.
+      expect(health.home).toMatchObject({ gb: homeGb, keptGb: KEPT_GB, ramBound: true });
+      mostBatchesGb = Math.max(mostBatchesGb, health.home?.batchesGb ?? 0);
+      for (const process of await simulation.ps("home")) {
+        if (process.filename.endsWith(`/${SHARE_SCRIPT_NAME}`)) homeShareThreads += process.threads;
+      }
+    }
+    const health = await healthOf(simulation);
+    console.log(
+      `#340, home ${homeGb} GB, ${sharingAsked ? "sharing" : "not sharing"}: its least free ${leastFreeGb.toFixed(2)} ` +
+        `GB (keeps ${KEPT_GB}), its batches at most ${mostBatchesGb.toFixed(1)} GB; ${homeShareThreads} share threads ` +
+        `seen on home; ${health.batchesStarted} batches, ${health.batchesTrimmed} trimmed, ${health.batchesShort} short`,
+    );
+    // Never the Agent's room: what home keeps stays free beside all that runs there, the share's threads too.
+    expect(leastFreeGb).toBeGreaterThanOrEqual(KEPT_GB - 1e-6);
+    // Home's RAM in the batches, beyond the two hosts' 32 GB.
+    expect(mostBatchesGb).toBeGreaterThan(32);
+    if (sharingAsked) {
+      // Home's free RAM beyond the batches shared, as its other hosts' is, to the cap: never home's kept RAM taken out
+      // twice (the room beside the batches would bind at 544 - 256 GB in use), nor the cap's room on sharing's 8 GB
+      // (it would fill home to what it keeps); never a batch smaller for it.
+      expect(homeShareThreads).toBeGreaterThan(0);
+      const capFreeGb = homeGb + 32 - 0.8 * (homeGb + 32 - KEPT_GB);
+      expect(leastFreeGb).toBeGreaterThan(capFreeGb - 16);
+      expect(leastFreeGb).toBeLessThan(capFreeGb + 8);
+    } else {
+      // Wanting more than home gives: filled to what it keeps, within a few GB, its batches trimmed to fit.
+      expect(homeShareThreads).toBe(0);
+      expect(leastFreeGb).toBeLessThan(KEPT_GB + 8);
+      expect(health.batchesTrimmed).toBeGreaterThan(0);
+    }
+    expect(health).toMatchObject({ batchesShort: 0, late: 0, lost: 0, desyncs: 0, batchesTrimmedBySharing: 0 });
+  },
+);

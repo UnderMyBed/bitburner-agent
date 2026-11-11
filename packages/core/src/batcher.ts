@@ -7,7 +7,7 @@
  * `HackingLevelMultiplier` folded into the player's `hacking_money`, `hacking_exp`, `hacking_grow` and `hacking` by the
  * brain (#321, #334, core's `bitNodeHackingMultipliers`), the rest taken as 1: exact in BN1, BN2, BN4 and BN5.
  */
-import { deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts";
+import { deployedFilePath, deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts";
 import { growthLogPerThread, percentMoneyHackedPerThread } from "./hack-loop.ts";
 import {
   GROW_SECURITY_PER_THREAD,
@@ -134,6 +134,20 @@ export const BATCHER_DEPLOY_WORKER_NAME = "batcher-deploy.js";
 export function isBatcherFile(filePath: string): boolean {
   const deploymentId = deploymentIdOfPath(filePath);
   return deploymentId !== null && isGeneratedDeploymentId(deploymentId) && filePath.endsWith(`/${BATCHER_SCRIPT_NAME}`);
+}
+
+/**
+ * One of this deployment's batch operations (#340's review: `agent/<deploymentId>/batch-hack.js`, `batch-grow.js` or
+ * `batch-weaken.js`), which the hack loop's deploy worker stops when levelling mode (#336) is sent: the batcher is
+ * stopped then, and its waves in flight would hold their RAM until they land (a next target's preparation at 3 times
+ * its minimum security, 13 minutes in levelling-simulation's seed 1), while experience lands only as an operation
+ * completes (NetscriptFunctions.ts:365), so they earn far less a thread-second than the level loop in their RAM.
+ * Never another deployment's, nor the share script, whose rounds end within 10 s.
+ */
+export function isOwnBatchOperation(filePath: string, deploymentId: string): boolean {
+  return [BATCH_HACK_SCRIPT_NAME, BATCH_GROW_SCRIPT_NAME, BATCH_WEAKEN_SCRIPT_NAME].some(
+    (name) => filePath === deployedFilePath(deploymentId, name),
+  );
 }
 
 /** What the batcher's deploy worker reports (#205): where ours runs afterwards, if anywhere, and what it did. */
@@ -534,6 +548,24 @@ export function batchPlan(target: HackingTarget, player: HackingPlayer, ramGb: n
     }
   }
   return best;
+}
+
+/**
+ * Whether a plan's share and spacing are held to the RAM (#340's review): below what `batchPlan` gives on unbounded
+ * RAM, the largest share a whole number of hack threads takes within `MAX_BATCH_SHARE` (one thread's, past it), at
+ * `MIN_BATCH_SPACING_MS`. So more RAM would earn more; otherwise the target's money bounds it, whatever the RAM.
+ */
+export function isPlanRamBound(
+  target: HackingTarget,
+  player: HackingPlayer,
+  hackShare: number,
+  spacingMs: number,
+): boolean {
+  const perThread = hackSharePerThread(target, player);
+  if (!(perThread > 0)) return false;
+  const threads = perThread >= MAX_BATCH_SHARE ? 1 : Math.floor(MAX_BATCH_SHARE / perThread + 1e-9);
+  const mostShare = Math.min(1, threads * perThread);
+  return spacingMs > MIN_BATCH_SPACING_MS || hackShare < mostShare * (1 - 1e-9);
 }
 
 /**
@@ -1200,6 +1232,25 @@ export interface BatcherConfig {
    * the bonus it reports.
    */
   sharing?: SharingConfig;
+  /**
+   * What home keeps free for the Agent and its workers, GB, beside all that runs there (#340), with home among `hosts`:
+   * the batches take home's free RAM beyond it (`hostKeptGb`), as the share does (`SharingConfig.homeKeptGb`, the same
+   * figure). Absent, home keeps none: a config naming home without it (#204's tests) has all of home's free RAM.
+   */
+  homeKeptGb?: number;
+  /**
+   * Whether the plan sent was held to the RAM (#340's review, core's `isPlanRamBound`), with home among `hosts`: the
+   * batcher's health echoes it in `home`, and the run report judges home idle by it. Absent from an older brain.
+   */
+  ramBound?: boolean;
+}
+
+/**
+ * What a host keeps from the batches, GB (#340): on home, the config's `homeKeptGb` (none without it), free beside
+ * all that runs there; on any other host, none.
+ */
+export function hostKeptGb(host: string, config: Pick<BatcherConfig, "homeKeptGb">): number {
+  return host === "home" ? (config.homeKeptGb ?? 0) : 0;
 }
 
 /**
@@ -1295,6 +1346,14 @@ export function parseBatcherConfig(
   const { sharing } = value as Record<string, unknown>;
   const parsedSharing = sharing === undefined || sharing === null ? null : parseSharing(sharing);
   if (parsedSharing !== null && !parsedSharing.ok) return parsedSharing;
+  const { homeKeptGb } = value as Record<string, unknown>;
+  if (homeKeptGb !== undefined && !(isFiniteNumber(homeKeptGb) && homeKeptGb >= 0)) {
+    return { ok: false, reason: "the config's homeKeptGb isn't a number of 0 or more" };
+  }
+  const { ramBound } = value as Record<string, unknown>;
+  if (ramBound !== undefined && typeof ramBound !== "boolean") {
+    return { ok: false, reason: "the config's ramBound isn't true or false" };
+  }
   return {
     ok: true,
     config: {
@@ -1306,6 +1365,8 @@ export function parseBatcherConfig(
       spacingMs,
       ...(parsedNext === undefined ? {} : { next: parsedNext }),
       ...(parsedSharing === null ? {} : { sharing: parsedSharing.sharing }),
+      ...(homeKeptGb === undefined ? {} : { homeKeptGb }),
+      ...(ramBound === undefined ? {} : { ramBound }),
     },
   };
 }
@@ -1441,6 +1502,14 @@ export interface BatcherHealth {
    */
   sharing?: SharingHealth | null;
   /**
+   * Home's RAM, with home among its hosts (#340), at its last loop: `gb` all of it, `keptGb` what it keeps for the
+   * Agent (the config's `homeKeptGb`), `freeGb` free beyond that (beside the Agent, its operations and its share
+   * threads), `batchesGb` its operations' parts there (batches and preparation waves), and `ramBound`, the config's.
+   * Null while home isn't a host (#340's re-review: a batcher since #340, so the run report can tell home left out);
+   * absent from an older batcher.
+   */
+  home?: BatcherHomeRam | null;
+  /**
    * Operations that found no room at their time and waited for it (#246), then started: how many, the run's longest
    * wait so far, ms (null before one), and the last `BATCH_WAITS_KEPT`, oldest first, each with what held the RAM at
    * its first look (#246's review: if waits replace shorts, they still say why). Absent from an older batcher.
@@ -1468,6 +1537,16 @@ export interface BatcherHealth {
   clock?: "monotonic";
   /** The game's wall clock (`Date.now()`) when this was written, as are the stamps in it the brain reads (#251). */
   atMs: number;
+}
+
+/** Home's RAM in the batcher's health (#340), GB. */
+export interface BatcherHomeRam {
+  gb: number;
+  keptGb: number;
+  freeGb: number;
+  batchesGb: number;
+  /** The config's `ramBound`: the plan sent held to the RAM; absent from an older brain's config. */
+  ramBound?: boolean;
 }
 
 /** How many batches short of RAM (#246), and waits for it, the health keeps: the run report lists each it sees. */

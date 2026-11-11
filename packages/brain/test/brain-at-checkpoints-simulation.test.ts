@@ -408,8 +408,13 @@ describe("the rows and the comparison", () => {
   });
 });
 
+// Its bound (#340's review): batches on home's RAM after the install make the hour's work heavier. Seed 1 locally
+// ran in 48.6 s of real time with `batcher.home` on and 28.0 s off, with 21,561 batches against 11,839, 305,039
+// timers fired against 190,290, and 5.9 s of the brain's CPU against 3.6 s: in proportion to the batches. CI ran
+// main's in 107 s, and the other simulator suites run 2-3 times local there (augmentations 75 s, 245 s in CI), so
+// up to about 150 s now: 300 s leaves the headroom 180 s no longer did.
 test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the game's own summary, printed as a row", {
-  timeout: 180_000,
+  timeout: 300_000,
 }, async () => {
   const fresh = await freshStartOf({ withDesiredState: true, seed: 1, fixture: BASELINE.fixture });
   const game: CheckpointGame = { summary: () => fresh.simulation.summary(), run: (ms) => fresh.game.run(ms) };
@@ -443,9 +448,15 @@ test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the g
     bitNodeLevel: 2,
     sourceFiles: end.sourceFiles,
   });
-  // The peak is every poll's highest: seed 1 installs at about 41 minutes, so at 1 h it's above the level then.
+  // The peak is every poll's highest, and survives an install's dip: seed 1 installs at about 40 minutes (the level
+  // falls between two polls, augmentations installed), and the peak is at least the highest level polled before it.
+  // Whether the level at 1 h passes it is the scenario's (#340's review): 477 at 1 h with home's RAM in the batches,
+  // past the 364 before the install; 278 with `batcher.home` off, under it.
   expect(last.peakHackingLevel).toBe(Math.max(...levels));
-  expect(last.peakHackingLevel).toBeGreaterThan(last.reading.hackingLevel);
+  expect(last.reading.augsInstalled).toBeGreaterThan(0);
+  const installAt = levels.findIndex((level, index) => index > 0 && level < (levels[index - 1] as number));
+  expect(installAt).toBeGreaterThan(0);
+  expect(last.peakHackingLevel).toBeGreaterThanOrEqual(Math.max(...levels.slice(0, installAt)));
   // The brain played: past hacking 1, home at SF1's 32 GB or more.
   expect(last.reading.hackingLevel).toBeGreaterThan(50);
   expect(last.reading.homeRamMax).toBeGreaterThanOrEqual(32);

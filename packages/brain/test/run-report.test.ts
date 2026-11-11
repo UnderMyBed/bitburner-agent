@@ -19,6 +19,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AugmentationTimeline } from "../src/augmentation-report.ts";
 import { writeAugmentationsEnabled } from "../src/augmentations.ts";
+import { BATCHER_ENABLED_SETTING, BATCHER_ON_HOME_SETTING } from "../src/batcher.ts";
 import { STORE_FILE_NAME } from "../src/config.ts";
 import { BitNodeCycles } from "../src/cycle-report.ts";
 import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
@@ -4281,6 +4282,47 @@ describe("a clock step or page stall behind the batcher's desyncs (#241, owner d
   });
 });
 
+describe("home missing from the batches (#340's re-review)", () => {
+  /** 12 minutes batching, a batcher since #340 saying home isn't a host, home of `homeGb`; in `bitNode`. */
+  function leftOut(homeGb: number, bitNode = 1) {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("static", 10 * SECOND, staticData());
+    const slow = slowData();
+    snapshot("slow", 10 * SECOND, { ...slow, resetInfo: { ...slow.resetInfo, currentNode: bitNode } });
+    for (let offsetMs = 10 * SECOND; offsetMs <= 12 * MINUTE + 10 * SECOND; offsetMs += 2 * SECOND) {
+      const batcher = { ...newBatcherHealth("n00dles", "a", 0), state: "batching" as const, home: null };
+      const game = { money: 0, homeRamUsed: 4, homeMaxRam: homeGb, homeProcesses: [] };
+      snapshot("fast", offsetMs, fastData({ batcher, game }), offsetMs);
+    }
+    const found = runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + 13 * MINUTE }).failures;
+    return found.filter((line) => line.startsWith("home missing from the batches"));
+  }
+
+  test("its switch and the batcher's on, home of 4 TB: a failure", () => {
+    expect(leftOut(4_096)).toEqual([
+      expect.stringContaining("(12 min): batching, with home's 4,096 GB above the 36 GB it keeps and the batcher's"),
+    ]);
+  });
+
+  test("its switch or the batcher's off: none", () => {
+    store.setSetting(BATCHER_ON_HOME_SETTING, "false");
+    expect(leftOut(4_096)).toEqual([]);
+  });
+
+  test("in BN4 home keeps the Singularity worker's RAM too: a 64 GB home is within its reserve there", () => {
+    expect(leftOut(64, 4)).toEqual([]);
+  });
+
+  test("in BN1 the same 64 GB home is above its 35.85 GB: a failure", () => {
+    expect(leftOut(64)).toHaveLength(1);
+  });
+
+  test("the batcher off: none", () => {
+    store.setSetting(BATCHER_ENABLED_SETTING, "false");
+    expect(leftOut(4_096)).toEqual([]);
+  });
+});
+
 describe("a batcher stuck on a poor target (#275)", () => {
   // The BN1.3 exit run's shape (#274), synthetic: hacking 1,327; 25 cloud servers of 1 PB (26.2 PB, 21:30's) before
   // the install and of 16 TB after (about 424 TB with the game's, 23:00's); the big targets at 3× their minimum
@@ -4375,6 +4417,8 @@ describe("a batcher stuck on a poor target (#275)", () => {
   }
 
   test("phantasy for an hour, then n00dles for over 2 after the install: a warning, then the cycle's failure", () => {
+    // Judged on the hack loop's hosts' RAM alone (`batcher.home` off): home's 8 TB isn't the batcher's here (#340).
+    store.setSetting(BATCHER_ON_HOME_SETTING, "false");
     stuckRun();
     const { text, failures, warnings } = runReport(store, stuckWindow);
     const stuck = (lines: string[]) => lines.filter((line) => line.startsWith("batcher stuck on a poor target: "));
@@ -4401,6 +4445,26 @@ describe("a batcher stuck on a poor target (#275)", () => {
     // In section 6, under its line.
     expect(text).toContain(`\n    ${warning}\n    ${failure}\n`);
     expect(text).toContain("\nVerdict: FAIL\n");
+  });
+
+  test("home among the batcher's hosts (#340's review): its 8 TB beyond what it keeps make n00dles poor from the install", () => {
+    stuckRun();
+    const { failures } = runReport(store, stuckWindow);
+    const failure = failures.find((line) => line.startsWith("batcher stuck on a poor target: ")) ?? "";
+    // From the install's first look, not 5 minutes on when the cloud servers came: home's RAM was the batcher's.
+    expect(failure).toContain(
+      `in 1 stretch; the longest, n00dles from ${at(INSTALL_MS)} to ${at(END_MS)} (2 h 10 min on it); `,
+    );
+  });
+
+  test("home's RAM in the ceiling only with the batcher on too (#340's re-review): off, n00dles poor from 5 minutes on", () => {
+    store.setSetting(BATCHER_ENABLED_SETTING, "false");
+    stuckRun();
+    const { failures } = runReport(store, stuckWindow);
+    const failure = failures.find((line) => line.startsWith("batcher stuck on a poor target: ")) ?? "";
+    expect(failure).toContain(
+      `in 1 stretch; the longest, n00dles from ${at(INSTALL_MS + 5 * MINUTE)} to ${at(END_MS)} (2 h 5 min on it); `,
+    );
   });
 
   test("batching the best throughout: none", () => {
