@@ -87,11 +87,22 @@ export function sharingConfigOf(
     const shared = config.hosts.includes(server?.hostname) || server?.hostname === "home";
     if (shared && typeof count === "number" && Number.isFinite(count) && count > 1) cores[server.hostname] = count;
   }
-  const homeKeptGb =
-    singularityMultiplier === null
-      ? SHARE_HOME_KEPT_GB
-      : SHARE_HOME_KEPT_GB + singularityWorkerRamGb(SINGULARITY_LARGEST_WORKER_GB, singularityMultiplier);
-  return { reserveGb: shareReserveGb(peakGb, config.next?.ramGb ?? 0), homeKeptGb, cores };
+  return {
+    reserveGb: shareReserveGb(peakGb, config.next?.ramGb ?? 0),
+    homeKeptGb: homeKeptGbOf(singularityMultiplier),
+    cores,
+  };
+}
+
+/**
+ * What home keeps for the Agent and its workers beside the batcher's share threads (#226's review, #242's), and beside
+ * levelling mode's loops (#336): `SHARE_HOME_KEPT_GB`, and with Singularity (`singularityMultiplier`) the most its
+ * largest worker takes beside that; the rest of home is what the batcher may use.
+ */
+export function homeKeptGbOf(singularityMultiplier: number | null): number {
+  return singularityMultiplier === null
+    ? SHARE_HOME_KEPT_GB
+    : SHARE_HOME_KEPT_GB + singularityWorkerRamGb(SINGULARITY_LARGEST_WORKER_GB, singularityMultiplier);
 }
 
 /** Whether the game has Singularity (#226's review): in BN4, or with SF4, as the slow snapshot's reset info says. */

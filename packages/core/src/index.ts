@@ -568,6 +568,8 @@ export {
   hackLoopsByHost,
   isHackLoopFile,
   isHackLoopReady,
+  LEVEL_LOOP_RAM_GB,
+  LEVEL_LOOP_SCRIPT_NAME,
   percentMoneyHackedPerThread,
 } from "./hack-loop.ts";
 export {
@@ -607,6 +609,23 @@ export {
   parseIntentRequest,
   resetsTheGame,
 } from "./intents.ts";
+export {
+  chooseLevelling,
+  chooseLevellingTarget,
+  LEVELLING_CANDIDATES,
+  LEVELLING_INSTALL_MS,
+  LEVELLING_SWITCH_GAIN,
+  type LevellingCandidate,
+  type LevellingEstimates,
+  type LevellingInputs,
+  type LevellingRate,
+  levelLoopThreads,
+  levellingEstimates,
+  levellingExpPerThreadSecond,
+  neuroFluxMultipliers,
+  secondsToHackingLevel,
+  shortestLevellingCandidate,
+} from "./levelling.ts";
 export { CITIES, TECH_VENDORS, TRAVEL_COST, TRAVEL_WORKER_NAME } from "./locations.ts";
 export { BUY_PROGRAM_WORKER_NAME, PORT_OPENER_PROGRAMS, TOR_ROUTER } from "./programs.ts";
 export { encodeSafeModeState, parseSafeModeState, type SafeModeState } from "./safe-mode.ts";

@@ -116,6 +116,10 @@ Built in #196 (M4 phase A slice A1): "how good is our hacking" as a number. `src
 
 With `percentMoneyHackedPerThread` and `growthLogPerThread` (`src/hack-loop.ts`, #187), and the script RAM (1.7, 1.75, 1.75 GB) and security a thread (0.002, 0.004, 0.05) as constants. The BitNode's `ScriptHackMoney` and `ServerGrowthRate` come folded into the player's `hacking_money` and `hacking_grow` (#321, #334: the brain folds core's `bitNodeHackingMultipliers` in where it reads the player); its other multipliers are taken as 1: exact in BN1, BN2, BN4 and BN5, high elsewhere (the safe side) but for BN11's weaken rate. `test/hacking-ceiling.test.ts` works them by hand, and the brain's `hacking-ceiling-parity.test.ts` checks them against the engine's `ns.formulas.hacking`.
 
+## Levelling (#336)
+
+`src/levelling.ts`, planner v0's first decision (owner decision 67), pure, so the brain's rule and the run report score alike: once the hacking level is all that's left, the time to w0r1d_d43m0n's level by each of three candidates (`levellingEstimates`), batching for money at its measured rate, levelling mode (`levellingExpPerThreadSecond`: `calculateHackingExpGain` over `calculateWeakenTime`, `Hacking.ts:30-38`, `:89-94`, on the best server, `chooseLevellingTarget`, times a fitted factor), and NeuroFlux Governor's levels then an install (`neuroFluxMultipliers`, the install's own `LEVELLING_INSTALL_MS`). The time is integrated over the level, every rate scaling with it as `level + 50` (`secondsToHackingLevel`); the choice is the shortest once it's `LEVELLING_SWITCH_GAIN` (1.25) times shorter (`chooseLevelling`). The level loop's script and RAM are `src/hack-loop.ts`'s (`LEVEL_LOOP_SCRIPT_NAME`, `LEVEL_LOOP_RAM_GB`), and the protocol's `hackLoop.levelling`, `src/control-protocol.ts`'s.
+
 ## The batcher
 
 Built in #204 (M4 phase A slice A7a): the maths of a batch (hack, weaken, grow, weaken), pure, so the in-game batcher ([ingame: the batcher](../ingame/README.md#the-batcher)) and the brain ([its target and plan](../brain/README.md#the-batcher), #206) use the same functions. `src/batcher.ts`.

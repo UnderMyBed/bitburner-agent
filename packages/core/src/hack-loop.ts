@@ -7,6 +7,16 @@ import { deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts"
 
 /** Runs on the servers other than home, with the target and the threads it hacks with (#187) as its arguments. */
 export const HACK_LOOP_SCRIPT_NAME = "hack-loop.js";
+/**
+ * Levelling mode's loop (#336): weakens its target, its one argument, for ever, for the experience; started by
+ * `hack-loop-deploy.js` on the hosts and on home's RAM beyond what home keeps, in the hack loop's place.
+ */
+export const LEVEL_LOOP_SCRIPT_NAME = "level-loop.js";
+/**
+ * Its RAM budget, GB a thread: 1.6 base + `weaken`'s 0.15 (RamCostGenerator.ts:11, :20), ram-budget.json's
+ * `level-loop.js` (the ingame ram-budget test checks both). On the hack loop's 2.4 GB, 27% fewer threads would fit.
+ */
+export const LEVEL_LOOP_RAM_GB = 1.75;
 /** Home worker: roots every server it can with the programs on home. */
 export const HACK_LOOP_ROOT_WORKER_NAME = "hack-loop-root.js";
 /** Home worker: starts and stops the loops on the rooted servers, as the desired state says. */
@@ -61,20 +71,27 @@ export interface HackLoopDeployReport {
 }
 
 /**
- * Any deployment's hack loop: `agent/<deploymentId>/hack-loop.js`, in a folder the deployer generated. Only these are
- * ever stopped, never a script in a player's own `agent/<name>/`.
+ * Any deployment's hack loop: `agent/<deploymentId>/hack-loop.js`, or levelling mode's `level-loop.js` (#336), in a
+ * folder the deployer generated. Only these are ever stopped, never a script in a player's own `agent/<name>/`.
  */
 export function isHackLoopFile(filePath: string): boolean {
   const deploymentId = deploymentIdOfPath(filePath);
   return (
-    deploymentId !== null && isGeneratedDeploymentId(deploymentId) && filePath.endsWith(`/${HACK_LOOP_SCRIPT_NAME}`)
+    deploymentId !== null &&
+    isGeneratedDeploymentId(deploymentId) &&
+    (filePath.endsWith(`/${HACK_LOOP_SCRIPT_NAME}`) || filePath.endsWith(`/${LEVEL_LOOP_SCRIPT_NAME}`))
   );
 }
+
+/** The deploy worker's second argument in levelling mode (#336): the third is then home's kept RAM, GB. */
+const LEVELLING_ARGUMENT = "levelling";
 
 /**
  * The deploy worker's arguments (#184, #187): whether the loop should run, then each host followed by its target and
  * its hack threads (0: no cap, all its threads hack). Off, or on with no target, names no host. Each host's own target
  * lets part of the hosts prepare the next one; its own hack threads keep the hosts from hacking their target dry.
+ * In levelling mode (#336, `levelling`), `"levelling"` and home's kept RAM come first, then each host and home, each
+ * with the target and 0: the level loop on each, on home only beyond the RAM it keeps.
  */
 export function hackLoopDeployArguments(hackLoop: {
   enabled: boolean;
@@ -82,30 +99,51 @@ export function hackLoopDeployArguments(hackLoop: {
   hosts: string[];
   preparing?: { target: string; hosts: string[] } | null;
   hackThreads?: Record<string, number> | null;
+  levelling?: { homeKeptGb: number } | null;
 }): (string | boolean | number)[] {
   if (!hackLoop.enabled || hackLoop.target === null) return [hackLoop.enabled];
+  const { target, levelling } = hackLoop;
+  if (levelling) {
+    const hosts = hackLoop.hosts.includes("home") ? hackLoop.hosts : [...hackLoop.hosts, "home"];
+    return [true, LEVELLING_ARGUMENT, levelling.homeKeptGb, ...hosts.flatMap((host) => [host, target, 0])];
+  }
   const hackThreads = new Map(Object.entries(hackLoop.hackThreads ?? {}));
-  const loopOf = (target: string) => (host: string) => [host, target, hackThreads.get(host) ?? 0];
-  const loops = hackLoop.hosts.flatMap(loopOf(hackLoop.target));
+  const loopOf = (loopTarget: string) => (host: string) => [host, loopTarget, hackThreads.get(host) ?? 0];
+  const loops = hackLoop.hosts.flatMap(loopOf(target));
   if (hackLoop.preparing) loops.push(...hackLoop.preparing.hosts.flatMap(loopOf(hackLoop.preparing.target)));
   return [true, ...loops];
 }
 
-/** A host's loop, as the deploy worker reads its arguments: its target, and its hack threads (null: all of them). */
+/**
+ * A host's loop, as the deploy worker reads its arguments: its target, and its hack threads (null: all of them); in
+ * levelling mode (#336), the level loop, with the RAM home keeps.
+ */
 export interface HostHackLoop {
   target: string;
   hackThreads: number | null;
+  /** Levelling mode (#336): the level loop on this host, and home's kept RAM, GB; absent for the hack loop. */
+  levelling?: { homeKeptGb: number };
 }
 
 /** The deploy worker's arguments read back: each host's loop, none when the loop shouldn't run. */
 export function hackLoopsByHost(workerArguments: unknown[]): Map<string, HostHackLoop> {
   const loops = new Map<string, HostHackLoop>();
   if (workerArguments[0] !== true) return loops;
-  for (let index = 1; index + 1 < workerArguments.length; index += 3) {
+  const keptGb = workerArguments[2];
+  // Home's kept RAM unread: none of home is used.
+  const levelling =
+    workerArguments[1] === LEVELLING_ARGUMENT
+      ? { homeKeptGb: typeof keptGb === "number" && keptGb >= 0 ? keptGb : Number.POSITIVE_INFINITY }
+      : null;
+  for (let index = levelling === null ? 1 : 3; index + 1 < workerArguments.length; index += 3) {
     const hackThreads = workerArguments[index + 2];
     loops.set(String(workerArguments[index]), {
       target: String(workerArguments[index + 1]),
-      hackThreads: Number.isSafeInteger(hackThreads) && (hackThreads as number) >= 1 ? (hackThreads as number) : null,
+      hackThreads:
+        levelling === null && Number.isSafeInteger(hackThreads) && (hackThreads as number) >= 1
+          ? (hackThreads as number)
+          : null,
+      ...(levelling === null ? {} : { levelling }),
     });
   }
   return loops;

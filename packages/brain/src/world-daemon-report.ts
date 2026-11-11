@@ -9,22 +9,45 @@
 // gain followed in its BitNode (#303, #308) is expected: the owner's switch asked for that end. One no stop followed
 // (the switch off, or the stop didn't fire) is the owner's prompt (#308): a warning once w0r1d_d43m0n has been ready
 // (rooted at its level) 5 minutes, unbroken to its BitNode's last medium snapshot, else a line.
+// The levelling choice (#336, ./levelling.ts): once the hacking level is all that's left, the candidates' estimates
+// from the window's last snapshots (core's levelling.ts, as the brain scores them), the brain's choice from its
+// `levellingChosen` events (none, a brain from before #336: batching for money), and levelling mode's fitted factor,
+// its measured rate against the formula's. A failure: the brain not on the shortest (past the hysteresis' 1.25 times)
+// for longer than a choice takes (`LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS`), or its choice's estimate past the time
+// the BitNode has taken so far, a hopeless one (decision 67's point 8).
 import {
   gangFactionOf,
+  LEVELLING_SWITCH_GAIN,
+  type LevellingCandidate,
+  type LevellingRate,
+  levellingEstimates,
   type MediumSnapshotData,
   type SlowSnapshotData,
   type StaticSnapshotData,
+  shortestLevellingCandidate,
   WORLD_DAEMON,
 } from "@bitburner-agent/core";
+import { bitNodeHackingOf } from "./batcher.ts";
 import { BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND } from "./bitnode-end.ts";
 import { gangShopOf } from "./gang.ts";
 import { formatDuration } from "./gap-report.ts";
 import { CITY_GROUP_CHOSEN_EVENT_KIND } from "./invitations.ts";
+import {
+  describeEstimate,
+  describeEstimates,
+  LEVELLING_CANDIDATE_WORDS,
+  LEVELLING_CHOSEN_EVENT_KIND,
+  LevellingRateWindow,
+  levellingFiguresOf,
+  levellingInputsOf,
+  settleMsOf,
+} from "./levelling.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
   DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
   describeWorldDaemonPath,
+  HACKING_EXP_WINDOW_MS,
   HackingExpRate,
   sinceResetOf,
   WORLD_DAEMON_STALLED_AFTER_MS,
@@ -32,15 +55,40 @@ import {
   worldDaemonPath,
 } from "./world-daemon.ts";
 
-/** The World Daemon's events (#215): section 3's and 4's, so left out of section 1's timeline. */
+/**
+ * The World Daemon's events (#215): section 3's and 4's, so left out of section 1's timeline; the levelling choice's
+ * too (#336).
+ */
 export const WORLD_DAEMON_EVENT_KINDS = [
   WORLD_DAEMON_STALLED_EVENT_KIND,
   BITNODE_DESTROY_SENT_EVENT_KIND,
   DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
+  LEVELLING_CHOSEN_EVENT_KIND,
 ];
 
 const fieldsOf = (detail: unknown) =>
   (typeof detail === "object" && detail !== null ? detail : {}) as Record<string, unknown>;
+
+/**
+ * How long the brain may be off the shortest candidate (#336) before the run report fails it: 10 minutes, the window
+ * its rates are measured over (`HACKING_EXP_WINDOW_MS`). The first choice comes a minute after the level is all
+ * that's left (money's rate measured), and later ones as the measured rates move, within the window.
+ */
+export const LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS = HACKING_EXP_WINDOW_MS;
+
+/** The brain's levelling mode at `atMs`, from its events (#336): the last choice by then, or money with none. */
+export function levellingModeAt(events: readonly StoredEvent[], atMs: number): LevellingCandidate {
+  const last = events.findLast((event) => event.kind === LEVELLING_CHOSEN_EVENT_KIND && event.atMs <= atMs);
+  const mode = fieldsOf(last?.detail).mode;
+  return mode === "level" || mode === "install" ? mode : "money";
+}
+
+/** The snapshots the levelling's judgement reads (#336): the window's last of each tier. */
+interface LastSnapshots {
+  staticLast: StaticSnapshotData | undefined;
+  mediumLast: MediumSnapshotData | undefined;
+  slowLast: SlowSnapshotData | undefined;
+}
 
 /**
  * w0r1d_d43m0n's readiness in a BitNode (#308), as its last medium snapshot left it: whether it could be judged (a
@@ -64,6 +112,14 @@ export class WorldDaemonFold {
   readonly #readiness = new Map<number, Readiness>();
   /** The last slow snapshot's game time (#334): the gang's faction's rate, since its install. */
   #slowGameTimeMs: number | null = null;
+  /**
+   * The medium snapshots' experience and level in the window's last BitNode and cycle (#336), for the measured rates:
+   * another BitNode, or the experience falling (an install), starts them again.
+   */
+  #samples: { atMs: number; exp: number; level: number }[] = [];
+  #samplesBitNode: number | null = null;
+  /** Since when the hacking level has been all that's left (#336), unbroken to the last medium snapshot, or null. */
+  #levelOnlySinceMs: number | null = null;
 
   /** A slow snapshot's game time, in order (#334). */
   addSlow(gameTimeMs: number): void {
@@ -83,6 +139,17 @@ export class WorldDaemonFold {
     if (typeof exp === "number" && Number.isFinite(exp)) this.#exp.add(atMs, exp);
     const required = this.#requirements.findLast((requirement) => requirement.atMs <= atMs)?.level;
     const level = player?.skills?.hacking;
+    // The levelling's samples, and since when the level has been all that's left (#336): w0r1d_d43m0n rooted, the
+    // level short of its requirement (rooted, The Red Pill is installed: it's reachable only then).
+    if (typeof exp === "number" && Number.isFinite(exp) && typeof level === "number" && Number.isFinite(level)) {
+      const last = this.#samples.at(-1);
+      if (this.#samplesBitNode !== bitNode || (last !== undefined && exp < last.exp)) this.#samples = [];
+      this.#samplesBitNode = bitNode;
+      this.#samples.push({ atMs, exp, level });
+    }
+    const daemonRooted = data.servers?.find((server) => server.hostname === WORLD_DAEMON)?.hasAdminRights === true;
+    const levelOnly = required !== undefined && typeof level === "number" && level < required && daemonRooted;
+    this.#levelOnlySinceMs = levelOnly ? (this.#levelOnlySinceMs ?? atMs) : null;
     const ready =
       required !== undefined &&
       typeof level === "number" &&
@@ -137,6 +204,9 @@ export class WorldDaemonFold {
     }
     for (const line of described) lines.push(`    ${line}`);
     if (described.length === 0) lines.push("    no slow snapshot in the window");
+    for (const line of this.#levelling({ staticLast, mediumLast, slowLast }, events, formatTime)?.lines ?? []) {
+      lines.push(`    ${line}`);
+    }
     for (const { atMs, detail } of events.filter((event) => event.kind === BITNODE_DESTROY_SENT_EVENT_KIND)) {
       const fields = fieldsOf(detail);
       lines.push(
@@ -169,11 +239,14 @@ export class WorldDaemonFold {
       warnings,
       formatTime,
       bitNodeAt,
+      snapshots,
     }: {
       failures: string[];
       warnings: string[];
       formatTime: (ms: number) => string;
       bitNodeAt: (atMs: number) => number;
+      /** The window's last snapshots, for the levelling choice's judgement (#336); absent, none. */
+      snapshots?: LastSnapshots;
     },
   ): string[] {
     const lines = [
@@ -233,6 +306,117 @@ export class WorldDaemonFold {
       failures.push(line);
     }
     if (stalls.length === 0) lines.push("    none");
+    // The levelling choice (#336), only while the hacking level is all that's left.
+    const levelling = snapshots === undefined ? null : this.#levelling(snapshots, events, formatTime);
+    if (levelling === null) return lines;
+    lines.push(
+      "  the levelling choice (#336: the brain not on the shortest way to w0r1d_d43m0n's level for " +
+        `${formatDuration(LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS)}, or its choice's estimate past the BitNode's time so ` +
+        "far):",
+    );
+    for (const failure of levelling.failures) {
+      lines.push(`    ${failure}`);
+      failures.push(failure);
+    }
+    if (levelling.failures.length === 0) lines.push("    none");
     return lines;
+  }
+
+  /**
+   * The levelling choice as the window's end shows it (#336), or null while the hacking level isn't all that's left:
+   * the candidates' estimates (core's `levellingEstimates`, on the brain's own figures, `levellingFiguresOf`), the
+   * brain's mode from its events (`levellingModeAt`), the mode's rate measured from the medium snapshots once it
+   * settled, and the failures: off the shortest past the hysteresis for `LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS`, or
+   * the mode's estimate past the BitNode's game time so far (from the slow snapshot's `lastNodeReset`): the whole path
+   * to here took that long, so a last step longer than all of it is hopeless (BN4.1: about 2,900 h to go, 27 h in).
+   */
+  #levelling(
+    { staticLast, mediumLast, slowLast }: LastSnapshots,
+    events: readonly StoredEvent[],
+    formatTime: (ms: number) => string,
+  ): { lines: string[]; failures: string[] } | null {
+    const sinceMs = this.#levelOnlySinceMs;
+    const lastMs = this.#samples.at(-1)?.atMs;
+    const required = this.#requirements.at(-1)?.level;
+    if (sinceMs === null || lastMs === undefined || required === undefined || mediumLast === undefined) return null;
+    const hacking = bitNodeHackingOf(slowLast?.resetInfo?.currentNode).multipliers;
+    const figures = levellingFiguresOf(staticLast ?? null, mediumLast, slowLast ?? null, hacking);
+    if (figures === null) return null;
+    const mode = levellingModeAt(events, lastMs);
+    const chosen = events.findLast((event) => event.kind === LEVELLING_CHOSEN_EVENT_KIND && event.atMs <= lastMs);
+    const fields = fieldsOf(chosen?.detail);
+    const modeSinceMs = Math.max(sinceMs, chosen?.atMs ?? sinceMs);
+    const target = figures.target;
+    // The mode's rate, measured once it settled, over the window's last 10 minutes at most.
+    const settledMs = modeSinceMs + (mode === "money" ? 0 : settleMsOf(mediumLast, hacking, target ? [target] : []));
+    const window = new LevellingRateWindow();
+    for (const sample of this.#samples) if (sample.atMs >= settledMs) window.add(sample.atMs, sample.exp, sample.level);
+    const measured = window.measured();
+    const rateOf = (value: unknown): LevellingRate | null => {
+      const rate = value as Partial<LevellingRate> | null | undefined;
+      return typeof rate?.expPerSecond === "number" && typeof rate.atLevel === "number"
+        ? { expPerSecond: rate.expPerSecond, atLevel: rate.atLevel }
+        : null;
+    };
+    const money = mode === "money" ? measured : rateOf(fields.money);
+    const predicted =
+      target === null || measured === null
+        ? null
+        : target.expPerThreadSecond * figures.threads * ((measured.atLevel + 50) / (figures.level + 50));
+    const fitted = mode === "level" && measured !== null && predicted !== null && predicted > 0;
+    const factor = fitted
+      ? measured.expPerSecond / (predicted as number)
+      : typeof fields.factor === "number"
+        ? fields.factor
+        : null;
+    const levels = typeof fields.neuroFluxLevels === "number" ? fields.neuroFluxLevels : null;
+    const estimates = levellingEstimates(levellingInputsOf(figures, required, money, factor, levels));
+    const best = shortestLevellingCandidate(estimates);
+    const words = LEVELLING_CANDIDATE_WORDS;
+    const lines = [
+      `levelling (the hacking level all that's left since ${formatTime(sinceMs)}, #336): ${describeEstimates(estimates)}` +
+        (chosen === undefined ? " (no levelling choice in the window: a brain from before #336, or none yet)" : ""),
+      `  the brain's choice: ${words[mode]} since ${formatTime(modeSinceMs)}` +
+        (target === null ? "" : `; levelling's target ${target.hostname}`) +
+        "; levelling's fitted factor " +
+        (fitted
+          ? `${(factor as number).toFixed(2)} (measured ${(measured as LevellingRate).expPerSecond.toExponential(2)}/s, ` +
+            `the formula ${(predicted as number).toExponential(2)}/s for the RAM it runs on)`
+          : factor !== null
+            ? `${factor.toFixed(2)} (as the brain last fitted it)`
+            : "not measured (1 taken, optimistic)"),
+    ];
+    const failures: string[] = [];
+    const ours = estimates[mode];
+    const shortest = best === null ? null : estimates[best];
+    const offMs = lastMs - modeSinceMs;
+    if (
+      best !== null &&
+      best !== mode &&
+      shortest !== null &&
+      (ours === null || shortest * LEVELLING_SWITCH_GAIN < ours) &&
+      offMs > LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS
+    ) {
+      failures.push(
+        `levelling: the brain on ${words[mode]} (${describeEstimate(ours)}) since ${formatTime(modeSinceMs)}, not the ` +
+          `shortest, ${words[best]} (${describeEstimate(shortest)}), for ${formatDuration(offMs)}, past the ` +
+          `${formatDuration(LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS)} a choice takes`,
+      );
+    }
+    const resetAt = slowLast?.resetInfo?.lastNodeReset;
+    const soFarMs =
+      typeof resetAt === "number" && this.#slowGameTimeMs !== null ? Math.max(0, this.#slowGameTimeMs - resetAt) : null;
+    if (
+      ours !== null &&
+      soFarMs !== null &&
+      ours * 1000 > soFarMs &&
+      lastMs - sinceMs > LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS
+    ) {
+      failures.push(
+        `levelling: the brain's choice, ${words[mode]}, ${describeEstimate(ours)} to w0r1d_d43m0n's level, past the ` +
+          `${formatDuration(soFarMs)} the BitNode has taken so far: a hopeless estimate`,
+      );
+    }
+    return { lines, failures };
   }
 }

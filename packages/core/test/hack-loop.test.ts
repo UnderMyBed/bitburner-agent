@@ -18,6 +18,57 @@ test("a hack loop is ours only in a folder the deployer generated, so a player's
   expect(isHackLoopFile("agent/0123456789AB/hack-loop.js")).toBe(false);
   expect(isHackLoopFile("agent/0123456789ab/agent.js")).toBe(false);
   expect(isHackLoopFile("hack-loop.js")).toBe(false);
+  // Levelling mode's loop (#336) is ours on the same terms.
+  expect(isHackLoopFile("agent/0123456789ab/level-loop.js")).toBe(true);
+  expect(isHackLoopFile("agent/mine/level-loop.js")).toBe(false);
+});
+
+test("the deploy worker's arguments in levelling mode (#336): each host and home with the target, home's kept RAM", () => {
+  const hackLoop = {
+    enabled: true,
+    target: "joesguns",
+    hosts: ["foodnstuff", "pserv-0"],
+    levelling: { homeKeptGb: 32 },
+  };
+  const args = hackLoopDeployArguments(hackLoop);
+  expect(args).toEqual([
+    true,
+    "levelling",
+    32,
+    "foodnstuff",
+    "joesguns",
+    0,
+    "pserv-0",
+    "joesguns",
+    0,
+    "home",
+    "joesguns",
+    0,
+  ]);
+  const levelling = { homeKeptGb: 32 };
+  expect([...hackLoopsByHost(args)]).toEqual([
+    ["foodnstuff", { target: "joesguns", hackThreads: null, levelling }],
+    ["pserv-0", { target: "joesguns", hackThreads: null, levelling }],
+    ["home", { target: "joesguns", hackThreads: null, levelling }],
+  ]);
+  // Home named already: once.
+  expect(hackLoopDeployArguments({ ...hackLoop, hosts: ["home"] })).toEqual([
+    true,
+    "levelling",
+    32,
+    "home",
+    "joesguns",
+    0,
+  ]);
+  // Off, or no target: none, as before.
+  expect(hackLoopsByHost(hackLoopDeployArguments({ ...hackLoop, enabled: false })).size).toBe(0);
+  expect(hackLoopsByHost(hackLoopDeployArguments({ ...hackLoop, target: null })).size).toBe(0);
+  // Home's kept RAM unread: none of home is used.
+  expect(hackLoopsByHost([true, "levelling", "32", "home", "joesguns", 0]).get("home")).toEqual({
+    target: "joesguns",
+    hackThreads: null,
+    levelling: { homeKeptGb: Number.POSITIVE_INFINITY },
+  });
 });
 
 test("generated deployment ids are 12 lowercase hex digits", () => {

@@ -156,7 +156,11 @@ try {
   // so each snapshot's hack loop target is set when it looks.
   const incomeWatch = new IncomeWatch({
     channel,
-    hackLoopTarget: () => desiredState.hackLoopView().target,
+    // Levelling mode (#336) earns experience, not money: no income is expected of it.
+    hackLoopTarget: () => {
+      const view = desiredState.hackLoopView();
+      return view.levelling === true ? null : view.target;
+    },
     log,
   });
   const controlServer = await startWebSocketServer({

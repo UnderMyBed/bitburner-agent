@@ -45,6 +45,9 @@
 //   donation, and the money at the income (`countablesToCome`). No countdown meanwhile; the countdown's money (or the
 //   set's and the last's, if more) held back from cloud servers and home RAM; the progress, the dashboard and the log
 //   say so, and when it's over.
+// - The planner's levelling install (#336, ./levelling.ts): The Red Pill installed and every install held for the
+//   destroy, A6 offers the NeuroFlux Governor levels the money buys (`neuroFluxOffer`); once the planner chooses them,
+//   the install is chosen at once (`reason` "the hacking level"), the destroy's hold set aside for it.
 import {
   type AugmentationPurchaseState,
   type AugmentationSet,
@@ -423,6 +426,12 @@ export interface AugmentationInputs {
    * shop, unknown. A commit for The Red Pill isn't called off for want of a seller meanwhile. Absent, read.
    */
   gangUnread?: boolean;
+  /**
+   * The planner's levelling choice is NeuroFlux Governor's levels and an install (#336, ./levelling.ts): with The Red
+   * Pill installed and the destroy wanted, the install is chosen at once ("the hacking level") in place of the
+   * destroy's hold, if the money buys a level. Absent, not.
+   */
+  levellingInstall?: boolean;
 }
 
 /** What the rule asks of the controller. */
@@ -689,6 +698,12 @@ export function describeReason(reason: InstallReason | string, figures: Partial<
   }
   if (reason === "nothing left") return "nothing else worth installing at the joined factions";
   if (reason === "The Red Pill") return "The Red Pill reached: it links w0r1d_d43m0n once installed";
+  if (reason === "the hacking level") {
+    return (
+      `the hacking level: the planner's shortest way to w0r1d_d43m0n's is NeuroFlux Governor's levels, then an ` +
+      `install (#336; ${counted})`
+    );
+  }
   if (reason === "Daedalus donations") {
     return (
       `Daedalus donations: its reputation this cycle unlocks its donations at the next install, so ${THE_RED_PILL}'s ` +
@@ -881,6 +896,11 @@ export class AugmentationRule {
   #holding: HoldReason | null = null;
   /** The last decision held installs for The Red Pill at the gang's faction (#335's review): the World Daemon's stall. */
   #redPillHeldAtGang = false;
+  /**
+   * NeuroFlux Governor's levels the money buys (#336), donations included (decision 53), as the last decision held
+   * every install for the destroy, or null: the planner's install candidate.
+   */
+  #neuroFluxOffer: number | null = null;
   /** The install held for Daedalus's count (#243), as last decided, or null: logged as it starts and ends. */
   #countHeld: CountHoldView | null = null;
   /** This update logged the hold's end (#243 review): `update` logs one on any other path. */
@@ -999,6 +1019,15 @@ export class AugmentationRule {
     return this.#redPillHeldAtGang;
   }
 
+  /**
+   * NeuroFlux Governor's levels the money would buy at an install now (#336, core's `affordableCounts`: each level's
+   * price, 1.14 times the last's and 1.9 times for each purchase queued before it, and its reputation, by donation where
+   * a seller takes them), while The Red Pill is installed and every install held for the destroy; null otherwise.
+   */
+  neuroFluxOffer(): number | null {
+    return this.#neuroFluxOffer;
+  }
+
   /** An install reported done that the next slow snapshot didn't show reset, until a reset (#213 re-review). */
   installNotReset(): { atMs: number; queued: string[] } | null {
     return this.#installNotReset === null ? null : { ...this.#installNotReset };
@@ -1054,6 +1083,7 @@ export class AugmentationRule {
     const holdWork = inputs.holdWork ?? { owners: null, brainWorks: true };
     this.#daedalusHold = 0;
     this.#redPillHeldAtGang = false;
+    this.#neuroFluxOffer = null;
     this.#redPillHold = 0;
     this.#enabled = enabled;
     const atMs = nowMs ?? 0;
@@ -1119,6 +1149,7 @@ export class AugmentationRule {
         holdWork,
         gangShop: inputs.gangShop ?? null,
         gangUnread: inputs.gangUnread ?? false,
+        levellingInstall: inputs.levellingInstall ?? false,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -1377,6 +1408,7 @@ export class AugmentationRule {
     holdWork,
     gangShop,
     gangUnread,
+    levellingInstall,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -1392,6 +1424,7 @@ export class AugmentationRule {
     holdWork: HoldWork;
     gangShop: JoinedFaction | null;
     gangUnread: boolean;
+    levellingInstall: boolean;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -1558,13 +1591,19 @@ export class AugmentationRule {
             "install, but nothing is queued or affordable",
         };
       }
-      const holding = endgame.kind === "hold" ? endgame.why : null;
+      // The destroy's hold (#336): what the money buys of NeuroFlux Governor is the planner's install candidate, and
+      // that install, once the planner chooses it, goes at once in the hold's place ("the hacking level"), if the money
+      // buys a level (an install of nothing new would only lose the experience).
+      const destroyHold = endgame.kind === "hold" && endgame.why === "destroy";
+      if (destroyHold) this.#neuroFluxOffer = counts.neuroFluxLevels;
+      const forLevel = destroyHold && levellingInstall && counts.neuroFluxLevels > 0;
+      const holding = endgame.kind === "hold" && !forLevel ? endgame.why : null;
       if (holding !== null && holding !== this.#holding) {
         this.#log(`augmentations: no install, waiting for ${endgame.kind === "hold" ? endgame.waitingFor : ""}`);
       }
       this.#holding = holding;
       let reason: InstallReason;
-      if (endgame.kind === "hold") {
+      if (endgame.kind === "hold" && !forLevel) {
         // The Red Pill's way overrides the count rule (#215).
         this.#cancelCountdown(`held for ${endgame.waitingFor}`);
         if (endgame.why === "daedalus") this.#daedalusHold = endgame.reserve;
@@ -1592,7 +1631,7 @@ export class AugmentationRule {
       const firstDecision = !this.#decidedOnce;
       this.#decidedOnce = true;
       const countHold =
-        short && countdownReason !== null && endgame.kind !== "redPill"
+        short && countdownReason !== null && endgame.kind !== "redPill" && !forLevel
           ? daedalusCountHold({
               installed: ownedAugs,
               installing,
@@ -1670,6 +1709,10 @@ export class AugmentationRule {
         this.#cancelCountdown("The Red Pill reached, installed at once");
         reason = "The Red Pill";
         redPillDonation = endgame.donation;
+      } else if (forLevel) {
+        // The planner's levelling install (#336): at once, as The Red Pill's; A6 buys the levels, then installs.
+        this.#cancelCountdown("the planner's levelling install, at once");
+        reason = "the hacking level";
       } else if (countdownReason === null) {
         this.#cancelCountdown(`the rule no longer says install: ${describeCounts(rule)}`);
         // Held back from cloud servers only for an install the rule would choose with A2's payback limit's more income:

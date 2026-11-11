@@ -382,6 +382,46 @@ describe("rejected, each with a reason", () => {
     }
   });
 
+  test("levelling mode (#336): carried with home's kept RAM; absent or null, none; refused with each its reason", () => {
+    const at = (fields: unknown) => parseBrainMessage(JSON.stringify({ ...desiredState, hackLoop: fields }));
+    const levelling = { homeKeptGb: 32 };
+    expect(at({ ...hackLoop, levelling })).toEqual({
+      ok: true,
+      message: { ...desiredState, hackLoop: { ...hackLoop, levelling } },
+    });
+    for (const none of [undefined, null]) {
+      expect(at({ ...hackLoop, levelling: none })).toEqual({ ok: true, message: desiredState });
+    }
+    const reasonOf = (fields: unknown) => {
+      const result = at(fields);
+      return result.ok ? null : result.reason;
+    };
+    for (const notAnObject of [4, "4", [4], true]) {
+      expect(reasonOf({ ...hackLoop, levelling: notAnObject })).toBe(
+        "desiredState's hackLoop.levelling isn't an object",
+      );
+    }
+    for (const [kept, described] of [
+      [-1, "-1"],
+      ["32", '"32"'],
+      [null, "null"],
+      [undefined, "undefined"],
+    ] as const) {
+      expect(reasonOf({ ...hackLoop, levelling: { homeKeptGb: kept } })).toBe(
+        `desiredState's hackLoop.levelling.homeKeptGb is ${described}`,
+      );
+    }
+    expect(reasonOf({ enabled: false, target: null, hosts: [], levelling })).toBe(
+      "desiredState's hackLoop.levelling with the loop off or no target",
+    );
+    expect(reasonOf({ ...hackLoop, levelling, hackThreads: { foodnstuff: 4 } })).toBe(
+      "desiredState's hackLoop.levelling with preparing or hackThreads",
+    );
+    expect(reasonOf({ ...hackLoop, levelling, preparing: { target: "zer0", hosts: ["max-hardware"] } })).toBe(
+      "desiredState's hackLoop.levelling with preparing or hackThreads",
+    );
+  });
+
   test("a desired state keeps only its known fields", () => {
     const extras = JSON.stringify({
       ...desiredState,
@@ -634,6 +674,12 @@ describe("the batcher (#205)", () => {
   test("only with the hack loop on", () => {
     const off = { hackLoop: { enabled: false, target: null, hosts: [] }, batcher };
     expect(parsed(off)).toEqual({ ok: false, reason: "desiredState's batcher with the hack loop off" });
+    // Nor with it levelling (#336), which takes the batcher's hosts and home's RAM.
+    const levelling = { hackLoop: { enabled: true, target: "joesguns", hosts: [], levelling: { homeKeptGb: 32 } } };
+    expect(parsed({ ...levelling, batcher })).toEqual({
+      ok: false,
+      reason: "desiredState's batcher with the hack loop levelling",
+    });
   });
 
   test("while the brain holds: off goes as it is; on, as last sent; nothing sent yet, nothing", () => {

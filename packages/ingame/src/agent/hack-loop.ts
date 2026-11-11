@@ -89,10 +89,18 @@ export function createHackLoop(
             ? "off"
             : desired.target === null
               ? "on, no target yet"
-              : runningText(deployed, desired.target, desired.preparing?.target ?? null),
+              : desired.levelling
+                ? levellingText(deployed, desired.target)
+                : runningText(deployed, desired.target, desired.preparing?.target ?? null),
       );
     },
   };
+}
+
+/** Levelling mode (#336), for the change log: "levelling, N threads weakening T on M servers". */
+function levellingText(deployed: HackLoopDeployReport, target: string): string {
+  const running = deployed.byTarget.find((each) => each.target === target);
+  return `levelling, ${running?.threadsRunning ?? 0} threads weakening ${target} on ${running?.serversRunning ?? 0} servers`;
 }
 
 /**
