@@ -35,7 +35,7 @@ test("1 virtual hour from BN5.1 with SF1.3 and SF4.3: roots, batches, earns and 
   // Intelligence in BN5: 1 with no experience (`PersonObjects/Person.ts:159`), then gained (`Person.ts:185`) from the
   // Singularity calls, the TOR router's, home RAM's and the programs' (`NetscriptFunctions/Singularity.ts:416,456,648`):
   // 1 → 4 on 2026-11-11. The report's own line (#349).
-  expect(line("    intelligence:")).toMatch(/^ {4}intelligence: 1 → [2-9]\d*$/);
+  expect(line("    intelligence:")).toMatch(/^ {4}intelligence: 1 → (?!1$)\d+$/);
   expect(line("    home RAM: 32 GB → ")).toMatch(/^ {4}home RAM: 32 GB → (64|128|256|512|1024) GB$/);
   expect(line("    the game's servers rooted:")).toMatch(/^ {4}the game's servers rooted: 0 → \d{2}$/);
   expect(line("    TOR router:")).toBe("    TOR router: no → yes");

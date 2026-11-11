@@ -2553,7 +2553,7 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
    * The default report's most lines and characters for `busyRun` (#245): its own are 201 and 14,366 (with #349's
    * intelligence line); --verbose's lines (909) are over 4 times the bound.
    */
-  const BUSY_REPORT_LINES = 205;
+  const BUSY_REPORT_LINES = 201;
   const BUSY_REPORT_CHARACTERS = 14_500;
   /**
    * pserv-index's RAM at `offsetMs`, or null where the medium snapshots don't show it: in cycle 1, each bought at 8 GB
@@ -3031,7 +3031,7 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
         // About 1,350 characters a cycle (2b's block is most of it), and 9,300 besides: 17,388 for 6 cycles at 10 of
         // each, 17,423 at 40, and 28,322 for 14 over 3 BitNodes (#349's intelligence line in each). Not how busy each
         // cycle was.
-        expect(brief.text.length).toBeLessThanOrEqual(9_100 + 1_400 * cycles);
+        expect(brief.text.length).toBeLessThanOrEqual(9_065 + 1_400 * cycles);
         // What comes again each reset is one line, not one a reset (#245's second round): the backdoors, the joins,
         // and each BitNode's lists.
         const lines = brief.text.split("\n");
