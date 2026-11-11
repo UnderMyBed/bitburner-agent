@@ -61,6 +61,7 @@ import {
   chooseBatcher,
   HACKING_MULTIPLIERS_UNREAD,
   readBatcherEnabled,
+  readBatcherOnHome,
 } from "./batcher.ts";
 import {
   type BitNodeEndEvent,
@@ -121,6 +122,7 @@ import {
 import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readProgramsEnabled } from "./programs.ts";
 import {
   factionWorkGoingOn,
+  homeKeptGbOf,
   readShareEnabled,
   type ShareView,
   shareBonusOf,
@@ -1491,7 +1493,8 @@ export class DesiredStateController {
    * to plan, the reason kept for the dashboard) the hack loop as planned. Logged when it changes, and when the target
    * or the next target does. With faction work going on (`factionWorking`, from the work sent and the Agent's word) and
    * sharing's switch on, the batcher's config asks it to share (#224); so it starts or stops at the next update after
-   * the work's outcome changes, a medium snapshot at most.
+   * the work's outcome changes, a medium snapshot at most. Home is one of its hosts too (#340), for its RAM beyond what
+   * it keeps for the Agent, unless `BATCHER_ON_HOME_SETTING` is off.
    */
   #withBatcher(
     hackLoop: DesiredState["hackLoop"],
@@ -1548,6 +1551,9 @@ export class DesiredStateController {
     // rho-construction and back.
     const health = this.#batcherHealth();
     const batching = health?.state === "batching" || health?.state === "recovering" ? health.target : null;
+    // Home among the hosts (#340), for its RAM beyond what it keeps for the Agent and its workers: the one reserve
+    // the share and levelling mode keep (`homeKeptGbOf`), with Singularity its largest worker's too.
+    const homeKeptGb = readBatcherOnHome(this.#store) ? homeKeptGbOf(singularityRamMultiplierOf(this.#slowData)) : null;
     const planned = chooseBatcher(
       this.#staticData,
       this.#mediumData,
@@ -1555,6 +1561,7 @@ export class DesiredStateController {
       hosts,
       this.#desired?.batcher ?? null,
       batching,
+      homeKeptGb,
     );
     if (planned.batcher === null) {
       this.#batcherWhy = planned.why;

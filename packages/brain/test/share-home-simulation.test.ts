@@ -5,10 +5,16 @@
 // servers with batches, over 80% of their RAM. Before #242 the share's 80% cap counted home's RAM and use with theirs,
 // so the room was 0 and home sat idle: the bonus x1.000 against x1.388 possible. Now home shares, in two halves, and
 // the bonus averages within 1% of the bonus possible on the RAM free, never x1.000, with no batch late, lost or short.
-// CI runs seed 1; `SHARE_HOME_SEEDS` (`1,2,3`, say) runs others.
+// That's home beside the batcher's hosts. Since #340, the default, home is one of them for its RAM beyond what it
+// keeps, so #242's shape runs with `BATCHER_ON_HOME_SETTING` off. The default's arm: the batches fill home too (its RAM
+// batches first, as #340 asks), the share takes what its rules leave, the bonus within 1% of that possible, and no
+// failure of the share's or of home's (`batches left home idle`). CI runs seed 1; `SHARE_HOME_SEEDS` (`1,2,3`, say)
+// runs others.
 import type { BatcherHealth, FastSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
+import { BATCHER_ON_HOME_SETTING } from "../src/batcher.ts";
 import { runReport } from "../src/run-report.ts";
+import { writeSwitch } from "../src/switches.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts } from "./helpers/fresh-start.ts";
 
@@ -52,62 +58,17 @@ test.each(SEEDS)(
   "seed %i: batches over 80% of the cloud servers, home shares beside them, the bonus within 1% of the possible",
   { timeout: 600_000 },
   async (seed) => {
-    const fresh = await freshStartOf({
-      withDesiredState: true,
-      seed,
-      beforeAgent: async (game) => {
-        await game.simulation.diagnostics.setMoney(1e15);
-        await ownerRunsOnHome(game, OWNERS_SETUP);
-        await game.simulation.diagnostics.setHomeRam(HOME_GB);
-        await game.simulation.diagnostics.setMoney(0);
-        await game.simulation.diagnostics.gainHackingExp(1e15);
-        await game.simulation.diagnostics.joinFactionWithReputation("CyberSec", 0);
-      },
-    });
-    const { game, data, simulation } = fresh;
-    await simulation.writeFile("home", "cloud-use.js", CLOUD_USE);
-    // The same game throughout: no purchases, so the hosts and the target stay as they are.
-    const controller = fresh.controller();
-    controller.setProgramsEnabled(false);
-    controller.setHomeRamEnabled(false);
-    controller.setCloudServersEnabled(false);
-    controller.setAugmentationsEnabled(false);
-    expect(controller.setWork({ faction: "CyberSec", workType: "hacking" })).toEqual({ ok: true });
-    const health = () => fresh.latest<FastSnapshotData>("fast")?.batcher ?? null;
-    await game.runUntil(() => health()?.state === "batching", 10 * 60_000);
-    // Into the batches' rhythm, and the share's halves'.
-    await game.run(60_000);
-    const fromMs = game.clock.now();
-    const cloudUse: number[] = [];
-    for (let elapsed = 0; elapsed < STRETCH_MS; elapsed += 30_000) {
-      const { pid } = await simulation.run("home", "cloud-use.js");
-      await game.run(30_000);
-      const line = (await simulation.logs(pid)).find((each) => each.startsWith("{"));
-      const { maxGb, usedGb } = JSON.parse(line ?? "{}") as { maxGb: number; usedGb: number };
-      cloudUse.push(usedGb / maxGb);
-    }
-    const toMs = game.clock.now();
-
-    const healths: { atMs: number; health: BatcherHealth }[] = [];
-    for (const row of data.store.iterateSnapshotsInWindow({
-      environment: "E1",
-      sinceMs: fromMs,
-      untilMs: toMs,
-      tier: "fast",
-    })) {
-      const each = (row.data as FastSnapshotData).batcher;
-      if (each) healths.push({ atMs: row.receivedAtMs, health: each });
-    }
+    const { healths, cloudUse, report } = await run(seed, false);
     const average = (of: (each: BatcherHealth) => number) =>
       healths.reduce((sum, { health: each }) => sum + of(each), 0) / healths.length;
     const bonus = average((each) => each.sharing?.bonus ?? 1);
     const possible = average((each) => each.sharing?.possibleBonus ?? 1);
     const homeShareGb = average((each) => (each.sharing?.ramGb ?? 0) - (each.sharing?.hostsRamGb ?? 0));
     console.log(
-      `seed ${seed}: the cloud servers ${cloudUse.map((each) => `${(each * 100).toFixed(0)}%`).join(", ")} used; ` +
-        `home sharing ${Math.round(homeShareGb).toLocaleString("en-US")} GB on average; the bonus x${bonus.toFixed(3)} ` +
-        `on average, of x${possible.toFixed(3)} possible; ${healths.at(-1)?.health.batchesStarted} batches on ` +
-        `${healths.at(-1)?.health.target}`,
+      `seed ${seed}, home beside: the cloud servers ${cloudUse.map((each) => `${(each * 100).toFixed(0)}%`).join(", ")} ` +
+        `used; home sharing ${Math.round(homeShareGb).toLocaleString("en-US")} GB on average; the bonus ` +
+        `x${bonus.toFixed(3)} on average, of x${possible.toFixed(3)} possible; ${healths.at(-1)?.health.batchesStarted} ` +
+        `batches on ${healths.at(-1)?.health.target}`,
     );
     expect(healths.length).toBeGreaterThan(100);
     // Run #3's shape: the batches over 80% of the cloud servers throughout, where the old cap left no room at all.
@@ -126,7 +87,6 @@ test.each(SEEDS)(
     expect(bonus).toBeLessThanOrEqual(possible + 1e-9);
 
     // The run report: the bonus against the possible, home never idle, and none of the share's failures.
-    const report = runReport(data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: toMs });
     const section = report.text.slice(
       report.text.indexOf("  sharing spare RAM (#224):"),
       report.text.indexOf("Verdict"),
@@ -139,3 +99,98 @@ test.each(SEEDS)(
     expect(report.failures.filter((failure) => /^share /.test(failure))).toEqual([]);
   },
 );
+
+test.each(SEEDS)(
+  "seed %i, home among the batcher's hosts (#340): its RAM batches first, the share takes what its rules leave, no failure",
+  { timeout: 600_000 },
+  async (seed) => {
+    const { healths, cloudUse, report } = await run(seed, true);
+    const average = (of: (each: BatcherHealth) => number) =>
+      healths.reduce((sum, { health: each }) => sum + of(each), 0) / healths.length;
+    const bonus = average((each) => each.sharing?.bonus ?? 1);
+    const possible = average((each) => each.sharing?.possibleBonus ?? 1);
+    const homeBatchesGb = average((each) => each.home?.batchesGb ?? 0);
+    console.log(
+      `seed ${seed}, home among the hosts: the cloud servers ` +
+        `${cloudUse.map((each) => `${(each * 100).toFixed(0)}%`).join(", ")} used; home's batches ` +
+        `${Math.round(homeBatchesGb).toLocaleString("en-US")} GB on average; the bonus x${bonus.toFixed(3)} on ` +
+        `average, of x${possible.toFixed(3)} possible; ${healths.at(-1)?.health.batchesStarted} batches on ` +
+        `${healths.at(-1)?.health.target}`,
+    );
+    expect(healths.length).toBeGreaterThan(100);
+    for (const used of cloudUse) expect(used).toBeGreaterThan(0.82);
+    for (const { atMs, health: each } of healths) {
+      // Home a host, keeping its 32 GB, never beside them.
+      expect(each.home, `at ${atMs}`).toMatchObject({ gb: HOME_GB, keptGb: 32 });
+      expect(each.sharing?.homeGb, `at ${atMs}`).toBeUndefined();
+      expect(each, `at ${atMs}`).toMatchObject({ late: 0, lost: 0, desyncs: 0, batchesShort: 0, outOfBounds: 0 });
+    }
+    // Its RAM in the batches, nearly all it may give.
+    expect(homeBatchesGb).toBeGreaterThan(0.95 * (HOME_GB - 32));
+    // The share at what its rules allow on what the batches leave.
+    expect(bonus).toBeGreaterThan(0.99 * possible);
+    expect(bonus).toBeLessThanOrEqual(possible + 1e-9);
+    const section = report.text.slice(report.text.indexOf("6. The batcher"), report.text.indexOf("Verdict"));
+    console.log(
+      section
+        .split("\n")
+        .filter((line) => /#340|#242/.test(line))
+        .join("\n"),
+    );
+    expect(section).toContain("among the batcher's hosts (#340): shared as they are, judged with the batches");
+    expect(section).toMatch(/^ {2}home among its hosts \(#340\): 65,504 GB it may give the batches/m);
+    expect(report.failures.filter((failure) => /^share |^batches left home idle/.test(failure))).toEqual([]);
+  },
+);
+
+/** One run of run #3's shape: home among the batcher's hosts (the default since #340) or beside them (#242's). */
+async function run(seed: number, homeAmongHosts: boolean) {
+  const fresh = await freshStartOf({
+    withDesiredState: true,
+    seed,
+    beforeAgent: async (game) => {
+      await game.simulation.diagnostics.setMoney(1e15);
+      await ownerRunsOnHome(game, OWNERS_SETUP);
+      await game.simulation.diagnostics.setHomeRam(HOME_GB);
+      await game.simulation.diagnostics.setMoney(0);
+      await game.simulation.diagnostics.gainHackingExp(1e15);
+      await game.simulation.diagnostics.joinFactionWithReputation("CyberSec", 0);
+    },
+  });
+  const { game, data, simulation } = fresh;
+  if (!homeAmongHosts) writeSwitch(data.store, BATCHER_ON_HOME_SETTING, false);
+  await simulation.writeFile("home", "cloud-use.js", CLOUD_USE);
+  // The same game throughout: no purchases, so the hosts and the target stay as they are.
+  const controller = fresh.controller();
+  controller.setProgramsEnabled(false);
+  controller.setHomeRamEnabled(false);
+  controller.setCloudServersEnabled(false);
+  controller.setAugmentationsEnabled(false);
+  expect(controller.setWork({ faction: "CyberSec", workType: "hacking" })).toEqual({ ok: true });
+  const health = () => fresh.latest<FastSnapshotData>("fast")?.batcher ?? null;
+  await game.runUntil(() => health()?.state === "batching", 10 * 60_000);
+  // Into the batches' rhythm, and the share's halves'.
+  await game.run(60_000);
+  const fromMs = game.clock.now();
+  const cloudUse: number[] = [];
+  for (let elapsed = 0; elapsed < STRETCH_MS; elapsed += 30_000) {
+    const { pid } = await simulation.run("home", "cloud-use.js");
+    await game.run(30_000);
+    const line = (await simulation.logs(pid)).find((each) => each.startsWith("{"));
+    const { maxGb, usedGb } = JSON.parse(line ?? "{}") as { maxGb: number; usedGb: number };
+    cloudUse.push(usedGb / maxGb);
+  }
+  const toMs = game.clock.now();
+
+  const healths: { atMs: number; health: BatcherHealth }[] = [];
+  for (const row of data.store.iterateSnapshotsInWindow({
+    environment: "E1",
+    sinceMs: fromMs,
+    untilMs: toMs,
+    tier: "fast",
+  })) {
+    const each = (row.data as FastSnapshotData).batcher;
+    if (each) healths.push({ atMs: row.receivedAtMs, health: each });
+  }
+  return { healths, cloudUse, report: runReport(data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: toMs }) };
+}

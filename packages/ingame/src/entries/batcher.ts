@@ -19,6 +19,10 @@
 //   (a dropped next target's long weaken held run #2's moves for 11 and 9 minutes). While it waits for its own, or no
 //   batch fits the RAM, a problem says why ("no batch on … fits the RAM yet: …"): never a silent `batching`.
 // - **The next target (#206):** the config's `next`, prepared the same way on at most its RAM, beside the batches.
+// - **Home among its hosts (#340):** home's free RAM less the config's `homeKeptGb` (core's `hostKeptGb`), the Agent's
+//   room kept free beside all that runs there, as the share keeps it (#242), so no operation takes it. `placeThreads`
+//   fills the smaller hosts first, so home, the largest after an install, takes what they leave. Its health's `home`
+//   says home's RAM, what it keeps, its free RAM beyond that and its operations' there.
 // - **Batching:** a batch's hack lands every spacing, its weaken, grow and weaken δ apart after it. Each operation is
 //   started just in time, its hold before it lands (core's `batchOrders`), on the hosts' free RAM (`placeThreads`),
 //   and lands itself (../workers/batch-operation.ts). A batch's threads are planned when its first weaken goes out,
@@ -71,11 +75,12 @@
 //   that started none looks again 100 ms on, while it may share on its hosts; on home alone, at a hold-off's end or a
 //   round's 5 s. None on its hosts while a last preparation wave still lands, nor until the batches planned meanwhile,
 //   whose leads it lengthens, have landed (#226's review); none for a minute after a batch came up short (legacy
-//   daemon.js shares only with every batch scheduled); home shares through all of these and while it prepares (#242:
-//   its share can't take the batches' RAM, #230). No wave starts while share threads on its hosts still hold RAM (10 s
-//   at most), so a move or a desync's preparation has all of it. A batch trimmed that the share's threads on its hosts
-//   made smaller is counted apart, the share's (#232's review). Its health has the bonus its last look found possible
-//   and home's RAM, free and kept, then (#242), and goes out at least every 10 s while asked (#242's review).
+//   daemon.js shares only with every batch scheduled); home beside its hosts shares through all of these and while it
+//   prepares (#242: its share can't take the batches' RAM, #230), and home among them (#340) as they do. No wave
+//   starts while share threads on its hosts still hold RAM (10 s at most), so a move or a desync's preparation has all
+//   of it. A batch trimmed that the share's threads on its hosts made smaller is counted apart, the share's (#232's
+//   review). Its health has the bonus its last look found possible and home's RAM, free and kept, then (#242), and goes
+//   out at least every 10 s while asked (#242's review).
 // - **Health:** core's `BatcherHealth`, on its health port whenever it changes, and in its log every minute and at each
 //   change of state or of its problem, or anything wrong.
 // - **On the page's monotonic clock (#251):** every schedule, wait, landing and duration is timed on
@@ -99,6 +104,7 @@ import {
   BATCHER_LANDING_PORT,
   type BatcherConfig,
   type BatcherHealth,
+  type BatcherHomeRam,
   type BatchOperation,
   type BatchThreads,
   batchBounds,
@@ -116,6 +122,7 @@ import {
   hackThreadsAtLaunch,
   hackThreadsForShare,
   hackWaitsForItsBatch,
+  hostKeptGb,
   isBackInStep,
   isOutsideBounds,
   isTargetPrepared,
@@ -316,8 +323,14 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     skills: { hacking: ns.getHackingLevel(), intelligence: current().player.intelligence },
     mults: current().player.mults,
   });
+  /** What a host keeps from the batches (#340): on home, the config's `homeKeptGb`, for the Agent; elsewhere none. */
+  const keptGbOn = (host: string) => hostKeptGb(host, current());
+  /** Each host's free RAM, less what it keeps (#340): on home, the Agent's room, beside all that runs there. */
   const freeRam = (): HostRam[] =>
-    hosts.map((host) => ({ host, freeGb: ns.getServerMaxRam(host) - ns.getServerUsedRam(host) }));
+    hosts.map((host) => ({
+      host,
+      freeGb: Math.max(0, ns.getServerMaxRam(host) - ns.getServerUsedRam(host) - keptGbOn(host)),
+    }));
 
   /**
    * Starts an operation's threads on the free RAM, landing at `landAt`, each part's id added to `wave` when given (a
@@ -606,7 +619,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
 
   /**
    * The RAM the batches can count on (#232): core's `batchRamGb` of each host's RAM less what isn't the batcher's own
-   * there (the batcher itself, anyone else's scripts), so every operation within it finds whole threads' room.
+   * there (the batcher itself, anyone else's scripts) and what it keeps (#340: on home, the Agent's room beside them),
+   * so every operation within it finds whole threads' room.
    */
   const capacityGb = () => {
     const now = monotonicMs();
@@ -616,7 +630,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     return batchRamGb(
       hosts.map((host) => {
         const othersGb = Math.max(0, ns.getServerUsedRam(host) - (batcherOwnGb.get(host) ?? 0));
-        return ns.getServerMaxRam(host) - othersGb;
+        return ns.getServerMaxRam(host) - othersGb - keptGbOn(host);
       }),
     );
   };
@@ -713,7 +727,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   /**
    * What holds the hosts' RAM now (#246), beside the batcher's operations in flight (core's `ramHeldOf`): its own past
    * their landing, those drained in this wake, scripts not its own (with home a host, the batcher's and the Agent's
-   * too), its share threads; and how late this wake's landings were.
+   * too), its share threads; and how late this wake's landings were. Free less what the host keeps (#340: on home,
+   * the Agent's room), as the batches may take it.
    */
   const ramHeldNow = (): RamHeld => {
     const now = monotonicMs();
@@ -728,7 +743,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       }
       const usedGb = ns.getServerUsedRam(host);
       return {
-        freeGb: ns.getServerMaxRam(host) - usedGb,
+        freeGb: ns.getServerMaxRam(host) - usedGb - keptGbOn(host),
         usedGb,
         inFlightGb,
         pastLandingGb,
@@ -1256,8 +1271,11 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       const roundEndsAt = now + SHARE_HELD_MS + BATCH_RAM_RELEASE_MS;
       const heldThen = mostRamHeldGb([...heldRam(), ...shareRamHeld(), ...upcomingRam(roundEndsAt)], now, roundEndsAt);
       const roomBesideGb = Math.max(0, capacityGb() - heldThen);
+      // Free as `shareRound` counts it (#340): home, among them, less what it keeps, or the round's room would be the
+      // room beside the batches less home's kept RAM a second time.
+      const keptGb = (host: string) => (host === "home" ? sharing.homeKeptGb : 0);
       const hostsFreeGb = use.reduce(
-        (total, each) => total + (each.batches ? Math.max(0, each.maxGb - each.usedGb) : 0),
+        (total, each) => total + (each.batches ? Math.max(0, each.maxGb - each.usedGb - keptGb(each.host)) : 0),
         0,
       );
       reserveGb = Math.max(sharing.reserveGb, hostsFreeGb - roomBesideGb);
@@ -1301,8 +1319,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     }
     if (round.placed.length > 0) sharingProblem = failed;
     if (started > 0) sharingRounds += 1;
-    // Home's RAM free beyond what it keeps, once this round has its threads (#242).
-    // Home beside its hosts (never one of them today, hack-loop.ts:44): as one, it's the batches'.
+    // Home's RAM free beyond what it keeps, once this round has its threads (#242), with home beside its hosts. As one
+    // of them (#340), it's the batches' first and shares as they do: its RAM is the health's `home`.
     const homeUse = use.find((each) => each.host === "home" && !each.batches);
     homeRamLooked =
       homeUse === undefined
@@ -1338,6 +1356,19 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         ? { homeGb: homeRamLooked.gb, homeFreeGb: homeRamLooked.freeGb, homeKeptGb: homeRamLooked.keptGb }
         : {}),
     };
+  };
+
+  /**
+   * Home's RAM in its health (#340), with home among its hosts: all of it, what it keeps, free beyond that, and its
+   * operations' parts there; undefined (absent) otherwise.
+   */
+  const homeHealth = (): BatcherHomeRam | undefined => {
+    if (!hosts.includes("home")) return undefined;
+    const gb = ns.getServerMaxRam("home");
+    const keptGb = keptGbOn("home");
+    let batchesGb = 0;
+    for (const part of parts.values()) if (part.host === "home") batchesGb += part.gb;
+    return { gb, keptGb, freeGb: Math.max(0, gb - ns.getServerUsedRam("home") - keptGb), batchesGb };
   };
 
   let lastLineAt = 0;
@@ -1457,6 +1488,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     prepareNext();
     shareSpareRam();
     health.sharing = sharingHealth();
+    health.home = homeHealth();
     // Awake for its next look while asked, in every state (#242: home shares beside the hosts, and a half's RAM is
     // taken again as it comes back), and to send its health again before the brain reads it as stale.
     if (health.sharing?.wanted) {

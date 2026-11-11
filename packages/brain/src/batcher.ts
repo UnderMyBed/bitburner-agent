@@ -39,6 +39,16 @@ export function readBatcherEnabled(store: TelemetryStore): boolean {
 }
 
 /**
+ * Home among the batcher's hosts (#340), for its RAM beyond what it keeps: on unless turned off. Not on the dashboard:
+ * the A/B's arm without it (home-batch-host-simulation.test.ts), main's before #340, and the owner's way back to it.
+ */
+export const BATCHER_ON_HOME_SETTING = "batcher.home";
+
+export function readBatcherOnHome(store: TelemetryStore): boolean {
+  return readSwitch(store, BATCHER_ON_HOME_SETTING, true);
+}
+
+/**
  * What home keeps for the Agent and its workers, GB: a fresh save's 8, of which the Agent and its largest worker take
  * 7.55 (architecture §14, Q1). The batcher runs on home only with its budget free beyond it: home of 16 GB or more.
  */
@@ -133,12 +143,18 @@ function figuresOf(staticData: StaticSnapshotData, target: string): HackingTarge
 
 /**
  * Where the batcher runs on `hosts`, their RAM, and the RAM its batches can count on there (`batchRamGb`), whatever the
- * target; or why it can't run. `planBatcher`'s, and `chooseBatcher`'s steps' (#274).
+ * target; or why it can't run. `planBatcher`'s, and `chooseBatcher`'s steps' (#274). With `homeKeptGb` (#340), home
+ * is a host too, last, for its RAM beyond that (share.ts's `homeKeptGbOf`: the Agent's room, as the share keeps it)
+ * and, with the batcher on it, its budget; while that's above 0. Left out: what the Agent's own scripts use on home
+ * beside it (optimistic: the Agent keeps that much more free there, so the batcher, which fits each batch to the RAM
+ * free as it goes (#232), trims at most that much of the plan, and only on a home small beside it). And home's cores
+ * (cautious: a grow or weaken on home is stronger, `Server/formulas/grow.ts:25`, `NetscriptFunctions.ts:367`).
  */
 function batcherRoomOf(
   mediumData: MediumSnapshotData,
   hosts: string[],
   current: string | null,
+  homeKeptGb: number | null = null,
 ): { runOn: string; hostsRam: (readonly [string, number])[]; ramGb: number } | { why: string } {
   const ramOf = new Map(
     mediumData.servers
@@ -146,7 +162,9 @@ function batcherRoomOf(
       .map((server) => [server.hostname, server.maxRam]),
   );
   const hostsRam = hosts.map((host) => [host, ramOf.get(host) ?? 0] as const).filter(([, ram]) => ram > 0);
-  if (hostsRam.length === 0) return { why: "no host with RAM" };
+  // Home's RAM for the batches (#340), the batcher's budget among it while it runs there.
+  const homeRamGb = homeKeptGb === null || hosts.includes("home") ? 0 : (ramOf.get("home") ?? 0) - homeKeptGb;
+  if (hostsRam.length === 0 && homeRamGb <= BATCHER_RAM_BUDGET_GB) return { why: "no host with RAM" };
   const onHome = (ramOf.get("home") ?? 0) - HOME_KEPT_FOR_THE_AGENT_GB >= BATCHER_RAM_BUDGET_GB;
   const holds = (host: string) =>
     host === "home" ? onHome : hosts.includes(host) && (ramOf.get(host) ?? 0) >= BATCHER_RAM_BUDGET_GB;
@@ -157,8 +175,10 @@ function batcherRoomOf(
   // Kept where it runs while it still fits there (#211): a move restarts it.
   const runOn = current !== null && holds(current) ? current : onHome ? "home" : largest;
   if (runOn === undefined) return { why: "no host holds the batcher" };
-  const operationsRam = hostsRam.map(([host, ram]) => (host === runOn ? ram - BATCHER_RAM_BUDGET_GB : ram));
-  return { runOn, hostsRam, ramGb: batchRamGb(operationsRam) };
+  const homeOperationsGb = homeRamGb - (runOn === "home" ? BATCHER_RAM_BUDGET_GB : 0);
+  const allRam = homeOperationsGb > 0 ? [...hostsRam, ["home", homeRamGb] as const] : hostsRam;
+  const operationsRam = allRam.map(([host, ram]) => (host === runOn ? ram - BATCHER_RAM_BUDGET_GB : ram));
+  return { runOn, hostsRam: allRam, ramGb: batchRamGb(operationsRam) };
 }
 
 /**
@@ -167,7 +187,9 @@ function batcherRoomOf(
  *   when its RAM in the medium snapshot leaves the batcher's budget (`BATCHER_RAM_BUDGET_GB`) beyond what home keeps
  *   for the Agent; otherwise the host with the most RAM. The host it runs on has that much less for operations;
  * - **its plan:** core's `batchPlan` on the hosts' RAM (`batchRamGb`), at the hacking level and multipliers of the
- *   medium snapshot. Its share and spacing go in the config; the batcher works out each batch's threads itself.
+ *   medium snapshot. Its share and spacing go in the config; the batcher works out each batch's threads itself;
+ * - **home (#340):** with `homeKeptGb` (the controller's `homeKeptGbOf`, null with the switch off), one of the hosts
+ *   for its RAM beyond that (`batcherRoomOf`), and the config says what it keeps, so the batcher leaves it free.
  */
 export function planBatcher(
   staticData: StaticSnapshotData,
@@ -177,6 +199,7 @@ export function planBatcher(
   hosts: string[],
   current: string | null = null,
   ramShare = 1,
+  homeKeptGb: number | null = null,
 ):
   | { batcher: BatcherState; incomePerSecond: number; ramGb: number; peakRamGb: number }
   | { batcher: null; why: string } {
@@ -187,9 +210,11 @@ export function planBatcher(
   }
   const figures = figuresOf(staticData, target);
   if (figures === null) return { batcher: null, why: `the static snapshot has no figures for ${target}` };
-  const room = batcherRoomOf(mediumData, hosts, current);
+  const room = batcherRoomOf(mediumData, hosts, current, homeKeptGb);
   if ("why" in room) return { batcher: null, why: room.why };
   const { runOn, hostsRam } = room;
+  // What home keeps, said with home among the hosts (#340).
+  const homeKept = hostsRam.some(([host]) => host === "home") ? homeKeptGb : null;
   const ramGb = room.ramGb * ramShare;
   const plan = batchPlan(figures, player, ramGb);
   if (plan === null) return { batcher: null, why: `no batch on ${target} fits the hosts' RAM, or it can't be hacked` };
@@ -206,6 +231,7 @@ export function planBatcher(
         hosts: hostsRam.map(([host]) => host),
         hackShare: plan.hackShare,
         spacingMs: plan.spacingMs,
+        ...(homeKept === null ? {} : { homeKeptGb: homeKept }),
       },
     },
   };
@@ -276,7 +302,8 @@ export interface BatcherTargetWorth {
  * targets that led to them were never weighed. Each is planned (`planBatcher`) on the hosts, and its worth is its
  * plan's income over `BATCHER_TARGET_HORIZON_MS` less the time until it earns: preparing it (core's
  * `preparationTimeMs`, from its money and security in the medium snapshot), then a weaken's time for its first batch.
- * A target is prepared on the RAM the batches of the one batched now leave (#216's review), or all of it.
+ * A target is prepared on the RAM the batches of the one batched now leave (#216's review), or all of it. With
+ * `homeKeptGb` (#340), home's RAM beyond it is among the hosts' throughout (`planBatcher`).
  * - **Never long without income (#184's lesson, #216's review):** the one batched now (`batching` from the batcher's
  *   health, or since #315 `recovering`, which batches on in place) earns at once; with nothing batched (a fresh
  *   start, a handover, a restart), another is chosen only if it earns within `BATCHER_MOST_IDLE_MS`, or with none
@@ -315,6 +342,7 @@ export function chooseBatcher(
   hosts: string[],
   current: BatcherState | null,
   batching: string | null,
+  homeKeptGb: number | null = null,
 ): { batcher: BatcherState; worths: BatcherTargetWorth[] } | { batcher: null; why: string } {
   const player = hackingPlayerOf(mediumData.player, hacking);
   if (player === null) return { batcher: null, why: "the medium snapshot has no hacking figures for the player" };
@@ -347,7 +375,7 @@ export function chooseBatcher(
   const plans = new Map<string, PlannedBatcher | null>();
   const planOf = (hostname: string) => {
     if (!plans.has(hostname)) {
-      const plan = planBatcher(staticData, mediumData, hacking, hostname, hosts, runOn);
+      const plan = planBatcher(staticData, mediumData, hacking, hostname, hosts, runOn, 1, homeKeptGb);
       if (plan.batcher === null) firstWhy ??= plan.why;
       plans.set(hostname, plan.batcher === null ? null : plan);
     }
@@ -355,10 +383,19 @@ export function chooseBatcher(
   };
   /** What a target's batches lose a second on four fifths of the RAM, as they do while a next is prepared (#278). */
   const lostPerSecondOf = (hostname: string, incomePerSecond: number) => {
-    const rest = planBatcher(staticData, mediumData, hacking, hostname, hosts, runOn, 1 - BATCHER_NEXT_RAM_SHARE);
+    const rest = planBatcher(
+      staticData,
+      mediumData,
+      hacking,
+      hostname,
+      hosts,
+      runOn,
+      1 - BATCHER_NEXT_RAM_SHARE,
+      homeKeptGb,
+    );
     return rest.batcher === null ? incomePerSecond : Math.max(0, incomePerSecond - rest.incomePerSecond);
   };
-  const room = batcherRoomOf(mediumData, hosts, runOn);
+  const room = batcherRoomOf(mediumData, hosts, runOn, homeKeptGb);
   const ramGb = "why" in room ? 0 : room.ramGb;
   /**
    * The steps (#274): the first `BATCHER_TARGETS_PLANNED` by the ceiling that might be the next from `from` (with none,
@@ -518,7 +555,16 @@ export function chooseBatcher(
       ? keptNext.each
       : worthiestNext?.each;
   if (next === undefined) return { batcher: chosen.state, worths };
-  const rest = planBatcher(staticData, mediumData, hacking, chosenName, hosts, runOn, 1 - BATCHER_NEXT_RAM_SHARE);
+  const rest = planBatcher(
+    staticData,
+    mediumData,
+    hacking,
+    chosenName,
+    hosts,
+    runOn,
+    1 - BATCHER_NEXT_RAM_SHARE,
+    homeKeptGb,
+  );
   if (rest.batcher === null) return { batcher: chosen.state, worths };
   const nextConfig = { target: next.weighed.target, figures: next.figures, ramGb: nextGb(next) };
   return { batcher: { ...rest.batcher, config: { ...rest.batcher.config, next: nextConfig } }, worths };
@@ -671,7 +717,10 @@ export function batcherOutOfStep(
   return { sinceMs, target: newest.target, ...rise };
 }
 
-/** The batcher's hosts (#205): all the hack loop's, its preparing ones included, which the hack loop then leaves. */
+/**
+ * The batcher's hosts (#205): all the hack loop's, its preparing ones included, which the hack loop then leaves. Home,
+ * which the hack loop never has, joins them in `planBatcher` (#340).
+ */
 export function batcherHostsOf(hackLoop: { hosts: string[]; preparing?: { hosts: string[] } | null }): string[] {
   return [...hackLoop.hosts, ...(hackLoop.preparing?.hosts ?? [])];
 }

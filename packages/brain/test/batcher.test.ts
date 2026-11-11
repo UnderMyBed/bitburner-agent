@@ -8,6 +8,7 @@ import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
   BATCHER_RAM_BUDGET_GB,
+  type BatcherHealth,
   type BatchShort,
   batcherIncomePerGigabyteSecond,
   batchPlan,
@@ -31,6 +32,7 @@ import {
   BATCHER_MOVE_IDLE_FAILS_AFTER_MS,
   BATCHER_NEXT_HORIZON_MS,
   BATCHER_NEXT_RAM_SHARE,
+  BATCHER_ON_HOME_SETTING,
   BATCHER_TARGET_HORIZON_MS,
   BATCHER_TARGETS_PLANNED,
   type BatcherTargetWorth,
@@ -47,11 +49,13 @@ import {
   hackingPlayerOf,
   planBatcher,
   readBatcherEnabled,
+  readBatcherOnHome,
 } from "../src/batcher.ts";
 import { batcherSection, GROW_SHORTFALL_REACH_MS, whoHacked } from "../src/batcher-report.ts";
 import type { ClockIncident } from "../src/clock-incidents.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { chooseHackHosts } from "../src/hack-loop.ts";
+import { homeKeptGbOf, SHARE_HOME_KEPT_GB, singularityRamMultiplierOf } from "../src/share.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
@@ -223,6 +227,34 @@ describe("the controller", () => {
     expect(log.filter((line) => line.startsWith("batcher:")).at(-1)).toBe("batcher: the hack loop hacks");
   });
 
+  test("home among its hosts (#340), beyond the share's reserve; Singularity's worker kept too; its switch off: never", () => {
+    const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    const controller = new DesiredStateController({ channel, store });
+    const agent = connectedAgent(channel);
+    agent.send("static", network);
+    agent.send("medium", medium(50, { n00dles: true, foodnstuff: true }, 4_096));
+    expect(agent.lastSent()?.batcher).toMatchObject({
+      runOn: "home",
+      config: { hosts: ["foodnstuff", "n00dles", "home"], homeKeptGb: SHARE_HOME_KEPT_GB },
+    });
+    expect(controller.batcherView().sent?.hosts).toBe(3);
+    // In BN4 (#242's review): its largest Singularity worker's RAM kept beside, the same figure the share keeps.
+    agent.send("slow", slowData(4));
+    const kept = homeKeptGbOf(singularityRamMultiplierOf(slowData(4)));
+    expect(kept).toBeGreaterThan(SHARE_HOME_KEPT_GB);
+    expect(agent.lastSent()?.batcher?.config.homeKeptGb).toBe(kept);
+    // Off: the game's servers alone, main's before #340; on again: back.
+    store.setSetting(BATCHER_ON_HOME_SETTING, "false");
+    agent.send("medium", medium(50, { n00dles: true, foodnstuff: true }, 4_096));
+    expect(agent.lastSent()?.batcher?.config.hosts).toEqual(["foodnstuff", "n00dles"]);
+    expect(agent.lastSent()?.batcher?.config).not.toHaveProperty("homeKeptGb");
+    expect(readBatcherOnHome(store)).toBe(false);
+    store.setSetting(BATCHER_ON_HOME_SETTING, "true");
+    agent.send("medium", medium(50, { n00dles: true, foodnstuff: true }, 4_096));
+    expect(agent.lastSent()?.batcher?.config.hosts).toContain("home");
+  });
+
   test("switch on with the hack loop off: no batcher, and the dashboard says it needs the hack loop (#211)", () => {
     const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
     channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
@@ -274,6 +306,80 @@ describe("the controller", () => {
     agent.send("slow", slowData(1));
     expect(agent.lastSent()?.batcher?.config.player.mults).toMatchObject({ hacking_money: 1, hacking_exp: 1 });
     expect(log.filter((line) => line === HACKING_MULTIPLIERS_UNREAD)).toHaveLength(1);
+  });
+});
+
+describe("home among the hosts (#340)", () => {
+  const HOSTS = ["n00dles", "foodnstuff"];
+  const at = (homeRam: number, homeKeptGb: number | null, hosts = HOSTS, current: string | null = null) =>
+    planBatcher(
+      network,
+      medium(50, { n00dles: true, foodnstuff: true }, homeRam),
+      BN1_HACKING,
+      "n00dles",
+      hosts,
+      current,
+      1,
+      homeKeptGb,
+    );
+  const player = { skills: { hacking: 50, intelligence: 0 }, mults: MULTS };
+
+  test("last among the hosts, for its RAM beyond what it keeps and the batcher's budget; the config says what it keeps", () => {
+    const planned = at(4_096, 32);
+    if (planned.batcher === null) throw new Error(planned.why);
+    // The game's servers 16 GB each; home's beyond its 32 GB, less the batcher's own budget, which runs there.
+    const ramGb = batchRamGb([16, 16, 4_096 - 32 - BATCHER_RAM_BUDGET_GB]);
+    expect(planned.ramGb).toBe(ramGb);
+    expect(planned.incomePerSecond).toBe(batchPlan(N00DLES, player, ramGb)?.incomePerSecond);
+    expect(planned.batcher).toMatchObject({ runOn: "home", config: { hosts: [...HOSTS, "home"], homeKeptGb: 32 } });
+  });
+
+  test("with the batcher elsewhere, home's RAM beyond what it keeps, all of it, and the batcher's host less its budget", () => {
+    const planned = at(4_096, 32, HOSTS, "foodnstuff");
+    if (planned.batcher === null) throw new Error(planned.why);
+    expect(planned.batcher.runOn).toBe("foodnstuff");
+    expect(planned.ramGb).toBe(batchRamGb([16, 16 - BATCHER_RAM_BUDGET_GB, 4_096 - 32]));
+  });
+
+  test("never with its switch off (null): main's before #340, and the config says nothing of home", () => {
+    const planned = at(4_096, null);
+    if (planned.batcher === null) throw new Error(planned.why);
+    expect(planned.batcher.config.hosts).toEqual(HOSTS);
+    expect(planned.batcher.config).not.toHaveProperty("homeKeptGb");
+    expect(planned.ramGb).toBe(batchRamGb([16, 16]));
+  });
+
+  test("a batch never takes the Agent's room: none on home until its RAM is past what it keeps and the batcher's", () => {
+    const kept = 32 + 33.9;
+    // At what it keeps and the batcher's budget, nothing left for an operation: not a host.
+    expect(at(kept + BATCHER_RAM_BUDGET_GB, kept).batcher?.config.hosts).toEqual(HOSTS);
+    expect(at(kept + BATCHER_RAM_BUDGET_GB, kept).batcher?.config).not.toHaveProperty("homeKeptGb");
+    // A GB past it: a host, its GB beyond them the plan's.
+    const past = at(kept + BATCHER_RAM_BUDGET_GB + 1, kept);
+    expect(past.batcher?.config).toMatchObject({ hosts: [...HOSTS, "home"], homeKeptGb: kept });
+    expect(past.batcher === null ? null : past.ramGb).toBe(batchRamGb([16, 16, 1]));
+    // A fresh save's 8 GB, or 16: never, as before (the batcher may run there, its operations not).
+    for (const homeRam of [8, 16]) expect(at(homeRam, 32).batcher?.config.hosts).toEqual(HOSTS);
+  });
+
+  test("home alone, no game server with RAM: the batcher and its batches on home", () => {
+    const planned = at(4_096, 32, []);
+    if (planned.batcher === null) throw new Error(planned.why);
+    expect(planned.batcher).toMatchObject({ runOn: "home", config: { hosts: ["home"], homeKeptGb: 32 } });
+    expect(planned.ramGb).toBe(batchRamGb([4_096 - 32 - BATCHER_RAM_BUDGET_GB]));
+    // Without home, or within what it keeps: no host with RAM, as before.
+    expect(at(4_096, null, []).batcher).toBeNull();
+    expect(at(34, 32, [])).toEqual({ batcher: null, why: "no host with RAM" });
+  });
+
+  test("chooseBatcher plans every target on home's RAM too", () => {
+    const data = medium(50, { n00dles: true, foodnstuff: true }, 4_096);
+    const chosen = chooseBatcher(network, data, BN1_HACKING, HOSTS, null, null, 32);
+    if (chosen.batcher === null) throw new Error(chosen.why);
+    expect(chosen.batcher.config).toMatchObject({ hosts: [...HOSTS, "home"], homeKeptGb: 32 });
+    const without = chooseBatcher(network, data, BN1_HACKING, HOSTS, null, null);
+    if (without.batcher === null) throw new Error(without.why);
+    expect(without.batcher.config.hosts).toEqual(HOSTS);
   });
 });
 
@@ -381,6 +487,76 @@ describe("the run report's section", () => {
   });
   /** A run's least money after a grow so far (#234), and its target. */
   const least = (share: number, target: string) => ({ leastMoneyAfterGrow: share, leastMoneyAfterGrowOn: target });
+
+  test("home among its hosts (#340): its RAM in the batches; idle over half while batches want RAM, 10 minutes, fails", () => {
+    const home = (freeGb: number, batchesGb: number) => ({ gb: 4_128, keptGb: 32, freeGb, batchesGb });
+    /** A fast snapshot every 2 s for `minutes`, from `fromMinute`, each health from `of(index)`. */
+    const every2s = (fromMinute: number, minutes: number, of: (index: number) => Partial<BatcherHealth>) =>
+      Array.from({ length: Math.round(minutes * 30) + 1 }, (_, index) => ({
+        atMs: at(fromMinute + index / 30),
+        health: health("a", of(index)),
+      }));
+    // Never a host: no line, no failure, as before #340.
+    const never: string[] = [];
+    expect(
+      batcherSection(
+        every2s(0, 1, () => ({})),
+        never,
+      ).some((line) => line.includes("#340")),
+    ).toBe(false);
+    expect(never).toEqual([]);
+    // 10 minutes batching with 3,000 of home's 4,096 GB free, a batch trimmed every minute: a failure. Its RAM in the
+    // batches, on average and at most.
+    const idle = every2s(0, 10, (index) => ({ home: home(3_000, 1_096), batchesTrimmed: Math.floor(index / 30) }));
+    const failures: string[] = [];
+    const lines = batcherSection(idle, failures);
+    const failure =
+      "batches left home idle from 2026-01-01T00:00:00.000Z to 2026-01-01T00:10:00.000Z (10 min): batching, over half " +
+      "of the 4,096 GB home may give free, while 10 batches were trimmed or short of RAM";
+    expect(failures).toEqual([failure]);
+    expect(lines).toContain(
+      "  home among its hosts (#340): 4,096 GB it may give the batches, beyond the 32 GB it keeps; the batches held " +
+        "1,096 GB there on average while batching (27% of it), at most 1,096 GB",
+    );
+    expect(lines).toContain(`    ${failure}`);
+    // Idle alone, no batch wanting RAM (a plan bounded by its target's money): no failure.
+    const bounded: string[] = [];
+    const boundedLines = batcherSection(
+      every2s(0, 12, () => ({ home: home(3_000, 1_096) })),
+      bounded,
+    );
+    expect(bounded).toEqual([]);
+    expect(boundedLines).toContain(
+      "    batches left home idle (over half free, batches trimmed or short meanwhile, for 10 minutes): never",
+    );
+    // Half free or less, a moment under 10 minutes, preparing, or a gap in the fast snapshots: none.
+    const cases: Partial<BatcherHealth>[][] = [];
+    for (const [freeGb, minutes, state] of [
+      [2_048, 12, "batching"],
+      [3_000, 9.9, "batching"],
+      [3_000, 12, "preparing"],
+    ] as const) {
+      cases.push(
+        every2s(0, minutes, (index) => ({ state, home: home(freeGb, 0), batchesShort: index })).map(
+          ({ health: each }) => each,
+        ),
+      );
+    }
+    for (const each of cases) {
+      const found: string[] = [];
+      batcherSection(
+        each.map((one, index) => ({ atMs: at(index / 30), health: one })),
+        found,
+      );
+      expect(found.filter((line) => line.startsWith("batches left home idle"))).toEqual([]);
+    }
+    const gapped: string[] = [];
+    batcherSection(
+      idle.filter(({ atMs }) => atMs < at(4) || atMs > at(4.5)),
+      gapped,
+    );
+    expect(gapped).toEqual([]);
+  });
 
   test("not run: says so", () => {
     expect(
@@ -2358,6 +2534,41 @@ describe("chooseBatcher, weighed beyond the 5 best by the ceiling (#274)", () =>
     const chosen = chosenOf(world, data, sent);
     expect(chosen.batcher.config.target).toBe("base");
     expect(chosen.batcher.config.next?.target).toBe("step");
+  });
+
+  test("home among the hosts (#340): the steps are reckoned on its RAM too, so a step only it can prepare is the next", () => {
+    // The last test's world, its two hosts 16 GB each and home 2 TB keeping 32: step's preparation on the hosts' RAM
+    // alone never ends; on home's too, within the hour, so it's the next.
+    const base = { moneyMax: 100_000_000, minDifficulty: 10, requiredHackingSkill: 52, serverGrowth: 50 };
+    const step = { moneyMax: 10_000_000_000, minDifficulty: 11, requiredHackingSkill: 96, serverGrowth: 50 };
+    const far = { moneyMax: 1_000_000_000_000, minDifficulty: 42, requiredHackingSkill: 80, serverGrowth: 50 };
+    const FAR = ["far-0", "far-1", "far-2", "far-3", "far-4"];
+    const world: StaticSnapshotData = {
+      servers: [
+        staticServer("n00dles", N00DLES),
+        staticServer("base", base),
+        staticServer("step", step),
+        ...FAR.map((hostname) => staticServer(hostname, far)),
+      ],
+    };
+    const data = worldAt(
+      {
+        base: [base.moneyMax, base.minDifficulty],
+        step: [step.moneyMax, 3 * step.minDifficulty],
+        ...Object.fromEntries(FAR.map((hostname) => [hostname, [far.moneyMax / 25, 3 * far.minDifficulty]])),
+      },
+      1,
+      16,
+    );
+    data.servers.push(serverAt("home", 2_048, 0, 1));
+    const chosenWith = (homeKeptGb: number | null) => {
+      const sent = planBatcher(world, data, BN1_HACKING, "base", CHOICE_HOSTS, null, 1, homeKeptGb).batcher;
+      const chosen = chooseBatcher(world, data, BN1_HACKING, CHOICE_HOSTS, sent, "base", homeKeptGb);
+      if (chosen.batcher === null) throw new Error(chosen.why);
+      return chosen.batcher.config;
+    };
+    expect(chosenWith(32)).toMatchObject({ target: "base", next: { target: "step" } });
+    expect(chosenWith(null).next).toBeUndefined();
   });
 
   test("the next's bound counts its first batch: one prepared within BATCHER_NEXT_HORIZON_MS but earning after isn't", () => {

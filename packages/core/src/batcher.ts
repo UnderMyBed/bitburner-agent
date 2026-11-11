@@ -1200,6 +1200,20 @@ export interface BatcherConfig {
    * the bonus it reports.
    */
   sharing?: SharingConfig;
+  /**
+   * What home keeps free for the Agent and its workers, GB, beside all that runs there (#340), with home among `hosts`:
+   * the batches take home's free RAM beyond it (`hostKeptGb`), as the share does (`SharingConfig.homeKeptGb`, the same
+   * figure). Absent, home keeps none: a config naming home without it (#204's tests) has all of home's free RAM.
+   */
+  homeKeptGb?: number;
+}
+
+/**
+ * What a host keeps from the batches, GB (#340): on home, the config's `homeKeptGb` (none without it), free beside
+ * all that runs there; on any other host, none.
+ */
+export function hostKeptGb(host: string, config: Pick<BatcherConfig, "homeKeptGb">): number {
+  return host === "home" ? (config.homeKeptGb ?? 0) : 0;
 }
 
 /**
@@ -1295,6 +1309,10 @@ export function parseBatcherConfig(
   const { sharing } = value as Record<string, unknown>;
   const parsedSharing = sharing === undefined || sharing === null ? null : parseSharing(sharing);
   if (parsedSharing !== null && !parsedSharing.ok) return parsedSharing;
+  const { homeKeptGb } = value as Record<string, unknown>;
+  if (homeKeptGb !== undefined && !(isFiniteNumber(homeKeptGb) && homeKeptGb >= 0)) {
+    return { ok: false, reason: "the config's homeKeptGb isn't a number of 0 or more" };
+  }
   return {
     ok: true,
     config: {
@@ -1306,6 +1324,7 @@ export function parseBatcherConfig(
       spacingMs,
       ...(parsedNext === undefined ? {} : { next: parsedNext }),
       ...(parsedSharing === null ? {} : { sharing: parsedSharing.sharing }),
+      ...(homeKeptGb === undefined ? {} : { homeKeptGb }),
     },
   };
 }
@@ -1441,6 +1460,12 @@ export interface BatcherHealth {
    */
   sharing?: SharingHealth | null;
   /**
+   * Home's RAM, with home among its hosts (#340), at its last loop: `gb` all of it, `keptGb` what it keeps for the
+   * Agent (the config's `homeKeptGb`), `freeGb` free beyond that (beside the Agent, its batches and its share threads),
+   * and `batchesGb` its operations' parts there. Absent while home isn't a host, and from an older batcher.
+   */
+  home?: BatcherHomeRam;
+  /**
    * Operations that found no room at their time and waited for it (#246), then started: how many, the run's longest
    * wait so far, ms (null before one), and the last `BATCH_WAITS_KEPT`, oldest first, each with what held the RAM at
    * its first look (#246's review: if waits replace shorts, they still say why). Absent from an older batcher.
@@ -1468,6 +1493,14 @@ export interface BatcherHealth {
   clock?: "monotonic";
   /** The game's wall clock (`Date.now()`) when this was written, as are the stamps in it the brain reads (#251). */
   atMs: number;
+}
+
+/** Home's RAM in the batcher's health (#340), GB. */
+export interface BatcherHomeRam {
+  gb: number;
+  keptGb: number;
+  freeGb: number;
+  batchesGb: number;
 }
 
 /** How many batches short of RAM (#246), and waits for it, the health keeps: the run report lists each it sees. */

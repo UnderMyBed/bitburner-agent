@@ -10,7 +10,9 @@
 // counts as a page stall only where the Agent's send stamps show the page was behind it: the socket's or the brain's
 // lag can't hold the page's batcher, and one whose side they can't tell excuses nothing (the 2026-11-08 clarkinc
 // desyncs stay a failure; their cause is #315). A batcher stuck on poor targets (#275, the best rooted one 100× more
-// on the hosts' RAM) is a warning for an hour, and a failure for 2 hours in a cycle.
+// on the hosts' RAM) is a warning for an hour, and a failure for 2 hours in a cycle. Home among its hosts (#340): its
+// RAM in the batches while batching, and `batches left home idle`, a failure, for over half of what home may give
+// (its RAM beyond what it keeps) free for 10 minutes while batching, with batches trimmed or short of RAM meanwhile.
 import {
   BATCH_RAM_WAIT_MS,
   type BatcherHealth,
@@ -79,6 +81,88 @@ const ALL_COUNTS = [...COUNTS, ...NEWER_COUNTS] as const;
 type Counts = Record<(typeof ALL_COUNTS)[number], number>;
 
 const HOUR_MS = 60 * 60_000;
+
+/** Batching, with over this part of what home may give the batches (its RAM beyond what it keeps) free (#340)... */
+export const HOME_BATCHES_IDLE_FREE_FRACTION = 0.5;
+/** ...this long, with batches trimmed or short of RAM meanwhile: `batches left home idle`, a failure. */
+export const HOME_BATCHES_IDLE_AFTER_MS = 10 * 60_000;
+/** Fast snapshots (every 2 s) further apart than this are a gap: a stretch of home idle ends there. */
+const HOME_IDLE_GAP_MS = 10_000;
+
+const gigabytes = (ram: number) => `${Math.round(ram).toLocaleString("en-US")} GB`;
+
+/**
+ * Home among the batcher's hosts (#340), from its health's `home` (no line while it never is): what home may give the
+ * batches (its RAM beyond what it keeps for the Agent), and what they held there on average and at most while
+ * batching. And each stretch of `HOME_BATCHES_IDLE_AFTER_MS` or more batching with over
+ * `HOME_BATCHES_IDLE_FREE_FRACTION` of what home may give free while batches were trimmed or short of RAM (their counts
+ * rose within it): `batches left home idle`, a failure each. Idle alone isn't one: a plan bounded by its target's
+ * money, not the RAM (core's `batchIncomeMostPerSecond`), leaves home idle that no batch wants; with batches wanting
+ * RAM, home's free RAM is the batcher not using it.
+ */
+function homeLines(healths: { atMs: number; health: BatcherHealth }[], failures: string[]): string[] {
+  const label = "  home among its hosts (#340)";
+  const onHome = healths.filter(({ health }) => health.home != null);
+  // Never a host (its switch off, home within what it keeps, or an older batcher): nothing, as before #340.
+  if (onHome.length === 0) return [];
+  const batching = onHome.filter(({ health }) => health.state === "batching");
+  const last = (onHome.at(-1) as { health: BatcherHealth }).health.home as NonNullable<BatcherHealth["home"]>;
+  const mayGiveGb = Math.max(0, last.gb - last.keptGb);
+  const average = batching.reduce((sum, { health }) => sum + (health.home?.batchesGb ?? 0), 0) / (batching.length || 1);
+  const most = Math.max(0, ...batching.map(({ health }) => health.home?.batchesGb ?? 0));
+  const percent = mayGiveGb > 0 ? ` (${Math.round((average / mayGiveGb) * 100)}% of it)` : "";
+  const lines = [
+    `${label}: ${gigabytes(mayGiveGb)} it may give the batches, beyond the ${gigabytes(last.keptGb)} it keeps; ` +
+      (batching.length === 0
+        ? "never batching on it in the window"
+        : `the batches held ${gigabytes(average)} there on average while batching${percent}, at most ${gigabytes(most)}`),
+  ];
+  // Stretches batching with over the fraction of what home may give free, and the batches' trimmed and short counts'
+  // rises within each, a run at a time.
+  let from: { atMs: number; health: BatcherHealth } | null = null;
+  let to: { atMs: number; health: BatcherHealth } | null = null;
+  let wanted = 0;
+  let stretchMayGiveGb = 0;
+  const close = () => {
+    if (from !== null && to !== null && to.atMs - from.atMs >= HOME_BATCHES_IDLE_AFTER_MS && wanted > 0) {
+      const line =
+        `batches left home idle from ${formatIsoTime(from.atMs)} to ${formatIsoTime(to.atMs)} ` +
+        `(${formatDuration(to.atMs - from.atMs)}): batching, over half of the ${gigabytes(stretchMayGiveGb)} home may ` +
+        `give free, while ${wanted} batch${wanted === 1 ? " was" : "es were"} trimmed or short of RAM`;
+      lines.push(`    ${line}`);
+      failures.push(line);
+    }
+    from = null;
+    to = null;
+    wanted = 0;
+  };
+  const wantedOf = (health: BatcherHealth) => (health.batchesTrimmed ?? 0) + health.batchesShort;
+  for (const point of healths) {
+    const { atMs, health } = point;
+    const home = health.home;
+    const homeMayGiveGb = home == null ? 0 : Math.max(0, home.gb - home.keptGb);
+    const idle =
+      health.state === "batching" &&
+      home != null &&
+      homeMayGiveGb > 0 &&
+      home.freeGb > HOME_BATCHES_IDLE_FREE_FRACTION * homeMayGiveGb;
+    if (!idle || (to !== null && atMs - to.atMs > HOME_IDLE_GAP_MS)) close();
+    if (!idle) continue;
+    if (to !== null && to.health.runName === health.runName) {
+      wanted += Math.max(0, wantedOf(health) - wantedOf(to.health));
+    }
+    from ??= point;
+    to = point;
+    stretchMayGiveGb = homeMayGiveGb;
+  }
+  close();
+  if (lines.length === 1) {
+    lines.push(
+      "    batches left home idle (over half free, batches trimmed or short meanwhile, for 10 minutes): never",
+    );
+  }
+  return lines;
+}
 
 /** A stored health, or null if it isn't one (every count a number, a run name and a state). */
 function healthOf(value: unknown): BatcherHealth | null {
@@ -1229,6 +1313,7 @@ export function batcherSection(
           `${total.hacksTrimmedForLevel === 1 ? "" : "s"} sent smaller for the level forecast at their landing; the ` +
           `most levels forecast between a hack's start and its landing: ${mostRise}`,
   );
+  lines.push(...homeLines(healths, failures));
   lines.push(...moveLines(moveFold.moves(resetsMs), moveFold.reporting, failures));
   if (stuck !== undefined) {
     const stuckLooks = healths.map(({ atMs, health }) => ({ atMs, target: health.target }));

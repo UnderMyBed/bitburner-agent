@@ -27,6 +27,7 @@ import { DesiredStateController } from "../src/desired-state.ts";
 import { bestWorkRate, FactionRule, WORK_TYPE_SWITCH_GAIN } from "../src/factions.ts";
 import {
   factionWorkGoingOn,
+  homeKeptGbOf,
   readShareEnabled,
   SHARE_ENABLED_SETTING,
   SHARE_HOME_KEPT_GB,
@@ -40,7 +41,7 @@ import {
 import { SHARE_IDLE_AFTER_MS, sharingLines } from "../src/share-report.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { worldDaemonPath } from "../src/world-daemon.ts";
-import { mediumData, staticServer } from "./helpers/snapshot-fixtures.ts";
+import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const MULTS = { hacking_chance: 1, hacking_speed: 1, hacking_money: 1, hacking_grow: 1, hacking: 1, hacking_exp: 1 };
 const N00DLES = { moneyMax: 1_750_000, minDifficulty: 1, requiredHackingSkill: 1, serverGrowth: 3_000 };
@@ -329,6 +330,30 @@ test("the controller asks the batcher to share while faction work goes on, with 
   controller.setBatcherEnabled(false);
   expect(agent.lastSent()?.batcher).toBeUndefined();
   expect(controller.shareView()).toMatchObject({ enabled: true, asked: false, why: "the batcher isn't sent" });
+});
+
+test("home among the batcher's hosts (#340): the share keeps on home what the batches do, the one reserve", () => {
+  const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
+  channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+  const controller = new DesiredStateController({ channel, store });
+  const agent = connectedAgent(channel);
+  const rooted = { n00dles: true, foodnstuff: true };
+  agent.send("static", network);
+  // BN4 (#242's review): home keeps the largest Singularity worker's RAM too.
+  agent.send("slow", {
+    resetInfo: { lastAugReset: 0, lastNodeReset: 0, currentNode: 4, ownedAugs: {}, ownedSF: {}, bitNodeOptions: {} },
+    purchasedServers: [],
+    factions: { backend: "sim", state: { joined: [], invitations: [], queuedAugmentations: [] }, problem: null },
+  });
+  expect(controller.setWork({ faction: "CyberSec", workType: "hacking" })).toEqual({ ok: true });
+  agent.send("fast", fast({ converged: true, problem: null, backend: "sim" }));
+  agent.send("medium", medium(50, rooted, [], 4_096));
+  const config = agent.lastSent()?.batcher?.config as BatcherConfig;
+  expect(config.hosts).toEqual(["foodnstuff", "n00dles", "home"]);
+  const kept = homeKeptGbOf(singularityRamMultiplierOf(slowData(4)));
+  expect(kept).toBeGreaterThan(SHARE_HOME_KEPT_GB);
+  expect(config.homeKeptGb).toBe(kept);
+  expect(config.sharing?.homeKeptGb).toBe(kept);
 });
 
 describe("the run report's lines", () => {
@@ -693,6 +718,20 @@ describe("the run report's lines", () => {
     const idle: string[] = [];
     sharingLines(stopped, [], idle);
     expect(idle).toEqual([]);
+  });
+
+  test("home among the batcher's hosts (#340): no home figures beside them, so judged with the batches, not idle", () => {
+    const points = [];
+    const home = { gb: 4_096, keptGb: 32, freeGb: 4_000, batchesGb: 0 };
+    for (let second = 0; second <= 400; second += 2) {
+      points.push({ atMs: at(second), health: health({ possibleBonus: 1 }, { atMs: at(second), home }) });
+    }
+    const failures: string[] = [];
+    const lines = sharingLines(points, [], failures);
+    expect(failures).toEqual([]);
+    expect(lines.at(-1)).toBe(
+      "    home idle while asked, among the batcher's hosts (#340): shared as they are, judged with the batches",
+    );
   });
 
   test("share idle: asked while batching, the room free and no threads for 10 minutes, a failure", () => {

@@ -36,6 +36,7 @@ import {
   hackThreadsAtLaunch,
   hackThreadsForShare,
   hackWaitsForItsBatch,
+  hostKeptGb,
   isBackInStep,
   isBatcherFile,
   isOutsideBounds,
@@ -1366,6 +1367,40 @@ describe("the config's next target (#206)", () => {
 
   test("a new batcher's health has no next yet", () => {
     expect(newBatcherHealth("joesguns", "r1", 5).next).toBeNull();
+  });
+});
+
+describe("home among the config's hosts (#340)", () => {
+  const config = {
+    target: "joesguns",
+    figures: joesguns,
+    player: { intelligence: 0, mults: CONFIG_MULTS },
+    hosts: ["foodnstuff", "home"],
+    hackShare: 0.05,
+    spacingMs: 5_000,
+  };
+
+  test("what home keeps taken as given, 0 or more; absent, none", () => {
+    expect(parseBatcherConfig({ ...config, homeKeptGb: 32 })).toEqual({
+      ok: true,
+      config: { ...config, homeKeptGb: 32 },
+    });
+    expect(parseBatcherConfig({ ...config, homeKeptGb: 0 })).toEqual({
+      ok: true,
+      config: { ...config, homeKeptGb: 0 },
+    });
+    expect(parseBatcherConfig(config)).toEqual({ ok: true, config });
+  });
+
+  test.each([-1, "32", null, Number.POSITIVE_INFINITY])("refused: homeKeptGb %j", (homeKeptGb) => {
+    const parsed = parseBatcherConfig({ ...config, homeKeptGb });
+    expect(parsed).toEqual({ ok: false, reason: "the config's homeKeptGb isn't a number of 0 or more" });
+  });
+
+  test("what a host keeps from the batches: home its homeKeptGb, none without it; any other host none", () => {
+    expect(hostKeptGb("home", { homeKeptGb: 32 })).toBe(32);
+    expect(hostKeptGb("home", {})).toBe(0);
+    expect(hostKeptGb("foodnstuff", { homeKeptGb: 32 })).toBe(0);
   });
 });
 

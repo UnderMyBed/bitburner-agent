@@ -1094,8 +1094,8 @@ describe("equipment (G3)", () => {
 
   test("gang.js starts in the room home keeps free of share threads, whatever the batcher does (#330's review)", () => {
     // The batcher itself takes its budget on home only with 8 GB left beyond it (`HOME_KEPT_FOR_THE_AGENT_GB`), and its
-    // operations run on the hack loop's hosts, never home; share threads leave `homeKeptGb` free on home (32 GB, and
-    // the largest Singularity worker's beside it with SF4). The Agent starts gang.js only in home's free RAM.
+    // operations (on home since #340) and share threads leave `homeKeptGb` free on home (32 GB, and the largest
+    // Singularity worker's beside it with SF4). The Agent starts gang.js only in home's free RAM.
     const budgets = JSON.parse(
       readFileSync(new URL("../../ingame/ram-budget.json", import.meta.url), "utf8"),
     ) as Record<string, number>;
