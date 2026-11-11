@@ -2170,27 +2170,36 @@ describe("augmentations and the reset (#210)", () => {
       expect(failuresOf(report)).toEqual([]);
     });
 
-    test("fails an install short of the count without its estimates, and one adding nothing to the count", () => {
+    test("fails an install short of the count without its estimates, and a NeuroFlux-only one, judged by its set and queue", () => {
+      const NFG = "NeuroFlux Governor";
       const report = augmentationRun({
         events: [
           [2 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "count reached", short: SHORT }],
+          // The count rule's NeuroFlux-only install (the A/B's baseline): nothing in its set, its queue its levels.
           [
             3 * MINUTE,
             "augmentationInstallChosen",
-            { ...CHOSEN, set: [], cost: 0, reason: "Daedalus's count", short: SHORT, timing: timing({ adding: 0 }) },
+            { ...CHOSEN, set: [], cost: 0, queued: [NFG, NFG], reason: "count reached", short: SHORT },
           ],
-          // An earlier brain's, its count not stored: not judged.
-          [4 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "count reached" }],
+          // The planner's, its set not empty: no failure; an earlier brain's, its count not stored: not judged.
+          [
+            4 * MINUTE,
+            "augmentationInstallChosen",
+            { ...CHOSEN, reason: "Daedalus's count", short: SHORT, timing: timing() },
+          ],
+          [5 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, set: [], queued: [NFG], reason: "count reached" }],
         ],
       });
+      const neuroFluxOnly =
+        "NeuroFlux-only install short of Daedalus's count: 25 of 30 installed, nothing in its set or queue but it";
       expect(failuresOf(report)).toEqual([
         "install short of Daedalus's count without the planner's estimates: 25 of 30 installed, the count reached: 1 " +
           "of 7 new augmentations affordable (3 of 11 with NeuroFlux)",
-        "NeuroFlux-only install short of Daedalus's count: 25 of 30 installed, nothing new to it",
+        "install short of Daedalus's count without the planner's estimates: 25 of 30 installed, the count reached: 1 " +
+          "of 7 new augmentations affordable (3 of 11 with NeuroFlux)",
+        neuroFluxOnly,
       ]);
-      expect(report.text).toContain(
-        `    ${at(3 * MINUTE)}  NeuroFlux-only install short of Daedalus's count: 25 of 30 installed, nothing new to it`,
-      );
+      expect(report.text).toContain(`    ${at(3 * MINUTE)}  ${neuroFluxOnly}`);
     });
 
     test("fails a wait the brain found overdue, listed with the decisions too", () => {

@@ -53,11 +53,15 @@
 //   to the count) or wait for the next k countables (`countablesToCome`, `nextCountables`), the least estimated time to
 //   the count chosen, at every update. Installing now is chosen at once (`reason` "Daedalus's count"), never with
 //   nothing new to the count (a NeuroFlux-only install). Waiting holds the set's and the k's money back from cloud
-//   servers and home RAM only within the lookahead's 15 minutes, has A5 work for the first of them by work, and a wait
-//   still short at twice its first τ and the income's window (10 minutes) is `augmentationWaitOverdue` (an event, a log
-//   line, a run report failure). Once the count is met (Daedalus inviting or joined), or never short (The Red Pill
-//   elsewhere), the count rule times installs as before, with The Red Pill's way, Daedalus donations and levelling.
-//   The count rule short of the count stays only as the A/B's baseline (`installTiming` "count rule", tests alone).
+//   servers and home RAM only within the lookahead's 15 minutes, and has A5 work for the first of them by work. The
+//   wait is kept in the store (a restart keeps it); still short at twice its first τ and the income's window (10
+//   minutes) it's `augmentationWaitOverdue` (an event, a log line, a run report failure), and from then on every fresh
+//   τ is scaled by its measured error, so a stalled wait gives way. With no income measured (after a restart or a gap)
+//   installing now is held unless the set meets the count. T counts the cycle's time before the brain first saw it.
+//   Once the count is met (Daedalus inviting or joined), or never short (The Red Pill elsewhere), the count rule times
+//   installs as before (amended #343: until the planner's next slice, the Daedalus/Red Pill stretch), with The Red
+//   Pill's way, Daedalus donations and levelling. The count rule short of the count stays only as the A/B's baseline
+//   (`installTiming` "count rule", tests alone).
 import {
   type AugmentationPurchaseState,
   type AugmentationSet,
@@ -850,6 +854,71 @@ export function readCountHold(
   return { lastAugReset, sinceOnlineMs, ...(ended === true ? { ended: true } : {}) };
 }
 
+/**
+ * The planner's wait for Daedalus's count (#343), kept in the store so a restarted brain carries it on: its cycle
+ * (`lastAugReset`), when it began (time online), its first τ, the n it waits to reach, and whether it's overdue.
+ */
+export const AUGMENTATION_INSTALL_WAIT_SETTING = "augmentations.installWait";
+
+export interface InstallWait {
+  lastAugReset: number;
+  sinceOnlineMs: number;
+  firstTauMs: number;
+  untilAdding: number;
+  overdue: boolean;
+}
+
+/** The wait as stored, or null; a value the brain didn't write fails, as the count hold's does. */
+export function readInstallWait(store: TelemetryStore): InstallWait | null {
+  const value = store.getSetting(AUGMENTATION_INSTALL_WAIT_SETTING);
+  if (value === null) return null;
+  let wait: Partial<Record<keyof InstallWait, unknown>> | null;
+  try {
+    wait = JSON.parse(value) as typeof wait;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_INSTALL_WAIT_SETTING} isn't JSON`);
+  }
+  const { lastAugReset, sinceOnlineMs, firstTauMs, untilAdding, overdue } = wait ?? {};
+  if (
+    !isFiniteNumber(lastAugReset) ||
+    !isFiniteNumber(sinceOnlineMs) ||
+    !isFiniteNumber(firstTauMs) ||
+    firstTauMs < 0 ||
+    !Number.isInteger(untilAdding) ||
+    typeof overdue !== "boolean"
+  ) {
+    throw new Error(`the store's ${AUGMENTATION_INSTALL_WAIT_SETTING} isn't a wait the brain wrote`);
+  }
+  return { lastAugReset, sinceOnlineMs, firstTauMs, untilAdding: untilAdding as number, overdue };
+}
+
+function writeInstallWait(store: TelemetryStore, wait: InstallWait | null): void {
+  if (wait === null) store.deleteSetting(AUGMENTATION_INSTALL_WAIT_SETTING);
+  else store.setSetting(AUGMENTATION_INSTALL_WAIT_SETTING, JSON.stringify(wait));
+}
+
+/**
+ * The game's time the brain first saw a cycle at (#343: its clock's start), kept in the store: the planner's T counts
+ * the cycle's time before it (a save first seen mid-cycle, an install made while the brain was down).
+ */
+export const AUGMENTATION_CYCLE_SEEN_SETTING = "augmentations.cycleSeen";
+
+export function readCycleSeen(store: TelemetryStore): { lastAugReset: number; gameTimeMs: number } | null {
+  const value = store.getSetting(AUGMENTATION_CYCLE_SEEN_SETTING);
+  if (value === null) return null;
+  let seen: { lastAugReset?: unknown; gameTimeMs?: unknown } | null;
+  try {
+    seen = JSON.parse(value) as typeof seen;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_CYCLE_SEEN_SETTING} isn't JSON`);
+  }
+  const { lastAugReset, gameTimeMs } = seen ?? {};
+  if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(gameTimeMs)) {
+    throw new Error(`the store's ${AUGMENTATION_CYCLE_SEEN_SETTING} isn't one the brain wrote`);
+  }
+  return { lastAugReset, gameTimeMs };
+}
+
 /** Whether someone works for `faction` under a hold (#243 review): the owner's faction work there, or A5's. */
 function worksFor(work: HoldWork, faction: string): boolean {
   if (work.owners !== null) return work.owners.kind === "faction" && work.owners.faction === faction;
@@ -891,14 +960,21 @@ export function describeInstallTiming(
   });
   const chosen =
     timing.choice === null
-      ? "nothing new to install, and nothing to come at the rates known"
+      ? timing.heldForIncome
+        ? "none"
+        : "nothing new to install, and nothing to come at the rates known"
       : timing.choice === 0
         ? "install now"
         : `wait for ${timing.choice}`;
+  const scaled =
+    timing.tauScale > 1 ? `; each τ ×${timing.tauScale.toFixed(1)}, the overdue wait's measured error` : "";
+  const held = timing.heldForIncome
+    ? "; install now held: no income measured yet (10 minutes of slow snapshots), and it doesn't meet the count"
+    : "";
   return (
     `${count.installed} of ${count.required} installed, ${timing.adding} new at an install, ` +
-    `${formatEta(timing.onlineMs)} online this cycle; to Daedalus's count: ${candidates.join(", ") || "no estimate"}; ` +
-    `chosen: ${chosen}`
+    `${formatEta(timing.onlineMs)} online this cycle; to Daedalus's count: ${candidates.join(", ") || "no estimate"}` +
+    `${scaled}; chosen: ${chosen}${held}`
   );
 }
 
@@ -997,21 +1073,10 @@ export class AugmentationRule {
   #countHoldEndLogged = false;
   /** Who times installs short of Daedalus's count (#343): the planner, or (the A/B's baseline) the count rule. */
   readonly #timingPolicy: InstallTimingPolicy;
-  /** The planner's choice and n as last decided (#343), or null when it isn't timing installs: logged as they change. */
+  /** The planner's choice and n as last decided (#343), or null when it isn't timing installs: logged on a change. */
   #timingLogged: string | null = null;
   /** The countables the planner's wait waits for (#343), as last decided: A5's work target, the reserve's. */
   #waitedFor: NextCountable[] = [];
-  /**
-   * The planner's wait under way (#343): its cycle, when it began (online), its first τ, the n it waits to reach, and
-   * whether it's been found overdue. In memory: a restarted brain's wait begins again.
-   */
-  #wait: {
-    lastAugReset: number;
-    sinceOnlineMs: number;
-    firstTauMs: number;
-    untilAdding: number;
-    overdue: boolean;
-  } | null = null;
   /** A decision made since the brain started: a hold's window open at the first is a restarted brain's hold. */
   #decidedOnce = false;
   /** Daedalus's $100b, held back for its invitation (#215), or 0: home RAM keeps it too (#215 review). */
@@ -1056,6 +1121,8 @@ export class AugmentationRule {
     this.#timingPolicy = timingPolicy;
     readAugmentationCycle(store);
     readCountHold(store);
+    readInstallWait(store);
+    readCycleSeen(store);
     this.#onlineClock = readOnlineClock(store);
   }
 
@@ -1305,6 +1372,10 @@ export class AugmentationRule {
     let gap = false;
     if (isFiniteNumber(lastAugReset)) {
       const { clock, leftOutMs } = advanceOnlineClock(this.#onlineClock, gameTimeMs, lastAugReset);
+      // A cycle the clock hasn't seen: when the brain first saw it (#343, the planner's T).
+      if (this.#onlineClock?.lastAugReset !== lastAugReset) {
+        this.#store.setSetting(AUGMENTATION_CYCLE_SEEN_SETTING, JSON.stringify({ lastAugReset, gameTimeMs }));
+      }
       if (clock !== this.#onlineClock) {
         this.#onlineClock = clock;
         this.#store.setSetting(AUGMENTATION_ONLINE_SETTING, JSON.stringify(clock));
@@ -1335,24 +1406,34 @@ export class AugmentationRule {
   }
 
   /**
-   * The planner's wait (#343): one begins at a wait chosen with none under way in the cycle, waiting for the n the set
-   * then adds plus k, its first τ the k-th's; it's over at an install chosen, or once n reaches that. Still under way
-   * at twice its first τ and `INSTALL_WAIT_OVERDUE_SLACK_MS` online from its start, the estimate was wrong: once,
-   * `augmentationWaitOverdue` and a log line (a run report failure). Nothing to install or wait for meanwhile is still
-   * the wait's.
+   * The planner's wait (#343), kept in the store (`AUGMENTATION_INSTALL_WAIT_SETTING`, a restart keeps it): one begins
+   * at a wait chosen with none under way in the cycle, waiting for the n the set then adds plus k, its first τ the
+   * k-th's; it's over at an install chosen, once n reaches that (`current` null then), or in another cycle. Still under
+   * way at twice its first τ and `INSTALL_WAIT_OVERDUE_SLACK_MS` online from its start, the estimate was wrong: once,
+   * `augmentationWaitOverdue` and a log line (a run report failure), and from then on its measured error scales every
+   * fresh τ (the caller's `tauScale`). Nothing to install or wait for meanwhile is still the wait's.
    */
-  #watchWait(timing: InstallTimingView, lastAugReset: number, atMs: number): void {
-    const { choice, adding, onlineMs } = timing;
-    let wait = this.#wait?.lastAugReset === lastAugReset ? this.#wait : null;
-    if (wait !== null && (choice === 0 || adding >= wait.untilAdding)) wait = null;
+  #watchWait(
+    timing: InstallTimingView,
+    current: InstallWait | null,
+    stored: InstallWait | null,
+    lastAugReset: number,
+    onlineMs: number,
+    atMs: number,
+  ): void {
+    const { choice, adding } = timing;
+    let wait = current === null || choice === 0 ? null : { ...current };
     if (wait === null && choice !== null && choice > 0) {
       const firstTauMs = timing.candidates.find((candidate) => candidate.k === choice)?.tauMs ?? 0;
       wait = { lastAugReset, sinceOnlineMs: onlineMs, firstTauMs, untilAdding: adding + choice, overdue: false };
     }
-    this.#wait = wait;
-    if (wait === null || wait.overdue) return;
-    if (onlineMs < wait.sinceOnlineMs + 2 * wait.firstTauMs + INSTALL_WAIT_OVERDUE_SLACK_MS) return;
-    wait.overdue = true;
+    const overdue =
+      wait !== null &&
+      !wait.overdue &&
+      onlineMs >= wait.sinceOnlineMs + 2 * wait.firstTauMs + INSTALL_WAIT_OVERDUE_SLACK_MS;
+    if (wait !== null && overdue) wait.overdue = true;
+    if (JSON.stringify(wait) !== JSON.stringify(stored)) writeInstallWait(this.#store, wait);
+    if (wait === null || !overdue) return;
     const { sinceOnlineMs, firstTauMs, untilAdding } = wait;
     this.#emit({
       type: AUGMENTATION_WAIT_OVERDUE_EVENT_KIND,
@@ -1783,10 +1864,16 @@ export class AugmentationRule {
       const planned = this.#timingPolicy === "planner" && short && endgame.kind === "none";
       let timing: InstallTimingView | null = null;
       if (!planned) {
-        this.#wait = null;
+        if (readInstallWait(this.#store) !== null) writeInstallWait(this.#store, null);
         this.#timingLogged = null;
       } else {
         const income = this.#income();
+        // T: the time online this cycle, and the game's time before the brain first saw the cycle (a save first seen
+        // mid-cycle, or an install made while it was down): offline time counted whole, cautious for installing now.
+        const seen = readCycleSeen(this.#store);
+        const cycleMs =
+          onlineMs +
+          (seen?.lastAugReset === resetInfo.lastAugReset ? Math.max(0, seen.gameTimeMs - resetInfo.lastAugReset) : 0);
         const toCome = countablesToCome({
           sold,
           state: purchaseState,
@@ -1811,12 +1898,17 @@ export class AugmentationRule {
           income,
           upTo: Math.max(0, needed - adding),
         });
+        // The wait under way (kept in the store, a restart keeps it): once overdue, each fresh τ scaled by its measured
+        // error, the wait so far over its first τ (decision 67's rates fitted online), so a stalled wait gives way.
+        const stored = readInstallWait(this.#store);
+        const wait = stored?.lastAugReset === resetInfo.lastAugReset && adding < stored.untilAdding ? stored : null;
+        const tauScale = wait?.overdue === true ? Math.max(1, (onlineMs - wait.sinceOnlineMs) / wait.firstTauMs) : 1;
         const figures = {
-          ...installTiming({ needed, adding, onlineMs, next }),
+          ...installTiming({ needed, adding, onlineMs: cycleMs, next, incomeMeasured: income !== null, tauScale }),
           next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
         };
         timing = { ...figures, words: describeInstallTiming(figures, count) };
-        this.#watchWait(timing, resetInfo.lastAugReset, atMs);
+        this.#watchWait(timing, wait, stored, resetInfo.lastAugReset, onlineMs, atMs);
         // A wait (or nothing) logged as the choice or n changes; an install, in its own line.
         const logged = `${timing.choice} ${timing.adding}`;
         if (logged !== this.#timingLogged && timing.choice !== 0) {
@@ -2060,7 +2152,6 @@ export class AugmentationRule {
         ...(short ? { short: { installed: count.installed, required: count.required } } : {}),
         ...(timing === null ? {} : { timing }),
       });
-      this.#wait = null;
       this.#log(
         `augmentations: install chosen, ${formatEta(onlineMs)} online this cycle: buying ` +
           `${setView.map((each) => each.augmentation).join(", ") || "nothing more"} (${formatMoney(set.money)}), ` +

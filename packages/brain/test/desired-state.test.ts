@@ -28,7 +28,7 @@ import {
 } from "@bitburner-agent/core";
 import { holdsOf, installDecision, NO_HOLDS, nextPurchase, type Purchase, type Purse } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { InstallTimingPolicy } from "../src/augmentations.ts";
+import { type InstallTimingPolicy, readInstallWait } from "../src/augmentations.ts";
 import { HACKING_MULTIPLIERS_UNREAD } from "../src/batcher.ts";
 import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
@@ -1345,46 +1345,201 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(sentIds()).toEqual([buy(FIVE[1] as string).id]);
     });
 
-    test("the planner (#343): a wait sends nothing; its install now goes at once, through the gate and a backup", async () => {
-      const { controller, connection, sentIds, backupNow, settleBackup } = connectedWithLoopOff("planner");
-      const sent: unknown[] = [];
-      controller.subscribe((event) => isInvitationEvent(event) || sent.push(event));
-      // Short of Daedalus's count (nothing installed), CyberSec at 0: nothing new to install, so no install candidate;
-      // the five to come by A5's work. However long, nothing of A6's goes out.
-      const atZero = slowWith();
-      send(connection, "slow", {
-        ...atZero,
+    describe("the planner (#343), short of Daedalus's count", () => {
+      const TBH = "The Black Hand";
+      const NFG = "NeuroFlux Governor";
+      const THREE = ["BitWire", "Synaptic Enhancement Implant", "Neurotrainer I"];
+      const fillers = AUGMENTATION_NAMES.filter(
+        (name) =>
+          isWorthInstalling(name, true) &&
+          !augmentationsSoldBy(TBH, 1, null).includes(name) &&
+          !augmentationsSoldBy("CyberSec", 1, null).includes(name) &&
+          name !== "Neural Wit Amplifier",
+      );
+      /**
+       * Run #3's 17:49, as augmentations.test.ts's planner tests have it: 25 installed (The Black Hand's shop but its
+       * own, Gen I and II, NeuroFlux Governor, fillers), Neural Wit Amplifier queued, CyberSec's other three reached:
+       * an install adds 4, 29 of 30. The 30th, "The Black Hand", reached at 100,000: its money is what's missing.
+       */
+      const OWNED: Record<string, number> = Object.fromEntries(
+        [
+          ...augmentationsSoldBy(TBH, 1, null).filter((name) => name !== TBH && name !== NFG),
+          ...FIVE.slice(0, 2),
+          NFG,
+          ...fillers,
+        ]
+          .slice(0, 25)
+          .map((name) => [name, name === NFG ? 5 : 1]),
+      );
+      /** The three after Neural Wit Amplifier, then The Black Hand first: what the set and it cost. */
+      const WITH_BLACK_HAND = 550e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
+      /** $300m short of The Black Hand with the set: 5 minutes at $1m a second. */
+      const SHORT_OF_IT = WITH_BLACK_HAND - 300e6;
+      /** The set's three after Neural Wit Amplifier, exactly: no NeuroFlux Governor level or home RAM after them. */
+      const THREE_EXACTLY = 10e6 * 1.9 + 7.5e6 * 1.9 ** 2 + 4e6 * 1.9 ** 3 + 1_000;
+      const EARNING = 1e6;
+      const MINUTE = 60_000;
+      const plannerSlow = ({
+        minute,
+        ownedAugs = OWNED,
+        queued = ["Neural Wit Amplifier"],
+        blackHand = 100_000,
+      }: {
+        minute: number;
+        ownedAugs?: Record<string, number>;
+        queued?: string[];
+        blackHand?: number;
+      }) => ({
+        ...slowData(),
+        resetInfo: { ...slowData().resetInfo, lastAugReset: 0, ownedAugs },
+        moneySources: { hacking: minute * 60 * EARNING },
         factions: {
-          ...atZero.factions,
-          state: { ...atZero.factions.state, joined: [{ name: "CyberSec", reputation: 0, favor: 0 }] },
+          backend: "sim",
+          state: {
+            joined: [
+              { name: "CyberSec", reputation: 18_750, favor: 0 },
+              { name: TBH, reputation: blackHand, favor: 0 },
+            ],
+            invitations: [],
+            queuedAugmentations: queued,
+          },
+          problem: null,
         },
       });
-      send(connection, "medium", richMedium(0));
-      expect(controller.augmentationsView().progress?.timing).toMatchObject({ needed: 30, adding: 0 });
-      expect(controller.augmentationsView().progress?.timing?.choice).not.toBe(0);
-      expect(controller.augmentationsView()).toMatchObject({ committed: false });
-      expect(sentIds().filter((id) => id === INSTALL.id || id.startsWith("purchaseAugmentation"))).toEqual([]);
-      // The five bought already (the owner's, say): 5 new of 30, the install now the shortest (0 online this cycle).
-      send(connection, "slow", slowWith(FIVE));
-      send(connection, "medium", richMedium(0));
-      expect(controller.augmentationsView()).toMatchObject({ committed: true });
-      expect(controller.augmentationsView().progress).toBeNull();
-      send(connection, "medium", richMedium(0));
-      expect(backupNow).toHaveBeenCalledTimes(1);
-      await settleBackup(SAVED);
-      expect(sentIds()).toEqual([INSTALL.id]);
-      expect(sent).toContainEqual(
-        expect.objectContaining({
-          type: "augmentationInstallChosen",
-          reason: "Daedalus's count",
-          short: { installed: 0, required: 30 },
-          timing: expect.objectContaining({ needed: 30, adding: 5, choice: 0 }),
-        }),
-      );
-      expect(sent).toContainEqual(
-        expect.objectContaining({ type: "augmentationInstallSent", source: "brain", queued: FIVE }),
-      );
-      expect(sent.filter((event) => (event as { type: string }).type === "augmentationInstallChosen")).toHaveLength(1);
+      /** A slow and a medium snapshot `minute` minutes into the cycle (the game's time), the medium with `money`. */
+      const minuteAt = (
+        connection: MemoryConnection,
+        minute: number,
+        money: number,
+        fields: Omit<Parameters<typeof plannerSlow>[0], "minute"> = {},
+        agentSessionId = "session-1",
+      ) => {
+        for (const [tier, data] of [
+          ["slow", plannerSlow({ minute, ...fields })],
+          ["medium", richMedium(money)],
+        ] as const) {
+          connection.receive(
+            encodeControlMessage({
+              protocolVersion: CONTROL_PROTOCOL_VERSION,
+              type: "snapshot",
+              agentSessionId,
+              tier,
+              sequenceNumber: ++sequenceNumber,
+              gameTimeMs: 10 * 3_600_000 + minute * MINUTE,
+              data,
+            }),
+          );
+        }
+      };
+      const augmentationIntents = (ids: string[]) =>
+        ids.filter((id) => id === INSTALL.id || id.startsWith("purchaseAugmentation"));
+
+      test("a wait at 29 of 30, The Black Hand's money 5 min off: nothing goes; restarted, no income measured, still none", () => {
+        const { controller, connection, sentIds } = connectedWithLoopOff("planner");
+        // Ten minutes of slow snapshots measure the income; meanwhile installing now is held for it.
+        minuteAt(connection, 0, SHORT_OF_IT);
+        expect(controller.augmentationsView().progress?.timing).toMatchObject({ needed: 5, adding: 4 });
+        for (let minute = 1; minute <= 10; minute += 1) minuteAt(connection, minute, SHORT_OF_IT);
+        const waiting = controller.augmentationsView().progress?.timing;
+        expect(waiting).toMatchObject({ needed: 5, adding: 4, choice: 1, heldForIncome: false });
+        expect(waiting?.next[0]).toMatchObject({
+          augmentation: TBH,
+          way: "money",
+          tauMs: expect.closeTo(5 * MINUTE, -3),
+        });
+        expect(augmentationIntents(sentIds())).toEqual([]);
+        expect(controller.augmentationsView().committed).toBe(false);
+        const wait = readInstallWait(store);
+        expect(wait).toMatchObject({ untilAdding: 5, overdue: false });
+
+        // Restarted: the income's samples are gone, so its money never comes at a rate known; installing now (29 of 30)
+        // would be the only candidate, and it's held until the income is measured again.
+        const { restarted } = restartedBrain();
+        const again = connectAgent();
+        send(again, "static", network);
+        for (let minute = 11; minute <= 15; minute += 1) minuteAt(again, minute, SHORT_OF_IT);
+        expect(restarted.augmentationsView().progress?.timing).toMatchObject({
+          adding: 4,
+          candidates: [{ k: 0 }],
+          choice: null,
+          heldForIncome: true,
+        });
+        expect(restarted.augmentationsView().committed).toBe(false);
+        expect(
+          augmentationIntents(
+            desiredStates(again)
+              .at(-1)
+              ?.intents.map((each) => each.id) ?? [],
+          ),
+        ).toEqual([]);
+        // The wait's record kept across the restart.
+        expect(readInstallWait(store)).toEqual(wait);
+      });
+
+      test("NeuroFlux Governor's levels alone on offer, the income measured: never an install", () => {
+        const { controller, connection, sentIds } = connectedWithLoopOff("planner");
+        // CyberSec's shop owned in place of three fillers: only its NeuroFlux Governor levels, with $1t.
+        const lastFillers = Object.keys(OWNED)
+          .filter((name) => fillers.includes(name))
+          .slice(-3);
+        const ownedAugs = {
+          ...Object.fromEntries(Object.entries(OWNED).filter(([name]) => !lastFillers.includes(name))),
+          ...Object.fromEntries(THREE.map((name) => [name, 1])),
+        };
+        expect(Object.keys(ownedAugs)).toHaveLength(25);
+        for (let minute = 0; minute <= 15; minute += 1) {
+          minuteAt(connection, minute, 1e12, { ownedAugs, queued: [], blackHand: 0 });
+        }
+        expect(controller.augmentationsView().progress?.affordableWithNeuroFlux).toBeGreaterThan(0);
+        expect(controller.augmentationsView().progress?.timing).toMatchObject({ adding: 0, heldForIncome: false });
+        expect(controller.augmentationsView().progress?.timing?.choice).not.toBe(0);
+        expect(controller.augmentationsView().committed).toBe(false);
+        expect(augmentationIntents(sentIds())).toEqual([]);
+      });
+
+      test("held while the income is unmeasured; then installing now, at once, through the gate and a backup", async () => {
+        const { controller, connection, sentIds, backupNow, settleBackup } = connectedWithLoopOff("planner");
+        const sent: unknown[] = [];
+        controller.subscribe((event) => isInvitationEvent(event) || sent.push(event));
+        // The Black Hand far off (0 of 100,000): installing now, 29 of 30, is the shortest, but held for the income.
+        for (let minute = 0; minute <= 9; minute += 1) {
+          minuteAt(connection, minute, THREE_EXACTLY, { blackHand: 0 });
+          expect(controller.augmentationsView().committed).toBe(false);
+        }
+        expect(controller.augmentationsView().progress?.timing).toMatchObject({ choice: null, heldForIncome: true });
+        expect(controller.augmentationsView().progress?.timing?.words).toMatch(
+          /; install now held: no income measured/,
+        );
+        minuteAt(connection, 10, THREE_EXACTLY, { blackHand: 0 });
+        expect(controller.augmentationsView()).toMatchObject({ committed: true });
+        expect(sent).toContainEqual(
+          expect.objectContaining({
+            type: "augmentationInstallChosen",
+            reason: "Daedalus's count",
+            short: { installed: 25, required: 30 },
+            timing: expect.objectContaining({ needed: 5, adding: 4, choice: 0, heldForIncome: false }),
+          }),
+        );
+        // The set's three, then the install through the gate: two medium snapshots and a backup.
+        const queued = ["Neural Wit Amplifier", ...THREE];
+        for (const [index, name] of THREE.entries()) {
+          expect(sentIds()).toContain(buy(name).id);
+          send(connection, "fast", {
+            degradedTiers: [],
+            pageHeapUsedBytes: null,
+            game: null,
+            intents: [{ id: buy(name).id, done: true, tries: 1, problem: null, backend: "sim" }],
+          });
+          minuteAt(connection, 11 + index, THREE_EXACTLY, { queued: queued.slice(0, index + 2), blackHand: 0 });
+        }
+        // The four shown queued: the install asked for, then the gate: two consecutive medium snapshots, and a backup.
+        minuteAt(connection, 14, 0, { queued, blackHand: 0 });
+        minuteAt(connection, 15, 0, { queued, blackHand: 0 });
+        minuteAt(connection, 16, 0, { queued, blackHand: 0 });
+        expect(backupNow).toHaveBeenCalledTimes(1);
+        await settleBackup(SAVED);
+        expect(sentIds()).toContain(INSTALL.id);
+      });
     });
 
     test("purchases reported done after the medium snapshot: their money taken off it (#213 re-review)", () => {

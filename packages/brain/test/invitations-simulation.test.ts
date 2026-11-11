@@ -9,7 +9,9 @@
 //   (the game's check, every 2 s) and A5 joins it, then works for it: its two with a hacking value first (#203), then,
 //   past them (a harness edit), the rest, for the count.
 // - With $100m, the city group (owner decision 54): B, the most that count, Ishima first (the player is there), then
-//   Chongqing and New Tokyo, back to Ishima; none of A's or C's joined.
+//   Chongqing and New Tokyo, back to Ishima; none of A's or C's joined. Meanwhile the planner (#343) holds installing
+//   Tian Di Hui's three with that money (no income measured yet, the brain's first 10 minutes), then waits for the
+//   group's countables.
 // - A harness edit stands in for that work's hours (Tian Di Hui's reputation for all eight) and the money: A6 counts
 //   Tian Di Hui's eight and the two no-value augmentations The Black Hand and BitRunners sell (by donation), buys them
 //   and installs: 33 installed. Hacking and money edited back past Daedalus's other requirements, it invites.
@@ -121,7 +123,18 @@ test.each(SEEDS)(
       expect.objectContaining({ group: "B", factions: groupB, short: true }),
     ]);
     expect(joined().filter((faction) => ["Sector-12", "Aevum", "Volhaven"].includes(faction))).toEqual([]);
+    // No install meanwhile (#343). The $100m covers Tian Di Hui's three (23 → 26 of 30). Installing now, about 2T (47
+    // min at the edit), is the planner's only candidate until the group joins (the hack loop is off, so the money never
+    // comes at a rate known): held while no income is measured, the brain's first 10 minutes of slow snapshots (seed 1:
+    // its first at 20.5 min of the game's time, measured from 30.5). Group B joined (seed 1: 28 min), its countables
+    // come by work, and waiting wins: NutriGen Implant 3 min off at New Tokyo, 34 min against installing now's 55.
     expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([]);
+    expect(fresh.controller().augmentationsView().progress?.timing).toMatchObject({
+      needed: 7,
+      adding: 3,
+      choice: 1,
+      heldForIncome: false,
+    });
 
     // The work's hours, and the money: the count reached, bought, installed.
     await simulation.diagnostics.joinFactionWithReputation("Tian Di Hui", 80_000);

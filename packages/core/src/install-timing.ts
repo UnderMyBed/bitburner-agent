@@ -15,13 +15,22 @@
  * Left out, each labelled:
  * - the next cycles as long as this one, though the install's multipliers, the favour and home's RAM make them faster:
  *   cautious for "install now";
- * - the countables a cycle gains later in the BitNode (more factions joined): cautious for "install now";
+ * - the next cycles' countables as easy as this one's, though the cheapest and nearest are bought first, so later ones
+ *   are dearer or further off: optimistic for "install now";
+ * - the factions joined later this cycle, and invitations from factions not joined yet (`countablesToCome` looks at
+ *   the joined alone): their countables aren't among the k, cautious for waiting;
  * - restarts and time offline: optimistic for both;
  * - Daedalus's other way in, combat 1,500: left out;
  * - each install's own time, its commit (about 2 minutes live, #343's tables): optimistic for "install now";
+ * - a money-bound τ takes the income as accruing unspent, though only a wait within the lookahead's 15 minutes holds
+ *   it back from cloud servers and home RAM: optimistic for waiting;
  * - the work one faction at a time, each in turn (`nextCountables`), never two at once: the order A5 takes and its
  *   switches left out, cautious for waiting where its own choice is already one of them;
  * - the countables whose prerequisite is among the k (not offered until it's bought): cautious for waiting.
+ * Two guards, each the rule's own measure: with no income measured (`incomeMeasured` false: 10 minutes of slow
+ * snapshots after a restart or a gap), every money-bound τ is never, so installing now is held unless the set meets
+ * the count; and a wait still short of its countables at twice its first τ and 10 minutes scales every fresh τ by its
+ * measured error, the wait so far over its first τ (`tauScale`, a rate fitted online), so a stalled wait gives way.
  * Pure, so the brain's rule and the run report read the same figures.
  */
 
@@ -45,7 +54,8 @@ const gameOrder = (name: string) => Object.keys(AUGMENTATIONS).indexOf(name);
  * The next countables in turn (#343), at most `upTo`: `toCome` (core's `countablesToCome` on `set`) the soonest first
  * (ties to the game's order), each one's τ the latest of three: the work for it and those before it, one faction at a
  * time (each faction's longest `workMs`, added up: the reputation at one faction serves all it sells, but the player
- * works for one faction at a time, `PersonObjects/Player/PlayerObject.ts:76`); the others' own times (a donation's or the money's alone);
+ * works for one faction at a time, `PersonObjects/Player/PlayerObject.ts:76`); the others' own times (a donation's or
+ * the money's alone);
  * and the money for the set with all of them in buy order (each purchase multiplies the next one's price by 1.9,
  * `Constants.ts:41`, `Augmentation/AugmentationHelpers.ts:30`) and their donations beyond `money`, at `income` a second
  * (none measured: only what `money` covers). A donation is taken from its seller's reputation now for each, so two at
@@ -141,31 +151,51 @@ export interface InstallTiming {
   candidates: InstallTimingCandidate[];
   /** The k chosen: 0 installs now, 1 or more waits; null with no candidate (nothing new to install, none to come). */
   choice: number | null;
+  /** Installing now was the least but held, as no income is measured and the set doesn't meet the count. */
+  heldForIncome: boolean;
+  /** The factor each wait's τ was scaled by (an overdue wait's measured error), 1 for none. */
+  tauScale: number;
 }
 
 /**
- * The candidates and the choice (#343): install now (with n above 0) and each next k with a τ, the least estimate
- * chosen; a tie to install (irreversible, it still passes the controller's gate), then to the fewer to wait for.
+ * The candidates and the choice (#343): install now (with n above 0) and each next k with a τ (times `tauScale`, an
+ * overdue wait's measured error; never, with a τ above 0 times a scale of Infinity), the least estimate chosen; a tie
+ * to install (irreversible, it still passes the controller's gate), then to the fewer to wait for. With no income
+ * measured (`incomeMeasured` false), installing now is chosen only once the set meets the count; else the least wait,
+ * or none (`heldForIncome` says so).
  */
 export function installTiming({
   needed,
   adding,
   onlineMs,
   next,
+  incomeMeasured = true,
+  tauScale = 1,
 }: {
   needed: number;
   adding: number;
   onlineMs: number;
   next: readonly { tauMs: number }[];
+  incomeMeasured?: boolean;
+  tauScale?: number;
 }): InstallTiming {
   const candidates: InstallTimingCandidate[] = [];
   const now = installNowEstimateMs(needed, adding, onlineMs);
   if (now !== null) candidates.push({ k: 0, tauMs: 0, estimateMs: now });
-  for (const [index, { tauMs }] of next.entries()) {
+  for (const [index, each] of next.entries()) {
+    const tauMs = each.tauMs === 0 ? 0 : each.tauMs * tauScale;
     const estimateMs = waitEstimateMs(needed, adding, index + 1, tauMs, onlineMs);
     if (estimateMs !== null) candidates.push({ k: index + 1, tauMs, estimateMs });
   }
-  let best: InstallTimingCandidate | null = null;
-  for (const candidate of candidates) if (best === null || candidate.estimateMs < best.estimateMs) best = candidate;
-  return { needed, adding, onlineMs, candidates, choice: best?.k ?? null };
+  const least = (allowed: (candidate: InstallTimingCandidate) => boolean) => {
+    let best: InstallTimingCandidate | null = null;
+    for (const candidate of candidates) {
+      if (allowed(candidate) && (best === null || candidate.estimateMs < best.estimateMs)) best = candidate;
+    }
+    return best;
+  };
+  const best = least(() => true);
+  const heldForIncome = best?.k === 0 && !incomeMeasured && adding < needed;
+  const choice = heldForIncome ? (least((candidate) => candidate.k > 0)?.k ?? null) : (best?.k ?? null);
+  return { needed, adding, onlineMs, candidates, choice, heldForIncome, tauScale };
 }

@@ -27,6 +27,7 @@ import {
   AUGMENTATION_CYCLE_SETTING,
   AUGMENTATION_INCOME_WINDOW_MS,
   AUGMENTATION_INSTALL_INTENT,
+  AUGMENTATION_INSTALL_WAIT_SETTING,
   AUGMENTATION_ONLINE_SETTING,
   AUGMENTATION_PROGRESS_COUNTS_EVERY_MS,
   AUGMENTATION_RESERVE_LOOKAHEAD_MS,
@@ -44,7 +45,9 @@ import {
   readAugmentationCycle,
   readAugmentationsEnabled,
   readCountHold,
+  readCycleSeen,
   readGangRedPillHold,
+  readInstallWait,
   readOnlineClock,
 } from "../src/augmentations.ts";
 import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
@@ -2958,6 +2961,8 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     queued = ["Neural Wit Amplifier"],
     invitations = [] as string[],
     ownedAugs = OWNED,
+    earned = 0,
+    lastAugReset = 0,
   } = {}): SlowSnapshotData {
     const data = slow({
       joined: [
@@ -2966,6 +2971,8 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
       ],
       queued,
       ownedAugs,
+      earned,
+      lastAugReset,
     });
     const state = data.factions?.state as FactionState;
     return { ...data, factions: { backend: "sim", state: { ...state, invitations }, problem: null } };
@@ -2979,7 +2986,10 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
   ).perSecond;
   const reputationFor = (etaMs: number) => 100_000 - (RATE * etaMs) / 1000;
   /** The planner's rule, `minutes` online this cycle so far (the next slow snapshot a minute on). */
+  /** The game's count of money earned since the install: $1m a second, so 10 minutes of slow snapshots measure it. */
+  let earned = 0;
   const plannerAt = (minutes: number) => {
+    earned = 0;
     store.setSetting(
       AUGMENTATION_ONLINE_SETTING,
       JSON.stringify({ lastAugReset: 0, onlineMs: minutes * MINUTE, lastGameTimeMs: gameTimeMs }),
@@ -2992,7 +3002,12 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     more: Partial<AugmentationInputs> = {},
   ) => {
     gameTimeMs += MINUTE;
-    return update({ slowData: slowWith(fields), mediumData: playerWith(money), ...more });
+    earned += 60e6;
+    return update({ slowData: slowWith({ earned, ...fields }), mediumData: playerWith(money), ...more });
+  };
+  /** Ten minutes more, the income measured by the next slow snapshot. */
+  const tenMinutes = (fields: Parameters<typeof slowWith>[0] = {}, money = MONEY) => {
+    for (let minute = 0; minute < 10; minute += 1) minuteOn(fields, money);
   };
   const chosen = () => events.filter((event) => event.type === "augmentationInstallChosen");
   const overdue = () => events.filter((event) => event.type === "augmentationWaitOverdue");
@@ -3012,6 +3027,8 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
         { k: 1, tauMs: expect.closeTo(17 * MINUTE, -3), estimateMs: expect.closeTo(17 * MINUTE, -3) },
       ],
       choice: 1,
+      heldForIncome: false,
+      tauScale: 1,
       next: [{ augmentation: TBH, faction: TBH, way: "work", tauMs: expect.closeTo(17 * MINUTE, -3) }],
       words:
         "25 of 30 installed, 4 new at an install, 28 min online this cycle; to Daedalus's count: install now 28 min, " +
@@ -3038,7 +3055,12 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
   });
 
   test("The Black Hand 30 min off at 28 min: install now, at once, its estimates in the event, the log and the note", () => {
-    plannerAt(27);
+    plannerAt(17);
+    // No income measured yet (the rule's first ten minutes): installing now, the shortest, is held; the wait meanwhile.
+    tenMinutes({ reputation: reputationFor(30 * MINUTE) });
+    expect(rule.view().progress?.timing).toMatchObject({ choice: 1, heldForIncome: true });
+    expect(rule.view().progress?.timing?.words).toMatch(/; chosen: wait for 1; install now held: no income measured/);
+    expect(chosen()).toEqual([]);
     const ask = minuteOn({ reputation: reputationFor(30 * MINUTE) });
     expect(ask).toMatchObject({ install: false, committed: true });
     expect(readAugmentationCycle(store)).toMatchObject({ reason: "Daedalus's count" });
@@ -3063,7 +3085,8 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     const words = (event as unknown as { timing: { words: string } }).timing.words;
     expect(words).toMatch(/; chosen: install now$/);
     // No countdown: the planner's install goes at once.
-    expect(lines).toEqual([
+    expect(lines.filter((line) => line.includes("countdown"))).toEqual([]);
+    expect(lines.slice(-1)).toEqual([
       `augmentations: install chosen, 28 min online this cycle: buying ${THREE.join(", ")} ` +
         `(${dollars(THREE_COST)}), Daedalus's count: the planner's shortest time to it is installing now (#343); ${words}`,
     ]);
@@ -3134,9 +3157,111 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     expect(lines.at(-1)).toMatch(
       /^augmentations: WAIT OVERDUE: the planner's wait for Daedalus's count, from 28 min online, expected 5 new at an install in ~10 min, still 4 at 58 min online: the estimate was wrong; 25 of 30/,
     );
+    expect(readInstallWait(store)).toMatchObject({ lastAugReset: 0, sinceOnlineMs: 28 * MINUTE, overdue: true });
     for (let minute = 0; minute < 5; minute += 1) minuteOn({ reputation: stuck });
     expect(overdue()).toHaveLength(1);
+    // From then on each fresh τ is scaled by the measured error, the wait so far over its first τ: 35 min over 10. At
+    // the last countable the scaled wait is the wait so far, under a cycle's T: it goes on (one more cycle is longer).
+    expect(rule.view().progress?.timing?.tauScale).toBeCloseTo(3.5, 1);
+    expect(rule.view().progress?.timing?.words).toMatch(/; each τ ×3\.5, the overdue wait's measured error; chosen: /);
     expect(chosen()).toEqual([]);
+  });
+
+  /** 21 installed (OWNED's first 21: The Black Hand's shop but its own, Gen I and II, NeuroFlux Governor): 9 to go. */
+  const OWNED_21 = Object.fromEntries(Object.entries(OWNED).slice(0, 21));
+
+  test("a stalled wait gives way: once overdue, the measured error scales τ until installing now is shorter", () => {
+    expect(Object.keys(OWNED_21)).toHaveLength(21);
+    plannerAt(27);
+    // 21 installed, 4 new at an install, 9 to go: installing now is 2 more cycles (2T), waiting for The Black Hand (10
+    // min) T + 2τ. Its reputation never moves, so its τ stays 10 min.
+    const stuck = { ownedAugs: OWNED_21, reputation: reputationFor(10 * MINUTE) };
+    minuteOn(stuck);
+    expect(rule.view().progress?.timing).toMatchObject({
+      needed: 9,
+      adding: 4,
+      candidates: [
+        { k: 0, estimateMs: 56 * MINUTE },
+        { k: 1, estimateMs: expect.closeTo(48 * MINUTE, -3) },
+      ],
+      choice: 1,
+    });
+    // Overdue at 2τ + 10 min (58 min online); the next minute τ × 3.1: 59 + 2 × 31 = 121 min against 2 × 59 = 118.
+    for (let minute = 0; minute < 30; minute += 1) minuteOn(stuck);
+    expect(overdue()).toHaveLength(1);
+    expect(chosen()).toEqual([]);
+    minuteOn(stuck);
+    expect(chosen()).toEqual([
+      expect.objectContaining({
+        reason: "Daedalus's count",
+        timing: expect.objectContaining({ choice: 0, tauScale: expect.closeTo(3.1, 2), onlineMs: 59 * MINUTE }),
+      }),
+    ]);
+    expect(readInstallWait(store)).toBeNull();
+  });
+
+  test("the wait kept in the store: a restarted brain carries on its start, its first τ and its overdue", () => {
+    plannerAt(27);
+    const stuck = { reputation: reputationFor(10 * MINUTE) };
+    minuteOn(stuck);
+    const wait = readInstallWait(store);
+    expect(wait).toEqual({
+      lastAugReset: 0,
+      sinceOnlineMs: 28 * MINUTE,
+      firstTauMs: expect.closeTo(10 * MINUTE, -3),
+      untilAdding: 5,
+      overdue: false,
+    });
+    // Restarted 20 minutes on: the same wait (not a new one from 48 min), overdue at 58 min as before, once.
+    for (let minute = 0; minute < 19; minute += 1) minuteOn(stuck);
+    rule = newRule("planner");
+    for (let minute = 0; minute < 11; minute += 1) minuteOn(stuck);
+    expect(readInstallWait(store)).toEqual({ ...wait, overdue: true });
+    expect(overdue()).toEqual([expect.objectContaining({ sinceOnlineMs: 28 * MINUTE, onlineMs: 58 * MINUTE })]);
+    rule = newRule("planner");
+    minuteOn(stuck);
+    expect(overdue()).toHaveLength(1);
+    // A wait the brain didn't write fails, as the count hold's does.
+    store.setSetting(AUGMENTATION_INSTALL_WAIT_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    expect(() => newRule()).toThrow("isn't a wait the brain wrote");
+  });
+
+  test("a wait's end: n reaching what it waited for, another cycle, and the count met (the planner off) each end it", () => {
+    plannerAt(27);
+    minuteOn({ ownedAugs: OWNED_21, reputation: reputationFor(10 * MINUTE) });
+    expect(readInstallWait(store)).toMatchObject({ untilAdding: 5 });
+    // Its reputation reached, restarted (no income): 5 new, 9 to go, installing now held for the income; the wait is
+    // over all the same (n reached the 5 it waited for).
+    rule = newRule("planner");
+    minuteOn({ ownedAugs: OWNED_21, reputation: 100_000 });
+    expect(rule.view().progress?.timing).toMatchObject({ adding: 5, choice: null, heldForIncome: true });
+    expect(readInstallWait(store)).toBeNull();
+    // Another cycle: the last cycle's wait isn't this one's.
+    minuteOn({ ownedAugs: OWNED_21, reputation: reputationFor(10 * MINUTE) });
+    expect(readInstallWait(store)).toMatchObject({ lastAugReset: 0 });
+    const reset = gameTimeMs;
+    minuteOn({ ownedAugs: OWNED_21, reputation: 0, lastAugReset: reset });
+    expect(readInstallWait(store)).toMatchObject({ lastAugReset: reset });
+    // The count met (Daedalus inviting): the planner doesn't time installs, and the wait is gone.
+    plannerAt(27);
+    minuteOn({ reputation: reputationFor(10 * MINUTE) });
+    expect(readInstallWait(store)).not.toBeNull();
+    minuteOn({ reputation: reputationFor(10 * MINUTE), invitations: ["Daedalus"] });
+    expect(readInstallWait(store)).toBeNull();
+  });
+
+  test("T counts the cycle's time before the brain first saw it: a save 7 h into its cycle, first seen now", () => {
+    // No clock stored: the brain first sees this cycle 7 h after its install (lastAugReset 0).
+    rule = newRule("planner");
+    gameTimeMs = 7 * HOUR;
+    update({ slowData: slowWith({ reputation: reputationFor(30 * MINUTE) }), mediumData: playerWith(MONEY) });
+    expect(readCycleSeen(store)).toEqual({ lastAugReset: 0, gameTimeMs: 7 * HOUR });
+    expect(rule.view().progress?.onlineMs).toBe(0);
+    expect(rule.view().progress?.timing).toMatchObject({
+      onlineMs: 7 * HOUR,
+      candidates: [{ k: 0, estimateMs: 7 * HOUR }, { k: 1 }],
+      choice: 1,
+    });
   });
 
   test("Daedalus inviting (the count met): the count rule times installs, as before; the planner doesn't", () => {

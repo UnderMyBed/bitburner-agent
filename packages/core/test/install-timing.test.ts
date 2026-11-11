@@ -45,6 +45,11 @@ describe("the choice (#343)", () => {
   test("29 of 30, the last 17 minutes off (run #3's BN1.2 17:49): waiting wins, by the ceiling alone", () => {
     // BN1.2 cycle 7: 25 at its start, the set's four make 29; The Black Hand's augmentation 17 minutes off by work;
     // 28 minutes online (the brain's clock). Installing now costs a whole cycle more for the last one.
+    // The Black Hand's τ from run #3's figures: 51,352 of its 100,000 at 46.9 a second, 17.3 minutes.
+    const tauMs = ((100_000 - 51_352) / 46.9) * 1000;
+    expect(tauMs / MINUTE).toBeCloseTo(17.3, 1);
+    expect(installTiming({ needed: 5, adding: 4, onlineMs: 28 * MINUTE, next: [{ tauMs }] }).choice).toBe(1);
+    // It waits for any τ under the cycle's 28 minutes, the bound it holds for.
     const timing = installTiming({ needed: 5, adding: 4, onlineMs: 28 * MINUTE, next: [{ tauMs: 17 * MINUTE }] });
     expect(timing).toEqual({
       needed: 5,
@@ -55,6 +60,8 @@ describe("the choice (#343)", () => {
         { k: 1, tauMs: 17 * MINUTE, estimateMs: 17 * MINUTE },
       ],
       choice: 1,
+      heldForIncome: false,
+      tauScale: 1,
     });
     // The last one a cycle off, or more: install now.
     expect(installTiming({ needed: 5, adding: 4, onlineMs: 28 * MINUTE, next: [{ tauMs: 29 * MINUTE }] }).choice).toBe(
@@ -74,6 +81,10 @@ describe("the choice (#343)", () => {
       ],
       choice: 0,
     });
+    // The bound it holds for: a fifth more than 14.7 minutes off (3τ + 88 against 132) installs; 14.6 would wait. The
+    // store saw none in 77.
+    const fifth = (tauMinutes: number) => installTiming({ ...at44, next: [{ tauMs: tauMinutes * MINUTE }] }).choice;
+    expect([fifth(14.6), fifth(14.7), fifth(77)]).toEqual([1, 0, 0]);
     // The count rule at 44 minutes: 4 of 8, 11 of 12 with its NeuroFlux Governor levels, no install (it came at 121).
     const rule = installRule({
       onlineMs: 44 * MINUTE,
@@ -118,6 +129,44 @@ describe("the choice (#343)", () => {
       candidates: [],
       choice: null,
     });
+  });
+
+  test("no income measured: installing now held unless the set meets the count; the least wait, or none, instead", () => {
+    const unmeasured = { needed: 5, adding: 4, onlineMs: 28 * MINUTE, incomeMeasured: false };
+    expect(installTiming({ ...unmeasured, next: [{ tauMs: 30 * MINUTE }] })).toMatchObject({
+      candidates: [{ k: 0, estimateMs: 28 * MINUTE }, { k: 1 }],
+      choice: 1,
+      heldForIncome: true,
+    });
+    expect(installTiming({ ...unmeasured, next: [] })).toMatchObject({ choice: null, heldForIncome: true });
+    // A wait shorter anyway isn't held; the set meeting the count installs whatever the income.
+    expect(installTiming({ ...unmeasured, next: [{ tauMs: 10 * MINUTE }] })).toMatchObject({
+      choice: 1,
+      heldForIncome: false,
+    });
+    expect(installTiming({ ...unmeasured, adding: 5, next: [] })).toMatchObject({ choice: 0, heldForIncome: false });
+  });
+
+  test("an overdue wait's measured error scales each τ: the wait gives way where its cycles cost more than installing", () => {
+    // 9 to go, 4 new: installing now 2T; waiting 10 min, T + 2τ. Scaled 3.1 (31 minutes waited of 10): 2T is less.
+    const at59 = { needed: 9, adding: 4, onlineMs: 59 * MINUTE, next: [{ tauMs: 10 * MINUTE }] };
+    expect(installTiming(at59).choice).toBe(1);
+    expect(installTiming({ ...at59, tauScale: 3.1 })).toMatchObject({
+      candidates: [
+        { k: 0, estimateMs: 118 * MINUTE },
+        { k: 1, tauMs: 31 * MINUTE, estimateMs: 121 * MINUTE },
+      ],
+      choice: 0,
+      tauScale: 3.1,
+    });
+    // At the last one, the scaled wait is the wait so far, never more than a cycle's T: it goes on.
+    expect(
+      installTiming({ needed: 5, adding: 4, onlineMs: 63 * MINUTE, next: [{ tauMs: 10 * MINUTE }], tauScale: 3.5 }),
+    ).toMatchObject({ candidates: [{ estimateMs: 63 * MINUTE }, { estimateMs: 35 * MINUTE }], choice: 1 });
+    // A first τ of 0 overdue: a scale of Infinity, so no wait has an estimate (a τ of 0 stays 0).
+    expect(installTiming({ ...at59, tauScale: Number.POSITIVE_INFINITY }).candidates.map((each) => each.k)).toEqual([
+      0,
+    ]);
   });
 
   test("no estimate for the next one (τ never): install now is the only candidate", () => {

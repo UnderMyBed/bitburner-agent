@@ -847,9 +847,10 @@ function describeWaitOverdue(fields: Record<string, unknown>): string {
 
 /**
  * The planner's install timing's failures (#343), section 4's: an install chosen short of Daedalus's count (the event's
- * `short`, this brain's) without the planner's estimates; one short of it adding nothing to it (NeuroFlux Governor's
- * levels alone, installed already: `timing.adding` 0); and each wait the brain found overdue (its event). Each is the
- * brain's own error, so a failure whatever the switch says now. None, no lines: the report's length bounds (#245).
+ * `short`, this brain's) without the planner's estimates; one short of it whose set and queue hold nothing but
+ * NeuroFlux Governor (its levels, bought after the commit, aren't in the event: a NeuroFlux-only install, whoever chose
+ * it); and each wait the brain found overdue (its event). Each is the brain's own error, so a failure whatever the
+ * switch says now. Both install failures can fire on one install. None, no lines: the report's length bounds (#245).
  */
 function timingLines(
   events: readonly StoredEvent[],
@@ -870,14 +871,16 @@ function timingLines(
     const short = shortOf(fields.short);
     if (short === null) continue;
     const count = `${short.installed} of ${short.required} installed`;
-    const timing = fieldsOf(fields.timing);
-    if (!isFiniteNumber(timing.adding)) {
+    if (!isFiniteNumber(fieldsOf(fields.timing).adding)) {
       add(
         atMs,
         `install short of Daedalus's count without the planner's estimates: ${count}, ${describeStoredReason(fields)}`,
       );
-    } else if (timing.adding === 0) {
-      add(atMs, `NeuroFlux-only install short of Daedalus's count: ${count}, nothing new to it`);
+    }
+    const set = Array.isArray(fields.set) ? fields.set.map((each) => fieldsOf(each).augmentation) : [];
+    const queued = Array.isArray(fields.queued) ? fields.queued : [];
+    if ([...set, ...queued].every((name) => name === NEUROFLUX_GOVERNOR)) {
+      add(atMs, `NeuroFlux-only install short of Daedalus's count: ${count}, nothing in its set or queue but it`);
     }
   }
   return lines.length === 1 ? [] : lines;
