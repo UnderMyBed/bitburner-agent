@@ -712,7 +712,8 @@ export class DesiredStateController {
         homeThreads += threads;
       }
     }
-    return { sent: hackLoop?.enabled === true && hackLoop.levelling != null, homeThreads };
+    // Levelling is only ever sent with the hack loop on (the protocol refuses it off).
+    return { sent: hackLoop?.levelling != null, homeThreads };
   }
 
   /** The planner's levelling choice (#336): the candidates, the choice and the fitted factor. */

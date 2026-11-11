@@ -391,10 +391,9 @@ export class LevellingRule {
       this.#started = true;
       this.#settledAtGameMs = mediumGameTimeMs + this.#settleMs(inputs, figures);
     }
-    // Levelling's rate only while the level loop runs (#336's review); its start settles again.
+    // Levelling's rate only while the level loop runs (#336's review): no sample otherwise, and its start settles again.
     const levelLoopRuns =
       inputs.levelLoop.sent && (figures === null || figures.homeThreads === 0 || inputs.levelLoop.homeThreads > 0);
-    if (this.#mode !== "money" && !levelLoopRuns) this.#window.clear();
     if (this.#mode !== "money" && levelLoopRuns && !this.#levelLoopRan && isFiniteNumber(mediumGameTimeMs)) {
       this.#window.clear();
       this.#settledAtGameMs = mediumGameTimeMs + this.#settleMs(inputs, figures);
@@ -422,7 +421,7 @@ export class LevellingRule {
     const measured = this.#window.measured();
     const target = figures.target;
     if (measured !== null && this.#mode === "money") this.#money = measured;
-    if (measured !== null && this.#mode === "level" && levelLoopRuns && target !== null) {
+    if (measured !== null && this.#mode === "level" && target !== null) {
       const predicted = target.expPerThreadSecond * figures.threads * ((measured.atLevel + 50) / (figures.level + 50));
       if (predicted > 0)
         this.#fit = { measured: measured.expPerSecond, predicted, factor: measured.expPerSecond / predicted };

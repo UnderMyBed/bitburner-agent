@@ -398,9 +398,12 @@ describe("the levelling rule (#336)", () => {
       // The hack loop off (nothing sent), or home's loop not there: no experience comes, and none is measured.
       levelFor(levelling, switchedAtMs + 10 * SECOND, 12 * MINUTE, 0, notRunning, 3000);
       expect(levelling.view().fit).toBeNull();
-      // Running again: it settles first, then fits.
+      // Running again: its first operations land a weaken's time on, nothing before; it settles first, then fits.
       const runningFromMs = switchedAtMs + 13 * MINUTE;
-      levelFor(levelling, runningFromMs, SETTLE_MS + 2 * MINUTE, 1, undefined, 3000);
+      for (let atMs = runningFromMs; atMs <= runningFromMs + SETTLE_MS + 2 * MINUTE; atMs += 10 * SECOND) {
+        const landingMs = Math.max(0, atMs - runningFromMs - 30 * SECOND);
+        levelling.update(inputsAt(atMs, { expAbove: 3000 + (landingMs / 1000) * predicted }));
+      }
       expect(levelling.view().fit?.factor).toBeCloseTo(1, 2);
     }
   });
