@@ -64,6 +64,8 @@ const NEUROFLUX_LEVEL_1 = 750_000 * 1.9 ** 5;
  */
 const HOME_RAM_INCOME_SLACK = 5_000_000;
 const NEUROFLUX = 1.01000262;
+/** The brain's line as it queues the install, before the install's gate and its save backup (augmentations.ts). */
+const INSTALL_QUEUED = /^augmentations: installing \d+ queued \(the gate, then a save backup first\)$/;
 
 test("AUGMENTATION_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd entry fails loudly", () => {
   expect(augmentationSeeds(undefined)).toEqual([1]);
@@ -118,6 +120,10 @@ test.each(SEEDS)(
     fresh.controller().setProgramsEnabled(true);
     fresh.controller().setHomeRamEnabled(true);
     fresh.controller().setCloudServersEnabled(true);
+    // The backups counted as the install is queued, before its gate: the city factions' joins after the edit each take
+    // their own at their gate, one of them (seed 1: New Tokyo's) after the commit.
+    await game.runUntil(() => brain.logLines.some((line) => INSTALL_QUEUED.test(line)), INSTALLED_WITHIN_MS);
+    const backupsBefore = brain.saveBackupEvents.length;
     await game.runUntil(() => (slow()?.resetInfo.lastAugReset ?? startedAt) !== startedAt, INSTALLED_WITHIN_MS);
     const resetAt = slow()?.resetInfo.lastAugReset as number;
     expect(resetAt).not.toBe(startedAt);
@@ -168,7 +174,10 @@ test.each(SEEDS)(
       );
       expect(brain.logLines.some((line) => vendors.includes(line))).toBe(true);
     }
-    expect(brain.saveBackupEvents.filter((event) => "file" in event).length).toBeGreaterThanOrEqual(1);
+    // The install's gate: one save backup, its own (destroy-restart's check).
+    expect(brain.saveBackupEvents.slice(backupsBefore)).toEqual([
+      expect.objectContaining({ file: expect.any(String) }),
+    ]);
     expect(brain.logLines.filter((line) => line.includes("NOT QUEUED"))).toEqual([]);
 
     // The reset game: the five installed, the next Agent back, the cycle over.
