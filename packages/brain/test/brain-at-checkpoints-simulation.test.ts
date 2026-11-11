@@ -20,6 +20,8 @@ import path from "node:path";
 import { baselineScenario, CHECKPOINTS_MS } from "@bitburner-agent/legacy";
 import { commitId, type GameSummary, parseSeeds, REPO_ROOT, rigId } from "@bitburner-agent/sim";
 import { describe, expect, test } from "vitest";
+import { AUGMENTATION_PROGRESS_EVENT_KIND, AUGMENTATION_WAIT_OVERDUE_EVENT_KIND } from "../src/augmentations.ts";
+import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import {
   type CheckpointGame,
   type CheckpointRecord,
@@ -412,7 +414,11 @@ describe("the rows and the comparison", () => {
 // ran in 48.6 s of real time with `batcher.home` on and 28.0 s off, with 21,561 batches against 11,839, 305,039
 // timers fired against 190,290, and 5.9 s of the brain's CPU against 3.6 s: in proportion to the batches. CI ran
 // main's in 107 s, and the other simulator suites run 2-3 times local there (augmentations 75 s, 245 s in CI), so
-// up to about 150 s now: 300 s leaves the headroom 180 s no longer did.
+// up to about 150 s now: 300 s leaves the headroom 180 s no longer did. Since #345 seed 1 never installs in the hour
+// (below): 133-139 s locally against main 48.7 s, 82 s of it in the last 20 virtual minutes, as the running scripts
+// grow from 4,000 to 13,400 (main: 3,600 after its install) at hacking 390-500 against phantasy and omega-net, the
+// share at up to 65 TB. Real time follows the running scripts more than the timers (5 virtual minutes: 44,000 timers
+// in 4.2 s with 1,000 scripts, 53,000 in 21.8 s with 7,200). At 2-3 times local, CI is at this bound.
 test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the game's own summary, printed as a row", {
   timeout: 300_000,
 }, async () => {
@@ -448,16 +454,27 @@ test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the g
     bitNodeLevel: 2,
     sourceFiles: end.sourceFiles,
   });
-  // The peak is every poll's highest, and survives an install's dip: seed 1 installs at about 37 minutes (the level
-  // falls between two polls, augmentations installed; the planner's install for Daedalus's count, #343: 3 new at 35 min
-  // online, installing now 5.4 h against waiting 5.5 h), and the peak is at least the highest level polled before it.
-  // Whether the level at 1 h passes it is the scenario's (#340's review): 458 at 1 h with home's RAM in the batches,
-  // past the 330 before the install (the count rule's install, about 40 minutes: 477 past 364).
+  // The peak is every poll's highest. Since #345 the planner counts the share in its τ by work, and seed 1 waits all
+  // hour: its countables at an install rise from 0 to 7 between 23 and 60 minutes online, each wait coming in about as
+  // estimated (at 35 minutes, waiting for 3 more, 4.8 h to the count, against installing now's 5.4 h), with no install
+  // (on main, #343's install at 35 minutes: 3 new, installing now 5.4 h against waiting 5.5 h). Its level at 1 h, 506,
+  // passes main's 458 with that install.
   expect(last.peakHackingLevel).toBe(Math.max(...levels));
-  expect(last.reading.augsInstalled).toBeGreaterThan(0);
-  const installAt = levels.findIndex((level, index) => index > 0 && level < (levels[index - 1] as number));
-  expect(installAt).toBeGreaterThan(0);
-  expect(last.peakHackingLevel).toBeGreaterThanOrEqual(Math.max(...levels.slice(0, installAt)));
+  // The planner sound over the run: the countables at an install rose; no wait went overdue; past the income's first
+  // window (10 minutes), every timing it logged made a choice.
+  const events = fresh.data.store.eventsInWindow({
+    environment: "E1",
+    sinceMs: EPOCH_MS,
+    untilMs: fresh.game.clock.now(),
+  });
+  const timings = events
+    .filter((event) => event.kind === AUGMENTATION_PROGRESS_EVENT_KIND)
+    .map((event) => (event.detail as { timing?: { adding: number; onlineMs: number; choice: number | null } }).timing)
+    .filter((timing) => timing !== undefined && timing !== null);
+  expect(timings.length).toBeGreaterThan(0);
+  expect(Math.max(...timings.map((timing) => timing.adding))).toBeGreaterThan(timings[0]?.adding ?? 0);
+  expect(events.filter((event) => event.kind === AUGMENTATION_WAIT_OVERDUE_EVENT_KIND)).toEqual([]);
+  expect(timings.filter((timing) => timing.onlineMs >= 10 * MINUTE && timing.choice === null)).toEqual([]);
   // The brain played: past hacking 1, home at SF1's 32 GB or more.
   expect(last.reading.hackingLevel).toBeGreaterThan(50);
   expect(last.reading.homeRamMax).toBeGreaterThanOrEqual(32);
