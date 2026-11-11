@@ -2133,6 +2133,148 @@ describe("augmentations and the reset (#210)", () => {
     });
     expect(report.failures.filter((failure) => failure.startsWith("install not seen done"))).toHaveLength(1);
   });
+
+  describe("the planner's install timing short of Daedalus's count (#343)", () => {
+    const SHORT = { installed: 25, required: 30 };
+    const timing = (fields: Record<string, unknown> = {}) => ({
+      needed: 5,
+      adding: 1,
+      onlineMs: 28 * MINUTE,
+      candidates: [{ k: 0, tauMs: 0, estimateMs: 112 * MINUTE }],
+      choice: 0,
+      next: [],
+      words: "25 of 30 installed, 1 new at an install, 28 min this cycle (T); to Daedalus's count: …",
+      ...fields,
+    });
+    const failuresOf = (report: ReturnType<typeof augmentationRun>) =>
+      report.failures.filter((failure) => !failure.startsWith("install not seen done"));
+
+    test("its estimates with each install chosen and progress; an install with them is no failure", () => {
+      const report = augmentationRun({
+        events: [
+          [MINUTE, "augmentationProgress", progress({ timing: timing({ choice: 1, words: "… chosen: wait for 1" }) })],
+          [
+            2 * MINUTE,
+            "augmentationInstallChosen",
+            { ...CHOSEN, reason: "Daedalus's count", short: SHORT, timing: timing() },
+          ],
+        ],
+      });
+      expect(report.text).toContain("; the planner: … chosen: wait for 1");
+      expect(report.text).toContain(
+        "install chosen, 2.0 h online this cycle: buying BitWire ($10,000,000); Daedalus's count: the planner's " +
+          "shortest time to it is installing now (#343); the planner: 25 of 30 installed, 1 new at an install",
+      );
+      // Nothing failing, no lines: the report's length bounds (#245).
+      expect(report.text).not.toContain("the planner's install timing short of Daedalus's count (#343)");
+      expect(failuresOf(report)).toEqual([]);
+    });
+
+    test("fails an install short of the count without its estimates, and a NeuroFlux-only one: n 0, else its set and queue", () => {
+      const NFG = "NeuroFlux Governor";
+      const report = augmentationRun({
+        events: [
+          [2 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, reason: "count reached", short: SHORT }],
+          // The count rule's NeuroFlux-only install (the A/B's baseline): nothing in its set, its queue its levels.
+          [
+            3 * MINUTE,
+            "augmentationInstallChosen",
+            { ...CHOSEN, set: [], cost: 0, queued: [NFG, NFG], reason: "count reached", short: SHORT },
+          ],
+          // The planner's with nothing new (n 0): a failure, whatever its set.
+          [
+            4 * MINUTE,
+            "augmentationInstallChosen",
+            { ...CHOSEN, reason: "Daedalus's count", short: SHORT, timing: timing({ adding: 0 }) },
+          ],
+          // Not failures: NeuroFlux Governor's first level, none installed (n 1: it counts once); the planner's, its
+          // set; an install of nothing judged by its set and queue (none); an earlier brain's, its count not stored.
+          [
+            5 * MINUTE,
+            "augmentationInstallChosen",
+            {
+              ...CHOSEN,
+              set: [],
+              queued: [NFG],
+              reason: "Daedalus's count",
+              short: SHORT,
+              timing: timing({ adding: 1 }),
+            },
+          ],
+          [
+            6 * MINUTE,
+            "augmentationInstallChosen",
+            { ...CHOSEN, reason: "Daedalus's count", short: SHORT, timing: timing() },
+          ],
+          [
+            7 * MINUTE,
+            "augmentationInstallChosen",
+            { ...CHOSEN, set: [], queued: [], reason: "count reached", short: SHORT },
+          ],
+          [8 * MINUTE, "augmentationInstallChosen", { ...CHOSEN, set: [], queued: [NFG], reason: "count reached" }],
+        ],
+      });
+      const neuroFluxOnly =
+        "NeuroFlux-only install short of Daedalus's count: 25 of 30 installed, nothing new to it in its set or queue";
+      const withoutEstimates =
+        "install short of Daedalus's count without the planner's estimates: 25 of 30 installed, the count reached: 1 " +
+        "of 7 new augmentations affordable (3 of 11 with NeuroFlux)";
+      expect(failuresOf(report)).toEqual([
+        withoutEstimates,
+        withoutEstimates,
+        neuroFluxOnly,
+        neuroFluxOnly,
+        withoutEstimates,
+      ]);
+      expect(report.text).toContain(`    ${at(3 * MINUTE)}  ${neuroFluxOnly}`);
+      expect(report.text).toContain(`    ${at(4 * MINUTE)}  ${neuroFluxOnly}`);
+    });
+
+    test("fails installing held for the income too long, listed with the decisions too", () => {
+      const report = augmentationRun({
+        events: [
+          [
+            10 * MINUTE,
+            "augmentationIncomeHeld",
+            {
+              onlineMs: 38 * MINUTE,
+              sinceOnlineMs: 18 * MINUTE,
+              timing: timing({ choice: null, heldForIncome: true, words: "… chosen: none; install now held: …" }),
+            },
+          ],
+        ],
+      });
+      const line =
+        "income unmeasured: installing now held for the income from 18 min online, 20 min on: … chosen: none; install " +
+        "now held: …";
+      expect(failuresOf(report)).toEqual([line]);
+      expect(report.text.split("\n").filter((each) => each.endsWith(line))).toHaveLength(3);
+    });
+
+    test("fails a wait the brain found overdue, listed with the decisions too", () => {
+      const report = augmentationRun({
+        events: [
+          [
+            10 * MINUTE,
+            "augmentationWaitOverdue",
+            {
+              onlineMs: 58 * MINUTE,
+              sinceOnlineMs: 28 * MINUTE,
+              firstTauMs: 10 * MINUTE,
+              untilAdding: 5,
+              timing: timing({ choice: 1, adding: 4, words: "25 of 30 installed, 4 new …; chosen: wait for 1" }),
+            },
+          ],
+        ],
+      });
+      const line =
+        "wait overdue: the planner's wait for Daedalus's count from 28 min online, for 5 new at an install in ~10 min, " +
+        "still short at 58 min online: 25 of 30 installed, 4 new …; chosen: wait for 1";
+      expect(failuresOf(report)).toEqual([line]);
+      // Section 3's decisions, section 4's, and the failures' list.
+      expect(report.text.split("\n").filter((each) => each.endsWith(line))).toHaveLength(3);
+    });
+  });
 });
 
 describe("donations (#225)", () => {

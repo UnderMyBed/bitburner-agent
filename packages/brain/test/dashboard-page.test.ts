@@ -1091,6 +1091,25 @@ test.each([
       "25 s, extended 2 times",
   ],
   [
+    "short of Daedalus's count, the planner's install timing (#343): its estimates, not the bars",
+    {
+      waiting: false,
+      progress: {
+        ...PROGRESS,
+        timing: {
+          needed: 5,
+          adding: 4,
+          onlineMs: 1_680_000,
+          candidates: [],
+          choice: 1,
+          next: [],
+          words: "25 of 30 installed, 4 new at an install; chosen: wait for 1",
+        },
+      },
+    },
+    "2.5 h online this cycleThe planner: 25 of 30 installed, 4 new at an install; chosen: wait for 1",
+  ],
+  [
     "held for The Red Pill's way (#215)",
     { waiting: false, progress: { ...PROGRESS, held: "The Red Pill: Daedalus's reputation 1 of 2" } },
     "Held: The Red Pill: Daedalus's reputation 1 of 2",

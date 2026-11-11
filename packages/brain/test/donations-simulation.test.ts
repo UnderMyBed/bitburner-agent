@@ -1,10 +1,10 @@
-// Donations (#225), in the simulator: a fresh 8 GB start in BN1, the brain's rules as on Steam, and a harness edit two
-// virtual minutes in that stands in for the hours before it.
+// Donations (#225), in the simulator: a fresh 8 GB start in BN1, the brain's rules as on Steam, and a harness edit
+// some virtual minutes in (11 for the donation, 2 for the favour) that stands in for the hours before it.
 // - Donating: CyberSec joined at 5,000 reputation with 150 favour (donations unlocked), and the money for its five and
-//   the donation for Cranial Signal Processors - Gen I and II's reputation. The count rule counts the five, two by
-//   donation: a quick install (#222). Committed, the brain donates first, sees CyberSec's reputation rise in the
-//   faction state, then buys the five in buy order, Gen II far above the reputation earned. A5 never works for
-//   CyberSec.
+//   the donation for Cranial Signal Processors - Gen I and II's reputation. The five counted, two by donation: the
+//   planner's install for Daedalus's count (#343; the count rule's quick install, #222, before it). Committed, the
+//   brain donates first, sees CyberSec's reputation rise in the faction state, then buys the five in buy order, Gen II
+//   far above the reputation earned. A5 never works for CyberSec.
 // - Working toward favour: BitRunners joined with 100 favour, its reputation a little short of the 306,374 that makes
 //   150 favour at the next install. A5 works for it to that, not to The BitRunners Neurolink's 875,000, and stops
 //   there.
@@ -37,6 +37,11 @@ const SEEDS = donationSeeds(process.env.DONATION_SEEDS);
 const MINUTE = 60_000;
 /** When the harness edit comes: the Agent connected and its snapshots flowing, well inside a quick install's 20 min. */
 const EDITED_AFTER_MS = 2 * MINUTE;
+/**
+ * When the donating test's edit comes: 11 minutes, past the income's first measure (its 10-minute window from the
+ * Agent's first slow snapshot), as the planner holds an install short of Daedalus's count until then (#343).
+ */
+const DONATED_AFTER_MS = 11 * MINUTE;
 const FIVE = [
   "Cranial Signal Processors - Gen I",
   "Cranial Signal Processors - Gen II",
@@ -60,7 +65,7 @@ test.each(SEEDS)(
   async (seed) => {
     const fresh = await freshStartOf({ withDesiredState: true, seed });
     const { game, simulation } = fresh;
-    await game.run(EDITED_AFTER_MS);
+    await game.run(DONATED_AFTER_MS);
     // Programs, home RAM and cloud servers off: nothing else takes the money.
     fresh.controller().setProgramsEnabled(false);
     fresh.controller().setHomeRamEnabled(false);
@@ -77,7 +82,7 @@ test.each(SEEDS)(
         .map((event) => event.detail as { augmentation: string; faction: string });
     await game.runUntil(() => bought().length >= 2, 6 * MINUTE);
 
-    // Counted with the donation: five affordable, two by it, a quick install.
+    // Counted with the donation: five affordable, two by it, the planner's install (#343).
     const progress = events()
       .filter((event) => event.kind === AUGMENTATION_PROGRESS_EVENT_KIND)
       .map((event) => event.detail as { affordable: number; byDonation: number });
@@ -87,7 +92,7 @@ test.each(SEEDS)(
       affordable: number;
       donations: { faction: string; reputation: number; amount: number }[];
     };
-    expect(chosen).toMatchObject({ reason: "quick install", affordable: 5 });
+    expect(chosen).toMatchObject({ reason: "Daedalus's count", affordable: 5 });
     expect(chosen.donations).toEqual([{ faction: "CyberSec", reputation: 18_750, amount: expect.any(Number) }]);
     // A little less than $13.75b: CyberSec gains reputation passively meanwhile.
     expect(chosen.donations[0]?.amount).toBeLessThanOrEqual(DONATION);
@@ -112,7 +117,7 @@ test.each(SEEDS)(
     // line; and no donation failure.
     const reportWindow = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
     expect(runReport(fresh.data.store, reportWindow).text).toMatch(
-      /\n {4}BN1\.1 1: [^\n]*; 1 install chosen \(quick install\); 1 donation: \$[\d,]+ to CyberSec[;\n]/,
+      /\n {4}BN1\.1 1: [^\n]*; 1 install chosen \(Daedalus's count\); 1 donation: \$[\d,]+ to CyberSec[;\n]/,
     );
     const { text, failures } = runReport(fresh.data.store, reportWindow, { verbose: true });
     expect(text).toMatch(

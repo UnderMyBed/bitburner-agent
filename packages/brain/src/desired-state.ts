@@ -47,6 +47,7 @@ import {
   AugmentationRule,
   type AugmentationsView,
   type InstallAwaitingRestart,
+  type InstallTimingPolicy,
   type NotQueued,
   readAugmentationsEnabled,
   writeAugmentationsEnabled,
@@ -473,18 +474,21 @@ export class DesiredStateController {
     store,
     saveBackups = null,
     log = () => {},
+    installTiming = "planner",
   }: {
     channel: ControlChannel;
     store: TelemetryStore;
     saveBackups?: BackupsBeforeIrreversibleIntents | null;
     log?: (line: string) => void;
+    /** Who times installs short of Daedalus's count (#343): the planner; the count rule for a test's A/B alone. */
+    installTiming?: InstallTimingPolicy;
   }) {
     this.#channel = channel;
     this.#store = store;
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
     this.#gang = new GangRule(log, store);
-    this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event) });
+    this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event), installTiming });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
     this.#levelling = new LevellingRule({ log, emit: (event) => this.#emit(event) });
@@ -1716,6 +1720,8 @@ export class DesiredStateController {
       gangUnread: this.#gang.gangUnread(),
       // The planner's levelling choice (#336), as of the last update: NeuroFlux Governor's levels and an install.
       levellingInstall: this.#levelling.mode() === "install",
+      // #228's invitation hold, as of the invitations rule's last update (#343: installing now held meanwhile).
+      invitationHold: this.#invitations.hold(),
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;

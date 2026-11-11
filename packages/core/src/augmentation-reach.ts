@@ -62,8 +62,12 @@ export function donationTermsOf(
   };
 }
 
-/** One to come for Daedalus's count (#243), with its money: what it adds to the set's, and any donation. */
-export type CountableWithMoney = CountableToCome & { money: number };
+/**
+ * One to come for Daedalus's count (#243), with its money: what it adds to the set's, and any donation. By work, its
+ * work's time alone (`workMs`, #343: its reputation at the rate, the money aside), as the work at one faction at a time
+ * adds up.
+ */
+export type CountableWithMoney = CountableToCome & { money: number; workMs?: number };
 
 /**
  * Who works for a faction while an install is held (#243): the owner's work wins (only faction work at the seller
@@ -187,6 +191,7 @@ export function countablesToCome({
         way: "work",
         etaMs: Math.max(workMs, moneyMsFor(priceAdded)),
         money: priceAdded,
+        workMs,
       });
     }
     // The soonest; a tie (both at once, say) to the cheaper: the seller whose donation is least.

@@ -14,7 +14,7 @@ import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import type { Simulation, SimulationOptions } from "@bitburner-agent/sim";
 import { useSimulations } from "@bitburner-agent/sim/test-helpers";
 import { afterAll, afterEach, beforeAll, expect } from "vitest";
-import { writeAugmentationsEnabled } from "../../src/augmentations.ts";
+import { type InstallTimingPolicy, writeAugmentationsEnabled } from "../../src/augmentations.ts";
 import { BATCHER_ENABLED_SETTING } from "../../src/batcher.ts";
 import type { DesiredStateController } from "../../src/desired-state.ts";
 import { readInGameBuild } from "../../src/in-game-build.ts";
@@ -74,6 +74,7 @@ export function useFreshStarts() {
     seed = 1,
     batcher = true,
     augmentations = true,
+    installTiming = "planner",
   }: {
     withDesiredState: boolean;
     beforeAgent?: (fresh: FreshGame) => Promise<void>;
@@ -90,6 +91,8 @@ export function useFreshStarts() {
      * install chosen would hold every dollar from (#334: a gang's faction's reputation buys augmentations).
      */
     augmentations?: boolean;
+    /** Who times installs short of Daedalus's count (#343): the planner, as on Steam; the count rule for an A/B. */
+    installTiming?: InstallTimingPolicy;
   }) {
     const simulation = await start({
       seed,
@@ -106,7 +109,7 @@ export function useFreshStarts() {
     if (!batcher) store.setSetting(BATCHER_ENABLED_SETTING, "false");
     if (!augmentations) writeAugmentationsEnabled(store, false);
     const data = { store, brainRelease: "fresh-start-test", dataDirectory };
-    const brain = startBrainInSimulation(game, { build, data, withDesiredState });
+    const brain = startBrainInSimulation(game, { build, data, withDesiredState, installTiming });
     await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);
     expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
     await beforeAgent({ simulation, game });

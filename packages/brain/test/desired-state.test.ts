@@ -28,6 +28,7 @@ import {
 } from "@bitburner-agent/core";
 import { holdsOf, installDecision, NO_HOLDS, nextPurchase, type Purchase, type Purse } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { type InstallTimingPolicy, readInstallWait } from "../src/augmentations.ts";
 import { HACKING_MULTIPLIERS_UNREAD } from "../src/batcher.ts";
 import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
@@ -909,11 +910,19 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
     return { saveBackups: { backupNow }, backupNow, settleBackup, settleNewestBackup };
   }
 
-  /** An Agent connected with its static snapshot sent, the hack loop off so the intents go without a medium one. */
-  function connectedWithLoopOff() {
+  /**
+   * An Agent connected with its static snapshot sent, the hack loop off so the intents go without a medium one. Its
+   * augmentation tests work the count rule short of Daedalus's count (#343: the A/B's baseline), but the planner's.
+   */
+  function connectedWithLoopOff(installTiming: InstallTimingPolicy = "count rule") {
     store.setSetting("hackLoop.enabled", "false");
     const backups = standInBackups();
-    const controller = new DesiredStateController({ channel, store, saveBackups: backups.saveBackups });
+    const controller = new DesiredStateController({
+      channel,
+      store,
+      saveBackups: backups.saveBackups,
+      installTiming,
+    });
     const connection = connectAgent();
     send(connection, "static", network);
     const sentIds = () =>
@@ -1334,6 +1343,230 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       // Reported done: the next goes at once, from the fast snapshot.
       reportedDone(connection, buy(FIVE[0] as string).id);
       expect(sentIds()).toEqual([buy(FIVE[1] as string).id]);
+    });
+
+    describe("the planner (#343), short of Daedalus's count", () => {
+      const TBH = "The Black Hand";
+      const NFG = "NeuroFlux Governor";
+      const THREE = ["BitWire", "Synaptic Enhancement Implant", "Neurotrainer I"];
+      const fillers = AUGMENTATION_NAMES.filter(
+        (name) =>
+          isWorthInstalling(name, true) &&
+          !augmentationsSoldBy(TBH, 1, null).includes(name) &&
+          !augmentationsSoldBy("CyberSec", 1, null).includes(name) &&
+          name !== "Neural Wit Amplifier",
+      );
+      /**
+       * Run #3's 17:49, as augmentations.test.ts's planner tests have it: 25 installed (The Black Hand's shop but its
+       * own, Gen I and II, NeuroFlux Governor, fillers), Neural Wit Amplifier queued, CyberSec's other three reached:
+       * an install adds 4, 29 of 30. The 30th, "The Black Hand", reached at 100,000: its money is what's missing.
+       */
+      const OWNED: Record<string, number> = Object.fromEntries(
+        [
+          ...augmentationsSoldBy(TBH, 1, null).filter((name) => name !== TBH && name !== NFG),
+          ...FIVE.slice(0, 2),
+          NFG,
+          ...fillers,
+        ]
+          .slice(0, 25)
+          .map((name) => [name, name === NFG ? 5 : 1]),
+      );
+      /** The three after Neural Wit Amplifier, then The Black Hand first: what the set and it cost. */
+      const WITH_BLACK_HAND = 550e6 * 1.9 + 10e6 * 1.9 ** 2 + 7.5e6 * 1.9 ** 3 + 4e6 * 1.9 ** 4;
+      /** $300m short of The Black Hand with the set: 5 minutes at $1m a second. */
+      const SHORT_OF_IT = WITH_BLACK_HAND - 300e6;
+      /** The set's three after Neural Wit Amplifier, exactly: no NeuroFlux Governor level or home RAM after them. */
+      const THREE_EXACTLY = 10e6 * 1.9 + 7.5e6 * 1.9 ** 2 + 4e6 * 1.9 ** 3 + 1_000;
+      const EARNING = 1e6;
+      const MINUTE = 60_000;
+      const plannerSlow = ({
+        minute,
+        ownedAugs = OWNED,
+        queued = ["Neural Wit Amplifier"],
+        blackHand = 100_000,
+        invited = [],
+      }: {
+        minute: number;
+        ownedAugs?: Record<string, number>;
+        queued?: string[];
+        blackHand?: number;
+        /** Factions inviting (a city group's, ending #228's hold for its invitations). */
+        invited?: string[];
+      }) => ({
+        ...slowData(),
+        resetInfo: { ...slowData().resetInfo, lastAugReset: 0, ownedAugs },
+        moneySources: { hacking: minute * 60 * EARNING },
+        factions: {
+          backend: "sim",
+          state: {
+            joined: [
+              { name: "CyberSec", reputation: 18_750, favor: 0 },
+              { name: TBH, reputation: blackHand, favor: 0 },
+            ],
+            invitations: invited,
+            queuedAugmentations: queued,
+          },
+          problem: null,
+        },
+      });
+      /** A slow and a medium snapshot `minute` minutes into the cycle (the game's time), the medium with `money`. */
+      const minuteAt = (
+        connection: MemoryConnection,
+        minute: number,
+        money: number,
+        fields: Omit<Parameters<typeof plannerSlow>[0], "minute"> = {},
+        agentSessionId = "session-1",
+      ) => {
+        for (const [tier, data] of [
+          ["slow", plannerSlow({ minute, ...fields })],
+          ["medium", richMedium(money)],
+        ] as const) {
+          connection.receive(
+            encodeControlMessage({
+              protocolVersion: CONTROL_PROTOCOL_VERSION,
+              type: "snapshot",
+              agentSessionId,
+              tier,
+              sequenceNumber: ++sequenceNumber,
+              gameTimeMs: 10 * 3_600_000 + minute * MINUTE,
+              data,
+            }),
+          );
+        }
+      };
+      const augmentationIntents = (ids: string[]) =>
+        ids.filter((id) => id === INSTALL.id || id.startsWith("purchaseAugmentation"));
+
+      test("a wait at 29 of 30, The Black Hand's money 5 min off: nothing goes; restarted, no income measured, still none", () => {
+        const { controller, connection, sentIds } = connectedWithLoopOff("planner");
+        // Ten minutes of slow snapshots measure the income; meanwhile installing now is held for it.
+        minuteAt(connection, 0, SHORT_OF_IT);
+        expect(controller.augmentationsView().progress?.timing).toMatchObject({ needed: 5, adding: 4 });
+        for (let minute = 1; minute <= 10; minute += 1) minuteAt(connection, minute, SHORT_OF_IT);
+        const waiting = controller.augmentationsView().progress?.timing;
+        expect(waiting).toMatchObject({ needed: 5, adding: 4, choice: 1, heldForIncome: false });
+        expect(waiting?.next[0]).toMatchObject({
+          augmentation: TBH,
+          way: "money",
+          tauMs: expect.closeTo(5 * MINUTE, -3),
+        });
+        expect(augmentationIntents(sentIds())).toEqual([]);
+        expect(controller.augmentationsView().committed).toBe(false);
+        const wait = readInstallWait(store);
+        expect(wait).toMatchObject({ untilAdding: 5, overdue: false });
+
+        // Restarted: the income's samples are gone, so its money never comes at a rate known; installing now (29 of 30)
+        // would be the only candidate, and it's held until the income is measured again.
+        const { restarted } = restartedBrain();
+        const again = connectAgent();
+        send(again, "static", network);
+        for (let minute = 11; minute <= 15; minute += 1) minuteAt(again, minute, SHORT_OF_IT);
+        expect(restarted.augmentationsView().progress?.timing).toMatchObject({
+          adding: 4,
+          candidates: [{ k: 0 }],
+          choice: null,
+          heldForIncome: true,
+        });
+        expect(restarted.augmentationsView().committed).toBe(false);
+        expect(
+          augmentationIntents(
+            desiredStates(again)
+              .at(-1)
+              ?.intents.map((each) => each.id) ?? [],
+          ),
+        ).toEqual([]);
+        // The wait's record kept across the restart.
+        expect(readInstallWait(store)).toEqual(wait);
+      });
+
+      test("NeuroFlux Governor's levels alone on offer, the income measured: never an install", () => {
+        const { controller, connection, sentIds } = connectedWithLoopOff("planner");
+        // CyberSec's shop owned in place of three fillers: only its NeuroFlux Governor levels, with $1t.
+        const lastFillers = Object.keys(OWNED)
+          .filter((name) => fillers.includes(name))
+          .slice(-3);
+        const ownedAugs = {
+          ...Object.fromEntries(Object.entries(OWNED).filter(([name]) => !lastFillers.includes(name))),
+          ...Object.fromEntries(THREE.map((name) => [name, 1])),
+        };
+        expect(Object.keys(ownedAugs)).toHaveLength(25);
+        for (let minute = 0; minute <= 15; minute += 1) {
+          minuteAt(connection, minute, 1e12, { ownedAugs, queued: [], blackHand: 0 });
+        }
+        expect(controller.augmentationsView().progress?.affordableWithNeuroFlux).toBeGreaterThan(0);
+        expect(controller.augmentationsView().progress?.timing).toMatchObject({ adding: 0, heldForIncome: false });
+        expect(controller.augmentationsView().progress?.timing?.choice).not.toBe(0);
+        expect(controller.augmentationsView().committed).toBe(false);
+        expect(augmentationIntents(sentIds())).toEqual([]);
+      });
+
+      test("held while the income is unmeasured, then while #228 holds a city group's money; then installing now, at once, through the gate and a backup", async () => {
+        const { controller, connection, sentIds, backupNow, settleBackup } = connectedWithLoopOff("planner");
+        const sent: unknown[] = [];
+        controller.subscribe((event) => isInvitationEvent(event) || sent.push(event));
+        // The Black Hand far off (0 of 100,000): installing now, 29 of 30, is the shortest, but held for the income.
+        for (let minute = 0; minute <= 9; minute += 1) {
+          minuteAt(connection, minute, THREE_EXACTLY, { blackHand: 0 });
+          expect(controller.augmentationsView().committed).toBe(false);
+        }
+        expect(controller.augmentationsView().progress?.timing).toMatchObject({ choice: null, heldForIncome: true });
+        expect(controller.augmentationsView().progress?.timing?.words).toMatch(
+          /; install now held: no income measured/,
+        );
+        // The income measured; the invitations rule meanwhile holds money for a city group's invitations (#228):
+        // installing now, which would spend it, held for it.
+        minuteAt(connection, 10, THREE_EXACTLY, { blackHand: 0 });
+        expect(controller.invitationsView().hold).toBeGreaterThan(0);
+        expect(controller.augmentationsView().progress?.timing).toMatchObject({
+          choice: 1,
+          heldForIncome: false,
+          heldForInvitation: true,
+        });
+        expect(controller.augmentationsView().committed).toBe(false);
+        // The group inviting: the hold over (as of the invitations rule's next update), installing now goes.
+        const group = controller.invitationsView().cityFactions;
+        expect(group.length).toBeGreaterThan(0);
+        minuteAt(connection, 11, THREE_EXACTLY, { blackHand: 0, invited: group });
+        expect(controller.invitationsView().hold).toBe(0);
+        minuteAt(connection, 12, THREE_EXACTLY, { blackHand: 0, invited: group });
+        expect(controller.augmentationsView()).toMatchObject({ committed: true });
+        expect(sent).toContainEqual(
+          expect.objectContaining({
+            type: "augmentationInstallChosen",
+            reason: "Daedalus's count",
+            short: { installed: 25, required: 30 },
+            timing: expect.objectContaining({ needed: 5, adding: 4, choice: 0, heldForIncome: false }),
+          }),
+        );
+        // The set's three, then the install through the gate: two medium snapshots and a backup.
+        const queued = ["Neural Wit Amplifier", ...THREE];
+        for (const [index, name] of THREE.entries()) {
+          expect(sentIds()).toContain(buy(name).id);
+          send(connection, "fast", {
+            degradedTiers: [],
+            pageHeapUsedBytes: null,
+            game: null,
+            intents: [{ id: buy(name).id, done: true, tries: 1, problem: null, backend: "sim" }],
+          });
+          minuteAt(connection, 13 + index, THREE_EXACTLY, {
+            queued: queued.slice(0, index + 2),
+            blackHand: 0,
+            invited: group,
+          });
+        }
+        // The four shown queued: the install asked for, then the gate: two consecutive medium snapshots, and a backup.
+        minuteAt(connection, 16, 0, { queued, blackHand: 0, invited: group });
+        minuteAt(connection, 17, 0, { queued, blackHand: 0, invited: group });
+        minuteAt(connection, 18, 0, { queued, blackHand: 0, invited: group });
+        // The group's joins (A5's, irreversible too) take their own backups, in turn: each settled.
+        expect(backupNow).toHaveBeenCalled();
+        for (let backup = 0; backup < 4 && !sentIds().includes(INSTALL.id); backup += 1) {
+          await settleBackup(SAVED);
+          minuteAt(connection, 19 + backup, 0, { queued, blackHand: 0, invited: group });
+        }
+        expect(controller.intentsView().map((each) => each.id)).toContain(INSTALL.id);
+        expect(sentIds()).toContain(INSTALL.id);
+      });
     });
 
     test("purchases reported done after the medium snapshot: their money taken off it (#213 re-review)", () => {
@@ -2589,6 +2822,8 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     );
   });
 
+  // The count rule's money held, short of Daedalus's count: its controllers' `installTiming` is "count rule" (#343: the
+  // A/B's baseline); the planner's wait holds money only within the lookahead (augmentations.test.ts).
   describe("with augmentations (#210)", () => {
     /**
      * A slow snapshot 7 h into the cycle, `minute` minutes on: the joined factions, and the hacking money earned since the
@@ -2634,7 +2869,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
       joined: { name: string; reputation: number }[],
       earnedPerSecond = 20_000,
     ) => {
-      const controller = new DesiredStateController({ channel, store });
+      const controller = new DesiredStateController({ channel, store, installTiming: "count rule" });
       const connection = connectAgent();
       send(connection, "static", network);
       for (let minute = 0; minute <= 10; minute++) {
@@ -2686,7 +2921,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     });
 
     test("the install's countdown (#222): the counted purchases' money held from cloud servers and home RAM", () => {
-      const controller = new DesiredStateController({ channel, store });
+      const controller = new DesiredStateController({ channel, store, installTiming: "count rule" });
       const connection = connectAgent();
       send(connection, "static", network);
       sendAt(connection, "slow", slowAt(EIGHT), 7 * 3_600_000);
@@ -2707,7 +2942,7 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
     });
 
     test("brain against the fast model (#263): in the countdown, home's RAM under the held money waits; off, it goes", () => {
-      const controller = new DesiredStateController({ channel, store });
+      const controller = new DesiredStateController({ channel, store, installTiming: "count rule" });
       const connection = connectAgent();
       send(connection, "static", network);
       sendAt(connection, "slow", slowAt(EIGHT), 7 * 3_600_000);
@@ -2795,7 +3030,12 @@ describe("cloud servers (#194): after the programs and home RAM, by the hack loo
         JSON.stringify({ lastAugReset: 0, onlineMs: 8 * 3_600_000, lastGameTimeMs: 7 * 3_600_000 }),
       );
       const lines: string[] = [];
-      const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+      const controller = new DesiredStateController({
+        channel,
+        store,
+        log: (line) => lines.push(line),
+        installTiming: "count rule",
+      });
       const connection = connectAgent();
       send(connection, "static", network);
       sendAt(connection, "slow", slow, 7 * 3_600_000 + MINUTE);

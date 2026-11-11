@@ -18,6 +18,8 @@
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
+  AUGMENTATION_NAMES,
+  augmentationsSoldBy,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
@@ -51,6 +53,21 @@ const CYBERSEC_FIVE = [
   "Synaptic Enhancement Implant",
   "Neurotrainer I",
 ];
+/**
+ * Installed in a run where the brain installs (#343): 25 that CyberSec doesn't sell, so CyberSec's five make Daedalus's
+ * 30 and the planner installs at once, whatever the income. Short of the count by less, it holds installing now until
+ * 10 minutes of slow snapshots measure the income, which a run's few minutes of the game's time never reach.
+ */
+const TWENTY_FIVE_INSTALLED: Record<string, number> = Object.fromEntries(
+  AUGMENTATION_NAMES.filter(
+    (name) =>
+      !augmentationsSoldBy("CyberSec", 1, null).includes(name) &&
+      name !== "NeuroFlux Governor" &&
+      name !== "The Red Pill",
+  )
+    .slice(0, 25)
+    .map((name) => [name, 1]),
+);
 const intentOf = (request: IntentRequest): Intent => ({ ...request, id: intentId(request.action, request.args) });
 /** Every action; three joins (Sector-12 and Chongqing are enemies, so irreversible; CyberSec isn't); two destroys. */
 const OWNER_INTENTS: Intent[] = [
@@ -375,12 +392,13 @@ async function play(
   };
   const slowWith = (invited: string[]) => {
     const data = slowData();
+    const brainInstalls = brainsReset === "install" && rulesOn;
     data.resetInfo = {
       ...data.resetInfo,
       ...gameResets,
       ...(standInGame.redPill ? { ownedAugs: { "The Red Pill": 1 } } : {}),
+      ...(brainInstalls ? { ownedAugs: TWENTY_FIVE_INSTALLED } : {}),
     };
-    const brainInstalls = brainsReset === "install" && rulesOn;
     data.factions = {
       backend: "sim",
       state: {
@@ -645,10 +663,10 @@ test("the runs reach what the property is for: resets, the brain down and the cl
   // it say, could be 0 in a block of random runs. The property above draws fresh runs each time.
   for (const key of Object.keys(reached)) (reached as Record<string, number>)[key] = 0;
   await fc.assert(fc.asyncProperty(anyRun, playRun), { numRuns: 100, seed: 179, endOnFailure: true });
-  // On seed 179's 100 runs: 28 resets in the steps (15 destroys), the brain down across 15 (9 destroys), the clock set
-  // back across 17; 48 failed backups that were a gate's own; a rule's own join out in 23 runs, the brain's install in
-  // 25 and its destroy in 13. Each floor about half that: below it, the generator no longer gets there, or a gate
-  // seldom lets it out.
+  // On seed 179's 100 runs (#343's, re-measured; main a3b75cc's in brackets): 28 [27] resets in the steps (9 destroys),
+  // the brain down across 16 [14] (6 destroys), the clock set back across 14 [15]; 51 [45] failed backups that were a
+  // gate's own; a rule's own join out in 17 runs, the brain's install in 27 [24] and its destroy in 10. Each floor about
+  // half that: below it, the generator no longer gets there, or a gate seldom lets it out.
   const floors: Record<keyof typeof reached, number> = {
     resetsInTheSteps: 14,
     brainDownAcrossReset: 7,

@@ -448,10 +448,11 @@ test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the g
     bitNodeLevel: 2,
     sourceFiles: end.sourceFiles,
   });
-  // The peak is every poll's highest, and survives an install's dip: seed 1 installs at about 40 minutes (the level
-  // falls between two polls, augmentations installed), and the peak is at least the highest level polled before it.
-  // Whether the level at 1 h passes it is the scenario's (#340's review): 477 at 1 h with home's RAM in the batches,
-  // past the 364 before the install; 278 with `batcher.home` off, under it.
+  // The peak is every poll's highest, and survives an install's dip: seed 1 installs at about 37 minutes (the level
+  // falls between two polls, augmentations installed; the planner's install for Daedalus's count, #343: 3 new at 35 min
+  // online, installing now 5.4 h against waiting 5.5 h), and the peak is at least the highest level polled before it.
+  // Whether the level at 1 h passes it is the scenario's (#340's review): 458 at 1 h with home's RAM in the batches,
+  // past the 330 before the install (the count rule's install, about 40 minutes: 477 past 364).
   expect(last.peakHackingLevel).toBe(Math.max(...levels));
   expect(last.reading.augsInstalled).toBeGreaterThan(0);
   const installAt = levels.findIndex((level, index) => index > 0 && level < (levels[index - 1] as number));
