@@ -474,8 +474,9 @@ test("the runs reach what it's for: rules' joins and the brain's resets out, the
     }),
     { numRuns: 300, seed: 271, endOnFailure: true },
   );
-  // On seed 271's 300 runs: a rule's own join out in 28 runs, the owner going ahead of one 16 times; the brain's
-  // install out in 12 runs and its destroy in 21; a travel queued ahead of the install out 7 times, of the destroy 11.
+  // On seed 271's 300 runs (#343's, re-measured; main a3b75cc's in brackets): a rule's own join out in 28 runs, the
+  // owner going ahead of one 16 times; the brain's install out in 26 [12] runs and its destroy in 21; a travel queued
+  // ahead of the install out 11 [7] times, of the destroy 11.
   // Each floor about half that: below it, the generator no longer gets there, or a gate seldom lets it out.
   const floors: Record<keyof typeof reached, number> = {
     runsWithARuleJoinOut: 14,

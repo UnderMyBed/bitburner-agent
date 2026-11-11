@@ -663,10 +663,10 @@ test("the runs reach what the property is for: resets, the brain down and the cl
   // it say, could be 0 in a block of random runs. The property above draws fresh runs each time.
   for (const key of Object.keys(reached)) (reached as Record<string, number>)[key] = 0;
   await fc.assert(fc.asyncProperty(anyRun, playRun), { numRuns: 100, seed: 179, endOnFailure: true });
-  // On seed 179's 100 runs: 28 resets in the steps (15 destroys), the brain down across 15 (9 destroys), the clock set
-  // back across 17; 48 failed backups that were a gate's own; a rule's own join out in 23 runs, the brain's install in
-  // 25 and its destroy in 13. Each floor about half that: below it, the generator no longer gets there, or a gate
-  // seldom lets it out.
+  // On seed 179's 100 runs (#343's, re-measured; main a3b75cc's in brackets): 28 [27] resets in the steps (9 destroys),
+  // the brain down across 16 [14] (6 destroys), the clock set back across 14 [15]; 51 [45] failed backups that were a
+  // gate's own; a rule's own join out in 17 runs, the brain's install in 27 [24] and its destroy in 10. Each floor about
+  // half that: below it, the generator no longer gets there, or a gate seldom lets it out.
   const floors: Record<keyof typeof reached, number> = {
     resetsInTheSteps: 14,
     brainDownAcrossReset: 7,
