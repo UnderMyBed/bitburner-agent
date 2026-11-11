@@ -110,10 +110,11 @@ const intent = (id: string, changes: Partial<IntentOutcome> = {}): IntentOutcome
   ...changes,
 });
 
-/** A medium snapshot: the player's money and hacking, home's RAM, and n00dles' money and security. */
+/** A medium snapshot: the player's money, hacking and intelligence (0 before BN5), home's RAM, n00dles' money, security. */
 function mediumData({
   money,
   hacking = 1,
+  intelligence = 0,
   homeRam = 8,
   noodles = { money: 1_000, security: 1 },
   hasTorRouter = false,
@@ -122,6 +123,7 @@ function mediumData({
 }: {
   money: number;
   hacking?: number;
+  intelligence?: number;
   homeRam?: number;
   noodles?: { money: number; security: number };
   hasTorRouter?: boolean;
@@ -138,7 +140,7 @@ function mediumData({
     hackDifficulty: security,
   });
   return {
-    player: { money, skills: { hacking, strength: 1 }, city: "Sector-12", factions, jobs: {} },
+    player: { money, skills: { hacking, intelligence, strength: 1 }, city: "Sector-12", factions, jobs: {} },
     hasTorRouter,
     programs,
     servers: [
@@ -287,7 +289,9 @@ describe("the sections", () => {
     for (const line of [
       "\n    money: $11,000 → $1,201,000",
       "\n    hacking: 1 → 12",
-      "\n    other skills: strength 1 → 1",
+      // Intelligence on its own line (#349), 0 before BN5, and never among the other skills.
+      "\n    intelligence: 0 (unchanged)\n",
+      "\n    other skills: strength 1 → 1\n",
       "\n    home RAM: 8 GB → 16 GB",
       "\n    home RAM used: 4 GB (unchanged)",
       "\n    TOR router: no → yes",
@@ -380,6 +384,8 @@ describe("the sections", () => {
     for (const line of [
       "\n    money: unknown (unchanged)",
       "\n    hacking: unknown (unchanged)",
+      // A snapshot without it (#349): unknown, as for hacking.
+      "\n    intelligence: unknown (unchanged)",
       "\n    home RAM: unknown (unchanged)",
       "\n    home RAM used: 4.5 GB → unknown",
       // No static snapshot: which servers are the game's isn't known (#194).
@@ -389,6 +395,14 @@ describe("the sections", () => {
       expect(text).toContain(line);
     }
     expect(text).not.toMatch(/undefined|NaN/);
+  });
+
+  test("intelligence gained (BN5 on, #349) shows first → last, on its own line", () => {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("medium", 10 * SECOND, mediumData({ money: 0, hacking: 300, intelligence: 3 }));
+    snapshot("medium", 20 * SECOND, mediumData({ money: 0, hacking: 310, intelligence: 8 }));
+    const { text } = report();
+    expect(text).toContain("\n    hacking: 300 → 310\n    intelligence: 3 → 8\n    other skills: strength 1 → 1\n");
   });
 
   test("an earlier brain start in the day before the window is noted", () => {
@@ -2536,10 +2550,10 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
   const busyWindow = { environment: "E0", sinceMs: T0, untilMs: T0 + BUSY_MS + 30 * SECOND } as const;
   const CLOUD_SERVERS = 20;
   /**
-   * The default report's most lines and characters for `busyRun` (#245): its own are 195 and 13,875; --verbose's
-   * lines (909) are over 4 times the bound.
+   * The default report's most lines and characters for `busyRun` (#245): its own are 201 and 14,366 (with #349's
+   * intelligence line); --verbose's lines (909) are over 4 times the bound.
    */
-  const BUSY_REPORT_LINES = 200;
+  const BUSY_REPORT_LINES = 205;
   const BUSY_REPORT_CHARACTERS = 14_500;
   /**
    * pserv-index's RAM at `offsetMs`, or null where the medium snapshots don't show it: in cycle 1, each bought at 8 GB
@@ -3014,9 +3028,10 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
         for (const [heading, most] of BLOCKS) {
           expect(blockOf(brief.text, heading).length, heading).toBeLessThanOrEqual(most(cycles));
         }
-        // About 1,350 characters a cycle (2b's block is most of it), and 8,600 besides: 16,721 for 6 cycles at 10 of
-        // each, 16,756 at 40, and 27,606 for 14 over 3 BitNodes. Not how busy each cycle was.
-        expect(brief.text.length).toBeLessThanOrEqual(9_000 + 1_400 * cycles);
+        // About 1,350 characters a cycle (2b's block is most of it), and 9,300 besides: 17,388 for 6 cycles at 10 of
+        // each, 17,423 at 40, and 28,322 for 14 over 3 BitNodes (#349's intelligence line in each). Not how busy each
+        // cycle was.
+        expect(brief.text.length).toBeLessThanOrEqual(9_100 + 1_400 * cycles);
         // What comes again each reset is one line, not one a reset (#245's second round): the backdoors, the joins,
         // and each BitNode's lists.
         const lines = brief.text.split("\n");

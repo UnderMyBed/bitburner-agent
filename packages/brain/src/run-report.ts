@@ -1336,7 +1336,10 @@ function segmentProgressLines(facts: RunFacts, segment: ProgressSegment, verbose
     const skillsFirst = fieldsOf(playerFirst.skills);
     const skillsLast = fieldsOf(playerLast.skills);
     lines.push(`  hacking: ${describeChange(displayValue(skillsFirst.hacking), displayValue(skillsLast.hacking))}`);
-    const otherSkills = Object.keys(skillsLast).filter((skill) => skill !== "hacking");
+    // Intelligence on its own line (#349): 0 before BN5 (`getPlayer()`'s skills; unknown in a snapshot without it).
+    const intelligence = describeChange(displayValue(skillsFirst.intelligence), displayValue(skillsLast.intelligence));
+    lines.push(`  intelligence: ${intelligence}`);
+    const otherSkills = Object.keys(skillsLast).filter((skill) => skill !== "hacking" && skill !== "intelligence");
     if (otherSkills.length > 0) {
       const changes = otherSkills.map(
         (skill) => `${skill} ${displayValue(skillsFirst[skill])} → ${displayValue(skillsLast[skill])}`,

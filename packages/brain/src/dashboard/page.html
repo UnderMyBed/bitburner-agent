@@ -347,6 +347,8 @@ function render(status) {
   fillTable(document.querySelector("#values table"), [
     ["Money", orNone(values.money, (money) => `$${Math.round(money).toLocaleString()}`)],
     ["Hacking level", orNone(values.hackingLevel)],
+    // Beside it, intelligence (#349): 0 before BN5.
+    ["Intelligence", orNone(values.intelligence)],
     // The hacking rows (#196): the brain's own words, as the run report has them.
     ["Hacking ceiling", status.hacking.ceilingText],
     ["Hacking income", status.hacking.incomeText],
