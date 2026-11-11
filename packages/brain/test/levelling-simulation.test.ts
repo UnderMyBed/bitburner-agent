@@ -17,6 +17,7 @@ import {
   deployedFilePath,
   hackingExpOfLevel,
   LEVEL_GROW_SCRIPT_NAME,
+  LEVEL_LOOP_SCRIPT_NAME,
   type MediumSnapshotData,
   NEUROFLUX_GOVERNOR,
   type SlowSnapshotData,
@@ -97,6 +98,12 @@ test.each(SEEDS)(
     expect(HACKING_MULT).toBeLessThan(5);
     await simulation.diagnostics.gainHackingExp(hackingExpOfLevel(2000, HACKING_MULT));
     await simulation.diagnostics.setMoney(1e12);
+    // Levelling's loops aren't bundles (#339): until it's sent, the deploy worker has written neither to home.
+    for (const name of [LEVEL_LOOP_SCRIPT_NAME, LEVEL_GROW_SCRIPT_NAME]) {
+      await expect(simulation.staticRamUsage("home", deployedFilePath(fresh.deploymentId, name))).rejects.toThrow(
+        /does not exist/,
+      );
+    }
     // Rooted, the planner measures batching's rate a minute, and chooses levelling mode.
     await game.runUntil(() => fresh.controller().levellingView().mode === "level", STAGE_MS);
     const view = fresh.controller().levellingView();

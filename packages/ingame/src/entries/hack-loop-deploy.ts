@@ -12,8 +12,11 @@
 //   sized from home's free RAM less that kept RAM (core's `loopThreadsRoom`), so the reservation stays free beside
 //   whatever runs as it starts; once other scripts' end frees as much again, it's started again at full size
 //   (`restartsAtFullSize`). It holds home for as long as it runs, where the share threads' 10 s rounds give it back.
+//   Neither loop is a bundle (#339): this worker writes the one sent to its deployment's folder on home first (core's
+//   `loopSourceOf`), so outside levelling the deploy, and all it does, is the one before levelling.
 // RAM: `scan` 0.2 + `hasRootAccess` 0.05 + `ps` 0.2 + `kill` 0.5 + `scp` 0.6 + `exec` 1.3 + `getScriptRam` 0.1 +
-// `getServerMaxRam` and `getServerUsedRam` 0.05 each (ram-budget.json).
+// `getServerMaxRam` and `getServerUsedRam` 0.05 each, `read` and `write` none (RamCostGenerator.ts:621-625;
+// ram-budget.json).
 import {
   deployedFilePath,
   deploymentIdOfPath,
@@ -23,6 +26,7 @@ import {
   isHackLoopFile,
   keptGbOf,
   loopScriptNameOf,
+  loopSourceOf,
   loopThreadsRoom,
   restartsAtFullSize,
 } from "@bitburner-agent/core";
@@ -44,6 +48,11 @@ export function main(ns: NS): void {
     deployedFilePath(ownDeploymentId, loopScriptNameOf(loop));
   // The script the hosts run: every host's is the same one.
   const [anyLoop] = loopOfHost.values();
+  // Levelling's loop, written when it's sent and not yet there: the hack loop's, a bundle, is never written.
+  const source = loopSourceOf(anyLoop);
+  if (anyLoop !== undefined && source !== null && ns.read(fileOf(anyLoop)) !== source) {
+    ns.write(fileOf(anyLoop), source, "w");
+  }
   if (anyLoop !== undefined && ns.getScriptRam(fileOf(anyLoop), "home") === 0) {
     // Stopping still goes ahead: only starting needs the script.
     report.problem = `${fileOf(anyLoop)} isn't on home`;

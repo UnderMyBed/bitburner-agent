@@ -574,6 +574,7 @@ export {
   LEVEL_LOOP_RAM_GB,
   LEVEL_LOOP_SCRIPT_NAME,
   loopScriptNameOf,
+  loopSourceOf,
   loopThreadsRoom,
   percentMoneyHackedPerThread,
   restartsAtFullSize,

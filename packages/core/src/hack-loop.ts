@@ -9,20 +9,21 @@ import { deploymentIdOfPath, isGeneratedDeploymentId } from "./deploy-layout.ts"
 export const HACK_LOOP_SCRIPT_NAME = "hack-loop.js";
 /**
  * Levelling mode's loop (#336): weakens its target, its one argument, for ever, for the experience; started by
- * `hack-loop-deploy.js` on the hosts and on home's RAM beyond what home keeps, in the hack loop's place.
+ * `hack-loop-deploy.js` on the hosts and on home's RAM beyond what home keeps, in the hack loop's place. Not a bundle:
+ * the deploy worker writes it (`loopSourceOf`).
  */
 export const LEVEL_LOOP_SCRIPT_NAME = "level-loop.js";
 /**
  * Levelling mode's grow loop (#336): grows its target for ever, in the level loop's place once the target is at its
  * minimum security (once its money is at its maximum, a grow adds no security, `Server/ServerHelpers.ts:201-212`); it
  * earns 1.25 times a weaken's experience a thread-second. A script of its own: one calling both would cost 0.15 GB a
- * thread more.
+ * thread more. Not a bundle either.
  */
 export const LEVEL_GROW_SCRIPT_NAME = "level-grow.js";
 /**
- * Their RAM budget, GB a thread: 1.6 base + `weaken`'s or `grow`'s 0.15 (RamCostGenerator.ts:11, :18, :20),
- * ram-budget.json's `level-loop.js` and `level-grow.js` (the ingame ram-budget test checks them). On the hack loop's
- * 2.4 GB, 27% fewer threads would fit.
+ * Their RAM, GB a thread: 1.6 base + `weaken`'s or `grow`'s 0.15 (RamCostGenerator.ts:11, :18, :20), as the game's
+ * calculator measures `loopSourceOf`'s (the ingame ram-budget test). On the hack loop's 2.4 GB, 27% fewer threads
+ * would fit.
  */
 export const LEVEL_LOOP_RAM_GB = 1.75;
 /** Home worker: roots every server it can with the programs on home. */
@@ -214,6 +215,27 @@ const MAX_GROWTH_LOG = Math.log1p(0.0035);
 export function loopScriptNameOf(loop: HostHackLoop | undefined): string {
   if (loop?.levelling === undefined) return HACK_LOOP_SCRIPT_NAME;
   return loop.levelling.operation === "grow" ? LEVEL_GROW_SCRIPT_NAME : LEVEL_LOOP_SCRIPT_NAME;
+}
+
+/**
+ * The source the deploy worker writes to home as a host's loop (#339), or null: the hack loop's is a bundle. Levelling
+ * mode's loops aren't: the deployer pushes and RAM-checks every bundle at each deploy, so a bundle of theirs would
+ * change the deploy outside levelling too (in the simulator, two of them started the Agent 1.6 s later and moved the
+ * money suites' figures, #341). Written only when levelling is sent, so it never touches the money path. The
+ * operation on the loop's one argument, for ever, and no other NS function: `LEVEL_LOOP_RAM_GB`.
+ */
+export function loopSourceOf(loop: HostHackLoop | undefined): string | null {
+  if (loop?.levelling === undefined) return null;
+  const operation = loop.levelling.operation === "grow" ? "grow" : "weaken";
+  return [
+    `// ${loopScriptNameOf(loop)}: levelling mode's loop (#336), written by hack-loop-deploy.js.`,
+    "export async function main(ns) {",
+    '  ns.disableLog("ALL");',
+    "  const target = String(ns.args[0]);",
+    `  for (;;) await ns.${operation}(target);`,
+    "}",
+    "",
+  ].join("\n");
 }
 
 /**

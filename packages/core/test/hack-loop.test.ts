@@ -13,6 +13,7 @@ import {
   LEVEL_GROW_SCRIPT_NAME,
   LEVEL_LOOP_SCRIPT_NAME,
   loopScriptNameOf,
+  loopSourceOf,
   loopThreadsRoom,
   percentMoneyHackedPerThread,
   restartsAtFullSize,
@@ -119,6 +120,20 @@ test("the deploy worker's choices (#336): each host's script, home only levellin
   expect(restartsAtFullSize(540 + 17, 540, 32, 1.75)).toBe(false);
   expect(restartsAtFullSize(540 + 18, 540, 32, 1.75)).toBe(true);
   expect(restartsAtFullSize(10, 0, 32, 1.75)).toBe(false);
+});
+
+test("levelling's loops aren't bundles (#339): the deploy worker writes one's source only when levelling is sent", () => {
+  // Outside levelling, nothing to write: the hack loop is a bundle, and the deploy is the one before levelling.
+  expect(loopSourceOf(undefined)).toBeNull();
+  expect(loopSourceOf({ target: "n00dles", hackThreads: 4 })).toBeNull();
+  // In it, a script calling the operation sent on its one argument for ever, and no other NS function, so its RAM is
+  // 1.6 + 0.15 (the ingame ram-budget test measures it with the game's calculator).
+  for (const operation of ["weaken", "grow"] as const) {
+    const source = loopSourceOf({ target: "joesguns", hackThreads: null, levelling: { homeKeptGb: 32, operation } });
+    expect(source).toContain("export async function main(ns)");
+    expect(source).toContain(`for (;;) await ns.${operation}(target);`);
+    expect(source?.match(/\bns\.\w+/g)).toEqual(["ns.disableLog", "ns.args", `ns.${operation}`]);
+  }
 });
 
 test("generated deployment ids are 12 lowercase hex digits", () => {
