@@ -6,7 +6,8 @@
 //   NeuroFlux Governor level.
 // - Short of Daedalus's count, the planner's install timing (#343; the count rule's quick install, #222, before it):
 //   six new to the count (the five and NeuroFlux Governor's first level) about 17 minutes into the cycle, nothing more
-//   to come soon (NiteSec at 0), so installing now is the shortest; at once, no countdown. The brain buys the five in
+//   to come soon (NiteSec at 0), so installing now is the shortest; held while #228's hold keeps city group B's money
+//   (to 20 minutes), then at once, no countdown. The brain buys the five in
 //   buy order through the Agent's `sim` effector, then home's RAM, then NeuroFlux Governor, and installs through the
 //   gate and a save backup; the game starts boot.js after the reset, and the next Agent connects.
 // - After the reset, the player's multipliers are the five's and NeuroFlux Governor's, and home has its new RAM.
@@ -136,7 +137,15 @@ test.each(SEEDS)(
       short: { installed: 0, required: 30 },
       timing: { needed: 30, adding: 6, choice: 0 },
     });
-    expect(chosen?.onlineMs).toBeLessThan(20 * MINUTE);
+    // Not while #228's hold keeps city group B's money (#343): the edit's money has group B chosen, $30m held in Ishima,
+    // then Chongqing's and New Tokyo's invitations; installing now waits for the last (seed 1: 20.0 min online, where the
+    // count rule's quick install, before #343, came at about 17.5, inside its 20 minutes).
+    const lineAt = (pattern: RegExp) => brain.logLines.findIndex((line) => pattern.test(line));
+    expect(lineAt(/^invitations: in Ishima: \$30,000,000 held for Ishima's invitation/)).toBeGreaterThan(-1);
+    expect(lineAt(/^invitations: New Tokyo invited in New Tokyo$/)).toBeGreaterThan(-1);
+    expect(lineAt(/^invitations: New Tokyo invited in New Tokyo$/)).toBeLessThan(
+      lineAt(/^augmentations: install chosen,/),
+    );
     expect(brain.logLines.filter((line) => line.includes("install countdown"))).toEqual([]);
     expect(brain.logLines).toContainEqual(
       expect.stringMatching(
