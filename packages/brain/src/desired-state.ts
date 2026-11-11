@@ -10,6 +10,7 @@
 // the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
+  BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BitNodeHackingMultipliers,
   bitNodeAssumptions,
@@ -60,6 +61,7 @@ import {
   bitNodeHackingOf,
   chooseBatcher,
   HACKING_MULTIPLIERS_UNREAD,
+  planBatcher,
   readBatcherEnabled,
   readBatcherOnHome,
 } from "./batcher.ts";
@@ -122,6 +124,7 @@ import {
 import { chooseNextPurchase, PROGRAMS_ENABLED_SETTING, type ProgramsPlan, readProgramsEnabled } from "./programs.ts";
 import {
   factionWorkGoingOn,
+  homeBatchesWhileSharing,
   homeKeptGbOf,
   readShareEnabled,
   type ShareView,
@@ -371,6 +374,8 @@ export class DesiredStateController {
   #lastSetHackTargetResetAt: number | null = null;
   /** Why no batcher is sent while its switch is on (#205), or null. */
   #batcherWhy: string | null = null;
+  /** Home left out of the batcher's hosts to share instead, this update (#340's review, `homeBatchesWhileSharing`). */
+  #homeSharesInstead = false;
   /** The mode, the batcher's target and next as last logged (#206), or null before any. */
   #batcherMode: string | null = null;
   /** Why the batcher sent isn't running, as the last fast snapshot said, or null (#211). */
@@ -1510,7 +1515,8 @@ export class DesiredStateController {
           ? `batcher: the hack loop hacks${this.#batcherWhy === null ? "" : `, not the batcher: ${this.#batcherWhy}`}`
           : `batcher: batches ${sent.config.target}` +
             (sent.config.next === undefined ? "" : `, preparing ${sent.config.next.target} next`) +
-            (sent.config.sharing === undefined ? "" : ", sharing its spare RAM");
+            (sent.config.sharing === undefined ? "" : ", sharing its spare RAM") +
+            (this.#homeSharesInstead ? ", home sharing rather than batching (#340's placeholder)" : "");
     if (mode !== this.#batcherMode) {
       // Not before the switch is first on: the hack loop is the default's mode then.
       if (this.#batcherMode !== null || (sent !== undefined && sent !== null)) this.#log(mode);
@@ -1525,6 +1531,7 @@ export class DesiredStateController {
     levelling: LevellingPlan["levelling"],
   ): Pick<DesiredState, "hackLoop" | "batcher"> {
     this.#batcherWhy = null;
+    this.#homeSharesInstead = false;
     this.#shareWhy = "the batcher isn't sent";
     // Levelling mode (#336): the level loop on the batcher's hosts and home's RAM beyond what it keeps, no batcher.
     if (levelling !== null) {
@@ -1554,15 +1561,51 @@ export class DesiredStateController {
     // Home among the hosts (#340), for its RAM beyond what it keeps for the Agent and its workers: the one reserve
     // the share and levelling mode keep (`homeKeptGbOf`), with Singularity its largest worker's too.
     const homeKeptGb = readBatcherOnHome(this.#store) ? homeKeptGbOf(singularityRamMultiplierOf(this.#slowData)) : null;
-    const planned = chooseBatcher(
-      this.#staticData,
-      this.#mediumData,
-      this.#hackingMultipliers(),
-      hosts,
-      this.#desired?.batcher ?? null,
-      batching,
-      homeKeptGb,
-    );
+    const chooseOn = (kept: number | null) =>
+      chooseBatcher(
+        this.#staticData as StaticSnapshotData,
+        this.#mediumData as MediumSnapshotData,
+        this.#hackingMultipliers(),
+        hosts,
+        this.#desired?.batcher ?? null,
+        batching,
+        kept,
+      );
+    let planned = chooseOn(homeKeptGb);
+    // While sharing is asked (#340's review), home batches only if the batches gain more with it than the share would
+    // on it: `homeBatchesWhileSharing`, a placeholder until the planner splits home's RAM (owner decision 67).
+    const sharingAsked = factionWorking && readShareEnabled(this.#store);
+    const onHome = planned.batcher?.config.hosts.includes("home") === true;
+    if (sharingAsked && onHome && planned.batcher !== null && homeKeptGb !== null) {
+      const { runOn, config } = planned.batcher;
+      const planOn = (kept: number | null) =>
+        planBatcher(
+          this.#staticData as StaticSnapshotData,
+          this.#mediumData as MediumSnapshotData,
+          this.#hackingMultipliers(),
+          config.target,
+          hosts,
+          runOn,
+          1,
+          kept,
+        );
+      const withHome = planOn(homeKeptGb);
+      const withoutHome = planOn(null);
+      const home = this.#mediumData.servers.find((server) => server?.hostname === "home");
+      const intelligence = (this.#mediumData.player as { skills?: { intelligence?: unknown } }).skills?.intelligence;
+      const choice = homeBatchesWhileSharing({
+        withHomeIncomePerSecond: withHome.batcher === null ? 0 : withHome.incomePerSecond,
+        withoutHomeIncomePerSecond: withoutHome.batcher === null ? 0 : withoutHome.incomePerSecond,
+        homeShareGb: (home?.maxRam ?? 0) - homeKeptGb - (runOn === "home" ? BATCHER_RAM_BUDGET_GB : 0),
+        homeCores: typeof home?.cpuCores === "number" ? home.cpuCores : 1,
+        intelligence: typeof intelligence === "number" ? intelligence : 0,
+      });
+      const without = choice.batches ? null : chooseOn(null);
+      if (without?.batcher) {
+        planned = without;
+        this.#homeSharesInstead = true;
+      }
+    }
     if (planned.batcher === null) {
       this.#batcherWhy = planned.why;
       return { hackLoop };

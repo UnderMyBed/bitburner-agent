@@ -5,11 +5,11 @@
 // servers with batches, over 80% of their RAM. Before #242 the share's 80% cap counted home's RAM and use with theirs,
 // so the room was 0 and home sat idle: the bonus x1.000 against x1.388 possible. Now home shares, in two halves, and
 // the bonus averages within 1% of the bonus possible on the RAM free, never x1.000, with no batch late, lost or short.
-// That's home beside the batcher's hosts. Since #340, the default, home is one of them for its RAM beyond what it
-// keeps, so #242's shape runs with `BATCHER_ON_HOME_SETTING` off. The default's arm: the batches fill home too (its RAM
-// batches first, as #340 asks), the share takes what its rules leave, the bonus within 1% of that possible, and no
-// failure of the share's or of home's (`batches left home idle`). CI runs seed 1; `SHARE_HOME_SEEDS` (`1,2,3`, say)
-// runs others.
+// That's home beside the batcher's hosts, run with `BATCHER_ON_HOME_SETTING` off (#340). The default's arm, since
+// #340's review: while sharing is asked, home is a batch host only if the batches gain more with it than the share
+// would on it (`homeBatchesWhileSharing`, a placeholder until the planner splits home's RAM), and here home's 4% more
+// batch RAM loses to x1.388, so home shares beside the hosts, as #242's, with no failure of the share's or of
+// home's. CI runs seed 1; `SHARE_HOME_SEEDS` (`1,2,3`, say) runs others.
 import type { BatcherHealth, FastSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { BATCHER_ON_HOME_SETTING } from "../src/batcher.ts";
@@ -101,44 +101,37 @@ test.each(SEEDS)(
 );
 
 test.each(SEEDS)(
-  "seed %i, home among the batcher's hosts (#340): its RAM batches first, the share takes what its rules leave, no failure",
+  "seed %i, the default (#340's review, a placeholder): home's 4% more batch RAM against x1.388, so home shares",
   { timeout: 600_000 },
   async (seed) => {
-    const { healths, cloudUse, report } = await run(seed, true);
+    const { healths, cloudUse, report, logLines } = await run(seed, true);
     const average = (of: (each: BatcherHealth) => number) =>
       healths.reduce((sum, { health: each }) => sum + of(each), 0) / healths.length;
     const bonus = average((each) => each.sharing?.bonus ?? 1);
     const possible = average((each) => each.sharing?.possibleBonus ?? 1);
-    const homeBatchesGb = average((each) => each.home?.batchesGb ?? 0);
+    const homeShareGb = average((each) => (each.sharing?.ramGb ?? 0) - (each.sharing?.hostsRamGb ?? 0));
     console.log(
-      `seed ${seed}, home among the hosts: the cloud servers ` +
-        `${cloudUse.map((each) => `${(each * 100).toFixed(0)}%`).join(", ")} used; home's batches ` +
-        `${Math.round(homeBatchesGb).toLocaleString("en-US")} GB on average; the bonus x${bonus.toFixed(3)} on ` +
-        `average, of x${possible.toFixed(3)} possible; ${healths.at(-1)?.health.batchesStarted} batches on ` +
+      `seed ${seed}, the default: the cloud servers ` +
+        `${cloudUse.map((each) => `${(each * 100).toFixed(0)}%`).join(", ")} used; home sharing ` +
+        `${Math.round(homeShareGb).toLocaleString("en-US")} GB on average; the bonus x${bonus.toFixed(3)} on average, ` +
+        `of x${possible.toFixed(3)} possible; ${healths.at(-1)?.health.batchesStarted} batches on ` +
         `${healths.at(-1)?.health.target}`,
+    );
+    // While faction work asks for the share, the batches gain at most 4% from home (65,504 GB beside 1.6 PB), the
+    // share x1.388 on it: home stays beside the hosts (`homeBatchesWhileSharing`), and says so in the brain's log.
+    expect(logLines).toContain(
+      "batcher: batches harakiri-sushi, sharing its spare RAM, home sharing rather than batching (#340's placeholder)",
     );
     expect(healths.length).toBeGreaterThan(100);
     for (const used of cloudUse) expect(used).toBeGreaterThan(0.82);
     for (const { atMs, health: each } of healths) {
-      // Home a host, keeping its 32 GB, never beside them.
-      expect(each.home, `at ${atMs}`).toMatchObject({ gb: HOME_GB, keptGb: 32 });
-      expect(each.sharing?.homeGb, `at ${atMs}`).toBeUndefined();
+      expect(each.home, `at ${atMs}`).toBeUndefined();
+      expect(each.sharing?.homeGb, `at ${atMs}`).toBe(HOME_GB);
       expect(each, `at ${atMs}`).toMatchObject({ late: 0, lost: 0, desyncs: 0, batchesShort: 0, outOfBounds: 0 });
     }
-    // Its RAM in the batches, nearly all it may give.
-    expect(homeBatchesGb).toBeGreaterThan(0.95 * (HOME_GB - 32));
-    // The share at what its rules allow on what the batches leave.
+    expect(homeShareGb).toBeGreaterThan(0.95 * (HOME_GB - 64));
+    expect(possible).toBeGreaterThan(1.38);
     expect(bonus).toBeGreaterThan(0.99 * possible);
-    expect(bonus).toBeLessThanOrEqual(possible + 1e-9);
-    const section = report.text.slice(report.text.indexOf("6. The batcher"), report.text.indexOf("Verdict"));
-    console.log(
-      section
-        .split("\n")
-        .filter((line) => /#340|#242/.test(line))
-        .join("\n"),
-    );
-    expect(section).toContain("among the batcher's hosts (#340): shared as they are, judged with the batches");
-    expect(section).toMatch(/^ {2}home among its hosts \(#340\): 65,504 GB it may give the batches/m);
     expect(report.failures.filter((failure) => /^share |^batches left home idle/.test(failure))).toEqual([]);
   },
 );
@@ -192,5 +185,10 @@ async function run(seed: number, homeAmongHosts: boolean) {
     const each = (row.data as FastSnapshotData).batcher;
     if (each) healths.push({ atMs: row.receivedAtMs, health: each });
   }
-  return { healths, cloudUse, report: runReport(data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: toMs }) };
+  return {
+    healths,
+    cloudUse,
+    report: runReport(data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: toMs }),
+    logLines: fresh.brain.logLines,
+  };
 }

@@ -17,7 +17,7 @@ import {
 import { donationStatus } from "../augmentation-report.ts";
 import type { AugmentationsView, InstallAwaitingRestart } from "../augmentations.ts";
 import type { BackdoorDue } from "../backdoors.ts";
-import { type BatcherView, batcherNotRunning, batcherOutOfStep } from "../batcher.ts";
+import { type BatcherView, batcherNotRunning, batcherOutOfStep, readBatcherOnHome } from "../batcher.ts";
 import type { DataBackupProblem } from "../data-backup.ts";
 import type {
   CloudServersView,
@@ -32,7 +32,7 @@ import type { FactionsView, FactionWorkStall } from "../factions.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { type HackingView, hackingView } from "../hacking-ceiling.ts";
 import { reportedRefusal } from "../record-channel-events.ts";
-import type { ShareView } from "../share.ts";
+import { homeKeptGbOf, type ShareView, singularityRamMultiplierOf } from "../share.ts";
 import { RELAUNCH_EVENT_KIND, readSupervisionSwitch, SUPERVISION_GAVE_UP_EVENT_KIND } from "../supervision.ts";
 import type { Environment, TelemetryStore } from "../telemetry-store.ts";
 import type { WorkView } from "../work.ts";
@@ -458,6 +458,10 @@ export function buildDashboardStatus({
       staticData: latestOfTier.static?.data as StaticSnapshotData | undefined,
       mediumData: medium,
       bitNode: bitNodeOf(slow?.data),
+      // Home among the batcher's hosts (#340's review): its RAM beyond what it keeps is theirs.
+      homeKeptGb: readBatcherOnHome(store)
+        ? homeKeptGbOf(singularityRamMultiplierOf((slow?.data as SlowSnapshotData | undefined) ?? null))
+        : null,
     }),
     timeline: timeline ?? null,
   };

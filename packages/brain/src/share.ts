@@ -13,14 +13,17 @@ import {
   batchThreads,
   hackThreadsForShare,
   type MediumSnapshotData,
+  SHARE_RAM_GB,
   SHARE_TIME_MS,
   type SharingConfig,
   type SharingHealth,
   SINGULARITY_LARGEST_WORKER_GB,
   type SlowSnapshotData,
+  shareBonus,
   shareReserveGb,
   singularityRamMultiplier,
   singularityWorkerRamGb,
+  threadsThatFit,
   type Work,
 } from "@bitburner-agent/core";
 import { HOME_KEPT_FOR_THE_AGENT_GB, hackingPlayerOf } from "./batcher.ts";
@@ -103,6 +106,41 @@ export function homeKeptGbOf(singularityMultiplier: number | null): number {
   return singularityMultiplier === null
     ? SHARE_HOME_KEPT_GB
     : SHARE_HOME_KEPT_GB + singularityWorkerRamGb(SINGULARITY_LARGEST_WORKER_GB, singularityMultiplier);
+}
+
+/**
+ * Home's batches against its share while sharing is asked (#340's review). **A placeholder** until the planner (owner
+ * decision 67) splits home's RAM between batching, levelling and sharing: home stays among the batcher's hosts only if
+ * the batches' income with it gains more, relatively, than the share on home's RAM would raise faction work's
+ * reputation: income with home / income without, less 1, above the share's bonus on home's threads and cores (core's
+ * `shareBonus`, `NetworkShare/Share.ts:22-24,43-48`) less 1, as reputation a second is the bonus times
+ * (`PersonObjects/formulas/reputation.ts:15-22`). Run #3's late shape, a 64 TB home beside 1.6 PB of cloud servers,
+ * gains at most 4% income against x1.388's 38.8%: home shares. After an install, with home most of the RAM, the batches
+ * gain several times over: home batches. Without income without home (none planned), home batches.
+ */
+export function homeBatchesWhileSharing({
+  withHomeIncomePerSecond,
+  withoutHomeIncomePerSecond,
+  homeShareGb,
+  homeCores,
+  intelligence,
+}: {
+  withHomeIncomePerSecond: number;
+  withoutHomeIncomePerSecond: number;
+  /** Home's RAM the share would take beside the batches' hosts: beyond what it keeps, and the batcher's budget there. */
+  homeShareGb: number;
+  homeCores: number;
+  intelligence: number;
+}): { batches: boolean; incomeGain: number; shareGain: number } {
+  const incomeGain =
+    withoutHomeIncomePerSecond > 0
+      ? withHomeIncomePerSecond / withoutHomeIncomePerSecond - 1
+      : withHomeIncomePerSecond > 0
+        ? Number.POSITIVE_INFINITY
+        : 0;
+  const threads = threadsThatFit(Math.max(0, homeShareGb), SHARE_RAM_GB);
+  const shareGain = shareBonus([{ threads, cores: homeCores }], intelligence) - 1;
+  return { batches: incomeGain > shareGain, incomeGain, shareGain };
 }
 
 /** Whether the game has Singularity (#226's review): in BN4, or with SF4, as the slow snapshot's reset info says. */

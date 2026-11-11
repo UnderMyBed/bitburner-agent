@@ -22,6 +22,7 @@ import {
   hackingIncomePerSecond,
   hackingMoneyOf,
 } from "../src/hacking-ceiling.ts";
+import { homeKeptGbOf, singularityRamMultiplierOf } from "../src/share.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const SECOND = 1_000;
@@ -228,6 +229,40 @@ describe("hackingCeiling: the score on the hack loop's hosts' RAM, the bound on 
     expect(bn2.incomePerSecond).toBeLessThan(
       known(hackingCeiling(staticData(), medium(150, rooted), 1)).incomePerSecond,
     );
+  });
+
+  test("home among the batcher's hosts (#340's review): its RAM beyond what it keeps counts with theirs, in the fold too", () => {
+    const rooted = { n00dles: true, zer0: true };
+    const big = medium(150, rooted, { ram: { home: 4_096 } });
+    const without = known(hackingCeiling(staticData(), big, 1));
+    const withHome = known(hackingCeiling(staticData(), big, 1, undefined, 32));
+    expect(withHome.hostRamGb).toBe(without.hostRamGb + 4_064);
+    expect(withHome.hostCount).toBe(without.hostCount + 1);
+    expect(withHome.batcherIncomePerSecond).toBeCloseTo(
+      (without.batcherIncomePerSecond / (2 * USABLE_16)) * (2 * USABLE_16 + usableRamGb(4_064)),
+      6,
+    );
+    // Home within what it keeps: nothing more. The bound, on all the rooted RAM, is the same either way.
+    expect(hackingCeiling(staticData(), medium(150, rooted, { ram: { home: 32 } }), 1, undefined, 32)).toEqual(
+      hackingCeiling(staticData(), medium(150, rooted, { ram: { home: 32 } }), 1),
+    );
+    expect(withHome.boundIncomePerSecond).toBe(without.boundIncomePerSecond);
+    // The fold, with the switch on: home's beyond what it keeps then, the Singularity worker's in BN4.
+    const fold = new HackingFold(new Set(["home"]), { homeOn: true });
+    fold.addStatic(0, staticData());
+    fold.addSlow(0, slowData(1));
+    fold.addSlow(2 * MINUTE, slowData(4));
+    fold.addMedium(MINUTE, big);
+    expect(fold.latestCeiling).toEqual(hackingCeiling(staticData(), big, 1, undefined, 32));
+    fold.addMedium(3 * MINUTE, big);
+    expect(fold.latestCeiling).toEqual(
+      hackingCeiling(staticData(), big, 4, undefined, homeKeptGbOf(singularityRamMultiplierOf(slowData(4)))),
+    );
+    const off = new HackingFold(new Set(["home"]));
+    off.addStatic(0, staticData());
+    off.addSlow(0, slowData(1));
+    off.addMedium(MINUTE, big);
+    expect(off.latestCeiling).toEqual(without);
   });
 
   test("the run report's fold takes each medium snapshot's BitNode from the newest slow snapshot by then", () => {

@@ -17,6 +17,7 @@ import {
   type DesiredState,
   encodeControlMessage,
   type MediumSnapshotData,
+  MIN_BATCH_SPACING_MS,
   newBatcherHealth,
   operationTimeMs,
   preparationTimeMs,
@@ -332,6 +333,11 @@ describe("home among the hosts (#340)", () => {
     expect(planned.ramGb).toBe(ramGb);
     expect(planned.incomePerSecond).toBe(batchPlan(N00DLES, player, ramGb)?.incomePerSecond);
     expect(planned.batcher).toMatchObject({ runOn: "home", config: { hosts: [...HOSTS, "home"], homeKeptGb: 32 } });
+    // Whether the plan is held to the RAM (#340's review): on 4 TB it is; on a petabyte n00dles' money bounds it.
+    expect(planned.batcher.config.ramBound).toBe(true);
+    const huge = at(2 ** 20, 32);
+    expect(huge.batcher?.config).toMatchObject({ hosts: [...HOSTS, "home"], ramBound: false });
+    expect(huge.batcher?.config.spacingMs).toBe(MIN_BATCH_SPACING_MS);
   });
 
   test("with the batcher elsewhere, home's RAM beyond what it keeps, all of it, and the batcher's host less its budget", () => {
@@ -489,7 +495,13 @@ describe("the run report's section", () => {
   const least = (share: number, target: string) => ({ leastMoneyAfterGrow: share, leastMoneyAfterGrowOn: target });
 
   test("home among its hosts (#340): its RAM in the batches; idle over half while batches want RAM, 10 minutes, fails", () => {
-    const home = (freeGb: number, batchesGb: number) => ({ gb: 4_128, keptGb: 32, freeGb, batchesGb });
+    const home = (freeGb: number, batchesGb: number, ramBound?: boolean) => ({
+      gb: 4_128,
+      keptGb: 32,
+      freeGb,
+      batchesGb,
+      ...(ramBound === undefined ? {} : { ramBound }),
+    });
     /** A fast snapshot every 2 s for `minutes`, from `fromMinute`, each health from `of(index)`. */
     const every2s = (fromMinute: number, minutes: number, of: (index: number) => Partial<BatcherHealth>) =>
       Array.from({ length: Math.round(minutes * 30) + 1 }, (_, index) => ({
@@ -512,23 +524,51 @@ describe("the run report's section", () => {
     const lines = batcherSection(idle, failures);
     const failure =
       "batches left home idle from 2026-01-01T00:00:00.000Z to 2026-01-01T00:10:00.000Z (10 min): batching, over half " +
-      "of the 4,096 GB home may give free, while 10 batches were trimmed or short of RAM";
+      "of the 4,096 GB home may give free, with 10 batches trimmed or short of RAM";
     expect(failures).toEqual([failure]);
     expect(lines).toContain(
-      "  home among its hosts (#340): 4,096 GB it may give the batches, beyond the 32 GB it keeps; the batches held " +
+      "  home among its hosts (#340): 4,096 GB it may give the batches, beyond the 32 GB it keeps; its operations held " +
         "1,096 GB there on average while batching (27% of it), at most 1,096 GB",
     );
     expect(lines).toContain(`    ${failure}`);
-    // Idle alone, no batch wanting RAM (a plan bounded by its target's money): no failure.
-    const bounded: string[] = [];
-    const boundedLines = batcherSection(
-      every2s(0, 12, () => ({ home: home(3_000, 1_096) })),
-      bounded,
+    // Idle alone, no batch wanting RAM (a plan bounded by its target's money, or an older brain's): no failure.
+    for (const ramBound of [false, undefined]) {
+      const bounded: string[] = [];
+      const boundedLines = batcherSection(
+        every2s(0, 12, () => ({ home: home(3_000, 1_096, ramBound) })),
+        bounded,
+      );
+      expect(bounded).toEqual([]);
+      expect(boundedLines).toContain(
+        "    batches left home idle (over half free, the plan held to the RAM or batches trimmed or short, for 10 " +
+          "minutes): never",
+      );
+    }
+    // The plan sent held to the RAM throughout (#340's review), none trimmed: the brain's plan sized without home.
+    const heldToRam: string[] = [];
+    batcherSection(
+      every2s(0, 10, () => ({ home: home(3_000, 1_096, true) })),
+      heldToRam,
     );
-    expect(bounded).toEqual([]);
-    expect(boundedLines).toContain(
-      "    batches left home idle (over half free, batches trimmed or short meanwhile, for 10 minutes): never",
+    expect(heldToRam).toEqual([
+      "batches left home idle from 2026-01-01T00:00:00.000Z to 2026-01-01T00:10:00.000Z (10 min): batching, over half " +
+        "of the 4,096 GB home may give free, with the plan sent held to the RAM",
+    ]);
+    // Held to the RAM for all but one look: not throughout, no failure.
+    const once: string[] = [];
+    batcherSection(
+      every2s(0, 10, (index) => ({ home: home(3_000, 1_096, index !== 150) })),
+      once,
     );
+    expect(once).toEqual([]);
+    // A home that isn't one (a figure not a number of 0 or more): no line, no failure.
+    const odd: string[] = [];
+    const oddLines = batcherSection(
+      every2s(0, 10, () => ({ home: { ...home(3_000, 1_096, true), freeGb: Number.NaN } })),
+      odd,
+    );
+    expect(odd).toEqual([]);
+    expect(oddLines.some((line) => line.includes("#340"))).toBe(false);
     // Half free or less, a moment under 10 minutes, preparing, or a gap in the fast snapshots: none.
     const cases: Partial<BatcherHealth>[][] = [];
     for (const [freeGb, minutes, state] of [
@@ -2567,7 +2607,14 @@ describe("chooseBatcher, weighed beyond the 5 best by the ceiling (#274)", () =>
       if (chosen.batcher === null) throw new Error(chosen.why);
       return chosen.batcher.config;
     };
-    expect(chosenWith(32)).toMatchObject({ target: "base", next: { target: "step" } });
+    // The batches beside the next, planned on four fifths of the RAM, home's among it (#340's review).
+    expect(chosenWith(32)).toMatchObject({
+      target: "base",
+      next: { target: "step" },
+      hosts: [...CHOICE_HOSTS, "home"],
+      homeKeptGb: 32,
+      ramBound: true,
+    });
     expect(chosenWith(null).next).toBeUndefined();
   });
 
@@ -2712,6 +2759,52 @@ describe("chooseBatcher, weighed beyond the 5 best by the ceiling (#274)", () =>
     };
     const afterAnInstall = (money: number) => ({ money, security: 3 * RICHER_ONE.minDifficulty });
     const next = (shape: ReturnType<typeof at>) => chosenOf(world, shape.data, shape.sent).batcher.config.next?.target;
+
+    test("home among the hosts (#340's review): what the batches lose while a next is prepared counts home's RAM", () => {
+      // The hosts 16 GB each and home 2 TB beyond the 32 GB it keeps: at each rung of richer's money, it's the next
+      // exactly when its gain over rich, less what rich's batches lose on four fifths of all that RAM, is above 0.
+      const shapeAt = (money: number) => {
+        const data = worldAt(
+          {
+            rich: [RICH.moneyMax, RICH.minDifficulty],
+            richer: [money, 3 * RICHER_ONE.minDifficulty],
+            ...Object.fromEntries(FARS.map((hostname) => [hostname, [FAR.moneyMax / 25, 100]])),
+          },
+          1,
+          16,
+        );
+        data.servers.push(serverAt("home", 2_080, 0, 1));
+        const plan = (target: string, share = 1, kept: number | null = 32) =>
+          planBatcher(world, data, BN1_HACKING, target, CHOICE_HOSTS, null, share, kept);
+        const whole = plan("rich");
+        const rest = plan("rich", 1 - BATCHER_NEXT_RAM_SHARE);
+        const restWithoutHome = plan("rich", 1 - BATCHER_NEXT_RAM_SHARE, null);
+        const richer = plan("richer");
+        if (whole.batcher === null || rest.batcher === null || richer.batcher === null) throw new Error("no plan");
+        const nextGb = whole.ramGb * Math.max(BATCHER_NEXT_RAM_SHARE, 1 - whole.peakRamGb / whole.ramGb);
+        const weakenMs = operationTimeMs("weaken1", RICHER_ONE, PLAYER_100);
+        const untilMs =
+          preparationTimeMs(RICHER_ONE, PLAYER_100, { money, security: 3 * RICHER_ONE.minDifficulty }, nextGb) +
+          weakenMs;
+        const afterMs = Math.max(0, BATCHER_NEXT_HORIZON_MS - untilMs);
+        const gainLess = (lost: number) => (richer.incomePerSecond - whole.incomePerSecond) * afterMs - lost * untilMs;
+        const chosen = chooseBatcher(world, data, BN1_HACKING, CHOICE_HOSTS, whole.batcher, "rich", 32);
+        if (chosen.batcher === null) throw new Error(chosen.why);
+        return {
+          gain: gainLess(whole.incomePerSecond - rest.incomePerSecond),
+          gainLostWithoutHome: gainLess(
+            whole.incomePerSecond - (restWithoutHome.batcher === null ? 0 : restWithoutHome.incomePerSecond),
+          ),
+          next: chosen.batcher.config.next?.target,
+        };
+      };
+      const shapes = Array.from({ length: 30 }, (_, halvings) => shapeAt(RICHER_ONE.moneyMax / 2 ** halvings));
+      for (const shape of shapes) expect(shape.next === "richer").toBe(shape.gain > 0);
+      // Some rungs go each way, and on one at least the loss reckoned without home's RAM would refuse the next.
+      expect(shapes.some((shape) => shape.next === "richer")).toBe(true);
+      expect(shapes.some((shape) => shape.next === undefined)).toBe(true);
+      expect(shapes.some((shape) => shape.gain > 0 && shape.gainLostWithoutHome <= 0)).toBe(true);
+    });
 
     test("RAM-bound: a next that earns too late to make up what the batches lose isn't sent; one sooner is", () => {
       expect(ceilingOf(FAR)).toBeGreaterThan(ceilingOf(RICHER_ONE));

@@ -115,10 +115,11 @@ test("a round never takes the hosts' use past 80% of their RAM, nor home's kept 
   expect(capped.placed).toEqual([{ host: "a", threads: 175 }]);
   // Already at 80%: nothing.
   expect(shareRound([host("a", 1_000, 800)], 0, 8)).toEqual({ placed: [], roomGb: 0 });
-  // Home keeps its RAM for the Agent: 1000 - 500 kept = 500, 125 threads, under the cap's 800.
+  // Home among the batches' hosts keeps its RAM for the Agent: 1000 - 500 kept = 500 free, and the cap counts its RAM
+  // less what it keeps too (#340's review): 80% of 500 = 400, 100 threads.
   expect(shareRound([host("home", 1_000, 0)], 0, 500)).toEqual({
-    placed: [{ host: "home", threads: 125 }],
-    roomGb: 500,
+    placed: [{ host: "home", threads: 100 }],
+    roomGb: 400,
   });
   // Any other host keeps nothing back: the cap binds.
   expect(shareRound([host("pserv-0", 1_000, 0)], 0, 500).placed).toEqual([{ host: "pserv-0", threads: 200 }]);

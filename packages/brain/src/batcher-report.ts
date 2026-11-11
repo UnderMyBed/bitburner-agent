@@ -12,7 +12,8 @@
 // desyncs stay a failure; their cause is #315). A batcher stuck on poor targets (#275, the best rooted one 100× more
 // on the hosts' RAM) is a warning for an hour, and a failure for 2 hours in a cycle. Home among its hosts (#340): its
 // RAM in the batches while batching, and `batches left home idle`, a failure, for over half of what home may give
-// (its RAM beyond what it keeps) free for 10 minutes while batching, with batches trimmed or short of RAM meanwhile.
+// (its RAM beyond what it keeps) free for 10 minutes while batching, with the plan sent held to the RAM throughout or
+// batches trimmed or short of RAM meanwhile.
 import {
   BATCH_RAM_WAIT_MS,
   type BatcherHealth,
@@ -91,59 +92,81 @@ const HOME_IDLE_GAP_MS = 10_000;
 
 const gigabytes = (ram: number) => `${Math.round(ram).toLocaleString("en-US")} GB`;
 
+/** A health's `home` (#340), or null where it has none, or one with a figure not a number of 0 or more. */
+function homeOf(health: BatcherHealth): NonNullable<BatcherHealth["home"]> | null {
+  const home = health.home as Record<string, unknown> | null | undefined;
+  if (typeof home !== "object" || home === null) return null;
+  const amount = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  return [home.gb, home.keptGb, home.freeGb, home.batchesGb].every(amount)
+    ? (home as unknown as NonNullable<BatcherHealth["home"]>)
+    : null;
+}
+
 /**
- * Home among the batcher's hosts (#340), from its health's `home` (no line while it never is): what home may give the
- * batches (its RAM beyond what it keeps for the Agent), and what they held there on average and at most while
- * batching. And each stretch of `HOME_BATCHES_IDLE_AFTER_MS` or more batching with over
- * `HOME_BATCHES_IDLE_FREE_FRACTION` of what home may give free while batches were trimmed or short of RAM (their counts
- * rose within it): `batches left home idle`, a failure each. Idle alone isn't one: a plan bounded by its target's
- * money, not the RAM (core's `batchIncomeMostPerSecond`), leaves home idle that no batch wants; with batches wanting
- * RAM, home's free RAM is the batcher not using it.
+ * Home among the batcher's hosts (#340), from its health's `home` (no line while it never is, or says it oddly): what
+ * home may give the batches (its RAM beyond what it keeps for the Agent), and what its operations held there on
+ * average and at most while batching. And each stretch of `HOME_BATCHES_IDLE_AFTER_MS` or more batching with over
+ * `HOME_BATCHES_IDLE_FREE_FRACTION` of what home may give free, while the plan sent was held to the RAM throughout
+ * (#340's review: the config's `ramBound`, core's `isPlanRamBound`: its income below what its target's money allows,
+ * so more RAM would earn more), or batches were trimmed or short of RAM (their counts rose within it):
+ * `batches left home idle`, a failure each. Either way the batches wanted RAM home had: the brain's plan sized without
+ * home, or the Agent's batcher not using it. Idle alone isn't one: a plan bounded by its target's money leaves home
+ * idle that no batch wants.
  */
 function homeLines(healths: { atMs: number; health: BatcherHealth }[], failures: string[]): string[] {
   const label = "  home among its hosts (#340)";
-  const onHome = healths.filter(({ health }) => health.home != null);
+  const onHome = healths.flatMap(({ atMs, health }) => {
+    const home = homeOf(health);
+    return home === null ? [] : [{ atMs, health, home }];
+  });
   // Never a host (its switch off, home within what it keeps, or an older batcher): nothing, as before #340.
   if (onHome.length === 0) return [];
   const batching = onHome.filter(({ health }) => health.state === "batching");
-  const last = (onHome.at(-1) as { health: BatcherHealth }).health.home as NonNullable<BatcherHealth["home"]>;
+  const last = (onHome.at(-1) as { home: NonNullable<BatcherHealth["home"]> }).home;
   const mayGiveGb = Math.max(0, last.gb - last.keptGb);
-  const average = batching.reduce((sum, { health }) => sum + (health.home?.batchesGb ?? 0), 0) / (batching.length || 1);
-  const most = Math.max(0, ...batching.map(({ health }) => health.home?.batchesGb ?? 0));
+  const average = batching.reduce((sum, { home }) => sum + home.batchesGb, 0) / (batching.length || 1);
+  const most = Math.max(0, ...batching.map(({ home }) => home.batchesGb));
   const percent = mayGiveGb > 0 ? ` (${Math.round((average / mayGiveGb) * 100)}% of it)` : "";
   const lines = [
     `${label}: ${gigabytes(mayGiveGb)} it may give the batches, beyond the ${gigabytes(last.keptGb)} it keeps; ` +
       (batching.length === 0
         ? "never batching on it in the window"
-        : `the batches held ${gigabytes(average)} there on average while batching${percent}, at most ${gigabytes(most)}`),
+        : `its operations held ${gigabytes(average)} there on average while batching${percent}, at most ` +
+          gigabytes(most)),
   ];
-  // Stretches batching with over the fraction of what home may give free, and the batches' trimmed and short counts'
-  // rises within each, a run at a time.
+  // Stretches batching with over the fraction of what home may give free: whether the plan sent was held to the RAM at
+  // every look, and the batches' trimmed and short counts' rises within each, a run at a time.
   let from: { atMs: number; health: BatcherHealth } | null = null;
   let to: { atMs: number; health: BatcherHealth } | null = null;
   let wanted = 0;
+  let ramBound = true;
   let stretchMayGiveGb = 0;
   const close = () => {
-    if (from !== null && to !== null && to.atMs - from.atMs >= HOME_BATCHES_IDLE_AFTER_MS && wanted > 0) {
+    if (from !== null && to !== null && to.atMs - from.atMs >= HOME_BATCHES_IDLE_AFTER_MS && (wanted > 0 || ramBound)) {
+      const why = [
+        ...(ramBound ? ["the plan sent held to the RAM"] : []),
+        ...(wanted > 0 ? [`${wanted} batch${wanted === 1 ? "" : "es"} trimmed or short of RAM`] : []),
+      ].join(", and ");
       const line =
         `batches left home idle from ${formatIsoTime(from.atMs)} to ${formatIsoTime(to.atMs)} ` +
         `(${formatDuration(to.atMs - from.atMs)}): batching, over half of the ${gigabytes(stretchMayGiveGb)} home may ` +
-        `give free, while ${wanted} batch${wanted === 1 ? " was" : "es were"} trimmed or short of RAM`;
+        `give free, with ${why}`;
       lines.push(`    ${line}`);
       failures.push(line);
     }
     from = null;
     to = null;
     wanted = 0;
+    ramBound = true;
   };
   const wantedOf = (health: BatcherHealth) => (health.batchesTrimmed ?? 0) + health.batchesShort;
   for (const point of healths) {
     const { atMs, health } = point;
-    const home = health.home;
-    const homeMayGiveGb = home == null ? 0 : Math.max(0, home.gb - home.keptGb);
+    const home = homeOf(health);
+    const homeMayGiveGb = home === null ? 0 : Math.max(0, home.gb - home.keptGb);
     const idle =
       health.state === "batching" &&
-      home != null &&
+      home !== null &&
       homeMayGiveGb > 0 &&
       home.freeGb > HOME_BATCHES_IDLE_FREE_FRACTION * homeMayGiveGb;
     if (!idle || (to !== null && atMs - to.atMs > HOME_IDLE_GAP_MS)) close();
@@ -151,6 +174,7 @@ function homeLines(healths: { atMs: number; health: BatcherHealth }[], failures:
     if (to !== null && to.health.runName === health.runName) {
       wanted += Math.max(0, wantedOf(health) - wantedOf(to.health));
     }
+    ramBound &&= home?.ramBound === true;
     from ??= point;
     to = point;
     stretchMayGiveGb = homeMayGiveGb;
@@ -158,7 +182,8 @@ function homeLines(healths: { atMs: number; health: BatcherHealth }[], failures:
   close();
   if (lines.length === 1) {
     lines.push(
-      "    batches left home idle (over half free, batches trimmed or short meanwhile, for 10 minutes): never",
+      "    batches left home idle (over half free, the plan held to the RAM or batches trimmed or short, for 10 " +
+        "minutes): never",
     );
   }
   return lines;

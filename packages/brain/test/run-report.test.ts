@@ -19,6 +19,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AugmentationTimeline } from "../src/augmentation-report.ts";
 import { writeAugmentationsEnabled } from "../src/augmentations.ts";
+import { BATCHER_ON_HOME_SETTING } from "../src/batcher.ts";
 import { STORE_FILE_NAME } from "../src/config.ts";
 import { BitNodeCycles } from "../src/cycle-report.ts";
 import { INCOME_STALLED_AFTER_MS } from "../src/dashboard/alerts.ts";
@@ -4375,6 +4376,8 @@ describe("a batcher stuck on a poor target (#275)", () => {
   }
 
   test("phantasy for an hour, then n00dles for over 2 after the install: a warning, then the cycle's failure", () => {
+    // Judged on the hack loop's hosts' RAM alone (`batcher.home` off): home's 8 TB isn't the batcher's here (#340).
+    store.setSetting(BATCHER_ON_HOME_SETTING, "false");
     stuckRun();
     const { text, failures, warnings } = runReport(store, stuckWindow);
     const stuck = (lines: string[]) => lines.filter((line) => line.startsWith("batcher stuck on a poor target: "));
@@ -4401,6 +4404,16 @@ describe("a batcher stuck on a poor target (#275)", () => {
     // In section 6, under its line.
     expect(text).toContain(`\n    ${warning}\n    ${failure}\n`);
     expect(text).toContain("\nVerdict: FAIL\n");
+  });
+
+  test("home among the batcher's hosts (#340's review): its 8 TB beyond what it keeps make n00dles poor from the install", () => {
+    stuckRun();
+    const { failures } = runReport(store, stuckWindow);
+    const failure = failures.find((line) => line.startsWith("batcher stuck on a poor target: ")) ?? "";
+    // From the install's first look, not 5 minutes on when the cloud servers came: home's RAM was the batcher's.
+    expect(failure).toContain(
+      `in 1 stretch; the longest, n00dles from ${at(INSTALL_MS)} to ${at(END_MS)} (2 h 10 min on it); `,
+    );
   });
 
   test("batching the best throughout: none", () => {

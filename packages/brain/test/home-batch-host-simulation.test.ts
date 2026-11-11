@@ -7,9 +7,11 @@
 // multipliers (cautious: a slower level reaches the richer targets, whose batches want the RAM, later). Each seed runs
 // twice: with home among the batcher's hosts, beyond what it keeps (`homeKeptGbOf`), and without
 // (`BATCHER_ON_HOME_SETTING` off: main's before #340). Each prints what each arm earned, and when the arm with home had
-// earned the hour's money of the arm without. CI runs seed 1; `HOME_BATCH_SEEDS` (`1,2,3`, say) runs others, and
-// `HOME_BATCH_MINUTES` another length.
-import type { FastSnapshotData, MediumSnapshotData } from "@bitburner-agent/core";
+// earned the hour's money of the arm without, and beside the money (#340's review: faction work is on by default, and
+// in the arm without home, home shares) each arm's share bonus on average over its fast snapshots and the reputation
+// its factions gained (from 0, the last slow snapshot's). CI runs seed 1; `HOME_BATCH_SEEDS` (`1,2,3`, say) runs
+// others, and `HOME_BATCH_MINUTES` another length.
+import type { FastSnapshotData, MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { BATCHER_ON_HOME_SETTING } from "../src/batcher.ts";
 import { runReport } from "../src/run-report.ts";
@@ -64,6 +66,10 @@ async function run(seed: number, onHome: boolean) {
   let batchingLooks = 0;
   let homeBatchesGb = 0;
   let homeBatchableGb = 0;
+  // The share bonus at each fast snapshot (x1 with none), and how many asked to share.
+  let fastLooks = 0;
+  let bonusSum = 0;
+  let askedLooks = 0;
   fresh.brain.channel.subscribe((event) => {
     if (event.type !== "snapshotReceived") return;
     if (event.snapshot.tier === "medium") {
@@ -74,6 +80,9 @@ async function run(seed: number, onHome: boolean) {
       samples.push({ atMs: event.atMs - startMs, earned });
     } else if (event.snapshot.tier === "fast") {
       const health = (event.snapshot.data as FastSnapshotData).batcher;
+      fastLooks += 1;
+      bonusSum += health?.sharing?.bonus ?? 1;
+      if (health?.sharing?.wanted === true) askedLooks += 1;
       if (health?.state !== "batching") return;
       batchingLooks += 1;
       homeBatchesGb += health.home?.batchesGb ?? 0;
@@ -83,7 +92,12 @@ async function run(seed: number, onHome: boolean) {
   await game.run(RUN_MS);
   const health = fresh.latest<FastSnapshotData>("fast")?.batcher ?? null;
   const report = runReport(data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() });
+  const joined = fresh.latest<SlowSnapshotData>("slow")?.factions?.state?.joined ?? [];
   return {
+    shareBonus: fastLooks === 0 ? 1 : bonusSum / fastLooks,
+    askedShare: fastLooks === 0 ? 0 : askedLooks / fastLooks,
+    reputation: joined.reduce((sum, faction) => sum + faction.reputation, 0),
+    factions: joined.filter((faction) => faction.reputation > 0).map((faction) => faction.name),
     earned,
     samples,
     level: (fresh.medium()?.player as { skills?: { hacking?: number } } | undefined)?.skills?.hacking ?? 0,
@@ -114,6 +128,16 @@ test.each(SEEDS)(
         `${reachedAtMs === null ? "never" : `${(reachedAtMs / MINUTE).toFixed(1)} min`}; home's RAM in the batches ` +
         `${Math.round(withHome.homeBatchesGb)} GB on average, of ${Math.round(withHome.homeBatchableGb)} GB it may give`,
     );
+    for (const [name, arm] of [
+      ["without home", without],
+      ["with home", withHome],
+    ] as const) {
+      console.log(
+        `seed ${seed}, ${name}: the share x${arm.shareBonus.toFixed(3)} on average (asked in ` +
+          `${Math.round(arm.askedShare * 100)}% of fast snapshots); reputation ` +
+          `${Math.round(arm.reputation).toLocaleString("en-US")} (${arm.factions.join(", ") || "none"})`,
+      );
+    }
     const homeLine = withHome.report.text.split("\n").find((line) => line.includes("home among its hosts (#340)"));
     console.log(homeLine);
     // Home among the hosts only with it on, beyond what it keeps for the Agent (no Singularity: 32 GB).

@@ -240,6 +240,50 @@ test("the Agent converges on what the brain says: only the named hosts, a new ta
   expect((await loop.hostsOf()).length).toBe(hosts.length - 1);
 });
 
+test("levelling sent (#340's review): this deployment's batch operations stop on home and the hosts; never otherwise", async () => {
+  // A brain with no controller: the test sets the desired state. This deployment's batch-weaken.js on home and on
+  // joesguns, landing an hour on, as the batcher's waves in flight are when levelling takes its hosts.
+  const loop = await freshStart({
+    withDesiredState: false,
+    beforeAgent: (fresh) => fresh.simulation.diagnostics.setHomeRam(64),
+  });
+  const { game, brain, simulation } = loop;
+  const weakenFile = deployedFilePath(loop.deploymentId, "batch-weaken.js");
+  const landAt = (await simulation.diagnostics.clock()).enginePerformanceNow + 60 * 60_000;
+  await ownerRunsOnHome(
+    { simulation, game },
+    `export async function main(ns) { ns.nuke("joesguns"); ns.scp("${weakenFile}", "joesguns", "home"); }`,
+  );
+  for (const host of ["home", "joesguns"]) {
+    const started = await simulation.run(host, weakenFile, { threads: 2, args: ["joesguns", landAt, 1, `w.${host}`] });
+    expect(started.error).toBeUndefined();
+  }
+  await game.run(1_000);
+  const operations = async () =>
+    (await Promise.all(["home", "joesguns"].map((host) => simulation.ps(host))))
+      .flat()
+      .filter((process) => process.filename === weakenFile)
+      .map((process) => process.args[3]);
+  expect((await operations()).sort()).toEqual(["w.home", "w.joesguns"]);
+  const desire = (hackLoop: DesiredState["hackLoop"]) => brain.channel.setDesiredState({ hackLoop, intents: [] });
+  // The hack loop, and off: they go on.
+  desire({ enabled: true, target: "n00dles", hosts: ["n00dles", "foodnstuff"] });
+  await game.run(2 * SNAPSHOT_ROUND_MS);
+  desire({ enabled: false, target: null, hosts: [] });
+  await game.run(2 * SNAPSHOT_ROUND_MS);
+  expect((await operations()).sort()).toEqual(["w.home", "w.joesguns"]);
+  // Levelling: both stopped within a convergence, the level loop on the hosts.
+  desire({
+    enabled: true,
+    target: "joesguns",
+    hosts: ["n00dles", "foodnstuff"],
+    levelling: { homeKeptGb: 32, operation: "weaken" },
+  });
+  await game.run(2 * SNAPSHOT_ROUND_MS);
+  expect(await operations()).toEqual([]);
+  expect((await loop.loopsRunning()).map((each) => each.hostname).sort()).toEqual(["foodnstuff", "n00dles"]);
+});
+
 test("each host its own target (#184): some earn, some prepare the next; a loop against another target goes, the owner's stays", async () => {
   const loop = await freshStart({ withDesiredState: false, beforeAgent: ownerScriptOnFoodnstuff });
   const { simulation, game, brain } = loop;

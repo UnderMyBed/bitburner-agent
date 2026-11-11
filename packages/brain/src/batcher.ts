@@ -19,6 +19,7 @@ import {
   type HackingTarget,
   hackChance,
   hackSharePerThread,
+  isPlanRamBound,
   isTargetPrepared,
   type MediumSnapshotData,
   operationTimeMs,
@@ -231,7 +232,11 @@ export function planBatcher(
         hosts: hostsRam.map(([host]) => host),
         hackShare: plan.hackShare,
         spacingMs: plan.spacingMs,
-        ...(homeKept === null ? {} : { homeKeptGb: homeKept }),
+        // With home among them, whether the plan is held to the RAM (#340's review): the run report judges home idle
+        // by it.
+        ...(homeKept === null
+          ? {}
+          : { homeKeptGb: homeKept, ramBound: isPlanRamBound(figures, player, plan.hackShare, plan.spacingMs) }),
       },
     },
   };

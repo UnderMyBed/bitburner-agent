@@ -5,7 +5,8 @@
 // there (another deployment's, one whose script, target or hack threads aren't this host's, on a server that isn't a
 // host, or all of them when off), and starts this deployment's loop on each host where it isn't running, with the
 // threads the free RAM allows, and the hack threads capped at those; one running beside free RAM that holds another
-// thread is started again at full size (#211). It never touches any other script, and uses only RAM left free.
+// thread is started again at full size (#211). It never touches any other script but levelling's stop below, and uses
+// only RAM left free.
 // - Levelling mode (#336): the level loop (`level-loop.js`) or the grow loop (`level-grow.js`), the operation the
 //   brain sends, in the hack loop's place on each host, and on home, where our loops never run otherwise
 //   (core's `hostLoopOf`), only beyond the RAM the brain says home keeps for the Agent and its workers: home's loop is
@@ -13,7 +14,9 @@
 //   whatever runs as it starts; once other scripts' end frees as much again, it's started again at full size
 //   (`restartsAtFullSize`). It holds home for as long as it runs, where the share threads' 10 s rounds give it back.
 //   Neither loop is a bundle (#339): this worker writes the one sent to its deployment's folder on home first (core's
-//   `loopSourceOf`), so outside levelling the deploy, and all it does, is the one before levelling.
+//   `loopSourceOf`), so outside levelling the deploy, and all it does, is the one before levelling. Levelling sent, it
+//   also stops this deployment's batch operations on every server (#340's review): the batcher is stopped then, and its
+//   waves in flight would hold their RAM for up to a weaken at 3 times a target's minimum security.
 // RAM: `scan` 0.2 + `hasRootAccess` 0.05 + `ps` 0.2 + `kill` 0.5 + `scp` 0.6 + `exec` 1.3 + `getScriptRam` 0.1 +
 // `getServerMaxRam` and `getServerUsedRam` 0.05 each, `read` and `write` none (RamCostGenerator.ts:621-625;
 // ram-budget.json).
@@ -24,6 +27,7 @@ import {
   hackLoopsByHost,
   hostLoopOf,
   isHackLoopFile,
+  isOwnBatchOperation,
   keptGbOf,
   loopScriptNameOf,
   loopSourceOf,
@@ -53,6 +57,9 @@ export function main(ns: NS): void {
   if (anyLoop !== undefined && source !== null && ns.read(fileOf(anyLoop)) !== source) {
     ns.write(fileOf(anyLoop), source, "w");
   }
+  // Levelling mode (#340's review): this deployment's batch operations still in flight are stopped on every server, so
+  // their RAM is the level loop's at once (core's `isOwnBatchOperation`); never otherwise.
+  const levelling = anyLoop?.levelling !== undefined;
   if (anyLoop !== undefined && ns.getScriptRam(fileOf(anyLoop), "home") === 0) {
     // Stopping still goes ahead: only starting needs the script.
     report.problem = `${fileOf(anyLoop)} isn't on home`;
@@ -76,6 +83,10 @@ export function main(ns: NS): void {
     let hackThreads = 0;
     const runningPids: number[] = [];
     for (const process of ns.ps(hostname)) {
+      if (levelling && isOwnBatchOperation(process.filename, ownDeploymentId)) {
+        ns.kill(process.pid);
+        continue;
+      }
       if (!isHackLoopFile(process.filename)) continue;
       const wanted = loopArguments(process.threads);
       if (

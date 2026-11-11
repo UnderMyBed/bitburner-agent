@@ -27,6 +27,7 @@ import {
 } from "./augmentation-report.ts";
 import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, readAugmentationsEnabled } from "./augmentations.ts";
 import { BackdoorTimeline } from "./backdoors.ts";
+import { readBatcherOnHome } from "./batcher.ts";
 import { batcherSection, whoHacked } from "./batcher-report.ts";
 import {
   BITNODE_END_EVENT_KINDS,
@@ -693,7 +694,8 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     let snapshotCount = 0;
     // The player's servers first, from the static and slow snapshots, so the medium ones can be read in one pass.
     const playersServers = new Set(["home"]);
-    const hacking = new HackingFold(playersServers);
+    // Home among the batcher's hosts (#340's review), as its switch stands now: its RAM beyond what it keeps is theirs.
+    const hacking = new HackingFold(playersServers, { homeOn: readBatcherOnHome(store) });
     // The servers' fixed figures for the hacking ceilings, as of the window's start: the Agent sends them once (#196).
     const staticBefore = store.latestSnapshotBefore({ ...window, tier: "static", beforeMs: window.sinceMs });
     const weakenTimes = new WeakenTimes();

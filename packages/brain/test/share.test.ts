@@ -27,6 +27,7 @@ import { DesiredStateController } from "../src/desired-state.ts";
 import { bestWorkRate, FactionRule, WORK_TYPE_SWITCH_GAIN } from "../src/factions.ts";
 import {
   factionWorkGoingOn,
+  homeBatchesWhileSharing,
   homeKeptGbOf,
   readShareEnabled,
   SHARE_ENABLED_SETTING,
@@ -354,6 +355,87 @@ test("home among the batcher's hosts (#340): the share keeps on home what the ba
   expect(kept).toBeGreaterThan(SHARE_HOME_KEPT_GB);
   expect(config.homeKeptGb).toBe(kept);
   expect(config.sharing?.homeKeptGb).toBe(kept);
+});
+
+describe("home's batches against its share while sharing is asked (#340's review, a placeholder)", () => {
+  test("home batches only if the batches' income gains more with it, relatively, than the share's bonus on it", () => {
+    const on = (withHome: number, withoutHome: number, homeShareGb = 4_000) =>
+      homeBatchesWhileSharing({
+        withHomeIncomePerSecond: withHome,
+        withoutHomeIncomePerSecond: withoutHome,
+        homeShareGb,
+        homeCores: 1,
+        intelligence: 0,
+      });
+    // 1,000 threads: 1 + ln(1,001)/25, a gain of 0.2763.
+    const shareGain = Math.log(1_001) / 25;
+    expect(on(1.27, 1).shareGain).toBeCloseTo(shareGain, 12);
+    expect(on(1.28, 1)).toMatchObject({ batches: true });
+    expect(on(1.27, 1)).toMatchObject({ batches: false });
+    expect(on(1.28, 1).incomeGain).toBeCloseTo(0.28, 12);
+    // No income without home: home batches. None either way: it shares.
+    expect(on(1, 0)).toMatchObject({ batches: true, incomeGain: Number.POSITIVE_INFINITY });
+    expect(on(0, 0)).toMatchObject({ batches: false });
+    // Home's cores and the player's intelligence raise the share's side.
+    const cored = homeBatchesWhileSharing({
+      withHomeIncomePerSecond: 1.28,
+      withoutHomeIncomePerSecond: 1,
+      homeShareGb: 4_000,
+      homeCores: 8,
+      intelligence: 0,
+    });
+    expect(cored.batches).toBe(false);
+  });
+
+  /** The controller with faction work going on (or not), the hosts' RAM and home's as given; what it sends and logs. */
+  function sentWith(hostsGb: number, homeGb: number, working: boolean) {
+    const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    const log: string[] = [];
+    const controller = new DesiredStateController({ channel, store, log: (line) => log.push(line) });
+    const agent = connectedAgent(channel);
+    agent.send("static", network);
+    agent.send("slow", slowData(1));
+    const data = medium(50, { n00dles: true, foodnstuff: true }, [], homeGb);
+    data.servers = data.servers.map((server) =>
+      server.hostname === "foodnstuff" ? { ...server, maxRam: hostsGb } : server,
+    );
+    if (working) {
+      expect(controller.setWork({ faction: "CyberSec", workType: "hacking" })).toEqual({ ok: true });
+      agent.send("fast", fast({ converged: true, problem: null, backend: "sim" }));
+    }
+    agent.send("medium", data);
+    return { config: agent.lastSent()?.batcher?.config as BatcherConfig, log };
+  }
+
+  test("run #3's late shape, 1.6 PB of hosts beside a 64 TB home on n00dles: sharing, home shares; not, it batches", () => {
+    const sharing = sentWith(25 * 65_536, 65_536, true);
+    expect(sharing.config.hosts).toEqual(["foodnstuff", "n00dles"]);
+    expect(sharing.config).not.toHaveProperty("homeKeptGb");
+    expect(sharing.config.sharing).toMatchObject({ homeKeptGb: SHARE_HOME_KEPT_GB });
+    expect(sharing.log).toContain(
+      "batcher: batches n00dles, sharing its spare RAM, home sharing rather than batching (#340's placeholder)",
+    );
+    expect(sentWith(25 * 65_536, 65_536, false).config.hosts).toEqual(["foodnstuff", "n00dles", "home"]);
+  });
+
+  test("a little more income than nothing, less than the share on home's RAM: home shares (1.6 TB of hosts, 96 GB home)", () => {
+    // The plan held to the hosts' RAM: home's 60 GB beyond what it keeps and the batcher's budget add about 4%; its 15
+    // share threads, 1 + ln(16)/25, 11%.
+    const sharing = sentWith(1_600, 96, true);
+    expect(sharing.config.hosts).toEqual(["foodnstuff", "n00dles"]);
+    expect(sentWith(1_600, 96, false).config).toMatchObject({
+      hosts: ["foodnstuff", "n00dles", "home"],
+      ramBound: true,
+    });
+  });
+
+  test("after an install's shape, 32 GB of hosts beside a 4 TB home: home batches though sharing is asked", () => {
+    const sharing = sentWith(16, 4_096, true);
+    expect(sharing.config).toMatchObject({ hosts: ["foodnstuff", "n00dles", "home"], homeKeptGb: SHARE_HOME_KEPT_GB });
+    expect(sharing.config.sharing).toBeDefined();
+    expect(sharing.log.some((line) => line.includes("home sharing rather than batching"))).toBe(false);
+  });
 });
 
 describe("the run report's lines", () => {

@@ -158,6 +158,8 @@ export {
   isBackInStep,
   isBatcherFile,
   isOutsideBounds,
+  isOwnBatchOperation,
+  isPlanRamBound,
   isTargetPrepared,
   LANDING_LOST_AFTER_MS,
   type LandingRecord,

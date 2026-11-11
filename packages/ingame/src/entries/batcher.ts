@@ -21,8 +21,9 @@
 // - **The next target (#206):** the config's `next`, prepared the same way on at most its RAM, beside the batches.
 // - **Home among its hosts (#340):** home's free RAM less the config's `homeKeptGb` (core's `hostKeptGb`), the Agent's
 //   room kept free beside all that runs there, as the share keeps it (#242), so no operation takes it. `placeThreads`
-//   fills the smaller hosts first, so home, the largest after an install, takes what they leave. Its health's `home`
-//   says home's RAM, what it keeps, its free RAM beyond that and its operations' there.
+//   puts each operation whole on the host with the least free RAM that holds it, and splits one that fits none across
+//   the hosts with the most, largest first: home, the largest after an install. Its health's `home` says home's RAM,
+//   what it keeps, its free RAM beyond that, its operations' there and whether the plan sent was held to the RAM.
 // - **Batching:** a batch's hack lands every spacing, its weaken, grow and weaken δ apart after it. Each operation is
 //   started just in time, its hold before it lands (core's `batchOrders`), on the hosts' free RAM (`placeThreads`),
 //   and lands itself (../workers/batch-operation.ts). A batch's threads are planned when its first weaken goes out,
@@ -1263,6 +1264,9 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
         usedGb: ns.getServerUsedRam(host),
         batches: hosts.includes(host),
       }));
+    // What home keeps from the share: among its hosts, the config's figure, the batches' own (#340's review: one
+    // figure, not two that could drift); beside them, sharing's.
+    const homeKeptGb = hosts.includes("home") ? keptGbOn("home") : sharing.homeKeptGb;
     let reserveGb = sharing.reserveGb;
     if (onHosts) {
       // Never the RAM the batches will hold over its threads' time and release (#232): those planned, and those due
@@ -1273,7 +1277,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       const roomBesideGb = Math.max(0, capacityGb() - heldThen);
       // Free as `shareRound` counts it (#340): home, among them, less what it keeps, or the round's room would be the
       // room beside the batches less home's kept RAM a second time.
-      const keptGb = (host: string) => (host === "home" ? sharing.homeKeptGb : 0);
+      const keptGb = (host: string) => (host === "home" ? homeKeptGb : 0);
       const hostsFreeGb = use.reduce(
         (total, each) => total + (each.batches ? Math.max(0, each.maxGb - each.usedGb - keptGb(each.host)) : 0),
         0,
@@ -1281,7 +1285,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       reserveGb = Math.max(sharing.reserveGb, hostsFreeGb - roomBesideGb);
     }
     // All the room, for the bonus possible; a round takes half of what the share may hold there (#242).
-    const roundOnAllRoom = shareRound(use, reserveGb, sharing.homeKeptGb);
+    const roundOnAllRoom = shareRound(use, reserveGb, homeKeptGb);
     const usedHosts = use.map((each) => each.host);
     const heldThreads = sharingParts.reduce((sum, part) => sum + (usedHosts.includes(part.host) ? part.threads : 0), 0);
     const roomThreads = roundOnAllRoom.placed.reduce((sum, part) => sum + part.threads, 0);
@@ -1290,7 +1294,7 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
       (part) => usedHosts.includes(part.host) && part.endsAt <= now + SHARE_LOOK_AGAIN_MS,
     );
     const mostThreads = shareRoundThreads(heldThreads, roomThreads, halfEnding);
-    const round = shareRound(use, reserveGb, sharing.homeKeptGb, mostThreads);
+    const round = shareRound(use, reserveGb, homeKeptGb, mostThreads);
     sharingRoomGb = roundOnAllRoom.roomGb;
     const coresOf = (host: string) => sharing.cores[host] ?? 1;
     sharingPossibleBonus = shareBonus(
@@ -1359,8 +1363,8 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
   };
 
   /**
-   * Home's RAM in its health (#340), with home among its hosts: all of it, what it keeps, free beyond that, and its
-   * operations' parts there; undefined (absent) otherwise.
+   * Home's RAM in its health (#340), with home among its hosts: all of it, what it keeps, free beyond that, its
+   * operations' parts there (batches and preparation waves), and the config's `ramBound`; undefined (absent) otherwise.
    */
   const homeHealth = (): BatcherHomeRam | undefined => {
     if (!hosts.includes("home")) return undefined;
@@ -1368,7 +1372,14 @@ async function runBatcher(ns: NS, readConfig: () => ReturnType<typeof parseBatch
     const keptGb = keptGbOn("home");
     let batchesGb = 0;
     for (const part of parts.values()) if (part.host === "home") batchesGb += part.gb;
-    return { gb, keptGb, freeGb: Math.max(0, gb - ns.getServerUsedRam("home") - keptGb), batchesGb };
+    const { ramBound } = current();
+    return {
+      gb,
+      keptGb,
+      freeGb: Math.max(0, gb - ns.getServerUsedRam("home") - keptGb),
+      batchesGb,
+      ...(ramBound === undefined ? {} : { ramBound }),
+    };
   };
 
   let lastLineAt = 0;
