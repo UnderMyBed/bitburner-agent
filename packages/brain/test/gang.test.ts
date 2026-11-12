@@ -301,6 +301,53 @@ describe("the rule", () => {
     });
   });
 
+  test("no slow snapshot (#365's review): the BitNode unknown, not another; the justice members and the faction kept, cleared in another BitNode", () => {
+    const settings = new Map<string, string>();
+    const store = {
+      getSetting: (key: string) => settings.get(key) ?? null,
+      setSetting: (key: string, value: string) => settings.set(key, value),
+    } as unknown as TelemetryStore;
+    const placed = () => JSON.parse(settings.get(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null");
+    settings.set(GANG_PLACED_ON_JUSTICE_SETTING, JSON.stringify(["member-02", "member-03"]));
+    // A restarted brain: its first updates come with no snapshots (the controller's constructor, an Agent's hello).
+    const rule = new GangRule(() => {}, store);
+    expect(rule.update({ mediumData: null, slowData: null })).toEqual({ intent: null, gang: null });
+    expect(rule.view()).toMatchObject({ stage: "notManaged", line: "Gang: not managed (no slow snapshot yet)" });
+    expect(placed()).toEqual(["member-02", "member-03"]);
+    // Then the readings, in the band: the stored justice members kept there.
+    const band = withGang(
+      formed(
+        [
+          member("member-01", 300, "Plant Virus"),
+          member("member-02", 250, "Ethical Hacking"),
+          member("member-03", 200, "Ethical Hacking"),
+        ],
+        { respect: 1_000, wantedLevel: (1_000 * 0.32 + 1) / (1 - 0.32), wantedPenalty: 0.5 },
+      ),
+    );
+    const onJustice = { "member-02": "Ethical Hacking", "member-03": "Ethical Hacking" };
+    expect(rule.update({ mediumData: band, slowData: slowData(2) }).gang?.tasks).toMatchObject(onJustice);
+    // An Agent's session ends or begins (the controller's snapshots cleared): waiting, the faction and members kept.
+    expect(rule.update({ mediumData: null, slowData: null })).toEqual({ intent: null, gang: null });
+    expect(rule.view()).toMatchObject({
+      stage: "waiting",
+      line: "Gang: waiting for a slow snapshot to say the BitNode",
+    });
+    expect(rule.gangFaction()).toBe("NiteSec");
+    expect(rule.hiddenFactions()).toEqual(["NiteSec"]);
+    expect(placed()).toEqual(["member-02", "member-03"]);
+    expect(rule.update({ mediumData: band, slowData: slowData(2) }).gang?.tasks).toMatchObject(onJustice);
+    // Another BitNode, read: everything cleared, the store's too.
+    expect(rule.update({ mediumData: band, slowData: slowData(1) })).toEqual({ intent: null, gang: null });
+    expect(rule.view().line).toBe("Gang: not managed (gangs play in BN2 only for now; this is BN1)");
+    expect(rule.gangFaction()).toBeNull();
+    expect(rule.hiddenFactions()).toEqual([]);
+    expect(placed()).toEqual([]);
+    // An Agent's session there ends: not managed, as before any slow snapshot (waiting only after BN2's).
+    rule.update({ mediumData: null, slowData: null });
+    expect(rule.view()).toMatchObject({ stage: "notManaged", line: "Gang: not managed (no slow snapshot yet)" });
+  });
+
   test("in bonus time (over 2 s stored), more members to justice: the game's decay is slower a cycle", () => {
     const three = [member("member-01", 300), member("member-02", 200), member("member-03")];
     const figures = { respect: 1_000, wantedLevel: 800, wantedPenalty: 1_000 / 1_800 };
@@ -986,7 +1033,7 @@ describe("the controller (#325)", () => {
         .sentMessages()
         .filter((message) => message.type === "desiredState")
         .at(-1) as unknown as DesiredState | undefined;
-    return { controller, send, last, lines };
+    return { controller, send, last, lines, connection };
   }
   /** A slow snapshot of `bitNode` with NiteSec joined, at no reputation, as forming the gang leaves it. */
   const niteSecSlow = (bitNode: number): SlowSnapshotData => ({
@@ -1194,6 +1241,74 @@ describe("the controller (#325)", () => {
       "member-02",
       "member-03",
     ]);
+  });
+
+  /** Three members, the wanted penalty `share` above its floor at respect 1,000, on `tasks`. */
+  const justiceReading = (tasks: string[], share: number) =>
+    niteSecMedium(
+      formed(
+        [member("member-01", 300, tasks[0]), member("member-02", 250, tasks[1]), member("member-03", 200, tasks[2])],
+        { respect: 1_000, wantedLevel: (1_000 * share + 1) / (1 - share), wantedPenalty: 0.5 },
+      ),
+    );
+  /** Under the bound, over its half, member-02 and member-03 on justice: kept there only if the rule put them there. */
+  const inBand = () => justiceReading(["Plant Virus", "Ethical Hacking", "Ethical Hacking"], 0.32);
+  const ON_JUSTICE = { "member-02": "Ethical Hacking", "member-03": "Ethical Hacking" };
+
+  test("a restarted brain keeps the rule's justice members (#365's review): its updates with no snapshots leave the store's", () => {
+    store.setSetting(GANG_PLACED_ON_JUSTICE_SETTING, JSON.stringify(["member-02", "member-03"]));
+    // The constructor's update and the hello's, with no snapshot yet.
+    const { controller, send, last } = connected();
+    expect(controller.gangView().stage).toBe("notManaged");
+    expect(JSON.parse(store.getSetting(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null")).toEqual(["member-02", "member-03"]);
+    send("slow", niteSecSlow(2));
+    send("medium", inBand());
+    expect(last()?.gang?.tasks).toMatchObject(ON_JUSTICE);
+  });
+
+  test("an Agent's disconnect and reconnect in BN2 (#365's review): waiting for a slow snapshot, the justice members kept", () => {
+    const { controller, send, connection, lines } = connected();
+    send("slow", niteSecSlow(2));
+    send("medium", justiceReading(["Plant Virus", "Plant Virus", "DDoS Attacks"], 0.4));
+    expect(JSON.parse(store.getSetting(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null")).toEqual(["member-02", "member-03"]);
+    connection.close(1006, "the Agent went");
+    expect(controller.gangView()).toMatchObject({
+      stage: "waiting",
+      line: "Gang: waiting for a slow snapshot to say the BitNode",
+    });
+    expect(lines).toContain("gang: waiting for a slow snapshot to say the BitNode");
+    expect(JSON.parse(store.getSetting(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null")).toEqual(["member-02", "member-03"]);
+    // The next Agent's session, its snapshots in the band: the rule's own kept on justice.
+    const next = new MemoryConnection();
+    channel.accept(next);
+    const message = (body: Record<string, unknown>) =>
+      next.receive(encodeControlMessage({ protocolVersion: CONTROL_PROTOCOL_VERSION, ...body } as never));
+    message({
+      type: "hello",
+      token: TOKEN,
+      deploymentId: "deployment-a",
+      agentSessionId: "session-2",
+      game: { version: "3.0.1", versionNumber: 51, commit: "3162fd2", platform: "Steam" },
+    });
+    for (const [tier, data] of [
+      ["slow", niteSecSlow(2)],
+      ["medium", inBand()],
+    ] as const) {
+      message({
+        type: "snapshot",
+        agentSessionId: "session-2",
+        tier,
+        sequenceNumber: ++sequenceNumber,
+        gameTimeMs: 2_000,
+        data,
+      });
+    }
+    const sent = next
+      .sentMessages()
+      .filter((each) => each.type === "desiredState")
+      .at(-1) as unknown as DesiredState | undefined;
+    expect(sent?.gang?.tasks).toMatchObject(ON_JUSTICE);
+    expect(controller.gangView().stage).toBe("managed");
   });
 
   test("equipment (G3): bought from the money above the brain's holds, this round's purchase held on top", () => {

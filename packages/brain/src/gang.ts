@@ -490,6 +490,8 @@ export class GangRule {
   /** The silent stalls (#354), on each new medium snapshot, and the last one watched. */
   readonly #stalls = new GangStallWatch();
   #watched: unknown = null;
+  /** The BitNode the last slow snapshot said, or null before any (#365's review). */
+  #lastBitNode: number | null = null;
 
   /** `store`: where the rule's justice members are kept across a restart; none (the tests), in memory only. */
   constructor(log: (line: string) => void = () => {}, store: TelemetryStore | null = null) {
@@ -547,6 +549,23 @@ export class GangRule {
     const fresh = mediumData !== this.#watched;
     this.#watched = mediumData;
     const bitNode = bitNodeOfSlow(slowData);
+    if (bitNode === null) {
+      // No slow snapshot (#365's review): a brain just started, or an Agent's session begun or ended (the controller
+      // clears its snapshots at each). The BitNode unknown, not another: the justice members (the store's too), the
+      // members read and the gang's faction kept, so a restart or a reconnect in BN2 keeps them. No gang state sent.
+      this.#stalls.add(null);
+      const view: GangView =
+        this.#lastBitNode === GANG_BITNODE
+          ? {
+              stage: "waiting",
+              line: "Gang: waiting for a slow snapshot to say the BitNode",
+              plan: null,
+              equipment: null,
+            }
+          : { stage: "notManaged", line: "Gang: not managed (no slow snapshot yet)", plan: null, equipment: null };
+      return this.#decide(view, null, null);
+    }
+    this.#lastBitNode = bitNode;
     if (bitNode !== GANG_BITNODE) {
       this.#stalls.add(null);
       this.#faction = null;
@@ -554,9 +573,13 @@ export class GangRule {
       this.#setPlaced([]);
       // No gang here (G4): the next one's members are no deaths of this one's.
       this.#lastMembers = null;
-      const why = bitNode === null ? "no slow snapshot yet" : `gangs play in BN2 only for now; this is BN${bitNode}`;
       return this.#decide(
-        { stage: "notManaged", line: `Gang: not managed (${why})`, plan: null, equipment: null },
+        {
+          stage: "notManaged",
+          line: `Gang: not managed (gangs play in BN2 only for now; this is BN${bitNode})`,
+          plan: null,
+          equipment: null,
+        },
         null,
         null,
       );
