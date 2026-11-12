@@ -495,7 +495,15 @@ export class WorldDaemonFold {
         )
       : [];
     // (d) (#380): the ladder and set the brain last weighed, at the income measured while batching, else the brain's.
-    const batch = batchFiguresOf(fields.batch, batching ? window.income() : undefined);
+    const resetAt = slowLast?.resetInfo?.lastNodeReset;
+    const soFarMs =
+      typeof resetAt === "number" && this.#slowGameTimeMs !== null ? Math.max(0, this.#slowGameTimeMs - resetAt) : null;
+    const batchFigures = batchFiguresOf(fields.batch, batching ? window.income() : undefined);
+    // Bounded by the hopeless bar below (#382's review), as the brain bounds it.
+    const batch =
+      batchFigures === null
+        ? null
+        : { ...batchFigures, batchingBoundSeconds: soFarMs === null ? null : soFarMs / 1000 };
     const estimates = levellingEstimates(
       levellingInputsOf(figures, required, money, factor, levels, augmentations, batch),
     );
@@ -533,9 +541,6 @@ export class WorldDaemonFold {
           `takes, and ${words[best]} (${describeEstimate(shortest)}) is shorter by more than 1.25 times at its end`,
       );
     }
-    const resetAt = slowLast?.resetInfo?.lastNodeReset;
-    const soFarMs =
-      typeof resetAt === "number" && this.#slowGameTimeMs !== null ? Math.max(0, this.#slowGameTimeMs - resetAt) : null;
     if (
       ours !== null &&
       soFarMs !== null &&

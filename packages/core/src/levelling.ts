@@ -304,6 +304,13 @@ export interface LevellingBatchOffer {
   homeThreads: number;
   perThread: LevellingRate;
   preparationMs?: number;
+  /**
+   * The longest the batching may take (#382's review), seconds: the BitNode's time so far, #336's bar for a hopeless
+   * estimate (the run report's, `world-daemon-report.ts`: the whole path to here took that long). Past it, (d)'s
+   * estimate is dominated by what it leaves out (later installs, the income's rise), so a count batching longer isn't
+   * weighed. Absent or null, no bound.
+   */
+  batchingBoundSeconds?: number | null;
 }
 
 /** (d)'s best plan (#380): its estimate, the levels to buy after the set, M, and the batching's part of the time. */
@@ -372,6 +379,8 @@ export function batchThenInstallPlan(inputs: LevellingInputs): LevellingBatchPla
     const money = offer.ladder[levels] as number;
     if (!(money > offer.money) || (levels === 0 && !setAdds)) continue;
     const batchingSeconds = (money - offer.money) / income;
+    // Past #336's hopeless bar (#382's review): this count and every later one, as the batching rises with k.
+    if (offer.batchingBoundSeconds != null && batchingSeconds > offer.batchingBoundSeconds) break;
     if (!(batchingSeconds + fixedSeconds < (best?.seconds ?? Number.POSITIVE_INFINITY))) break;
     const seconds =
       batchingSeconds + afterInstallSeconds(levels, augmentations, offer, factor, inputs.required, inputs.levelMult);

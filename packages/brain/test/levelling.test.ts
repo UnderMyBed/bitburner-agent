@@ -40,6 +40,7 @@ import {
 } from "../src/augmentations.ts";
 import { BN1_HACKING } from "../src/batcher.ts";
 import { DesiredStateController, type RuleEvent } from "../src/desired-state.ts";
+import { levellingEstimateMs } from "../src/destroy-estimate.ts";
 import { HACK_LOOP_ENABLED_SETTING } from "../src/hack-loop.ts";
 import {
   describeEstimate,
@@ -209,6 +210,7 @@ function slow({
   currentNode = 1,
   neuroFluxLevel = 0,
   favor = 0,
+  lastNodeReset = -10 * 60 * MINUTE,
 }: {
   redPill?: boolean;
   faction?: string;
@@ -219,11 +221,13 @@ function slow({
   neuroFluxLevel?: number;
   /** `faction`'s favour: 0 unless given; 150 or more unlocks its donations (#380's case). */
   favor?: number;
+  /** The BitNode's start: 10 h before the game's time 0 unless given (#382's review: (d)'s batching bound). */
+  lastNodeReset?: number;
 } = {}): SlowSnapshotData {
   return {
     resetInfo: {
       lastAugReset,
-      lastNodeReset: 0,
+      lastNodeReset,
       currentNode,
       ownedAugs: {
         ...(redPill ? { [RED_PILL]: 1 } : {}),
@@ -779,6 +783,36 @@ describe("the levelling rule (#336)", () => {
     expect(events.at(-1)).toMatchObject({ from: "batch" });
   });
 
+  test("(d) (#382's review): its batching bounded by the BitNode's time so far, #336's hopeless bar: both sides", () => {
+    const measuredMs = SETTLE_MS + MINUTE + 10 * SECOND;
+    /** (d) after money's minute at $10m a second, on `ladder`, `lastNodeReset` the BitNode's start. */
+    const dAfter = (ladder: number[], lastNodeReset: number) => {
+      const levelling = rule();
+      for (let atMs = 0; atMs <= measuredMs; atMs += 10 * SECOND) {
+        levelling.update(
+          inputsAt(atMs, {
+            mult: MULT,
+            money: (atMs / 1000) * 1e7,
+            expAbove: (atMs / 1000) * 10,
+            batchOffer: { ladder, augmentations: [] },
+            levelLoop: { sent: false, homeThreads: 0 },
+            slowData: slow({ lastNodeReset }),
+          }),
+        );
+      }
+      return levelling.view().estimates?.batch ?? null;
+    };
+    // The next level at $100b: about 10,000 s of batching. Weighed 10 h into the BitNode; past the bar at its start
+    // (its time so far a couple of minutes), not weighed.
+    const far = [0, 1e6, 1e11];
+    expect(dAfter(far, -10 * 60 * MINUTE)).not.toBeNull();
+    expect(dAfter(far, 0)).toBeNull();
+    // The next levels within the bar at its start (about 2 minutes' batching): weighed.
+    const firstMoney = (measuredMs / 1000) * 1e7;
+    expect(dAfter([0, 1e6, firstMoney + 1e9], 0)).not.toBeNull();
+    expect(dAfter([0, 1e6, firstMoney + 1e10], 0)).toBeNull();
+  });
+
   test("(d) (#382's review): a first minute with no income (the target preparing) keeps (d): money waits, then (d)", () => {
     const levelling = rule();
     const measuredMs = SETTLE_MS + MINUTE + 10 * SECOND;
@@ -862,6 +896,10 @@ describe("the levelling rule (#336)", () => {
     batchFor(flat, 0, measuredMs, { incomePerSecond: 0 });
     expect(flat.mode()).toBe("money");
     expect(flat.view().estimates?.batch).toBeNull();
+    // Waiting, no choice made: the time to the destroy takes no estimate from it yet (#360).
+    expect(flat.view()).toMatchObject({ waitingForIncome: true });
+    expect(levellingEstimateMs(flat.view())).toBeNull();
+    expect(flat.view().lines.at(-1)).toBe("  money waits for (d)'s income: none measured yet (5 min at most, #382)");
     batchFor(flat, measuredMs + 10 * SECOND, LEVELLING_INCOME_WAIT_MS - 20 * SECOND, {
       incomePerSecond: 0,
       expAt: ((measuredMs + 10 * SECOND) / 1000) * 10,
@@ -873,6 +911,8 @@ describe("the levelling rule (#336)", () => {
     });
     expect(flat.mode()).toBe("level");
     expect(flat.view().estimates?.batch).toBeNull();
+    expect(flat.view().waitingForIncome).toBeUndefined();
+    expect(levellingEstimateMs(flat.view())).not.toBeNull();
     // Measured while batching, then a trickle: levelling mode, the income kept (it earns none there), so (d) still
     // weighed.
     events.length = 0;

@@ -386,11 +386,13 @@ test("BN4 A/B (#380): from The Red Pill with the level short, levelling mode aga
   // (d) never weighed.
   expect(off.chosen[0]).toMatchObject({ mode: "level", from: "money", estimates: { install: null, batch: null } });
   expect(off.chosen.every((each) => each.estimates.batch === null)).toBe(true);
-  // On: (d) at once, 1.25 times shorter than levelling mode; batching until (c), the money in hand, is no longer than
-  // (d), then the install for the level; after it, the level from the install's start.
+  // On: (d) at once, the shortest (#382's review: its batching within the BitNode's time so far, fewer levels than
+  // without the bar), 1.25 times shorter than money; batching until (c), the money in hand, is no longer than (d) and
+  // the shortest, then the install for the level; after it, the level from the install's start.
   const first = on.chosen[0] as LevellingEvent & { afterMs: number };
   expect(first).toMatchObject({ mode: "batch", from: "money", estimates: { install: null } });
-  expect(first.estimates.batch as number).toBeLessThan((first.estimates.level as number) / 1.25);
+  expect(first.estimates.batch as number).toBeLessThan(first.estimates.level as number);
+  expect((first.estimates.batch as number) * 1.25).toBeLessThan(first.estimates.money as number);
   expect(first.batch).toMatchObject({ levels: expect.any(Number), money: expect.any(Number) });
   expect(on.chosen.map((each) => each.mode).slice(0, 3)).toEqual(["batch", "install", "money"]);
   expect(on.installs.filter((each) => each.reason === "the hacking level").length).toBeGreaterThan(0);

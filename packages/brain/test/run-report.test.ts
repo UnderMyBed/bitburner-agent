@@ -3708,15 +3708,14 @@ describe("the levelling choice (#336)", () => {
   });
 
   test("(d) at a trickle (#380): levelling mode 1.25 times shorter for over 10 minutes: the report fails it", () => {
-    // $1b a second, measured by the report while batching (the brain's $10t at its choice, since fallen): ×18 would
-    // take 3 months.
+    // $1b a second, measured by the report while batching (the brain's $10t at its choice, since fallen): the next
+    // level would take 3 months of batching, past the 27 h the BitNode has taken (#336's bar, #382's review), so (d)
+    // is none, and the brain on it fails.
     batchChosen(1e9, 1e13);
     const { text, failures } = report();
-    expect(text).toMatch(/batching for the money, then an install about [\d.]+ h/);
+    expect(text).toMatch(/batching for the money, then an install none/);
     expect(failures.filter((failure) => failure.startsWith("levelling:"))).toContainEqual(
-      expect.stringMatching(
-        /^levelling: the brain on batching for the money, then an install \(about [\d.,]+ h\) for /,
-      ),
+      expect.stringMatching(/^levelling: the brain on batching for the money, then an install \(none\) for /),
     );
   });
 

@@ -309,15 +309,20 @@ export function levellingInputsOf(
             perThread: afterInstall,
             // At the set alone's level and speed: more levels only shorten it (core's `LevellingBatchOffer`).
             preparationMs: preparationMs(0, batch.augmentations),
+            batchingBoundSeconds: batch.batchingBoundSeconds ?? null,
           },
   };
 }
 
-/** (d)'s figures (#380): A6's ladder and its set (`batchOffer`), and the measured income, $/s, or null unmeasured. */
+/**
+ * (d)'s figures (#380): A6's ladder and its set (`batchOffer`), the measured income, $/s, or null unmeasured, and
+ * (#382's review) the BitNode's time so far, seconds, the batching's bound (core's `batchingBoundSeconds`), or null.
+ */
 export interface LevellingBatchFigures {
   incomePerSecond: number | null;
   ladder: readonly number[];
   augmentations: readonly string[];
+  batchingBoundSeconds?: number | null;
 }
 
 /** "about 2,873.4 h", "about 41 min", "about 1.28e+193 h" (3 figures past a million hours), "none". */
@@ -352,6 +357,12 @@ export function describeEstimates(estimates: LevellingEstimates): string {
   return LEVELLING_CANDIDATES.map(
     (candidate) => `${LEVELLING_CANDIDATE_WORDS[candidate]} ${describeEstimate(estimates[candidate])}`,
   ).join(", ");
+}
+
+/** The BitNode's game time so far, seconds (from the slow snapshot's `lastNodeReset`), or null unread. */
+export function soFarSeconds(slowData: SlowSnapshotData | null, gameTimeMs: number | null): number | null {
+  const reset = slowData?.resetInfo?.lastNodeReset;
+  return isFiniteNumber(reset) && isFiniteNumber(gameTimeMs) ? Math.max(0, gameTimeMs - reset) / 1000 : null;
 }
 
 /** Medium snapshots' experience and level, for a measured rate: a gap, an install or the clock set back restart it. */
@@ -485,6 +496,11 @@ export interface LevellingView {
   fit: { measured: number; predicted: number; factor: number } | null;
   /** The view in words, for the dashboard. */
   lines: string[];
+  /**
+   * Money waiting for (d)'s income (#382's review, `LEVELLING_INCOME_WAIT_MS`): no choice made yet, so no chosen
+   * estimate for the time to the destroy (#360). Absent, not waiting.
+   */
+  waitingForIncome?: boolean;
 }
 
 /** The levelling rule (#336), as the controller runs it. */
@@ -597,7 +613,13 @@ export class LevellingRule {
     const batch =
       batchOffer === null
         ? null
-        : { incomePerSecond: this.#income, ladder: batchOffer.ladder, augmentations: batchOffer.augmentations };
+        : {
+            incomePerSecond: this.#income,
+            ladder: batchOffer.ladder,
+            augmentations: batchOffer.augmentations,
+            // The BitNode's game time so far (#382's review): the run report's hopeless bar (#336), from the same reset.
+            batchingBoundSeconds: soFarSeconds(slowData, mediumGameTimeMs),
+          };
     const levellingInputs = levellingInputsOf(
       figures,
       required,
@@ -629,7 +651,11 @@ export class LevellingRule {
       estimates,
       target: target?.hostname ?? null,
       fit: this.#fit,
-      lines: this.#lines(estimates, target?.hostname ?? null, figures, inputs, plan),
+      lines: [
+        ...this.#lines(estimates, target?.hostname ?? null, figures, inputs, plan),
+        ...(waitsForIncome ? ["  money waits for (d)'s income: none measured yet (5 min at most, #382)"] : []),
+      ],
+      ...(waitsForIncome ? { waitingForIncome: true } : {}),
     };
     return {
       mode: this.#mode,

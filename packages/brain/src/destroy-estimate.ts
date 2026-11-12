@@ -742,8 +742,11 @@ export class DestroyEstimateRule {
   }
 }
 
-/** Levelling's chosen candidate's estimate (#336), ms, once it applies and has one; Infinity where it's never. */
+/**
+ * Levelling's chosen candidate's estimate (#336), ms, once it applies and has one; Infinity where it's never. None
+ * while money waits for (d)'s income (#382's review): the choice isn't made yet.
+ */
 export function levellingEstimateMs(view: LevellingView): number | null {
-  const seconds = view.applies ? (view.estimates?.[view.mode] ?? null) : null;
+  const seconds = view.applies && view.waitingForIncome !== true ? (view.estimates?.[view.mode] ?? null) : null;
   return seconds === null || Number.isNaN(seconds) ? null : seconds * 1000;
 }
