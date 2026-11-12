@@ -79,9 +79,10 @@
 //   installing now is chosen at once (`reason` "the gang's favour"), through the controller's gate. Every install in
 //   BN2 with the gang carries its cost (`gangCost`: the reputation lost, the favour gained, The Red Pill's estimate),
 //   the rules' too. While the plan earns no respect (training, justice, warfare), the cycle's last p decides (kept in
-//   the store, #372's review), the World Daemon's reputation stall as on main: a pause past its 10 minutes fails the
-//   report, falsely in a long justice stretch, until the plan's time to earning is computed; only in a cycle where p was never known
-//   do the rules decide there, as before: nothing banked is growing, and a hold would only stall. The A/B's baseline
+//   the store, #372's review), the World Daemon's reputation stall bounding the pause by the plan's own estimate
+//   (#374: twice the gang rule's time until its plan earns respect, and 10 minutes; core's `gangTimeToEarningMs`);
+//   only in a cycle where p was never known do the rules decide there, as before: nothing banked is growing, and a
+//   hold would only stall. The A/B's baseline
 //   (`bn2Route` "rules") keeps the count rule and G5's hold.
 //   Once the count is met (Daedalus inviting or joined), or never short (The Red Pill elsewhere), the count rule times
 //   installs as before (amended #343: until the planner's next slice, the Daedalus/Red Pill stretch), with The Red
@@ -2466,9 +2467,8 @@ export class AugmentationRule {
                 : "the planner times installs short of Daedalus's count",
           );
           // Keeping or banking with the gang (#357's (3)): installs held for The Red Pill there, the World Daemon's
-          // stall to watch (its reputation not rising), as on main, a pause to train included (#372's re-review): no
-          // computed bound exists for the plan's time to earning, so a pause past the stall's 10 minutes fails the
-          // report, falsely in a long justice stretch, until that time is computed (the issue filed for it).
+          // stall to watch (its reputation not rising), a pause to train included (#372's re-review): while the plan
+          // earns no respect, past twice the gang rule's estimate of the time until it does and 10 minutes (#374).
           if (timing.route === GANG_FORMED_ROUTE) this.#redPillHeldAtGang = true;
           const waitedFor = timing.choice === null ? [] : next.slice(0, timing.choice);
           this.#waitedFor = waitedFor;
