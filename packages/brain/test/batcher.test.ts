@@ -10,6 +10,7 @@ import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BatchShort,
+  BLADEBURNER_WORKER_RAM_GB,
   batcherIncomePerGigabyteSecond,
   batchPlan,
   batchRamGb,
@@ -254,6 +255,54 @@ describe("the controller", () => {
     store.setSetting(BATCHER_ON_HOME_SETTING, "true");
     agent.send("medium", medium(50, { n00dles: true, foodnstuff: true }, 4_096));
     expect(agent.lastSent()?.batcher?.config.hosts).toContain("home");
+  });
+
+  test("beside Bladeburner's reading worker (#377's review): its 42.6 GB kept too while the rule asks for it", () => {
+    const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    new DesiredStateController({ channel, store });
+    const agent = connectedAgent(channel);
+    agent.send("static", network);
+    agent.send("slow", slowData(6));
+    const base = medium(50, { n00dles: true, foodnstuff: true }, 4_096);
+    const combat = { strength: 100, defense: 100, dexterity: 100, agility: 100 };
+    const inDivision: MediumSnapshotData = {
+      ...base,
+      player: {
+        ...base.player,
+        skills: { ...(base.player as { skills: object }).skills, ...combat, charisma: 1 },
+        exp: { strength: 1e4, defense: 1e4, dexterity: 1e4, agility: 1e4 },
+        mults: {
+          ...MULTS,
+          strength: 1,
+          defense: 1,
+          dexterity: 1,
+          agility: 1,
+          strength_exp: 1,
+          defense_exp: 1,
+          dexterity_exp: 1,
+          agility_exp: 1,
+        },
+        money: 1e6,
+        city: "Sector-12",
+      },
+      inBladeburner: true,
+    };
+    const kept = homeKeptGbOf(singularityRamMultiplierOf(slowData(6)));
+    agent.send("medium", inDivision);
+    // In the division, home's RAM beyond what it keeps holding the worker: the worker asked for, its RAM kept from the
+    // batches beside the Agent's (the gate counts home beyond `homeKeptGbOf` alone: it stays open).
+    expect(agent.lastSent()?.bladeburner).toEqual({ joinTheFaction: false });
+    expect(agent.lastSent()?.batcher?.config.hosts).toContain("home");
+    expect(agent.lastSent()?.batcher?.config.homeKeptGb).toBeCloseTo(kept + BLADEBURNER_WORKER_RAM_GB, 9);
+    // Out of it: no worker, nothing more kept.
+    agent.send("medium", {
+      ...inDivision,
+      inBladeburner: false,
+      player: { ...inDivision.player, skills: base.player.skills },
+    });
+    expect(agent.lastSent()?.bladeburner).toBeUndefined();
+    expect(agent.lastSent()?.batcher?.config.homeKeptGb).toBe(kept);
   });
 
   test("switch on with the hack loop off: no batcher, and the dashboard says it needs the hack loop (#211)", () => {

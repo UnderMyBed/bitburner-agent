@@ -137,13 +137,14 @@ export interface LevellingFigures {
  * the target, the game's rooted servers' best by experience a thread-second at its minimum security (core's
  * `chooseLevellingTarget`: a weaken needs root only); the RAM it runs on, the hack loop's hosts (`hackLoopHosts`, the
  * batcher's), and home's beyond what it keeps (`homeKeptGbOf`, as the batcher's share threads leave it: the Agent's
- * reservation stays).
+ * reservation stays), and `homeAlsoKeptGb` more (#375: Bladeburner's reading worker while it runs).
  */
 export function levellingFiguresOf(
   staticData: StaticSnapshotData | null,
   mediumData: MediumSnapshotData | null,
   slowData: SlowSnapshotData | null,
   hacking: BitNodeHackingMultipliers,
+  homeAlsoKeptGb = 0,
 ): LevellingFigures | null {
   if (staticData === null || mediumData === null) return null;
   const player = hackingPlayerOf(mediumData.player, hacking);
@@ -176,7 +177,7 @@ export function levellingFiguresOf(
   }
   const hosts = hackLoopHosts(staticData, mediumData);
   const homeGb = mediumData.servers.find((server) => server?.hostname === "home")?.maxRam;
-  const homeKeptGb = homeKeptGbOf(singularityRamMultiplierOf(slowData));
+  const homeKeptGb = homeKeptGbOf(singularityRamMultiplierOf(slowData)) + homeAlsoKeptGb;
   const homeThreads = isFiniteNumber(homeGb) ? threadsThatFit(Math.max(0, homeGb - homeKeptGb), LEVEL_LOOP_RAM_GB) : 0;
   // The grow at the target's minimum security, whatever its money (#339's third pass): the weaken first, then a flip or
   // two at most (core's `chooseLevellingTarget`).
@@ -368,6 +369,8 @@ export interface LevellingRuleInputs {
   /** The batcher's last target and figures, whose waves land as a mode settles; null with none sent. */
   batcherTarget: { hostname: string; figures: HackingTarget } | null;
   nowMs: number | null;
+  /** More home keeps beside the Agent's reservation (#375: Bladeburner's reading worker while it runs), GB; absent, 0. */
+  homeAlsoKeptGb?: number;
 }
 
 /** The rule's plan: the mode, and levelling mode's target and home's kept RAM while it levels. */
@@ -426,7 +429,7 @@ export class LevellingRule {
   update(inputs: LevellingRuleInputs): LevellingPlan {
     const { mediumData, mediumGameTimeMs, slowData } = inputs;
     const lastAugReset = slowData?.resetInfo?.lastAugReset;
-    const figures = levellingFiguresOf(inputs.staticData, mediumData, slowData, inputs.hacking);
+    const figures = levellingFiguresOf(inputs.staticData, mediumData, slowData, inputs.hacking, inputs.homeAlsoKeptGb);
     // An install (or a destroy): a new game, back to money (w0r1d_d43m0n to root again), each rate and fit afresh.
     if (isFiniteNumber(lastAugReset)) {
       if (this.#lastAugReset !== null && lastAugReset !== this.#lastAugReset) {

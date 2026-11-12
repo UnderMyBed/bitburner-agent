@@ -19,6 +19,11 @@ const HACK_LOOP_OFF: DesiredState["hackLoop"] = { enabled: false, target: null, 
 const BN6 = { kind: "bitnode", n: 6, sourceFiles: { 1: 3 } } as const;
 /** Each combat stat to 100 at ×1 (core's `skillExpFor`), by the game's own gains. */
 const trained = ({ simulation }: FreshGame) => simulation.diagnostics.gainCombatExp(skillExpFor(100, 1) + 1);
+/** Trained, and home at 128 GB: room for the reading worker's 42.6 GB (#375) beside the Agent. */
+const trainedWithRoom = async (fresh: FreshGame) => {
+  await trained(fresh);
+  await fresh.simulation.diagnostics.setHomeRam(128);
+};
 const REFUSED =
   "the game didn't take the player into the Bladeburner division: a combat stat under 100, or no Bladeburner here " +
   "(BN6, BN7, or SF6 or SF7; none in BN8)";
@@ -72,7 +77,7 @@ test("the division's join (its worker): the simulator's effectors taken away, th
 });
 
 test("the Bladeburner worker: no rank out of the division; in it, the rank read, and the faction joined at 25", async () => {
-  const fresh = await freshStart({ withDesiredState: false, fixture: BN6, beforeAgent: trained });
+  const fresh = await freshStart({ withDesiredState: false, fixture: BN6, beforeAgent: trainedWithRoom });
   const state = (joinTheFaction: boolean): DesiredState => ({
     hackLoop: HACK_LOOP_OFF,
     intents: [],
@@ -87,20 +92,65 @@ test("the Bladeburner worker: no rank out of the division; in it, the rank read,
   // Asked under 25 (a stale state): a problem, nothing joined.
   fresh.brain.channel.setDesiredState(state(true));
   await fresh.game.runUntil(() => (fresh.medium()?.bladeburner?.problems.length ?? 0) > 0, 30_000);
-  expect(fresh.medium()?.bladeburner).toEqual({ rank: 0, problems: ["the faction asked for at rank 0.0, under 25"] });
+  expect(fresh.medium()?.bladeburner).toMatchObject({
+    rank: 0,
+    problems: ["the faction asked for at rank 0.0, under 25"],
+  });
   await fresh.simulation.diagnostics.setBladeburnerRank(25);
   await fresh.game.runUntil(() => {
     const factions = (fresh.medium()?.player as { factions?: string[] } | undefined)?.factions ?? [];
     return factions.includes("Bladeburners");
   }, 30_000);
-  expect(fresh.medium()?.bladeburner).toEqual({ rank: 25, problems: [] });
+  expect(fresh.medium()?.bladeburner).toMatchObject({ rank: 25, problems: [] });
   // Asked again with it joined: done at once, as the game has it.
   await fresh.game.run(12_000);
-  expect(fresh.medium()?.bladeburner).toEqual({ rank: 25, problems: [] });
+  expect(fresh.medium()?.bladeburner).toMatchObject({ rank: 25, problems: [] });
 });
 
+test("the Bladeburner worker's action (#375): a level over its max refused; held at its level, started once; a rest", async () => {
+  const fresh = await freshStart({ withDesiredState: false, fixture: BN6, beforeAgent: trainedWithRoom });
+  expect(await triedOnce(fresh, JOIN_BLADEBURNER_INTENT)).toMatchObject({ done: true });
+  const order = (action: NonNullable<DesiredState["bladeburner"]>["action"]): DesiredState => ({
+    hackLoop: HACK_LOOP_OFF,
+    intents: [],
+    bladeburner: { joinTheFaction: false, action },
+  });
+  const reading = () => fresh.medium()?.bladeburner;
+  const tracking = () => reading()?.actions?.find((each) => each.name === "Tracking");
+  // Level 2 with its max at 1: a stale state, a problem, nothing started.
+  fresh.brain.channel.setDesiredState(order({ type: "Contracts", name: "Tracking", level: 2 }));
+  await fresh.game.runUntil(() => (reading()?.problems.length ?? 0) > 0, 30_000);
+  expect(reading()).toMatchObject({ problems: ["Tracking asked for at level 2, over its max 1"], current: null });
+  // Its max at 3 (a harness edit), level 2 held: started once, then found under way; the level stays 2 after attempts,
+  // auto-level off (on, the game would set it to its max, 3).
+  await fresh.simulation.diagnostics.setBladeburnerFigures({ maxLevels: { Tracking: 3 } });
+  await fresh.game.runUntil(() => reading()?.current?.name === "Tracking", 30_000);
+  expect(reading()).toMatchObject({ problems: [], found: null, current: { type: "Contracts", name: "Tracking" } });
+  await fresh.game.run(60_000);
+  expect(reading()).toMatchObject({
+    problems: [],
+    found: { type: "Contracts", name: "Tracking" },
+    current: { type: "Contracts", name: "Tracking" },
+  });
+  expect(tracking()).toMatchObject({ level: 2, maxLevel: 3 });
+  expect(tracking()?.count).toBeGreaterThan(0);
+  expect(tracking()?.chance[0]).toBeGreaterThan(0);
+  expect(reading()?.actions).toHaveLength(9);
+  const { stamina, maxStamina, bonusSeconds } = reading() ?? {};
+  expect(stamina).toBeLessThan(maxStamina ?? 0);
+  expect(bonusSeconds).toBeGreaterThanOrEqual(0);
+  // A rest: Field Analysis, a general action at no level.
+  fresh.brain.channel.setDesiredState(order({ type: "General", name: "Field Analysis", level: null }));
+  await fresh.game.runUntil(() => reading()?.current?.name === "Field Analysis", 30_000);
+  expect(reading()).toMatchObject({ problems: [], found: { name: "Tracking" } });
+  // None: the game's action left as it is.
+  fresh.brain.channel.setDesiredState(order(null));
+  await fresh.game.run(30_000);
+  expect(reading()).toMatchObject({ current: { name: "Field Analysis" }, found: { name: "Field Analysis" } });
+}, 120_000);
+
 test("the brain gone: the Agent forgets the Bladeburner state, so its worker doesn't run on in safe mode", async () => {
-  const fresh = await freshStart({ withDesiredState: false, fixture: BN6, beforeAgent: trained });
+  const fresh = await freshStart({ withDesiredState: false, fixture: BN6, beforeAgent: trainedWithRoom });
   expect(await triedOnce(fresh, JOIN_BLADEBURNER_INTENT)).toMatchObject({ done: true });
   // Kept for safe mode (its ttl), so the Agent's rounds go on once the brain is gone.
   fresh.brain.channel.setDesiredState({

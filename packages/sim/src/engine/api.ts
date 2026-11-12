@@ -76,12 +76,16 @@ export interface EngineApi {
   gainCharismaExp(exp: number): void;
   /** Gives the player each combat stat's experience, through the game's own gains. A harness edit, for tests (#367). */
   gainCombatExp(exp: number): void;
+  /** Gives the player intelligence experience, through the game's own gain (SF5 or BN5). A harness edit (#377). */
+  gainIntelligenceExp(exp: number): void;
   /** Sets a gang member's experience and ascension points, its levels from them. A harness edit, for tests (#330). */
   setGangMemberFigures(name: string, figures: Record<string, number>): void;
   /** Sets the player's gang's respect. A harness edit, for tests (#330). */
   setGangRespect(respect: number): void;
   /** Sets the player's Bladeburner rank, through the game's own change. A harness edit, for tests (#367). */
   setBladeburnerRank(rank: number): void;
+  /** Sets Bladeburner's city, stamina and actions' max levels. A harness edit, for core's parity tests (#375). */
+  setBladeburnerFigures(figures: BladeburnerFigures): void;
   /** Queues `augmentation`, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
   queueAugmentation(augmentation: string): void;
   /** The page the game's Router is on. */
@@ -172,9 +176,11 @@ const API_FUNCTIONS = {
   gainHackingExp: true,
   gainCharismaExp: true,
   gainCombatExp: true,
+  gainIntelligenceExp: true,
   setGangMemberFigures: true,
   setGangRespect: true,
   setBladeburnerRank: true,
+  setBladeburnerFigures: true,
   queueAugmentation: true,
   bitNodeMultipliers: true,
   gameData: true,
@@ -207,4 +213,17 @@ export function assertEngineApi(exports: unknown): asserts exports is EngineApi 
     (name) => typeof (exports as Record<string, unknown>)[name] !== "function",
   );
   if (missing.length > 0) throw new Error(`engine bundle is missing EngineApi functions: ${missing.join(", ")}`);
+}
+
+/**
+ * Bladeburner's figures a harness may set (#375): its current city's population, estimate, communities and chaos, the
+ * stamina, and contracts' and operations' max levels by name. Each absent is left as it is.
+ */
+export interface BladeburnerFigures {
+  population?: number;
+  estimate?: number;
+  communities?: number;
+  chaos?: number;
+  stamina?: number;
+  maxLevels?: Record<string, number>;
 }

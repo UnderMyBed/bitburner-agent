@@ -276,7 +276,7 @@ describe("the rule", () => {
     }
   });
 
-  test("in the division: no work, no join; the worker only once home's RAM beyond its reserve holds its 9.6 GB", () => {
+  test("in the division: no work, no join; the worker only once home's RAM beyond its reserve holds its 42.6 GB (#375)", () => {
     const rule = new BladeburnerRule();
     // After an install, the stats back at 1, the division kept: no training.
     expect(decide(rule, medium({ inBladeburner: true, homeRam: 64 }), slow(6, { 4: 3 }), KEPT_AT_SF4_3)).toEqual({
@@ -285,7 +285,7 @@ describe("the rule", () => {
       state: null,
     });
     expect(rule.view().line).toBe(
-      "Bladeburner: in the division; its reading waits for home's RAM: 9.6 GB beyond the 65.9 GB home keeps, and home " +
+      "Bladeburner: in the division; its reading waits for home's RAM: 42.6 GB beyond the 65.9 GB home keeps, and home " +
         "has 64 GB",
     );
     expect(decide(rule, medium({ inBladeburner: true, homeRam: 128 }), slow(6, { 4: 3 }), KEPT_AT_SF4_3).state).toEqual(
@@ -294,16 +294,16 @@ describe("the rule", () => {
       },
     );
     expect(rule.view().line).toBe("Bladeburner: in the division; waiting for its worker's reading");
-    // Without Singularity home keeps 32 GB: 41.6 GB is the least that holds it.
+    // Without Singularity home keeps 32 GB: 74.6 GB is the least that holds it (75 GB does; 74.5 GB doesn't).
     const fits = (homeRam: number) => decide(rule, medium({ inBladeburner: true, homeRam }), slow(6), 32).state;
-    expect(fits(32 + BLADEBURNER_WORKER_RAM_GB)).toEqual({ joinTheFaction: false });
+    expect(fits(32.4 + BLADEBURNER_WORKER_RAM_GB)).toEqual({ joinTheFaction: false });
     expect(fits(32 + BLADEBURNER_WORKER_RAM_GB - 0.1)).toBeNull();
   });
 
   test("the faction asked for once the rank reads 25 and it isn't joined; joined, not again", () => {
     const rule = new BladeburnerRule();
     const read = (rank: number, factions: string[] = []) =>
-      decide(rule, medium({ inBladeburner: true, homeRam: 64, factions, reading: { rank, problems: [] } })).state;
+      decide(rule, medium({ inBladeburner: true, homeRam: 128, factions, reading: { rank, problems: [] } })).state;
     expect(read(24.9)).toEqual({ joinTheFaction: false });
     expect(rule.view().line).toBe("Bladeburner: in the division, rank 24.9; Bladeburners at rank 25");
     expect(read(25)).toEqual({ joinTheFaction: true });
@@ -341,7 +341,7 @@ describe("the rule", () => {
     expect(bladeburnerSnapshotOf(medium({ reading: { rank: "3", problems: [] } })).reading.kind).toBe("unread");
     expect(bladeburnerSnapshotOf(medium({ inBladeburner: true, reading: { rank: 3, problems: ["x"] } }))).toEqual({
       joined: true,
-      reading: { kind: "read", rank: 3, problems: ["x"] },
+      reading: { kind: "read", rank: 3, problems: ["x"], actions: null },
     });
   });
 });
@@ -565,7 +565,8 @@ describe("the run report's section 8 (#367)", () => {
 
   test("outside BN6 and BN7: none played", () => {
     expect(fold([[0, medium()]], 2).text).toBe(
-      "8. Bladeburner (#367, B1: the training to join, the division, the faction; played in BN6 and BN7 only)\n" +
+      "8. Bladeburner (#367, #375: the training to join, the division, the faction and the actions; played in BN6 and " +
+        "BN7 only)\n" +
         "  not in BN6 or BN7 in the window: no Bladeburner played",
     );
   });
@@ -575,14 +576,14 @@ describe("the run report's section 8 (#367)", () => {
       [0, medium()],
       [40, medium({ levels: { strength: 100, defense: 100 } })],
       [74, medium({ levels: TRAINED })],
-      [75, medium({ levels: TRAINED, inBladeburner: true, homeRam: 64, reading: { rank: 0, problems: [] } })],
-      [76, medium({ levels: TRAINED, inBladeburner: true, homeRam: 64, reading: { rank: 25, problems: [] } })],
+      [75, medium({ levels: TRAINED, inBladeburner: true, homeRam: 128, reading: { rank: 0, problems: [] } })],
+      [76, medium({ levels: TRAINED, inBladeburner: true, homeRam: 128, reading: { rank: 25, problems: [] } })],
       [
         76.5,
         medium({
           levels: TRAINED,
           inBladeburner: true,
-          homeRam: 64,
+          homeRam: 128,
           factions: ["Bladeburners"],
           reading: { rank: 25, problems: [] },
         }),
@@ -725,7 +726,7 @@ describe("the run report's section 8 (#367)", () => {
     const joined = (minute: number, homeRam: number) =>
       [minute, medium({ levels: TRAINED, inBladeburner: true, homeRam })] as [number, MediumSnapshotData];
     expect(fold([joined(0, 32), joined(30, 32)]).failures).toEqual([]);
-    const { failures } = fold([joined(0, 64), joined(BLADEBURNER_UNREAD_WITHIN_MS / MINUTE, 64)]);
+    const { failures } = fold([joined(0, 128), joined(BLADEBURNER_UNREAD_WITHIN_MS / MINUTE, 128)]);
     expect(failures).toEqual([
       `the division unread with home's RAM there for its worker from ${iso(T0)} to ${iso(T0 + 5 * MINUTE)}, for ` +
         "5 min (no Bladeburner reading in the medium snapshot)",
@@ -734,7 +735,7 @@ describe("the run report's section 8 (#367)", () => {
 
   test("the rank at 25 with the faction not joined for a minute fails; under it passes; the worker's problems listed", () => {
     const at25 = (minute: number, problems: string[] = []) =>
-      [minute, medium({ levels: TRAINED, inBladeburner: true, homeRam: 64, reading: { rank: 25, problems } })] as [
+      [minute, medium({ levels: TRAINED, inBladeburner: true, homeRam: 128, reading: { rank: 25, problems } })] as [
         number,
         MediumSnapshotData,
       ];

@@ -14,6 +14,7 @@ import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BitNodeHackingMultipliers,
+  BLADEBURNER_WORKER_RAM_GB,
   type BladeburnerState,
   type Bn2Route,
   bitNodeAssumptions,
@@ -85,7 +86,12 @@ import {
   type StopAtBitNodeEnd,
   writeStopAtBitNodeEnd,
 } from "./bitnode-end.ts";
-import { type BladeburnerEvent, BladeburnerRule, type BladeburnerView } from "./bladeburner.ts";
+import {
+  BLADEBURNER_ACTIONS_HOLD,
+  type BladeburnerEvent,
+  BladeburnerRule,
+  type BladeburnerView,
+} from "./bladeburner.ts";
 import {
   CLOUD_SERVER_RESERVE_HORIZON_MS,
   CLOUD_SERVERS_ENABLED_SETTING,
@@ -1603,6 +1609,15 @@ export class DesiredStateController {
     return result;
   }
 
+  /**
+   * What home keeps beside `homeKeptGbOf` for the batches, the share and levelling mode (#377's review): Bladeburner's
+   * reading worker's `BLADEBURNER_WORKER_RAM_GB` while the rule asks for it (in the division, the RAM gate open: the
+   * gate counts home's RAM beyond `homeKeptGbOf` alone, so this doesn't close it), else nothing.
+   */
+  #homeAlsoKeptGb(): number {
+    return this.#bladeburnerState === null ? 0 : BLADEBURNER_WORKER_RAM_GB;
+  }
+
   #chooseMode(
     hackLoop: DesiredState["hackLoop"],
     factionWorking: boolean,
@@ -1638,7 +1653,9 @@ export class DesiredStateController {
     const batching = health?.state === "batching" || health?.state === "recovering" ? health.target : null;
     // Home among the hosts (#340), for its RAM beyond what it keeps for the Agent and its workers: the one reserve
     // the share and levelling mode keep (`homeKeptGbOf`), with Singularity its largest worker's too.
-    const homeKeptGb = readBatcherOnHome(this.#store) ? homeKeptGbOf(singularityRamMultiplierOf(this.#slowData)) : null;
+    const homeKeptGb = readBatcherOnHome(this.#store)
+      ? homeKeptGbOf(singularityRamMultiplierOf(this.#slowData)) + this.#homeAlsoKeptGb()
+      : null;
     const chooseOn = (kept: number | null) =>
       chooseBatcher(
         this.#staticData as StaticSnapshotData,
@@ -1695,6 +1712,7 @@ export class DesiredStateController {
           this.#mediumData,
           this.#hackingMultipliers(),
           singularityRamMultiplierOf(this.#slowData),
+          this.#homeAlsoKeptGb(),
         )
       : null;
     const sharing = readShareEnabled(this.#store) ? sharingConfig : null;
@@ -1885,6 +1903,7 @@ export class DesiredStateController {
       batcherTarget: batcherConfig === null ? null : { hostname: batcherConfig.target, figures: batcherConfig.figures },
       levelLoop: this.#levelLoopRunning(),
       nowMs: this.#lastEventAtMs,
+      homeAlsoKeptGb: this.#homeAlsoKeptGb(),
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({
@@ -1925,8 +1944,13 @@ export class DesiredStateController {
       slowAtMs: this.#slowAtMs,
       nowMs: this.#lastEventAtMs,
       ownersWork: readOwnersWork(this.#store) !== null,
-      // Bladeburner's training (#367) goes as the brain's work ahead of A5's.
-      heldFor: this.#bladeburner.training() ? "Bladeburner's combat training at the gym (#367)" : null,
+      // Bladeburner's training (#367) goes as the brain's work ahead of A5's; its actions (#375) hold A5's work, which
+      // would stop them (`Bladeburner/Bladeburner.ts:1356-1368`).
+      heldFor: this.#bladeburner.training()
+        ? "Bladeburner's combat training at the gym (#367)"
+        : this.#bladeburner.acting()
+          ? BLADEBURNER_ACTIONS_HOLD
+          : null,
       enabled: readFactionWorkEnabled(this.#store),
       augmentationsEnabled: readAugmentationsEnabled(this.#store),
       shareBonus,

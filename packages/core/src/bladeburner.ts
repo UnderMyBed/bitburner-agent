@@ -28,6 +28,7 @@
  * - **RAM** (`Netscript/RamCostGenerator.ts:334-376`): `inBladeburner` costs nothing, so the medium snapshot says
  *   whether the player has joined; `getRank`, `joinBladeburnerFaction` and `joinBladeburnerDivision` 4 GB each.
  */
+import type { BladeburnerActionReading } from "./bladeburner-actions.ts";
 import {
   CLASS_LOCATION_NAMES,
   CLASS_LOCATIONS,
@@ -70,25 +71,52 @@ export function bladeburnerWorkerFileNames(): string[] {
 }
 
 /**
- * `bladeburner.js`'s RAM by the game's calculator (ram-budget.json, which a test keeps in step): 1.6 GB for a script,
- * `getRank` 4 and `joinBladeburnerFaction` 4 (`Netscript/RamCostGenerator.ts:359`, `:372`). The brain asks for it only
- * once home's RAM beyond what it keeps for the Agent and its workers holds it (#359's RAM decision).
+ * `bladeburner.js`'s RAM by the game's calculator (ram-budget.json, which a test keeps in step;
+ * `Netscript/RamCostGenerator.ts:334-376`): 1.6 GB for a script; 4 GB each for `getRank`, `joinBladeburnerFaction`
+ * (B1), and B2's (#375) `getStamina`, `getActionEstimatedSuccessChance`, `getActionCountRemaining`,
+ * `getActionMaxLevel`, `getActionCurrentLevel`, `startAction`, `setActionLevel` and `setActionAutolevel`; 1 GB for
+ * `getCurrentAction`; nothing for `getBonusTime` and `inBladeburner`. The brain asks for it only once home's RAM beyond
+ * what it keeps for the Agent and its workers holds it (#359's RAM decision): at SF4.3 that's still a 128 GB home
+ * (65.9 + 42.6 GB), as B1's 9.6 GB was; without SF4 the least home moves from B1's 41.6 GB to 74.6.
  */
-export const BLADEBURNER_WORKER_RAM_GB = 9.6;
+export const BLADEBURNER_WORKER_RAM_GB = 42.6;
 
-/** What the brain asks of `bladeburner.js`: join the faction (the rank allows it, and it isn't joined yet). */
+/** An action the brain asks `bladeburner.js` to run (#375): its type and name as the NS API has them, and its level. */
+export interface BladeburnerActionOrder {
+  type: "Contracts" | "Operations" | "General";
+  name: string;
+  /** A contract's or operation's level, held (auto-level off); null for a general action. */
+  level: number | null;
+}
+
+/**
+ * What the brain asks of `bladeburner.js`: join the faction (the rank allows it, and it isn't joined yet); and (#375)
+ * the action to run, or null (absent from a B1 brain): the game's action left as it is.
+ */
 export interface BladeburnerState {
   joinTheFaction: boolean;
+  action?: BladeburnerActionOrder | null;
 }
 
 /**
  * What `bladeburner.js` reads, for the medium snapshot: the rank, or null with the division not joined; and the
- * worker's problems (a faction join the game refused).
+ * worker's problems (a faction join or an action the game refused). In the division, B2's (#375) too (absent from a
+ * B1 Agent): the stamina and its max (`getStamina`), the bonus time in seconds, the action the worker found under way
+ * and the one under way after it acted (`getCurrentAction`: type and name, or null idle), and every contract and
+ * operation, in core's order.
  */
 export interface BladeburnerReading {
   rank: number | null;
   problems: string[];
+  stamina?: number;
+  maxStamina?: number;
+  bonusSeconds?: number;
+  found?: { type: string; name: string } | null;
+  current?: { type: string; name: string } | null;
+  actions?: BladeburnerActionReading[];
 }
+
+const ORDER_TYPES = ["Contracts", "Operations", "General"];
 
 /** The desired state's `bladeburner`, checked: null (none managed), or one to do. */
 export function parseBladeburnerState(
@@ -98,7 +126,23 @@ export function parseBladeburnerState(
   if (typeof value !== "object" || typeof (value as { joinTheFaction?: unknown }).joinTheFaction !== "boolean") {
     return { ok: false, reason: "bladeburner isn't { joinTheFaction: true or false }" };
   }
-  return { ok: true, bladeburner: { joinTheFaction: (value as BladeburnerState).joinTheFaction } };
+  const { joinTheFaction, action } = value as { joinTheFaction: boolean; action?: unknown };
+  if (action === undefined || action === null) return { ok: true, bladeburner: { joinTheFaction } };
+  const { type, name, level } = action as Partial<Record<keyof BladeburnerActionOrder, unknown>>;
+  const levelOk =
+    type === "General" ? level === null : typeof level === "number" && Number.isInteger(level) && level >= 1;
+  if (typeof action !== "object" || !ORDER_TYPES.includes(type as string) || typeof name !== "string" || !levelOk) {
+    return {
+      ok: false,
+      reason:
+        "bladeburner's action isn't { type: Contracts, Operations or General, name, level: a whole level from 1 " +
+        "(null for General) }",
+    };
+  }
+  return {
+    ok: true,
+    bladeburner: { joinTheFaction, action: { type, name, level } as BladeburnerActionOrder },
+  };
 }
 
 /** A level from its experience (`calculateSkill`, `PersonObjects/formulas/skill.ts:7-15`). */

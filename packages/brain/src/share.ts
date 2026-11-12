@@ -77,6 +77,8 @@ export function sharingConfigOf(
   mediumData: MediumSnapshotData,
   hacking: BitNodeHackingMultipliers,
   singularityMultiplier: number | null = null,
+  /** More home keeps beside that (#375: Bladeburner's reading worker while it runs), GB. */
+  homeAlsoKeptGb = 0,
 ): SharingConfig | null {
   // The BitNode's hacking multipliers folded in (#321), as the batcher's own plan has them.
   const player = hackingPlayerOf(mediumData.player, hacking);
@@ -92,7 +94,7 @@ export function sharingConfigOf(
   }
   return {
     reserveGb: shareReserveGb(peakGb, config.next?.ramGb ?? 0),
-    homeKeptGb: homeKeptGbOf(singularityMultiplier),
+    homeKeptGb: homeKeptGbOf(singularityMultiplier) + homeAlsoKeptGb,
     cores,
   };
 }
