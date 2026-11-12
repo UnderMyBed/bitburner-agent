@@ -12,6 +12,7 @@ import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-help
 import {
   addsToLevelling,
   augmentationsSoldBy,
+  BLADEBURNER_WORKER_RAM_GB,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
@@ -312,6 +313,12 @@ describe("levelling mode's figures (#336)", () => {
     expect(figures?.threads).toBe(
       Math.floor(16 / 1.75) + Math.floor(4 / 1.75) + Math.floor(1024 / 1.75) + (figures?.homeThreads ?? 0),
     );
+    // Beside Bladeburner's reading worker (#377's re-review): its 42.6 GB kept from home's loops too, while the rule
+    // asks for it (the controller's `homeAlsoKeptGb`); without it, none.
+    expect(levellingFiguresOf(STATIC, medium(), slow(), BN1_HACKING, BLADEBURNER_WORKER_RAM_GB)).toMatchObject({
+      homeKeptGb: SHARE_HOME_KEPT_GB + BLADEBURNER_WORKER_RAM_GB,
+      homeThreads: Math.floor((4096 - SHARE_HOME_KEPT_GB - BLADEBURNER_WORKER_RAM_GB) / LEVEL_LOOP_RAM_GB),
+    });
     // The player's figures missing: none.
     expect(levellingFiguresOf(STATIC, { ...medium(), player: {} }, slow(), BN1_HACKING)).toBeNull();
     expect(levellingFiguresOf(null, medium(), slow(), BN1_HACKING)).toBeNull();

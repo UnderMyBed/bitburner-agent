@@ -61,7 +61,7 @@ Other mults that touch these systems: `FactionWorkRepGain`/`CompanyWorkRepGain`/
 
 ## 1. Gangs
 
-How the brain plays Bladeburner (epic #359): B1 (#367), the combat stats to 100 at the gym, the division and the Bladeburners faction, in BN6 and BN7 ([packages/brain](../../packages/brain/README.md#bladeburner-bn6-and-bn7), [packages/core](../../packages/core/README.md#bladeburner)).
+How the brain plays Bladeburner (epic #359): B1 (#367), the combat stats to 100 at the gym, the division and the Bladeburners faction, in BN6 and BN7; B2 (#375), the contracts and operations by rank a second, and the stamina ([packages/brain](../../packages/brain/README.md#bladeburner-bn6-and-bn7), [packages/core](../../packages/core/README.md#bladeburner)).
 
 How the brain plays them (epic #324): G1 (#325), forming, recruiting, the task rule and the wanted level, in BN2; G2 (#328), ascension; with core's formulas checked against the engine ([packages/brain](../../packages/brain/README.md#the-gang-bn2), [packages/core](../../packages/core/README.md#gangs)).
 

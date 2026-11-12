@@ -523,6 +523,21 @@ export interface HostMethods {
    */
   "diagnostics.setBladeburnerRank"(params: { rank: number }): void;
   /**
+   * Sets Bladeburner's current city's population, estimate, communities and chaos, the stamina, and contracts' and
+   * operations' max levels by name (each finite and 0 or more; absent, left), for core's parity tests (#375). A harness
+   * edit. Not in the division, or an action of neither kind, throws.
+   */
+  "diagnostics.setBladeburnerFigures"(params: {
+    figures: {
+      population?: number;
+      estimate?: number;
+      communities?: number;
+      chaos?: number;
+      stamina?: number;
+      maxLevels?: Record<string, number>;
+    };
+  }): void;
+  /**
    * Gives the player charisma experience (finite, 0 or more) through the game's own `gainCharismaExp`, which sets the
    * skill from it, for test scenarios that need a job's required charisma (#155). A harness edit.
    */
@@ -532,6 +547,11 @@ export interface HostMethods {
    * skills from it, for test scenarios that need the Bladeburner division's 100s (#367). A harness edit.
    */
   "diagnostics.gainCombatExp"(params: { exp: number }): void;
+  /**
+   * Gives the player intelligence experience (finite, 0 or more) through the game's own `gainIntelligenceExp`, which
+   * sets the skill from it, only with SF5 or in BN5, for core's parity tests (#377's review). A harness edit.
+   */
+  "diagnostics.gainIntelligenceExp"(params: { exp: number }): void;
   /**
    * Queues an augmentation (one of the game's names, not owned already but for NeuroFlux Governor), unpaid and not yet
    * installed, for test scenarios (#164). A harness edit, not something a player can do.

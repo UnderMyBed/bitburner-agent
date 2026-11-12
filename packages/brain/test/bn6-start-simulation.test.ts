@@ -73,7 +73,7 @@ test("BN6.1 with the campaign's Source-Files: trained at the gym, joined through
     `read at home ${home?.maxRam} GB, ${((fresh.game.clock.now() - joinedAtMs) / MINUTE).toFixed(1)} min after the join`,
   );
   expect(home?.maxRam).toBeGreaterThanOrEqual(128);
-  expect(medium()?.bladeburner).toEqual({ rank: 0, problems: [] });
+  expect(medium()?.bladeburner).toMatchObject({ rank: 0, problems: [] });
   // Rank 25 by a harness edit: the faction joined through the worker.
   await fresh.simulation.diagnostics.setBladeburnerRank(25);
   await fresh.game.runUntil(() => {
@@ -81,10 +81,11 @@ test("BN6.1 with the campaign's Source-Files: trained at the gym, joined through
     return factions.includes("Bladeburners");
   }, 2 * MINUTE);
   await fresh.game.run(MINUTE);
-  expect(fresh.controller().bladeburnerView().line).toBe(
-    "Bladeburner: in the division, rank 25.0; Bladeburners joined",
+  // Joined, and (B2, #375) the actions under way, the rank rising from 25 with them.
+  expect(fresh.controller().bladeburnerView().line).toMatch(
+    /^Bladeburner: in the division, rank 2\d\.\d; Bladeburners joined; /,
   );
-  // A5 back on faction work it chose, never Bladeburners' (it offers none).
+  // Never Bladeburners' faction work (it offers none); A5's held for the actions (#375).
   const work = fresh.controller().workView().desired;
   expect(work?.kind === "faction" ? work.faction : null).not.toBe("Bladeburners");
 
@@ -101,7 +102,7 @@ test("BN6.1 with the campaign's Source-Files: trained at the gym, joined through
   expect(ratio).toBeGreaterThan(0.8);
   expect(ratio).toBeLessThan(1.5);
   expect(section).toMatch(/\n {2}the division: joined, first seen /);
-  expect(section).toMatch(/\n {2}rank: 0\.0 → 25\.0, read from /);
+  expect(section).toMatch(/\n {2}rank: 0\.0 → 2\d\.\d, read from /);
   // Joined, by the worker's asking or A5's accepting its invitation: either path (#373's review).
   expect(section).toMatch(/\n {2}Bladeburners: joined, first seen /);
   // Its bound: twice Iron Gym's estimate at SF1.3's ×1.28 (4 × 5,417 / 1.28 s) and 10 min.

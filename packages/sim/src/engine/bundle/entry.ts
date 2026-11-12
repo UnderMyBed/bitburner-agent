@@ -305,12 +305,52 @@ export function setBladeburnerRank(rank: number) {
 }
 
 /**
+ * Sets Bladeburner's figures (#375): its current city's population, estimate, communities and chaos
+ * (`Bladeburner/City.ts:8-28`), the stamina (`Bladeburner.ts:121-122`), and contracts' and operations' max levels by
+ * name (`Actions/LevelableAction.ts:28`), each as given, the rest left: a harness edit for core's parity tests, not
+ * something a player can do. Not in the division, or an action of neither kind, throws.
+ */
+export function setBladeburnerFigures(figures: {
+  population?: number;
+  estimate?: number;
+  communities?: number;
+  chaos?: number;
+  stamina?: number;
+  maxLevels?: Record<string, number>;
+}) {
+  const bladeburner = Player.bladeburner;
+  if (!bladeburner) throw new RangeError("not in the Bladeburner division");
+  const city = bladeburner.getCurrentCity();
+  if (figures.population !== undefined) city.pop = figures.population;
+  if (figures.estimate !== undefined) city.popEst = figures.estimate;
+  if (figures.communities !== undefined) city.comms = figures.communities;
+  if (figures.chaos !== undefined) city.chaos = figures.chaos;
+  if (figures.stamina !== undefined) bladeburner.stamina = figures.stamina;
+  for (const [name, maxLevel] of Object.entries(figures.maxLevels ?? {})) {
+    const action =
+      (bladeburner.contracts as Record<string, { maxLevel: number }>)[name] ??
+      (bladeburner.operations as Record<string, { maxLevel: number }>)[name];
+    if (action === undefined) throw new RangeError(`no contract or operation ${name}`);
+    action.maxLevel = maxLevel;
+  }
+}
+
+/**
  * Sets the player's gang's respect: a harness edit for test scenarios (#330's re-review, a gang of 12 recruited at
  * once), not something a player can do. No gang throws.
  */
 export function setGangRespect(respect: number) {
   if (!Player.gang) throw new RangeError("no gang");
   Player.gang.respect = respect;
+}
+
+/**
+ * Gives the player `exp` intelligence experience through the game's own `gainIntelligenceExp`
+ * (`PersonObjects/Person.ts:176-190`: only with SF5 or in BN5), which sets the skill from it: a harness edit for core's
+ * parity tests (#377's review), not something a player can do.
+ */
+export function gainIntelligenceExp(exp: number) {
+  Player.gainIntelligenceExp(exp);
 }
 
 /**
