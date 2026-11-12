@@ -805,7 +805,7 @@ describe("the levelling rule (#336)", () => {
       expAbove: (switchedMs / 1000) * 10 + 100,
       levelLoop: { sent: false, homeThreads: 0 },
     });
-    delete (unread.mediumData?.player as { money?: number }).money;
+    delete ((unread.mediumData as MediumSnapshotData).player as { money?: number }).money;
     levelling.update(unread);
     // Read again: the window holds the unread sample a while, and the income measured before it stands.
     batchFor(levelling, switchedMs + 20 * SECOND, 20 * SECOND, {
