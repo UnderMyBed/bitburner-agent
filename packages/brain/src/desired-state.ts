@@ -483,6 +483,8 @@ export class DesiredStateController {
   /** The planner's levelling choice (#336): the rule, and its plan as of the last update. */
   readonly #levelling: LevellingRule;
   #levellingPlan: LevellingPlan = { mode: "money", levelling: null };
+  /** Whether levelling weighs (d) (#380): the planner's; off for a test's A/B alone. */
+  readonly #levellingBatch: boolean;
   /** The time to the destroy (#360): estimated at the BitNode's start, each install, Daedalus joined and levelling. */
   readonly #destroyEstimate: DestroyEstimateRule;
   /** The BitNode whose BN1-only assumptions (#321) were last logged: logged again only for another. */
@@ -512,6 +514,7 @@ export class DesiredStateController {
     bn2Route = "planner",
     gangRoute = bn2Route,
     environment = null,
+    levellingBatch = true,
   }: {
     channel: ControlChannel;
     store: TelemetryStore;
@@ -531,7 +534,10 @@ export class DesiredStateController {
      * Null (tests of other rules): no prior, the estimate's time online from 0.
      */
     environment?: Environment | null;
+    /** Levelling's (d), batching for the money then an install (#380): weighed; off for a test's A/B alone. */
+    levellingBatch?: boolean;
   }) {
+    this.#levellingBatch = levellingBatch;
     this.#channel = channel;
     this.#store = store;
     this.#log = log;
@@ -1914,6 +1920,8 @@ export class DesiredStateController {
       levelLoop: this.#levelLoopRunning(),
       nowMs: this.#lastEventAtMs,
       homeAlsoKeptGb: this.#homeAlsoKeptGb(),
+      // (d) (#380): A6's ladder and set (none where a test's A/B turns (d) off).
+      batchOffer: this.#levellingBatch ? this.#augmentations.batchOffer() : null,
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({

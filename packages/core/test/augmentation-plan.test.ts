@@ -24,6 +24,8 @@ import {
   installGains,
   installRule,
   isWorthInstalling,
+  NEUROFLUX_LADDER_LEVELS,
+  neuroFluxLadder,
   QUICK_INSTALL_AT_AUGMENTATIONS,
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
@@ -424,6 +426,40 @@ describe("donations (#225): what a donation brings within reach", () => {
       donations: donating,
     });
     expect(counts).toMatchObject({ affordable: 2, neuroFluxLevels: 1, byDonation: 2, donationMoney: 18_750_010_000 });
+  });
+
+  test("(d)'s ladder (#380): entry k is what the set and k levels cost, so a commit with it buys exactly k levels", () => {
+    const set = chooseAugmentationsToBuy(REACHED, BN1, ALL_FIVE, LEVEL, terms({}));
+    const cyberSec = { faction: "CyberSec", reputation: 0 };
+    const donations = terms({}, [cyberSec]);
+    const ladder = neuroFluxLadder({ state: BN1, set, neuroFluxReputation: 0, donations, levels: 12 });
+    expect(NEUROFLUX_LADDER_LEVELS).toBe(60);
+    expect(ladder).toHaveLength(13);
+    // The set alone, then the levels above: by hand for the first two, as the test before this one.
+    expect(ladder[0]).toBe(set.money);
+    expect(ladder[1]).toBeCloseTo(set.money + 750_000 * 1.9 ** 4 + 500_010_000, 0);
+    expect(ladder[2]).toBeCloseTo(set.money + 750_000 * 1.9 ** 4 + 500_010_000 + 750_000 * 1.14 * 1.9 ** 5 + 70e6, 0);
+    for (let levels = 1; levels < ladder.length; levels++) {
+      const money = ladder[levels] as number;
+      // Rising: each level costs more than none, and more than the one before it (×1.14 a level, ×1.9 a purchase).
+      expect(money).toBeGreaterThan(ladder[levels - 1] as number);
+      const counted = affordableCounts({ state: BN1, set, money, neuroFluxReputation: 0, donations });
+      expect(counted.neuroFluxLevels, `level ${levels}`).toBe(levels);
+      expect(counted.money / money).toBeCloseTo(1, 12);
+      expect(
+        affordableCounts({ state: BN1, set, money: money * (1 - 1e-12), neuroFluxReputation: 0, donations }),
+      ).toMatchObject({ neuroFluxLevels: levels - 1 });
+    }
+    // The steps grow toward 2.17 times (1.14 × 1.9) once the prices outweigh the donations' ×1.14.
+    const step = (k: number) =>
+      ((ladder[k] as number) - (ladder[k - 1] as number)) / ((ladder[k - 1] as number) - (ladder[k - 2] as number));
+    expect(step(12)).toBeGreaterThan(1.9);
+    expect(step(12)).toBeLessThan(1.14 * 1.9);
+    // No seller taking donations and no reputation: the set alone. Reputation for two levels: those two.
+    expect(neuroFluxLadder({ state: BN1, set, neuroFluxReputation: 0 })).toEqual([set.money]);
+    expect(neuroFluxLadder({ state: BN1, set, neuroFluxReputation: 570 })).toHaveLength(3);
+    // Unlimited, the default count.
+    expect(neuroFluxLadder({ state: BN1, set, neuroFluxReputation: Number.POSITIVE_INFINITY })).toHaveLength(61);
   });
 });
 

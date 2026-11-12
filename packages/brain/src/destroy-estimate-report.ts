@@ -29,6 +29,7 @@ import {
   describeDestroyEstimate,
   destroyEstimateRecord,
   destroyStageOf,
+  levellingLookTimesOf,
   parseDestroyEstimate,
 } from "./destroy-estimate.ts";
 import { FACTION_WORK_CHOSEN_EVENT_KIND } from "./factions.ts";
@@ -52,10 +53,6 @@ export const DESTROY_ESTIMATE_REPORT_EVENT_KINDS = [
  * a minute, so every time is ±1 min, over ±10% of what's left below 10 minutes (BN1.4's Red Pill row: 4 min against 1).
  */
 export const SHORT_REMAINING_MS = 10 * 60_000;
-
-/** The levelling choices' times among `events`: a prior with none before its destroy has its D from before #336. */
-const levellingTimesOf = (events: readonly StoredEvent[]) =>
-  events.filter((event) => event.kind === LEVELLING_CHOSEN_EVENT_KIND).map((event) => event.atMs);
 
 /** The campaign's own events (`CAMPAIGN_EVENT_KINDS`): what its views read, so the section's others change none. */
 const isCampaignEvent = (event: StoredEvent) => CAMPAIGN_EVENT_KINDS.includes(event.kind);
@@ -149,7 +146,7 @@ export class DestroyHindcast {
     const view = views[index] as BitNodeView;
     // Its time online is the clock's from its start: none for a BitNode whose start the store didn't see.
     if (!view.startSeen || bitNode.installedBeforeFirstLook || bitNode.startMs < this.#firstMs) return;
-    const prior = destroyPriorOf(views, index, levellingTimesOf(this.#events.slice(0, this.#seen)));
+    const prior = destroyPriorOf(views, index, levellingLookTimesOf(this.#events.slice(0, this.#seen)));
     const { countMetOnlineMs } = destroyStretchesOf(view);
     const count = Object.keys(bitNode.ownedAugs).length;
     const redPillInstalled = Object.hasOwn(bitNode.ownedAugs, THE_RED_PILL);

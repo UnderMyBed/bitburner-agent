@@ -443,6 +443,107 @@ export interface CountedPurchases extends InstallCounts {
   byDonation: number;
 }
 
+/** One NeuroFlux Governor level after the set and the levels before it (`neuroFluxLevelsAfter`). */
+interface NeuroFluxLevelStep {
+  /** The money spent with it, the set's, the levels' and their donations: what a budget must cover. */
+  tried: number;
+  /** What it adds to the money spent: its price and what its donation adds. */
+  added: number;
+  /** The donations planned with it. */
+  planned: { donations: Donation[]; donationMoney: number };
+  byDonation: boolean;
+}
+
+/**
+ * NeuroFlux Governor's levels after `set`, one at a time (`affordableCounts`' and `neuroFluxLadder`'s): `first` is the
+ * set's money and donations, `next()` each level's step, priced after the set and the levels before it as
+ * `augmentationCost` has it (×1.14 a level, `NEUROFLUX_LEVEL_GROWTH`; ×1.9 a purchase,
+ * `Augmentation/AugmentationHelpers.ts:29-31`); a level beyond `neuroFluxReputation` by a donation at the NeuroFlux
+ * seller taking donations it raises least. It ends where no seller reaches a level's reputation; never otherwise.
+ */
+function neuroFluxLevelsAfter(
+  state: AugmentationPurchaseState,
+  set: AugmentationSet,
+  neuroFluxReputation: number,
+  donations: DonationTerms | undefined,
+): {
+  first: { spent: number; planned: { donations: Donation[]; donationMoney: number } };
+  next: () => Generator<NeuroFluxLevelStep>;
+} {
+  const sellerReputation = sellerReputations(donations);
+  const startTargets = new Map(set.donations.map(({ faction, reputation }) => [faction, { faction, reputation }]));
+  const startPlanned = donationsOf(startTargets, sellerReputation, donations);
+  const first = { spent: set.money + startPlanned.donationMoney, planned: startPlanned };
+  function* next(): Generator<NeuroFluxLevelStep> {
+    let queued = [...state.queued, ...set.purchases.map((purchase) => purchase.name)];
+    let targets = startTargets;
+    let planned = startPlanned;
+    let spent = first.spent;
+    for (;;) {
+      const cost = augmentationCost(NEUROFLUX_GOVERNOR, { ...state, queued });
+      // A seller taking donations reaches what its planned donation brings it to.
+      const reach = Math.max(
+        neuroFluxReputation,
+        ...(donations?.neuroFluxSellers ?? []).map((each) => targets.get(each.faction)?.reputation ?? each.reputation),
+      );
+      let nextTargets = targets;
+      let nextPlanned = planned;
+      const byDonation = cost.reputation > reach;
+      if (byDonation) {
+        const seller = cheapestSeller(donations?.neuroFluxSellers ?? [], cost.reputation, targets);
+        // Without a seller taking donations, a finite reputation ends it.
+        if (seller === null) return;
+        nextTargets = new Map(targets).set(seller.faction, { faction: seller.faction, reputation: cost.reputation });
+        nextPlanned = donationsOf(nextTargets, sellerReputation, donations);
+      }
+      // In `affordableCounts`' order of operations before #380, so its counts agree to the last bit.
+      const tried = spent + cost.money + nextPlanned.donationMoney - planned.donationMoney;
+      const added = cost.money + nextPlanned.donationMoney - planned.donationMoney;
+      yield { tried, added, planned: nextPlanned, byDonation };
+      spent += added;
+      targets = nextTargets;
+      planned = nextPlanned;
+      queued = [...queued, NEUROFLUX_GOVERNOR];
+    }
+  }
+  return { first, next };
+}
+
+/**
+ * How many NeuroFlux Governor levels `neuroFluxLadder` prices (#380): 60. Each costs about 1.14 × 1.9 = 2.17 times the
+ * one before it (`neuroFluxLevelsAfter`), so the 60th about 7e19 times the first: no measured income reaches it.
+ */
+export const NEUROFLUX_LADDER_LEVELS = 60;
+
+/**
+ * The money `set` and each count of NeuroFlux Governor levels after it cost (#380, levelling's (d)): entry k is the
+ * set's prices and donations and k levels' with theirs, as `affordableCounts` buys them (`neuroFluxLevelsAfter`), so
+ * an install's commit with entry k's money buys the set and k levels. Up to `levels` levels; fewer where no seller
+ * reaches a level's reputation. Rising: each level costs more than none. A donation past what can be named
+ * (`donationToReach`'s 2^53) is Infinity.
+ */
+export function neuroFluxLadder({
+  state,
+  set,
+  neuroFluxReputation,
+  donations,
+  levels = NEUROFLUX_LADDER_LEVELS,
+}: {
+  state: AugmentationPurchaseState;
+  set: AugmentationSet;
+  neuroFluxReputation: number;
+  donations?: DonationTerms;
+  levels?: number;
+}): number[] {
+  const after = neuroFluxLevelsAfter(state, set, neuroFluxReputation, donations);
+  const ladder = [after.first.spent];
+  for (const level of after.next()) {
+    if (ladder.length > levels) break;
+    ladder.push(level.tried);
+  }
+  return ladder;
+}
+
 /**
  * The counts (#222; `autopilot.js:901-903`, the legacy faction manager's affordable and awaiting-install counts).
  * - Affordable: those worth installing in `installable`, plus the set to buy (`chooseAugmentationsToBuy` with `money`).
@@ -477,38 +578,17 @@ export function affordableCounts({
   const queuedWorth = installable.filter((name) => isWorthInstalling(name, short)).length;
   const queuedNeuroFlux = installable.filter((name) => name === NEUROFLUX_GOVERNOR).length;
   const affordable = queuedWorth + set.purchases.length;
-  let queued = [...state.queued, ...set.purchases.map((purchase) => purchase.name)];
-  const sellerReputation = sellerReputations(donations);
-  let targets = new Map(set.donations.map(({ faction, reputation }) => [faction, { faction, reputation }]));
-  let planned = donationsOf(targets, sellerReputation, donations);
-  let spent = set.money + planned.donationMoney;
+  const levels = neuroFluxLevelsAfter(state, set, neuroFluxReputation, donations);
+  let { spent, planned } = levels.first;
   let neuroFluxLevels = 0;
   let levelsByDonation = 0;
-  for (;;) {
-    const cost = augmentationCost(NEUROFLUX_GOVERNOR, { ...state, queued });
-    // A seller taking donations reaches what its planned donation brings it to.
-    const reach = Math.max(
-      neuroFluxReputation,
-      ...(donations?.neuroFluxSellers ?? []).map((each) => targets.get(each.faction)?.reputation ?? each.reputation),
-    );
-    let nextTargets = targets;
-    let next = planned;
-    const byDonation = cost.reputation > reach;
-    if (byDonation) {
-      const seller = cheapestSeller(donations?.neuroFluxSellers ?? [], cost.reputation, targets);
-      // Without a seller taking donations, a finite reputation ends it.
-      if (seller === null) break;
-      nextTargets = new Map(targets).set(seller.faction, { faction: seller.faction, reputation: cost.reputation });
-      next = donationsOf(nextTargets, sellerReputation, donations);
-    }
+  for (const level of levels.next()) {
     // Each level dearer, so a finite money ends it.
-    if (spent + cost.money + next.donationMoney - planned.donationMoney > money) break;
-    spent += cost.money + next.donationMoney - planned.donationMoney;
-    targets = nextTargets;
-    planned = next;
-    queued = [...queued, NEUROFLUX_GOVERNOR];
+    if (level.tried > money) break;
+    spent += level.added;
+    planned = level.planned;
     neuroFluxLevels += 1;
-    if (byDonation) levelsByDonation += 1;
+    if (level.byDonation) levelsByDonation += 1;
   }
   return {
     affordable,
