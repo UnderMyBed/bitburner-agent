@@ -575,8 +575,10 @@ describe("the run report's section", () => {
         grownHacker(`member-${String(index + 1).padStart(2, "0")}`, { task: "Cyberterrorism", upgrades: [] }),
       );
     /** A medium snapshot of the gang of 12, the player's `faction_rep` read. */
-    const atTwelve = (): MediumSnapshotData => {
-      const data = withGang(formed(twelve(), { respect: 2e6, wantedLevel: 1, wantedPenalty: 2e6 / (2e6 + 1) }));
+    /** The `index`-th reading of the gang of 12: its respect rising, as working members' does (#354's stalls). */
+    const atTwelve = (index: number): MediumSnapshotData => {
+      const respect = 2e6 + index * 1e8;
+      const data = withGang(formed(twelve(), { respect, wantedLevel: 1, wantedPenalty: respect / (respect + 1) }));
       data.player = { ...data.player, mults: { faction_rep: 1 } };
       return data;
     };
@@ -610,7 +612,7 @@ describe("the run report's section", () => {
     function judged(count: number, events: StoredEvent[] = [], before: StoredEvent[] = []) {
       const gang = new GangFold();
       gang.addSlow(0, niteSec);
-      for (let index = 0; index < count; index += 1) gang.addMedium(index * 10_000, atTwelve());
+      for (let index = 0; index < count; index += 1) gang.addMedium(index * 10_000, atTwelve(index));
       const failures: string[] = [];
       const text = gang.section(failures, count * 10_000, events, before).join("\n");
       return { text, failures };
