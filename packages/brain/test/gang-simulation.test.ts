@@ -501,7 +501,14 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   writeWorldDaemonEnabled(fresh.data.store, false);
   await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
   // Every 5 minutes: territory, power, the flag and the crew.
-  const readings: { minute: number; territory: number; power: number; engaged: boolean; crew: number }[] = [];
+  const readings: {
+    minute: number;
+    territory: number;
+    power: number;
+    engaged: boolean;
+    crew: number;
+    planCrew: number | null;
+  }[] = [];
   for (let minute = 5; minute <= 20; minute += 5) {
     await fresh.game.run(5 * 60_000);
     const reading = gangSnapshotOf(fresh.medium());
@@ -512,6 +519,8 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
       power: reading.gang.power,
       engaged: reading.gang.territoryWarfareEngaged === true,
       crew: reading.members.filter((each) => each.task === "Territory Warfare").length,
+      // The rule's warfare plan on that reading (`GangWarfarePlan`'s crew), as the brain sent it.
+      planCrew: fresh.controller().gangView().plan?.warfare?.crew.length ?? null,
     });
   }
   console.log(readings.map((each) => JSON.stringify(each)).join("\n"));
@@ -551,15 +560,23 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   // review (2026-11-11): the gang's faction kept across each install's restart (no slow snapshot then), so after them
   // A8 holds for The Red Pill at NiteSec and invitations no longer travel for Daedalus's count (15, then 27 of 30); the
   // same four installs, a run a little different, and a second death, member-09's, in the last minutes: its recruit
-  // trains at the 20-minute reading, nine on Territory Warfare.
+  // trains at the 20-minute reading, nine on Territory Warfare. Since #357 (2026-11-11), The Red Pill installed by a
+  // harness edit (money at 12 the planner's own choice) and the World Daemon's switch off (A6 buying, not held for the
+  // destroy): four quick installs (4 min 28 s, 8 min 53 s, 12 min 27 s, 15 min 42 s) in place of main's quick install,
+  // The Red Pill's and two for the level, the run shifted (the harness's install before the Agent, #341): crew 9, 9,
+  // 9, 9, two on Identity Theft from the first plan; engaged throughout, 19 min 30 s, territory 17.4%; two deaths,
+  // member-04 and member-08. The crew read is the plan's at each reading, not a fixed list.
   expect(readings.every((each) => each.engaged)).toBe(true);
-  expect(readings.map((each) => each.crew)).toEqual([10, 10, 10, 9]);
+  for (const { minute, crew, planCrew, engaged } of readings) {
+    expect(crew, `minute ${minute}`).toBe(planCrew);
+    if (engaged) expect(crew, `minute ${minute}`).toBeGreaterThanOrEqual(1);
+  }
   expect(last.gang.territory).toBeGreaterThan(1 / 7 + 0.02);
   expect(section).toMatch(
-    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 2 deaths \(member-06, member-09\)\n/,
+    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 2 deaths \(member-04, member-08\)\n/,
   );
   expect(fresh.controller().gangView().line).toMatch(
-    /; warfare on: .*; 9 on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 2 deaths seen; /,
+    /; warfare on: .*; \d+ on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 2 deaths seen; /,
   );
   expect(section).toContain(
     "territory warfare engaged while the rule's measure says it loses for 1 min or more:\n    none",
