@@ -10,6 +10,9 @@ import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BatchShort,
+  BLADEBURNER_LEVELLED_ACTIONS,
+  BLADEBURNER_SKILL_NAMES,
+  BLADEBURNER_SKILL_WORKER_RAM_GB,
   BLADEBURNER_WORKER_RAM_GB,
   batcherIncomePerGigabyteSecond,
   batchPlan,
@@ -257,7 +260,7 @@ describe("the controller", () => {
     expect(agent.lastSent()?.batcher?.config.hosts).toContain("home");
   });
 
-  test("beside Bladeburner's reading worker (#377's review): its 42.6 GB kept too while the rule asks for it", () => {
+  test("beside Bladeburner's reading worker (#377's review): its 50.6 GB kept too while the rule asks for it", () => {
     const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
     channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
     new DesiredStateController({ channel, store });
@@ -294,6 +297,46 @@ describe("the controller", () => {
     // batches beside the Agent's (the gate counts home beyond `homeKeptGbOf` alone: it stays open).
     expect(agent.lastSent()?.bladeburner).toEqual({ joinTheFaction: false });
     expect(agent.lastSent()?.batcher?.config.hosts).toContain("home");
+    expect(agent.lastSent()?.batcher?.config.homeKeptGb).toBeCloseTo(kept + BLADEBURNER_WORKER_RAM_GB, 9);
+    // With skills to buy (#381's review): the skills' worker's 9.6 GB kept too; bought, not.
+    const withReading = (points: number): MediumSnapshotData => ({
+      ...inDivision,
+      player: {
+        ...inDivision.player,
+        mults: {
+          ...(inDivision.player as { mults: object }).mults,
+          bladeburner_success_chance: 1,
+          bladeburner_max_stamina: 1,
+          bladeburner_stamina_gain: 1,
+        },
+      },
+      bladeburner: {
+        rank: 30,
+        problems: [],
+        stamina: 39,
+        maxStamina: 39.8,
+        bonusSeconds: 0,
+        found: null,
+        current: null,
+        actions: BLADEBURNER_LEVELLED_ACTIONS.map(({ type, name }) => ({
+          type,
+          name,
+          level: 1,
+          maxLevel: 1,
+          count: 100,
+          chance: [0.3, 0.3],
+        })),
+        skillPoints: points,
+        skillLevels: Object.fromEntries(BLADEBURNER_SKILL_NAMES.map((skill) => [skill, 0])),
+      },
+    });
+    agent.send("medium", withReading(10));
+    expect(agent.lastSent()?.intents.some((each) => each.action === "upgradeBladeburnerSkill")).toBe(true);
+    expect(agent.lastSent()?.batcher?.config.homeKeptGb).toBeCloseTo(
+      kept + BLADEBURNER_WORKER_RAM_GB + BLADEBURNER_SKILL_WORKER_RAM_GB,
+      9,
+    );
+    agent.send("medium", withReading(0));
     expect(agent.lastSent()?.batcher?.config.homeKeptGb).toBeCloseTo(kept + BLADEBURNER_WORKER_RAM_GB, 9);
     // Out of it: no worker, nothing more kept.
     agent.send("medium", {

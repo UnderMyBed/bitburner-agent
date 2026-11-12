@@ -30,6 +30,7 @@ const DESTROY_INTO_2 = intent({ action: "destroyBitNode", args: { nextBitNode: 2
 const CLOSE_GAME = intent({ action: "closeGame", args: {} });
 const CREATE_GANG = intent({ action: "createGang", args: { faction: "NiteSec" } });
 const JOIN_BLADEBURNER = intent({ action: "joinBladeburnerDivision", args: {} });
+const OVERCLOCK_3 = intent({ action: "upgradeBladeburnerSkill", args: { skill: "Overclock", level: 3 } });
 const notDone = (problem: string): EffectorReport => ({ done: false, problem });
 const DONE: EffectorReport = { done: true, problem: null };
 
@@ -432,6 +433,7 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
     CLOSE_GAME,
     CREATE_GANG,
     JOIN_BLADEBURNER,
+    OVERCLOCK_3,
   ];
   /**
    * Each pool intent's `ui` worker run, its worker and arguments without the deadline, written out here rather than
@@ -454,6 +456,7 @@ describe("properties (§9.3, #179): every action, its effector done, not done, b
     ["close-game.js"],
     ["create-gang.js", "NiteSec"],
     ["join-bladeburner.js"],
+    ["bladeburner-skill.js", "Overclock", 3],
   ];
   /** What a stand-in worker does on one run: reports done or not done, is still running, can't start, or is silent. */
   const ANSWERS = ["done", "notDone", "busy", "cantStart", "silent"] as const;

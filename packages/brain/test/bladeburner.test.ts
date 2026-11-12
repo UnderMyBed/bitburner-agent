@@ -123,7 +123,7 @@ describe("the rule", () => {
 
   test("outside BN6 and BN7 nothing, SF6 and SF7 or not; with no slow snapshot, nothing either", () => {
     const rule = new BladeburnerRule();
-    const none = { work: null, intent: null, state: null };
+    const none = { work: null, intent: null, state: null, skillIntents: [] };
     for (const slowSnapshot of [slow(1), slow(2, { 6: 1, 7: 1 }), slow(5, { 6: 3 }), slow(8, { 7: 3 })]) {
       expect(decide(rule, medium({ levels: TRAINED }), slowSnapshot)).toEqual(none);
       expect(decide(rule, medium(), slowSnapshot)).toEqual(none);
@@ -140,6 +140,7 @@ describe("the rule", () => {
         work: { kind: "class", location: "Powerhouse Gym", classType: "str" },
         intent: null,
         state: null,
+        skillIntents: [],
       });
       expect(rule.view().stage).toBe("training");
       expect(rule.training()).toBe(true);
@@ -158,7 +159,12 @@ describe("the rule", () => {
       classType: "dex",
     });
     const poor = new BladeburnerRule();
-    expect(decide(poor, medium({ money: 50_000 }))).toEqual({ work: null, intent: null, state: null });
+    expect(decide(poor, medium({ money: 50_000 }))).toEqual({
+      work: null,
+      intent: null,
+      state: null,
+      skillIntents: [],
+    });
     expect(poor.training()).toBe(false);
     expect(poor.view().line).toBe(
       "Bladeburner: training to join, training waits for money for a gym: $72,000 at Iron Gym (10 minutes of its " +
@@ -172,6 +178,7 @@ describe("the rule", () => {
       work: null,
       intent: travelIntent("Sector-12"),
       state: null,
+      skillIntents: [],
     });
     expect(travelIntent("Sector-12")).toEqual({
       action: "travel",
@@ -187,6 +194,7 @@ describe("the rule", () => {
       work: { kind: "class", location: "Powerhouse Gym", classType: "str" },
       intent: null,
       state: null,
+      skillIntents: [],
     });
     // With too little for the travel and a gym: it waits, and says so.
     const poor = new BladeburnerRule();
@@ -203,7 +211,7 @@ describe("the rule", () => {
     const update = (ownersWork: boolean, nowMs: number, changes: Parameters<typeof medium>[0] = {}) =>
       rule.update({ mediumData: medium(changes), slowData: slow(6), homeKeptGb: 32, ownersWork, nowMs });
     expect(update(false, 1)).toMatchObject({ work: { location: "Powerhouse Gym" } });
-    expect(update(true, 2)).toEqual({ work: null, intent: null, state: null });
+    expect(update(true, 2)).toEqual({ work: null, intent: null, state: null, skillIntents: [] });
     expect(rule.training()).toBe(false);
     expect(rule.view().line).toBe(
       "Bladeburner: training to join held for your work on the dashboard (strength 1, defense 1, dexterity 1, agility 1)",
@@ -244,6 +252,7 @@ describe("the rule", () => {
       work: null,
       intent: travelIntent("Aevum"),
       state: null,
+      skillIntents: [],
     });
     expect(rule.view().training?.gym).toBe("Crush Fitness Gym");
   });
@@ -254,6 +263,7 @@ describe("the rule", () => {
       work: null,
       intent: JOIN_BLADEBURNER_INTENT,
       state: null,
+      skillIntents: [],
     });
     expect(JOIN_BLADEBURNER_INTENT).toEqual({
       action: "joinBladeburnerDivision",
@@ -276,16 +286,17 @@ describe("the rule", () => {
     }
   });
 
-  test("in the division: no work, no join; the worker only once home's RAM beyond its reserve holds its 42.6 GB (#375)", () => {
+  test("in the division: no work, no join; the worker only once home's RAM beyond its reserve holds its 50.6 GB (#375)", () => {
     const rule = new BladeburnerRule();
     // After an install, the stats back at 1, the division kept: no training.
     expect(decide(rule, medium({ inBladeburner: true, homeRam: 64 }), slow(6, { 4: 3 }), KEPT_AT_SF4_3)).toEqual({
       work: null,
       intent: null,
       state: null,
+      skillIntents: [],
     });
     expect(rule.view().line).toBe(
-      "Bladeburner: in the division; its reading waits for home's RAM: 42.6 GB beyond the 65.9 GB home keeps, and home " +
+      "Bladeburner: in the division; its reading waits for home's RAM: 50.6 GB beyond the 65.9 GB home keeps, and home " +
         "has 64 GB",
     );
     expect(decide(rule, medium({ inBladeburner: true, homeRam: 128 }), slow(6, { 4: 3 }), KEPT_AT_SF4_3).state).toEqual(

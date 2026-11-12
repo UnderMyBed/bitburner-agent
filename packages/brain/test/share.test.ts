@@ -358,7 +358,7 @@ test("home among the batcher's hosts (#340): the share keeps on home what the ba
   expect(config.sharing?.homeKeptGb).toBe(kept);
 });
 
-test("beside Bladeburner's reading worker (#377's re-review): the share keeps its 42.6 GB too, in the division", () => {
+test("beside Bladeburner's reading worker (#377's re-review): the share keeps its 50.6 GB too, in the division", () => {
   const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
   channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
   const controller = new DesiredStateController({ channel, store });

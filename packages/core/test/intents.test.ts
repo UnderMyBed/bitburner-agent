@@ -49,6 +49,8 @@ describe("parseIntentRequest", () => {
     ["createGang", { faction: "NiteSec" }],
     ["createGang", { faction: "Slum Snakes" }],
     ["joinBladeburnerDivision", {}],
+    ["upgradeBladeburnerSkill", { skill: "Overclock", level: 90 }],
+    ["upgradeBladeburnerSkill", { skill: "Cyber's Edge", level: 1 }],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,

@@ -41,9 +41,20 @@
  * - **Bonus time:** a second's tick takes up to 5 seconds' stored cycles (`:1376-1380`), so the actions run up to 5
  *   times as fast while there is bonus time (`getBonusTime`, `NetscriptFunctions/Bladeburner.ts:367-370`).
  * - **One focus:** any other work stops the action, and starting one stops the work (`:178-180`, `:1356-1368`).
- * Left out, and labelled: the skills (B3: their multipliers at 1 here, `getSkillMult`'s default, `:755-757`), the
- * cities and chaos (B4), Black Ops (B5), teams (an operation's team bonus at 0 members: 1) and random events.
+ * - **The skills** (B3, #379; ./bladeburner-skills.ts): the success skills on competence, Reaper and Evasive System on
+ *   the combat stats it, the time and the stamina read (`getEffectiveSkillLevel`, `:759-774`), Overclock on the time,
+ *   Cyber's Edge on the max stamina and its regain; each at 1 with no levels (`getSkillMult`'s default, `:755-757`).
+ * Left out, and labelled: the cities and chaos (B4), Black Ops (B5), teams (an operation's team bonus at 0 members: 1)
+ * and random events.
  */
+import {
+  type BladeburnerSkillLevels,
+  type BladeburnerSkillMults,
+  type BladeburnerSkillPlan,
+  bladeburnerSkillMultsOf,
+  NO_BLADEBURNER_SKILLS,
+  planBladeburnerSkills,
+} from "./bladeburner-skills.ts";
 
 /** A contract's or operation's type, as the NS API names it (`Bladeburner/Enums.ts`). */
 export type BladeburnerLevelledType = "Contracts" | "Operations";
@@ -360,22 +371,71 @@ export interface BladeburnerCityFigures {
 }
 
 /**
+ * A stat's level as Bladeburner reads it (`getEffectiveSkillLevel`, `Bladeburner.ts:759-774`): a combat stat's or
+ * charisma's times its skill multiplier (Reaper's, Evasive System's), the others as they are.
+ */
+export function effectiveLevel(
+  person: BladeburnerPerson,
+  stat: BladeburnerPersonStat,
+  skills: BladeburnerSkillMults = NO_BLADEBURNER_SKILLS,
+): number {
+  const level = person.skills[stat];
+  switch (stat) {
+    case "strength":
+      return level * skills.effStrength;
+    case "defense":
+      return level * skills.effDefense;
+    case "dexterity":
+      return level * skills.effDexterity;
+    case "agility":
+      return level * skills.effAgility;
+    case "charisma":
+      return level * skills.effCharisma;
+    default:
+      return level;
+  }
+}
+
+/**
+ * The part of an action's competence the skills move (`Actions/Action.ts:174-187`): the stats' weighted levels, at
+ * their effective levels, times the success skills' multipliers that apply to it (all; its type's, `Actions/
+ * Contract.ts:30-32`, `Actions/Operation.ts:92-94`; stealth's; killing's). The rest (intelligence, stamina, team,
+ * population, augmentations) is the same at any skill levels.
+ */
+export function actionSkillCompetence(
+  action: BladeburnerLevelledAction,
+  person: BladeburnerPerson,
+  skills: BladeburnerSkillMults = NO_BLADEBURNER_SKILLS,
+): number {
+  let competence = 0;
+  for (const stat of BLADEBURNER_PERSON_STATS) {
+    competence += action.weights[stat] * effectiveLevel(person, stat, skills) ** action.decays[stat];
+  }
+  competence *= skills.successAll;
+  competence *= action.type === "Contracts" ? skills.successContract : skills.successOperation;
+  if (action.isStealth) competence *= skills.successStealth;
+  if (action.isKill) competence *= skills.successKill;
+  return competence;
+}
+
+/**
  * The chance of `action` at `level` (`Actions/Action.ts:169-196`), at a city's population (the true one for the real
- * chance, the estimate for the estimated), with the stamina penalty. The skills at 0 and no team: their multipliers 1
- * (B3's, and labelled). Raid is 0 with no communities (`Actions/Operation.ts:63-68`).
+ * chance, the estimate for the estimated), with the stamina penalty and the skills' multipliers (none: all 1). No team:
+ * its bonus 1 (labelled). Raid is 0 with no communities (`Actions/Operation.ts:63-68`).
  */
 export function actionSuccessChance(
   action: BladeburnerLevelledAction,
   level: number,
   person: BladeburnerPerson,
-  { city, penalty }: { city: BladeburnerCityFigures; penalty: number },
+  {
+    city,
+    penalty,
+    skills = NO_BLADEBURNER_SKILLS,
+  }: { city: BladeburnerCityFigures; penalty: number; skills?: BladeburnerSkillMults },
 ): number {
   if (action.name === "Raid" && city.communities <= 0) return 0;
   let difficulty = actionDifficulty(action, level);
-  let competence = 0;
-  for (const stat of BLADEBURNER_PERSON_STATS) {
-    competence += action.weights[stat] * person.skills[stat] ** action.decays[stat];
-  }
+  let competence = actionSkillCompetence(action, person, skills);
   // `calculateIntelligenceBonus(int, 0.75)` (`PersonObjects/formulas/intelligence.ts`).
   competence *= 1 + (0.75 * person.skills.intelligence ** 0.8) / 600;
   competence *= penalty;
@@ -401,11 +461,11 @@ export function actionSuccessRange(real: number, est: number, population: number
   return [clamp(low), clamp(high)];
 }
 
-/** statFac: ½(agi^0.04 + dex^0.035 + agi/10,000 + dex/10,000) (`Actions/Action.ts:110-117`). */
-function actionStatFactor(person: BladeburnerPerson): number {
+/** statFac: ½(agi^0.04 + dex^0.035 + agi/10,000 + dex/10,000), at the effective levels (`Actions/Action.ts:110-117`). */
+function actionStatFactor(person: BladeburnerPerson, skills: BladeburnerSkillMults): number {
   const c = BLADEBURNER_CONSTANTS;
-  const agility = person.skills.agility;
-  const dexterity = person.skills.dexterity;
+  const agility = effectiveLevel(person, "agility", skills);
+  const dexterity = effectiveLevel(person, "dexterity", skills);
   return (
     0.5 *
     (agility ** c.effAgiExponentialFactor +
@@ -415,10 +475,18 @@ function actionStatFactor(person: BladeburnerPerson): number {
   );
 }
 
-/** A contract's or operation's time, in seconds: ⌈max(1, difficulty/10 / statFac)⌉ (`Actions/Action.ts:105-122`). */
-export function actionSeconds(action: BladeburnerLevelledAction, level: number, person: BladeburnerPerson): number {
+/**
+ * A contract's or operation's time, in seconds: ⌈max(1, difficulty/10 × the skills' time multiplier (Overclock's) /
+ * statFac)⌉ (`Actions/Action.ts:105-122`).
+ */
+export function actionSeconds(
+  action: BladeburnerLevelledAction,
+  level: number,
+  person: BladeburnerPerson,
+  skills: BladeburnerSkillMults = NO_BLADEBURNER_SKILLS,
+): number {
   const baseTime = actionDifficulty(action, level) / BLADEBURNER_CONSTANTS.difficultyToTimeFactor;
-  return Math.ceil(Math.max(1, baseTime / actionStatFactor(person)));
+  return Math.ceil(Math.max(1, (baseTime * skills.actionTime) / actionStatFactor(person, skills)));
 }
 
 /** A success's rank: rankGain × rewardFac^(level − 1) × `BladeburnerRank`, ±10% (`Formulas.ts:9-28`). */
@@ -457,16 +525,48 @@ export function actionHpLoss(action: BladeburnerLevelledAction, level: number): 
   return action.hpLoss * difficultyMultiplier(actionDifficulty(action, level));
 }
 
-/** The max stamina: (agi^0.8 + bonus) × `bladeburner_max_stamina` (`Bladeburner.ts:1329-1337`). */
-export function maxStaminaOf(person: BladeburnerPerson, staminaBonus: number): number {
-  return Math.max((person.skills.agility ** 0.8 + staminaBonus) * person.mults.bladeburner_max_stamina, 1e-9);
+/**
+ * The max stamina: (agi^0.8 + bonus) × the skills' stamina multiplier (Cyber's Edge's) × `bladeburner_max_stamina`, the
+ * agility effective (`Bladeburner.ts:1329-1345`).
+ */
+export function maxStaminaOf(
+  person: BladeburnerPerson,
+  staminaBonus: number,
+  skills: BladeburnerSkillMults = NO_BLADEBURNER_SKILLS,
+): number {
+  const agility = effectiveLevel(person, "agility", skills);
+  return Math.max((agility ** 0.8 + staminaBonus) * skills.stamina * person.mults.bladeburner_max_stamina, 1e-9);
 }
 
-/** The stamina regained a second: (0.0085 + max/70,000) × agi^0.17 × `bladeburner_stamina_gain` (`:1319-1327`). */
-export function staminaGainPerSecond(person: BladeburnerPerson, maxStamina: number): number {
+/**
+ * The stamina regained a second: (0.0085 + max/70,000) × agi^0.17 × the skills' stamina multiplier ×
+ * `bladeburner_stamina_gain`, the agility effective (`Bladeburner.ts:1319-1327`).
+ */
+export function staminaGainPerSecond(
+  person: BladeburnerPerson,
+  maxStamina: number,
+  skills: BladeburnerSkillMults = NO_BLADEBURNER_SKILLS,
+): number {
   const c = BLADEBURNER_CONSTANTS;
-  const gain = (c.staminaGainPerSecond + maxStamina / c.maxStaminaToGainFactor) * person.skills.agility ** 0.17;
-  return Math.max(0, gain * person.mults.bladeburner_stamina_gain);
+  const agility = effectiveLevel(person, "agility", skills);
+  const gain = (c.staminaGainPerSecond + maxStamina / c.maxStaminaToGainFactor) * agility ** 0.17;
+  return Math.max(0, gain * skills.stamina * person.mults.bladeburner_stamina_gain);
+}
+
+/**
+ * The max stamina at other skill levels (#379), from the one read at `read`'s multipliers: the bonus (Training's,
+ * `Bladeburner.ts:1100`) is what the max read holds beyond its agility's part. The game scales the stamina with the max
+ * (`:1338-1345`), so the penalty stays.
+ */
+export function maxStaminaAtSkills(
+  person: BladeburnerPerson,
+  maxStamina: number,
+  read: BladeburnerSkillMults,
+  planned: BladeburnerSkillMults,
+): number {
+  const divisor = read.stamina * person.mults.bladeburner_max_stamina;
+  const bonus = divisor > 0 ? Math.max(0, maxStamina / divisor - effectiveLevel(person, "agility", read) ** 0.8) : 0;
+  return maxStaminaOf(person, bonus, planned);
 }
 
 /** The successes level `maxLevel` + 1 opens after: ⌈½·M·(2b + M − 1)⌉ (`Actions/LevelableAction.ts:54-56`). */
@@ -525,10 +625,16 @@ export function chanceLowAt(
   read: BladeburnerActionReading,
   level: number,
   penalty: number,
+  /** The competence at other skill levels over the competence read (#379): 1 at the levels read. */
+  competenceRatio = 1,
 ): number | null {
   if (!(penalty > 0)) return null;
-  if (read.chance[1] >= 1 && level > read.level + 1) return null;
-  const atRead = Math.min(1, read.chance[0] / penalty);
+  const clamped = read.chance[1] >= 1;
+  if (clamped && level > read.level + 1) return null;
+  // The range scales with competence as with 1/difficulty (#379); clamped, a skill's rise isn't credited (the low end
+  // read may be over the true one already), so the rule errs low there.
+  const ratio = clamped ? Math.min(1, competenceRatio) : competenceRatio;
+  const atRead = Math.min(1, (read.chance[0] / penalty) * ratio);
   return Math.min(1, atRead * action.difficultyFac ** (read.level - level));
 }
 
@@ -621,11 +727,15 @@ export interface BladeburnerActionPlan {
  * - **The rest:** the best of the three with that work, by the cycle's rank a second; and resting alone (Field
  *   Analysis's rank) when no work beats it.
  * - **Ties:** the first in the game's order (contracts, then operations, each level from 1).
+ * - **The skills** (#379): the levels read (`skills.read`) are in the game's range already, and in the time and the
+ *   regain computed here. At other levels (`skills.planned`: the skills' forecast, ./bladeburner-skills.ts), each
+ *   action's low end scales with its competence (`actionSkillCompetence`), the time and the regain are computed at
+ *   those levels, and the max stamina with them (`maxStaminaAtSkills`). No skills given: none read or planned.
  * Left out, and labelled: a failure's HP (#377's review), which costs money at the hospital, not rank (its mean is
  * `hpLoss`; the run report shows the visits and their money): so the choice is optimistic for the actions that lose
  * the most HP (Raid about 386 a failure, Stealth Retirement 85, Assassination 50, Bounty Hunter 5, against 20 HP at
- * defense 100), the money traded for rank the planner's (decision 67); money (contracts pay as a by-product); the
- * skills, teams and chaos (B3, B4).
+ * defense 100), the money traded for rank the planner's (decision 67); money (contracts pay as a by-product); teams
+ * and chaos (B4).
  */
 export function chooseBladeburnerAction({
   readings,
@@ -634,6 +744,7 @@ export function chooseBladeburnerAction({
   maxStamina,
   rankMultiplier,
   speed,
+  skills = {},
 }: {
   readings: readonly BladeburnerActionReading[];
   person: BladeburnerPerson;
@@ -642,9 +753,15 @@ export function chooseBladeburnerAction({
   rankMultiplier: number;
   /** Game seconds a real second: 5 with bonus time, else 1. */
   speed: number;
+  /** The skill levels read (none: all 0), and those to forecast at (none: the levels read). */
+  skills?: { read?: BladeburnerSkillLevels; planned?: BladeburnerSkillLevels };
 }): BladeburnerActionPlan {
-  const regain = staminaGainPerSecond(person, maxStamina);
-  const rests = bladeburnerRests(regain, maxStamina, rankMultiplier);
+  const readMults = bladeburnerSkillMultsOf(skills.read ?? {});
+  const mults = skills.planned === undefined ? readMults : bladeburnerSkillMultsOf(skills.planned);
+  const maxPlanned =
+    skills.planned === undefined ? maxStamina : maxStaminaAtSkills(person, maxStamina, readMults, mults);
+  const regain = staminaGainPerSecond(person, maxPlanned, mults);
+  const rests = bladeburnerRests(regain, maxPlanned, rankMultiplier);
   const penalty = staminaPenalty(stamina, maxStamina);
   const restAlone = rests.reduce((best, each) => (each.rankPerSecond > best.rankPerSecond ? each : best));
   let best: BladeburnerActionPlan = {
@@ -657,10 +774,15 @@ export function chooseBladeburnerAction({
   for (const read of readings) {
     const action = bladeburnerLevelledAction(read.type, read.name);
     if (action === null) continue;
+    const readCompetence = actionSkillCompetence(action, person, readMults);
+    const ratio =
+      skills.planned === undefined || !(readCompetence > 0)
+        ? 1
+        : actionSkillCompetence(action, person, mults) / readCompetence;
     for (let level = 1; level <= Math.max(1, read.maxLevel); level++) {
-      const chance = chanceLowAt(action, read, level, penalty);
+      const chance = chanceLowAt(action, read, level, penalty, ratio);
       if (chance === null) continue;
-      const seconds = actionSeconds(action, level, person);
+      const seconds = actionSeconds(action, level, person, mults);
       if (read.count < 1 + (BLADEBURNER_READING_SECONDS * speed) / seconds) continue;
       const { mean, variance } = attemptRankMoments(
         chance,
@@ -698,6 +820,25 @@ export function chooseBladeburnerAction({
     }
   }
   return best;
+}
+
+/** What the rule's forecast reads (#375): `chooseBladeburnerAction`'s figures but the skills. */
+export type BladeburnerForecastInput = Omit<Parameters<typeof chooseBladeburnerAction>[0], "skills">;
+
+/**
+ * The skills to buy (#379): core's `planBladeburnerSkills` from the levels and points read, each set of levels
+ * weighed by this rule's forecast there (`chooseBladeburnerAction`'s cycle of work and rest).
+ */
+export function chooseBladeburnerSkills(
+  input: BladeburnerForecastInput,
+  { levels, points, costMultiplier }: { levels: BladeburnerSkillLevels; points: number; costMultiplier: number },
+): BladeburnerSkillPlan {
+  return planBladeburnerSkills({
+    levels,
+    points,
+    costMultiplier,
+    rankPerSecond: (planned) => chooseBladeburnerAction({ ...input, skills: { read: levels, planned } }).rankPerSecond,
+  });
 }
 
 /**
