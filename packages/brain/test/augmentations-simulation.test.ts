@@ -370,7 +370,7 @@ test.each(
       notes.push(line);
       if (process.env.AUGMENTATION_DAEDALUS_LOG) appendFileSync(process.env.AUGMENTATION_DAEDALUS_LOG, `${line}\n`);
     };
-    // Sharing off, so A5's rate is A6's (the share's bonus left out); the money kept until the wait or the commit, and
+    // Sharing off, so A5's rate is A6's with no share bonus in either; the money kept until the wait or the commit, and
     // no install before the edit (a quick install of NeuroFlux Governor's levels would reset its hacking level).
     const controller = fresh.controller();
     controller.setAugmentationsEnabled(false);
