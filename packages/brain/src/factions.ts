@@ -366,6 +366,8 @@ export interface FactionInputs {
   nowMs: number | null;
   /** The owner's work is set: it wins. */
   ownersWork: boolean;
+  /** Why the brain's other work goes instead (#367: Bladeburner's training), or null (absent: none). */
+  heldFor?: string | null;
   /** The Augmentations switch (#225): off, no donation follows, so the work is to each augmentation's reputation. */
   augmentationsEnabled?: boolean;
   /** The brain's faction work's switch. */
@@ -581,7 +583,7 @@ export class FactionRule {
       ? "the brain's faction work is switched off"
       : ownersWork
         ? "your work on the dashboard"
-        : null;
+        : (inputs.heldFor ?? null);
     const sent = plan.choice !== null && notSent === null ? plan.choice : null;
     this.#view = {
       ...this.#view,

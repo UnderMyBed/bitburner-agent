@@ -1,6 +1,7 @@
 // agent/<deploymentId>/snapshot-medium.js: the medium tier's worker (#89). The player, the hacking programs they own
 // (#136), and every reachable server's RAM, cores, money, security and access.
-// RAM: `getPlayer` 0.5 + `scan` 0.2 + `getServer` 2.0 + `fileExists` 0.1 + `hasTorRouter` 0.05 (ram-budget.json).
+// RAM: `getPlayer` 0.5 + `scan` 0.2 + `getServer` 2.0 + `fileExists` 0.1 + `hasTorRouter` 0.05 (ram-budget.json);
+// `bladeburner.inBladeburner` (#367) nothing (`Netscript/RamCostGenerator.ts:335`), and it needs no access.
 import { type MediumSnapshotData, PORT_OPENER_PROGRAMS } from "@bitburner-agent/core";
 import type { NS } from "../ns.ts";
 import { reachableHostnames } from "../workers/reachable-hostnames.ts";
@@ -12,6 +13,7 @@ export function main(ns: NS): void {
     player: { ...ns.getPlayer() },
     hasTorRouter: ns.hasTorRouter(),
     programs: PORT_OPENER_PROGRAMS.filter((program) => ns.fileExists(program, "home")),
+    inBladeburner: ns.bladeburner.inBladeburner(),
     servers: reachableHostnames(ns).map((hostname) => {
       const server = ns.getServer(hostname);
       return {

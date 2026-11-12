@@ -540,17 +540,17 @@ describe("cloud servers (#194)", () => {
     );
   });
 
-  test("outside BN1, BN2, BN4 and BN5, the price is unknown; the BN1-only assumptions listed under the BitNode (#321)", () => {
+  test("outside the BitNodes core knows, the price is unknown; the BN1-only assumptions listed under the BitNode (#321)", () => {
     withPurchases(3);
     const { text } = report({ verbose: true });
     expect(text).toContain(`    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, price unknown in BitNode 3`);
     expect(text).toContain("    in all: 1 bought, 1 upgraded\n");
     expect(text).toContain(
-      "    the brain buys none in BitNode 3: cloud server prices are known only in BN1, BN2, BN4 and BN5\n",
+      "    the brain buys none in BitNode 3: cloud server prices are known only in BN1, BN2, BN4, BN5, BN6 and BN7\n",
     );
     expect(text).toContain(
-      "\n    taken as BN1's in BitNode 3 (#321):\n      BitNode 3's multipliers: the brain knows those of BN1, BN2, BN4 " +
-        "and BN5 only",
+      "\n    taken as BN1's in BitNode 3 (#321):\n      BitNode 3's multipliers: the brain knows those of BN1, BN2, BN4, " +
+        "BN5, BN6 and BN7 only",
     );
     expect(report().text).toContain(
       `    BN3.1 1, ${at(5 * MINUTE)} to ${at(12 * MINUTE)}: 1 server, 8 GB → 2 servers, 72 GB ` +
@@ -2575,11 +2575,13 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
   const busyWindow = { environment: "E0", sinceMs: T0, untilMs: T0 + BUSY_MS + 30 * SECOND } as const;
   const CLOUD_SERVERS = 20;
   /**
-   * The default report's most lines and characters for `busyRun` (#245): its own are 201 and 14,366 (with #349's
-   * intelligence line); --verbose's lines (909) are over 4 times the bound.
+   * The default report's most lines and characters for `busyRun` (#245): its own are 204 and 14,527 (with #349's
+   * intelligence line, and #367's section 8: exactly 3 lines and 161 characters with no Bladeburner played, added to
+   * the bounds as they were, 201 and 14,500, with no slack); --verbose's
+   * lines (912) are over 4 times the bound.
    */
-  const BUSY_REPORT_LINES = 201;
-  const BUSY_REPORT_CHARACTERS = 14_500;
+  const BUSY_REPORT_LINES = 204;
+  const BUSY_REPORT_CHARACTERS = 14_661;
   /**
    * pserv-index's RAM at `offsetMs`, or null where the medium snapshots don't show it: in cycle 1, each bought at 8 GB
    * a minute apart from 1 min, all upgraded to 32 GB at 25 min; the install at 30 min deletes them; in cycle 2, ten
@@ -3053,10 +3055,10 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
         for (const [heading, most] of BLOCKS) {
           expect(blockOf(brief.text, heading).length, heading).toBeLessThanOrEqual(most(cycles));
         }
-        // About 1,350 characters a cycle (2b's block is most of it), and 9,300 besides: 17,388 for 6 cycles at 10 of
-        // each, 17,423 at 40, and 28,322 for 14 over 3 BitNodes (#349's intelligence line in each). Not how busy each
-        // cycle was.
-        expect(brief.text.length).toBeLessThanOrEqual(9_065 + 1_400 * cycles);
+        // About 1,350 characters a cycle (2b's block is most of it), and 9,500 besides: 17,549 for 6 cycles at 10 of
+        // each, 17,584 at 40, and 28,483 for 14 over 3 BitNodes (#349's intelligence line in each; #367's section 8, 161
+        // characters with no Bladeburner played, added to 9,065 with no slack). Not how busy each cycle was.
+        expect(brief.text.length).toBeLessThanOrEqual(9_226 + 1_400 * cycles);
         // What comes again each reset is one line, not one a reset (#245's second round): the backdoors, the joins,
         // and each BitNode's lists.
         const lines = brief.text.split("\n");
@@ -5370,5 +5372,52 @@ describe("the gang's objective before the window (#357, #368's re-review)", () =
       [-26 * 3_600_000, "2:-5000"],
       [-25 * 3_600_000, "2:0"],
     ]);
+  });
+});
+
+describe("section 8, Bladeburner (#367): the owner's hold, stored, stops the training's overdue clock", () => {
+  /** A BN6 slow snapshot, and a medium one with every combat stat at `level` (no experience), no multipliers. */
+  const bn6Slow = (): SlowSnapshotData => {
+    const data = slowData();
+    return { ...data, resetInfo: { ...data.resetInfo, currentNode: 6 } as SlowSnapshotData["resetInfo"] };
+  };
+  const bn6Medium = (level: number) => {
+    const data = mediumData({ money: 0 });
+    const stats = ["strength", "defense", "dexterity", "agility"];
+    data.player = {
+      ...data.player,
+      skills: { ...(data.player.skills as object), ...Object.fromEntries(stats.map((each) => [each, level])) },
+      exp: Object.fromEntries(stats.map((each) => [each, 0])),
+      mults: Object.fromEntries(
+        stats.flatMap((each) => [
+          [each, 1],
+          [`${each}_exp`, 1],
+        ]),
+      ),
+      city: "Sector-12",
+    };
+    return { ...data, inBladeburner: false };
+  };
+  /** Twice Iron Gym's 4 × 11,255.3 s from nothing, and 10 min: 25 h 10 min. */
+  const BOUND_MS = 25 * 60 * MINUTE + 10 * MINUTE;
+  const overdue = (failures: string[]) => failures.filter((each) => each.startsWith("the training past"));
+  const run = (held: boolean) => {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("slow", 10 * SECOND, bn6Slow());
+    snapshot("medium", 10 * SECOND, bn6Medium(1));
+    if (held) {
+      event(MINUTE, "bladeburnerTrainingHeld", { held: true });
+      event(3 * 60 * MINUTE, "bladeburnerTrainingHeld", { held: false });
+    }
+    snapshot("medium", BOUND_MS + 30 * MINUTE, bn6Medium(50));
+    return runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + BOUND_MS + 31 * MINUTE });
+  };
+
+  test("unheld, the training 30 min past its bound fails", () => {
+    expect(overdue(run(false).failures)).toHaveLength(1);
+  });
+
+  test("held for 2 h 59 min by the owner's work, stored as the rule's events: the same reading passes", () => {
+    expect(overdue(run(true).failures)).toEqual([]);
   });
 });

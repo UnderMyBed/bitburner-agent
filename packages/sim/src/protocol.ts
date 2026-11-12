@@ -518,10 +518,20 @@ export interface HostMethods {
   /** Sets the player's gang's respect (finite, 0 or more), for test scenarios (#330). A harness edit. No gang throws. */
   "diagnostics.setGangRespect"(params: { respect: number }): void;
   /**
+   * Sets the player's Bladeburner rank (finite, 0 or more) through the game's own `changeRank`, for test scenarios
+   * (#367). A harness edit. Not in the division throws.
+   */
+  "diagnostics.setBladeburnerRank"(params: { rank: number }): void;
+  /**
    * Gives the player charisma experience (finite, 0 or more) through the game's own `gainCharismaExp`, which sets the
    * skill from it, for test scenarios that need a job's required charisma (#155). A harness edit.
    */
   "diagnostics.gainCharismaExp"(params: { exp: number }): void;
+  /**
+   * Gives the player experience (finite, 0 or more) in each combat stat through the game's own gains, which set the
+   * skills from it, for test scenarios that need the Bladeburner division's 100s (#367). A harness edit.
+   */
+  "diagnostics.gainCombatExp"(params: { exp: number }): void;
   /**
    * Queues an augmentation (one of the game's names, not owned already but for NeuroFlux Governor), unpaid and not yet
    * installed, for test scenarios (#164). A harness edit, not something a player can do.

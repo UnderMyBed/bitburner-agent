@@ -277,7 +277,9 @@ describe("the destroy", () => {
   });
 
   test("past the BitNodes the brain can't play yet (#323): BN2.3 into BN5 again, the skipped logged and in the view", () => {
-    const skipped = "BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet";
+    const skipped =
+      "BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); " +
+      "BN3 skipped: no hacking multipliers or prices yet";
     const bn23 = { currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } };
     expect(update({ slowData: slow(bn23) })).toBe(true);
     expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(5));
@@ -626,7 +628,9 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
     "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
     "Source-File 5 at 3), but the run";
   const SKIPPED =
-    "BN6, BN7, BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
+    "BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); " +
+    "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 " +
+    "and BN12 skipped: no hacking multipliers or prices yet";
   const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
   const atCaps = { slowData: slow({ ownedSF: CAPS }) };
 
@@ -704,7 +708,8 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
       "on (into BitNode 2)",
     );
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } }))).toBe(
-      "on (into BitNode 5 (BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet))",
+      "on (into BitNode 5 (BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); BN3 skipped: " +
+        "no hacking multipliers or prices yet))",
     );
     expect(describeWorldDaemonSwitch(true, slow({ ownedSF: CAPS }))).toBe(
       `on (into BitNode 1 (${SKIPPED}), a replay (${REPLAY}))`,

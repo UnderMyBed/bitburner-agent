@@ -2105,7 +2105,9 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         const stored: unknown[] = [];
         controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
         daemonMedium();
-        const skipped = "BN6, BN7 and BN3 skipped: no hacking multipliers or prices yet";
+        const skipped =
+          "BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); " +
+          "BN3 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({ nextBitNode: 5, replay: null, skipped });
         daemonMedium();
         daemonMedium();
@@ -2161,8 +2163,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
           "Source-File 5 at 3), but the run";
         const skipped =
-          "BN6, BN7, BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or " +
-          "prices yet";
+          "BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); " +
+          "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({
           destroying: true,
           nextBitNode: 1,

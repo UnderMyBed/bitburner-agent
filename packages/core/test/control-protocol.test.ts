@@ -709,3 +709,36 @@ describe("the batcher (#205)", () => {
     expect(desiredStateWhileHolding(off, lastSent)).toEqual({ hackLoop, intents: [] });
   });
 });
+
+describe("Bladeburner (#367)", () => {
+  const state = { protocolVersion: 1, type: "desiredState", hackLoop: { enabled: false, target: null, hosts: [] } };
+  const bladeburnerOf = (bladeburner: unknown) => {
+    const parsed = parseBrainMessage(JSON.stringify({ ...state, intents: [], bladeburner }));
+    if (!parsed.ok) return parsed.reason;
+    return parsed.message.type === "desiredState" ? parsed.message.bladeburner : "not a state";
+  };
+
+  test("absent or null, none is read: the message carries none; else its one field, the rest dropped", () => {
+    expect(bladeburnerOf(undefined)).toBeUndefined();
+    expect(bladeburnerOf(null)).toBeUndefined();
+    expect(bladeburnerOf({ joinTheFaction: true, extra: 1 })).toEqual({ joinTheFaction: true });
+    expect(bladeburnerOf({ joinTheFaction: false })).toEqual({ joinTheFaction: false });
+  });
+
+  test.each([
+    ["not an object", 3],
+    ["no joinTheFaction", {}],
+    ["a joinTheFaction that isn't true or false", { joinTheFaction: "yes" }],
+  ])("refused: %s", (_name, bladeburner) => {
+    expect(bladeburnerOf(bladeburner)).toBe("desiredState's bladeburner isn't { joinTheFaction: true or false }");
+  });
+
+  test("a held state carries none: nothing new starts while the brain holds", () => {
+    const desired = {
+      hackLoop: { enabled: false, target: null, hosts: [] },
+      intents: [],
+      bladeburner: { joinTheFaction: true },
+    };
+    expect(desiredStateWhileHolding(desired, desired)).toEqual({ hackLoop: desired.hackLoop, intents: [] });
+  });
+});

@@ -295,12 +295,34 @@ export function setGangMemberFigures(name: string, figures: Record<string, numbe
 }
 
 /**
+ * Sets the player's Bladeburner rank, through the game's own `changeRank` (`Bladeburner/Bladeburner.ts:1267-1293`: the
+ * max rank and skill points with it, and the faction's reputation if joined): a harness edit for test scenarios (#367,
+ * a rank no B1 run earns), not something a player can do. Not in the division throws.
+ */
+export function setBladeburnerRank(rank: number) {
+  if (!Player.bladeburner) throw new RangeError("not in the Bladeburner division");
+  Player.bladeburner.changeRank(Player, rank - Player.bladeburner.rank);
+}
+
+/**
  * Sets the player's gang's respect: a harness edit for test scenarios (#330's re-review, a gang of 12 recruited at
  * once), not something a player can do. No gang throws.
  */
 export function setGangRespect(respect: number) {
   if (!Player.gang) throw new RangeError("no gang");
   Player.gang.respect = respect;
+}
+
+/**
+ * Gives the player `exp` experience in each combat stat (strength, defense, dexterity and agility) through the game's
+ * own gains (`PersonObjects/Person.ts:66-140`), which set each skill from it: a harness edit for test scenarios (#367,
+ * the gym's hours), not something a player can do.
+ */
+export function gainCombatExp(exp: number) {
+  Player.gainStrengthExp(exp);
+  Player.gainDefenseExp(exp);
+  Player.gainDexterityExp(exp);
+  Player.gainAgilityExp(exp);
 }
 
 /**

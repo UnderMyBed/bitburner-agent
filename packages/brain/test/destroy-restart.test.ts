@@ -206,7 +206,8 @@ test("at the campaign order's caps (#311, #321): the brain's own destroy replays
     "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
     "Source-File 5 at 3), but the run";
   const skipped =
-    "BN6, BN7, BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
+    "BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); " +
+    "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
   expect(stored("bitNodeDestroySent")).toEqual([{ source: "brain", nextBitNode: 1, replay, skipped }]);
   expect(stored("worldDaemonStalled")).toEqual([]);
   expect(stored("brainStoppedAtBitNodeEnd")).toMatchObject([

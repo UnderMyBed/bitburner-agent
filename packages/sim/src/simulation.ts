@@ -262,8 +262,12 @@ export class Simulation {
       this.rpc.call("diagnostics.setGangMemberFigures", { name, figures }),
     /** Sets the player's gang's respect. A harness edit, for tests (#330). */
     setGangRespect: (respect: number) => this.rpc.call("diagnostics.setGangRespect", { respect }),
+    /** Sets the player's Bladeburner rank, through the game's own change. A harness edit, for tests (#367). */
+    setBladeburnerRank: (rank: number) => this.rpc.call("diagnostics.setBladeburnerRank", { rank }),
     /** Gives the player charisma experience, through the game's own gain. A harness edit, for test scenarios (#155). */
     gainCharismaExp: (exp: number) => this.rpc.call("diagnostics.gainCharismaExp", { exp }),
+    /** Gives the player each combat stat's experience, through the game's own gains. A harness edit, for tests (#367). */
+    gainCombatExp: (exp: number) => this.rpc.call("diagnostics.gainCombatExp", { exp }),
     /** Queues an augmentation, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
     queueAugmentation: (augmentation: string) => this.rpc.call("diagnostics.queueAugmentation", { augmentation }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */

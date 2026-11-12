@@ -20,6 +20,9 @@
 //   so a backup that can't be taken (no Remote File API connection) is tried once a minute, not every 20 s.
 // - Everything here is in memory: a disconnect, a new Agent or a restarted brain starts every gate again, the safe way.
 import {
+  BLADEBURNER_JOIN_LEVEL,
+  COMBAT_STATS,
+  combatPersonOf,
   FACTION_ENEMIES,
   type Intent,
   isIrreversibleIntent,
@@ -90,6 +93,9 @@ const newGate = (): Gate => ({
  *   allows a destroy with every Black Op done (`NetscriptFunctions/Singularity.ts:1176-1186`); the guard doesn't count
  *   that route, the conservative direction.
  * - Forming a gang (#325): its faction joined, as the game requires (`Gang/helpers.ts:22-24`).
+ * - Joining the Bladeburner division (#367): all four combat stats at 100, as the game requires
+ *   (`NetscriptFunctions/Bladeburner.ts:349-363`). Its access (BN6, BN7, SF6 or SF7) the rule checks; the game refuses
+ *   it otherwise, and nothing is joined.
  */
 export function guardFailure(
   intent: Intent,
@@ -102,7 +108,7 @@ export function guardFailure(
 
 /**
  * The part of `intent`'s guard that reads the snapshots, or null: a join's enemies, w0r1d_d43m0n's preconditions, a
- * gang's faction joined (#325).
+ * gang's faction joined (#325), the combat stats at 100 for the Bladeburner division (#367).
  */
 export function snapshotGuardFailure(
   intent: Intent,
@@ -110,6 +116,7 @@ export function snapshotGuardFailure(
   staticData: StaticSnapshotData | null,
 ): string | null {
   if (intent.action === "destroyBitNode") return worldDaemonGuardFailure(medium, staticData);
+  if (intent.action === "joinBladeburnerDivision") return bladeburnerGuardFailure(medium);
   if (intent.action !== "joinFaction" && intent.action !== "createGang") return null;
   const joined = (medium.player as { factions?: unknown } | undefined)?.factions;
   if (!Array.isArray(joined)) return "the medium snapshot has no list of the factions joined";
@@ -131,6 +138,16 @@ export function queueGuardFailure(intent: Intent, queue: Intent[]): string | nul
   if (!resetsTheGame(intent) && intent.action !== "closeGame") return null;
   const first = queue[0];
   return first !== undefined && first.id !== intent.id ? `${first.id}, queued before it, isn't done` : null;
+}
+
+/** The Bladeburner division's requirement on the medium snapshot (#367): each combat stat short of 100, or none read. */
+function bladeburnerGuardFailure(medium: MediumSnapshotData): string | null {
+  const person = combatPersonOf(medium.player);
+  if (person === null) return "the medium snapshot has no combat stats";
+  const short = COMBAT_STATS.filter((stat) => person.skills[stat] < BLADEBURNER_JOIN_LEVEL);
+  if (short.length === 0) return null;
+  const levels = short.map((stat) => `${stat} ${Math.floor(person.skills[stat])}`).join(", ");
+  return `${levels}: the division needs ${BLADEBURNER_JOIN_LEVEL} each`;
 }
 
 /** w0r1d_d43m0n's preconditions on the snapshots (#175): `worldDaemonProblem`, or what a snapshot lacks for them. */
