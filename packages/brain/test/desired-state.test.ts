@@ -3932,7 +3932,8 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
     expect(planner.controller.gangView().stage).toBe("managed");
     expect(planner.controller.augmentationsView().progress?.timing?.route).toBe("gang forming");
     expect(planner.sent()).toEqual([]);
-    // The slow snapshot shows NiteSec, the gang's faction: never short of Daedalus's count, no route (the count rule's).
+    // The slow snapshot shows NiteSec, the gang's faction: never short of Daedalus's count, so not #343's nor (1). With
+    // no members the gang earns no respect, so not (3) either (#357's second slice): the rules', as before.
     const state = bn2Slow.factions.state;
     const shown = {
       ...bn2Slow,

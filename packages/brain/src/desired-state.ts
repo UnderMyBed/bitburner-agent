@@ -499,6 +499,7 @@ export class DesiredStateController {
     log = () => {},
     installTiming = "planner",
     bn2Route = "planner",
+    gangRoute = bn2Route,
     environment = null,
   }: {
     channel: ControlChannel;
@@ -510,6 +511,11 @@ export class DesiredStateController {
     /** BN2's route (#357): the planner's; the rules' (#343's before the gang, money at 12) for a test's A/B alone. */
     bn2Route?: Bn2Route;
     /**
+     * The gang rule's own route (#357's (3) A/B, a test's alone): the objective at 12 the planner's while A6's install
+     * timing is the rules', so the A/B weighs the installs alone. Absent, `bn2Route`.
+     */
+    gangRoute?: Bn2Route;
+    /**
      * The store's environment (#360): the destroy estimate's prior is read from its slow snapshots, once a BitNode.
      * Null (tests of other rules): no prior, the estimate's time online from 0.
      */
@@ -519,7 +525,7 @@ export class DesiredStateController {
     this.#store = store;
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
-    this.#gang = new GangRule(log, store, { emit: (event) => this.#emit(event), route: bn2Route });
+    this.#gang = new GangRule(log, store, { emit: (event) => this.#emit(event), route: gangRoute });
     this.#bladeburner = new BladeburnerRule(log, (event) => this.#emit(event));
     this.#augmentations = new AugmentationRule({
       store,
@@ -1828,6 +1834,8 @@ export class DesiredStateController {
       shareBonus,
       // BN2 before the gang (#357's (1)): avmnite-02h's level, while the gang rule reads none.
       gangForming: this.#gangFormingInputs(),
+      // With the gang (#357's (3)): p and the plan's respect a cycle, as the gang rule's managed decision has them.
+      gangInstall: this.#gang.installFigures(),
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;

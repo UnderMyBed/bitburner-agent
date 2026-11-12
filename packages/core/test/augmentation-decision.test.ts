@@ -156,8 +156,10 @@ test("A8 with the gang's faction (#334): reached, its install; short, held only 
     sinceResetMs: number | null,
     daedalus: number | null = null,
     gangHoldOver = false,
+    gangPlanned = false,
   ) =>
     augmentationEndgame({
+      gangPlanned,
       installed,
       installable: [],
       queue: [],
@@ -200,4 +202,14 @@ test("A8 with the gang's faction (#334): reached, its install; short, held only 
   expect(endgame(1e6, 3_600_000, 462_491)).toEqual({ kind: "none" });
   // Reached at either: the install.
   expect(endgame(1e6, 3_600_000, 2.5e6)).toEqual({ kind: "redPill", donation: null });
+  // The planner's (#357's (3)): short there, its turn, never G5's hold, within the window or not; reached, the install.
+  expect(endgame(2e6, 3_600_000, null, false, true)).toEqual({
+    kind: "gang",
+    faction: "NiteSec",
+    reputation: 2e6,
+    needed: 2.5e6,
+  });
+  expect(endgame(1e6, null, null, false, true)).toMatchObject({ kind: "gang", reputation: 1e6 });
+  expect(endgame(1e6, 3_600_000, 1000, false, true)).toMatchObject({ kind: "gang" });
+  expect(endgame(2.5e6, 60_000, null, false, true)).toEqual({ kind: "redPill", donation: null });
 });

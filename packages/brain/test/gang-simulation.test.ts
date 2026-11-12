@@ -25,6 +25,7 @@ import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   augmentationsSoldBy,
   type FastSnapshotData,
+  favorAfterInstall,
   GANG_AUGMENTATION_HORIZON_MS,
   GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
   gangAscensionToMake,
@@ -45,6 +46,7 @@ import {
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
+import { describeGangInstallCost, type GangInstallCost, type InstallTimingView } from "../src/augmentations.ts";
 import { type GangEvent, gangSnapshotOf, gangWarfareFiguresOf } from "../src/gang.ts";
 import { GANG_WANTED_OVER_BOUND_MS } from "../src/gang-report.ts";
 import { formatDuration } from "../src/gap-report.ts";
@@ -784,4 +786,155 @@ test("the objective at 12 (#357's (2)) A/B, 20 virtual minutes an arm: the plann
   );
   // Two 20-minute arms in one test: CI took 94.8 s (#368's run) and 79.3 s (main at ffa7850), and went past 120 s on
   // #369's run. 300 s keeps CI's variance off the result, as #351 did for the checkpoints (#370).
+}, 300_000);
+
+/**
+ * #357's (3), an arm: the gang of 12 (`twelveToChoose`), member-01's ascension points `points` (its rate's), NiteSec
+ * at `reputation` (set after the gang formed, which zeroes it) and `money` ($10b unless said), harness edits; A6 on. Up to
+ * `windowMs` virtual: the time to The Red Pill's reputation at NiteSec (its slow snapshots, or The Red Pill bought),
+ * else how far it got, and each install chosen with its cost. The gang rule's objective is the planner's in both arms
+ * (the controller's test-only `gangRoute`): the arms differ in A6's install timing alone.
+ */
+async function installArm(
+  bn2Route: "planner" | "rules",
+  {
+    windowMs,
+    reputation = 0,
+    points = 4.5e11,
+    money = 1e10,
+  }: { windowMs: number; reputation?: number; points?: number; money?: number },
+) {
+  const fresh = await freshStartOf({
+    withDesiredState: true,
+    fixture: BN2,
+    bn2Route,
+    gangRoute: "planner",
+    beforeAgent: async (game) => {
+      await twelveToChoose(game);
+      await game.simulation.diagnostics.setGangMemberFigures("member-01", { hack_asc_points: points });
+      if (reputation > 0) await game.simulation.diagnostics.joinFactionWithReputation("NiteSec", reputation);
+      await game.simulation.diagnostics.setMoney(money);
+    },
+  });
+  const startMs = fresh.game.clock.now();
+  const niteSec = () =>
+    fresh.latest<SlowSnapshotData>("slow")?.factions?.state?.joined.find((each) => each.name === "NiteSec") ?? null;
+  const events = () =>
+    fresh.data.store.eventsInWindow({ environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() });
+  const redPillBought = () =>
+    events().some(
+      (event) =>
+        event.kind === "augmentationBought" &&
+        (event.detail as { augmentation?: string }).augmentation === "The Red Pill",
+    );
+  let reachedMs: number | null = null;
+  let last = { reputation: 0, favor: 0 };
+  while (fresh.game.clock.now() - startMs < windowMs && reachedMs === null) {
+    await fresh.game.run(30_000);
+    const faction = niteSec();
+    if (faction !== null) last = faction;
+    if ((faction !== null && faction.reputation >= 2.5e6) || redPillBought())
+      reachedMs = fresh.game.clock.now() - startMs;
+  }
+  const installs = events()
+    .filter((event) => event.kind === "augmentationInstallChosen")
+    .map((event) => ({
+      atMs: event.atMs - startMs,
+      ...(event.detail as { reason: string; gangCost?: GangInstallCost; timing?: InstallTimingView }),
+    }));
+  // The planner's first (3) estimate with something to install (its progress events; banking needs it too, #372's
+  // review, so before NiteSec's reputation reaches any augmentation it keeps): when, and its figures then.
+  const first = events().find((event) => {
+    const timing = (event.detail as { timing?: { route?: string; gangInstall?: { installable?: boolean } } }).timing;
+    return (
+      event.kind === "augmentationProgress" &&
+      timing?.route === "gang formed" &&
+      timing.gangInstall?.installable === true
+    );
+  });
+  const estimate =
+    first === undefined
+      ? null
+      : { atMs: first.atMs - startMs, ...((first.detail as { timing: InstallTimingView }).timing.gangInstall ?? {}) };
+  const { failures, section } = reportOf(fresh);
+  return { reachedMs, last, installs, failures, section, estimate };
+}
+
+type InstallArm = Awaited<ReturnType<typeof installArm>>;
+
+/** An arm in words, for the log: when The Red Pill's reputation came, or how far it got; and its installs. */
+function describeArm(arm: InstallArm, windowMs: number): string {
+  const reached =
+    arm.reachedMs === null
+      ? `not reached in ${formatDuration(windowMs)} (NiteSec at ${Math.round(arm.last.reputation).toLocaleString("en-US")}, favour ${arm.last.favor.toFixed(1)})`
+      : `reached at ${formatDuration(arm.reachedMs)}`;
+  const installs = arm.installs.map(
+    (each) =>
+      `${formatDuration(each.atMs)} ${each.reason}` +
+      (each.gangCost === undefined ? "" : ` (${describeGangInstallCost(each.gangCost)})`),
+  );
+  return `${reached}; installs: ${installs.join("; ") || "none"}`;
+}
+
+test("installing with the gang (#357's (3)) A/B from 0: banking to R* against the count rule's quick install, both near R*", async () => {
+  const windowMs = 30 * 60_000;
+  const planner = await installArm("planner", { windowMs });
+  const rules = await installArm("rules", { windowMs });
+  console.log(`from 0: the planner ${describeArm(planner, windowMs)}\nthe rules ${describeArm(rules, windowMs)}`);
+  console.log(planner.section.slice(planner.section.indexOf("  installs chosen in BN2 with the gang")));
+  const [chosen] = planner.installs;
+  // The planner banked, then installed for the gang's favour, its estimates and its cost with it.
+  expect(chosen).toMatchObject({ reason: "the gang's favour", timing: { route: "gang formed", choice: 0 } });
+  expect(chosen?.timing?.gangInstall?.atInstall as number).toBeLessThan(2.5e6);
+  // Its cost is the estimate at the choice (#372's review): the favour the install gave, measured at the next slow
+  // snapshots, against it. Measured on 2026-11-12: 115.0 against 116.8 (the commit shorter than its 2 minutes); the
+  // rules' 115.0 against 119.1 (their choice at the countdown's end, the commit after it).
+  const measured = planner.last.favor;
+  console.log(
+    `the favour after the install: the planner's ${measured.toFixed(1)} against its ${chosen?.gangCost?.favorAfter.toFixed(1)}; ` +
+      `the rules' ${rules.last.favor.toFixed(1)} against their ${rules.installs[0]?.gangCost?.favorAfter.toFixed(1)}`,
+  );
+  // A computed range (#372's re-review): the commit is never negative and never longer than its `aheadMs`, so the
+  // favour lies from r's at the choice to the estimate's (r and the rate over `aheadMs`).
+  const gangInstall = chosen?.timing?.gangInstall as NonNullable<InstallTimingView["gangInstall"]>;
+  expect(measured).toBeGreaterThanOrEqual(favorAfterInstall(gangInstall.favor, gangInstall.reputation));
+  expect(measured).toBeLessThanOrEqual(chosen?.gangCost?.favorAfter as number);
+  expect(rules.last.favor).toBeLessThanOrEqual(rules.installs[0]?.gangCost?.favorAfter as number);
+  expect(planner.installs.at(-1)?.reason).toBe("The Red Pill");
+  expect(planner.estimate).toMatchObject({ choice: "bank" });
+  expect(planner.reachedMs).not.toBeNull();
+  expect(rules.reachedMs).not.toBeNull();
+  expect(planner.reachedMs as number).toBeLessThanOrEqual(rules.reachedMs as number);
+  expect(planner.failures).toEqual([]);
+}, 300_000);
+
+test("installing with the gang (#357's (3)) A/B from 1.9m: the planner keeps the cycle; G5's hold runs out and the count rule installs", async () => {
+  const windowMs = 40 * 60_000;
+  // Member-01 at a sixteenth of the points (a quarter of the multiplier): NiteSec's rate about 365 a second, so the
+  // rest past 1.9m is beyond G5's 20 minutes. $100b: the count rule's 8 affordable once its quick install is past.
+  // The 1.9m is injected at the start (#372's review), so G5's estimate at the cycle's rate (the reputation over the
+  // game's time since the install) sees it all earned in minutes and holds its whole 20 minutes; live, with the
+  // reputation earned over the cycle, its estimate would be the true one, so it wouldn't hold and the count rule would
+  // install sooner (its quick install), losing about 1.9m earlier and starting again sooner: the rules' arm installs
+  // later here than it would live, so the planner's margin is overstated (the planner keeps either way).
+  const arm = (bn2Route: "planner" | "rules") =>
+    installArm(bn2Route, { windowMs, reputation: 1.9e6, points: 4.5e11 / 16, money: 1e11 });
+  const planner = await arm("planner");
+  const rules = await arm("rules");
+  console.log(`from 1.9m: the planner ${describeArm(planner, windowMs)}\nthe rules ${describeArm(rules, windowMs)}`);
+  console.log(`the planner's first estimate: ${JSON.stringify(planner.estimate)}`);
+  // The planner kept the cycle: The Red Pill's own install alone, its reputation reached, at its estimate within ×2.
+  expect(planner.estimate).toMatchObject({ choice: "keep" });
+  expect(planner.installs.map((each) => each.reason)).toEqual(["The Red Pill"]);
+  const reached = planner.reachedMs as number;
+  const keepMs = planner.estimate?.keepMs as number;
+  expect(reached - (planner.estimate?.atMs as number)).toBeGreaterThan(keepMs / 2);
+  expect(reached - (planner.estimate?.atMs as number)).toBeLessThan(keepMs * 2);
+  // The rules: G5's hold over at 20 minutes online, the count rule installed, losing over 2m; not reached in the window.
+  const [install] = rules.installs;
+  expect(install?.reason).toBe("count reached");
+  expect(install?.atMs as number).toBeGreaterThan(20 * 60_000);
+  expect(install?.gangCost?.reputation as number).toBeGreaterThan(2e6);
+  expect(rules.reachedMs).toBeNull();
+  expect(planner.failures).toEqual([]);
 }, 300_000);
