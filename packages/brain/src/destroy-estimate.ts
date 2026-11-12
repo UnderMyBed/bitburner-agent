@@ -5,12 +5,15 @@
 // amended: the rest are reported, not judged).
 // - The inputs: the BitNode's time online, the campaign's clock (`advanceOnlineClock` keyed by its `lastNodeReset`,
 //   kept in the store so a restart carries it on); Daedalus's count (core's `daedalusCountOf`); A5's ETA for The Red
-//   Pill's hold (its `factionWorkChosen` choice, with the share); levelling's chosen candidate's estimate (#336); and
+//   Pill's hold (its first `factionWorkChosen` choice at Daedalus, the join's moment waiting for it: with the share if
+//   it runs then, else about 1.6× cautious); levelling's chosen candidate's estimate (#336); and
 //   the prior, the last destroyed BitNode's stretches, the same number first (./campaign-model.ts), read from the store
 //   once a BitNode and kept with the rest.
 // - Restarts: the setting `destroyEstimate.last` (the BitNode's and the cycle's resets, the moments made, the clock and
 //   the last estimate) keeps a restart from repeating one. An install made while the brain was down is estimated at
 //   the first slow snapshot after it, and marked late (that snapshot more than a slow gap after the install).
+//   A brain with no note for the BitNode sees a later cycle "first seen" (the hindcast has its install); a save loaded,
+//   an earlier `lastAugReset`, isn't estimated again.
 // - Daedalus's route alone (BN1, BN4, BN5: core's `DESTROY_ESTIMATE_BITNODES`): in another BitNode, no estimate, said
 //   once in the log. BN2's gang (#357) and Black Ops (#359) are later slices.
 import {
@@ -40,7 +43,7 @@ import {
 } from "./campaign-model.ts";
 import { bitNodeLabel } from "./cycle-report.ts";
 import { formatDuration } from "./gap-report.ts";
-import type { LevellingView } from "./levelling.ts";
+import { LEVELLING_CHOSEN_EVENT_KIND, type LevellingView } from "./levelling.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 
 /** Stored at each estimate (#360), for the campaign report and the run report. */
@@ -48,8 +51,12 @@ export const DESTROY_ESTIMATED_EVENT_KIND = "destroyEstimated";
 /** The rule's note (#360), kept in the store so a restarted brain neither repeats an estimate nor loses its clock. */
 export const DESTROY_ESTIMATE_SETTING = "destroyEstimate.last";
 
-/** Where an estimate is made: the BitNode's start, an install, Daedalus joined, levelling's first choice. */
-export type DestroyMoment = "start" | "install" | "joined" | "levelling";
+/**
+ * Where an estimate is made: the BitNode's start, an install, Daedalus joined, levelling's first choice; or "first
+ * seen", a cycle not the BitNode's first that a brain with no note for the BitNode sees first (a first deploy mid-cycle):
+ * the hindcast has its install already, so it's listed apart and left out of the summaries.
+ */
+export type DestroyMoment = "start" | "install" | "first seen" | "joined" | "levelling";
 
 /**
  * Where the BitNode stood at it, for the campaign report's ratios by moment: an install short of the count, the count
@@ -62,7 +69,8 @@ export type DestroyStage =
   | "joined"
   | "donations install"
   | "The Red Pill installed"
-  | "levelling";
+  | "levelling"
+  | "first seen";
 
 /** A term as stored: Infinity can't be JSON, so a term that's never has `never` and no ms. */
 export interface StoredDestroyTerm {
@@ -110,7 +118,7 @@ export function destroyStageOf(
   moment: DestroyMoment,
   { redPillInstalled, daedalus, countMet }: { redPillInstalled: boolean; daedalus: DaedalusStage; countMet: boolean },
 ): DestroyStage {
-  if (moment === "start" || moment === "joined" || moment === "levelling") return moment;
+  if (moment === "start" || moment === "joined" || moment === "levelling" || moment === "first seen") return moment;
   if (redPillInstalled) return "The Red Pill installed";
   if (daedalus === "donations installed") return "donations install";
   return countMet ? "count met" : "install";
@@ -160,7 +168,7 @@ export function destroyEstimateRecord(
   };
 }
 
-const MOMENTS: readonly string[] = ["start", "install", "joined", "levelling"];
+const MOMENTS: readonly string[] = ["start", "install", "first seen", "joined", "levelling"];
 const isTerm = (value: unknown): value is StoredDestroyTerm => {
   const term = value as Partial<StoredDestroyTerm> | null;
   return (
@@ -248,16 +256,23 @@ export function readDestroySeed(store: TelemetryStore, environment: Environment,
       environment,
       sinceMs: 0,
       untilMs: Number.MAX_SAFE_INTEGER,
-      kinds: CAMPAIGN_EVENT_KINDS,
+      kinds: [...CAMPAIGN_EVENT_KINDS, LEVELLING_CHOSEN_EVENT_KIND],
     });
   });
   fold.add({ id: 0, release: "", ...live });
-  const views = campaignViews(fold, events)?.views ?? [];
+  const levellingChosenAtMs = events
+    .filter((each) => each.kind === LEVELLING_CHOSEN_EVENT_KIND)
+    .map((each) => each.atMs);
+  const views =
+    campaignViews(
+      fold,
+      events.filter((each) => each.kind !== LEVELLING_CHOSEN_EVENT_KIND),
+    )?.views ?? [];
   const index = views.findLastIndex((view) => view.bitNode.lastNodeReset === live.resetInfo.lastNodeReset);
   const view = views[index];
   if (view === undefined) return { prior: null, onlineMs: 0, countMetOnlineMs: null };
   return {
-    prior: destroyPriorOf(views, index),
+    prior: destroyPriorOf(views, index, levellingChosenAtMs),
     onlineMs: view.bitNode.clock.onlineMs,
     countMetOnlineMs: destroyStretchesOf(view).countMetOnlineMs,
   };
@@ -358,6 +373,8 @@ export class DestroyEstimateRule {
   #sampledGameTimeMs: number | null = null;
   /** The BitNode whose route was said to be unmodelled, once. */
   #unmodelledLogged: number | null = null;
+  /** A slow snapshot of the noted BitNode seen in this run: till then, the dashboard's line may be another's. */
+  #seenThisRun = false;
 
   constructor({
     store,
@@ -383,10 +400,10 @@ export class DestroyEstimateRule {
     return this.#note?.last ?? null;
   }
 
-  /** The dashboard's World Daemon line (#360): the latest estimate. */
+  /** The dashboard's World Daemon line (#360): the latest estimate, once this run has seen a slow snapshot of its BitNode. */
   lines(): string[] {
     const last = this.last();
-    return last === null ? [] : [`time to ${describeDestroyEstimate(last)}`];
+    return last === null || !this.#seenThisRun ? [] : [`time to ${describeDestroyEstimate(last)}`];
   }
 
   update(inputs: DestroyEstimateInputs): void {
@@ -396,6 +413,8 @@ export class DestroyEstimateRule {
     let note = this.#note;
     let changed = false;
     // Another BitNode (or none noted): its seed from the store, once.
+    const firstLook = note === null || note.lastNodeReset !== facts.lastNodeReset;
+    this.#seenThisRun = true;
     if (note === null || note.lastNodeReset !== facts.lastNodeReset) {
       const seed = this.#seedOf({
         receivedAtMs: inputs.slowAtMs ?? slowGameTimeMs,
@@ -448,19 +467,26 @@ export class DestroyEstimateRule {
     const redPillInstalled = Object.hasOwn(facts.ownedAugs, THE_RED_PILL);
     const daedalus = factionReadingOf(inputs.slowData)?.state?.joined.find((faction) => faction.name === DAEDALUS);
     const moments: DestroyMoment[] = [];
-    if (note.lastAugReset !== facts.lastAugReset) {
-      moments.push(facts.lastAugReset === facts.lastNodeReset ? "start" : "install");
+    // A new cycle: the start, an install, or a first look at a later one. One earlier than the noted (a save loaded) isn't
+    // estimated again: its install, when it comes, is later than the noted.
+    if (note.lastAugReset === null || facts.lastAugReset > note.lastAugReset) {
+      moments.push(facts.lastAugReset === facts.lastNodeReset ? "start" : firstLook ? "first seen" : "install");
       note = { ...note, lastAugReset: facts.lastAugReset };
       changed = true;
     }
-    if (daedalus !== undefined && note.joinedCycle === null && !redPillInstalled) {
+    // Daedalus joined, once A5's choice for The Red Pill there is in too (its ETA the hold's), as the hindcast reads its
+    // first `factionWorkChosen`: the same moment.
+    const choice = inputs.factionChoice;
+    const holdChosen = choice?.faction === DAEDALUS && choice.augmentation === THE_RED_PILL;
+    if (daedalus !== undefined && holdChosen && note.joinedCycle === null && !redPillInstalled) {
       moments.push("joined");
       note = { ...note, joinedCycle: facts.lastAugReset };
       changed = true;
     }
+    // Levelling's first choice; at a cycle's first estimate that already has it as D, no second with the same figures.
     const levellingMs = levellingEstimateMs(inputs.levelling);
     if (redPillInstalled && !note.levelled && levellingMs !== null) {
-      moments.push("levelling");
+      if (moments.length === 0) moments.push("levelling");
       note = { ...note, levelled: true };
       changed = true;
     }
@@ -474,11 +500,7 @@ export class DestroyEstimateRule {
           : daedalus !== undefined
             ? "joined"
             : "not joined";
-      const choice = inputs.factionChoice;
-      const holdEtaMs =
-        stage === "joined" && choice?.faction === DAEDALUS && choice.augmentation === THE_RED_PILL
-          ? choice.etaSeconds * 1000
-          : null;
+      const holdEtaMs = stage === "joined" && holdChosen ? (choice as FactionWorkChoice).etaSeconds * 1000 : null;
       const estimate = destroyEstimate({
         currentNode: facts.currentNode,
         ownedSF: facts.ownedSF,
@@ -500,8 +522,7 @@ export class DestroyEstimateRule {
         }),
         // An install the brain saw late (down at it): its first slow snapshot more than a slow gap after it.
         late:
-          moment !== "joined" &&
-          moment !== "levelling" &&
+          (moment === "start" || moment === "install") &&
           slowGameTimeMs - facts.lastAugReset > AUGMENTATION_SLOW_GAP_MS,
         currentNode: facts.currentNode,
         ownedSF: facts.ownedSF,

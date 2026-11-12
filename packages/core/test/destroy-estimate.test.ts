@@ -127,8 +127,21 @@ describe("each term's cases (#360)", () => {
       ms: 9 * MINUTE,
       source: "levelling's chosen candidate (#336)",
     });
-    // Before levelling's first choice: the prior's.
-    expect(destroyEstimate(inputs(720, 38, installed)).terms[2]).toMatchObject({ ms: 3 * MINUTE, atLeast: false });
+    // Before levelling's first choice: the prior's, and said so.
+    expect(destroyEstimate(inputs(720, 38, installed)).terms[2]).toMatchObject({
+      ms: 3 * MINUTE,
+      atLeast: false,
+      source: "the prior's (BN1.2), levelling not yet chosen",
+    });
+    // A prior whose D came before levelling (BN4.1's 419 min, 409 at the money pace): cautious.
+    const preLevelling = { ...prior("BN4.1", 1023, 182, 20, 419, 9000), dBeforeLevelling: true };
+    expect(
+      destroyEstimate(inputs(0, 0, { currentNode: 4, ownedSF: { 1: 3, 4: 1 }, prior: preLevelling })).terms[2],
+    ).toMatchObject({
+      ms: 419 * MINUTE,
+      label: "cautious",
+      source: "the prior's (BN4.1), pre-#336 (no levelling choice before its destroy): cautious",
+    });
     // BN4 (9,000) from BN1's prior (3,000): none, and the total at least.
     const bn4 = destroyEstimate(inputs(0, 0, { currentNode: 4, ownedSF: { 1: 3 }, prior: BN1_4 }));
     expect(bn4.terms[2]).toMatchObject({
@@ -236,12 +249,13 @@ describe("golden cases from the store's tables (#360)", () => {
     const met = destroyEstimate(inputs(547, 32, { prior: BN1_2, countMetOnlineMs: 547 * MINUTE }));
     expect(termsOf(met)).toEqual({ A: 0, BC: 100, D: 3 });
     expect(ratio(met, 756, 547)).toBe(0.49);
-    // Joined 102 + 1 minutes after: the hold's ETA with the share, 114 minutes (#347, item 1b).
+    // Joined 102 + 1 minutes after: A5's ETA then, as the store has it and the brain's hindcast reads it (184 min: the
+    // share not yet running at the choice; with it, 114).
     const joined = destroyEstimate(
-      inputs(650, 37, { prior: BN1_2, countMetOnlineMs: 547 * MINUTE, daedalus: "joined", holdEtaMs: 114 * MINUTE }),
+      inputs(650, 37, { prior: BN1_2, countMetOnlineMs: 547 * MINUTE, daedalus: "joined", holdEtaMs: 184 * MINUTE }),
     );
-    expect(termsOf(joined)).toEqual({ A: 0, BC: 132, D: 3 });
-    expect(ratio(joined, 756, 650)).toBe(1.27);
+    expect(termsOf(joined)).toEqual({ A: 0, BC: 184 + 18, D: 3 });
+    expect(ratio(joined, 756, 650)).toBe(1.93);
     expect([start, met, joined].map((each) => each.atLeast)).toEqual([false, false, false]);
   });
 
@@ -253,10 +267,11 @@ describe("golden cases from the store's tables (#360)", () => {
     expect(termsOf(met)).toEqual({ A: 0, BC: 201, D: 4 });
     expect(ratio(met, 406, 349)).toBe(3.6);
     const joined = destroyEstimate(
-      inputs(356, 36, { prior: BN1_3, countMetOnlineMs: 349 * MINUTE, daedalus: "joined", holdEtaMs: 34 * MINUTE }),
+      inputs(356, 36, { prior: BN1_3, countMetOnlineMs: 349 * MINUTE, daedalus: "joined", holdEtaMs: 35 * MINUTE }),
     );
-    expect(termsOf(joined)).toEqual({ A: 0, BC: 56, D: 4 });
-    expect(ratio(joined, 406, 356)).toBe(1.2);
+    // A5's ETA then, as stored: 35 min.
+    expect(termsOf(joined)).toEqual({ A: 0, BC: 35 + 22, D: 4 });
+    expect(ratio(joined, 406, 356)).toBe(1.22);
   });
 
   test("BN4.1 (prior BN1.4, none of BN4 before): D none at 9,000, the total at least, against its 1,624 minutes", () => {
@@ -268,10 +283,11 @@ describe("golden cases from the store's tables (#360)", () => {
     expect(termsOf(met)).toEqual({ A: 0, BC: 48, D: null });
     expect(ratio(met, 1624, 1023)).toBe(0.08);
     const joined = destroyEstimate(
-      inputs(1083, 36, { ...bn4, countMetOnlineMs: 1023 * MINUTE, daedalus: "joined", holdEtaMs: 161 * MINUTE }),
+      inputs(1083, 36, { ...bn4, countMetOnlineMs: 1023 * MINUTE, daedalus: "joined", holdEtaMs: 165 * MINUTE }),
     );
-    expect(termsOf(joined)).toEqual({ A: 0, BC: 169, D: null });
-    expect(ratio(joined, 1624, 1083)).toBe(0.31);
+    // A5's ETA then, as stored: 165 min.
+    expect(termsOf(joined)).toEqual({ A: 0, BC: 165 + 8, D: null });
+    expect(ratio(joined, 1624, 1083)).toBe(0.32);
     expect([start, met, joined].every((each) => each.atLeast)).toBe(true);
   });
 });

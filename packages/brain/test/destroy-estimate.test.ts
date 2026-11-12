@@ -245,10 +245,10 @@ describe("the campaign fold's stretches and the prior (#360)", () => {
       [null, null, null, null],
     ]);
     // The prior: the same number first (BN1.3's is BN1.2), else the last destroyed (BN4.1's is BN1.4); levels apart.
-    expect(destroyPriorOf(views, 0)).toBeNull();
-    expect(destroyPriorOf(views, 1)).toMatchObject({ bitNode: "BN1.2", requiredLevel: 3000, aMs: 570 * MINUTE });
-    expect(destroyPriorOf(views, 3)).toMatchObject({ bitNode: "BN1.4", currentNode: 1, requiredLevel: 3000 });
-    expect(destroyPriorOf(views, 4)).toMatchObject({ bitNode: "BN1.4", currentNode: 1 });
+    expect(destroyPriorOf(views, 0, [])).toBeNull();
+    expect(destroyPriorOf(views, 1, [])).toMatchObject({ bitNode: "BN1.2", requiredLevel: 3000, aMs: 570 * MINUTE });
+    expect(destroyPriorOf(views, 3, [])).toMatchObject({ bitNode: "BN1.4", currentNode: 1, requiredLevel: 3000 });
+    expect(destroyPriorOf(views, 4, [])).toMatchObject({ bitNode: "BN1.4", currentNode: 1 });
   });
 
   test("a save loaded: its cycle left out of the count; an open BitNode's so far, D none", () => {
@@ -409,23 +409,28 @@ describe("the hindcast and the campaign report's section (#360)", () => {
     const section = lines.slice(start);
     expect(section[1]).toMatch(/^ {2}BitNode +at +moment +online +est\. remaining +est\. total +actual remaining/);
     expect(section).toContainEqual(expect.stringMatching(/^ {2}BN4\.1 +\S+ +start \(hindcast\) +1 min +≥ 6 h 36 min /));
-    // The summaries: the estimates that aren't at least. BN1.2's have no prior (BN1.1 isn't in the store), BN4.1's no D
-    // at 9,000 (BN1.4's is at 3,000): bounds, left out.
+    // BN1.3's Red Pill row: 2 min against 3, flagged.
+    expect(section).toContainEqual(
+      expect.stringMatching(/^ {2}BN1\.3 .* The Red Pill installed \(hindcast\) .* 0\.67 \(under 10 min left\) /),
+    );
+    // The summaries: the measured rows. BN1.2's have no prior (BN1.1 isn't in the store), BN4.1's no D at 9,000 (BN1.4's
+    // is at 3,000): bounds. Under 10 min left (BN1.3's Red Pill row, BN1.4's donations and Red Pill rows): ±1 min steps.
     expect(section.slice(section.indexOf("  each BitNode:"))).toEqual([
       "  each BitNode:",
-      "    BN1.2: no ratio; 12 at least, left out",
-      "    BN1.3: 12 ratio(s), median 0.71, worst 0.17, 0.17-2.02",
-      "    BN1.4: 17 ratio(s), median 1.75, worst 4.21, 0.88-4.21",
-      "    BN4.1: no ratio; 12 at least, left out",
+      "    BN1.2: no ratio; left out: 12 at least",
+      "    BN1.3: 11 ratio(s), median 0.72, worst 0.17, 0.17-2.02; left out: 1 under 10 min left",
+      "    BN1.4: 15 ratio(s), median 1.53, worst 4.21, 0.88-4.21; left out: 2 under 10 min left",
+      "    BN4.1: no ratio; left out: 12 at least",
       "    BN1.4 #2: no ratio",
       "  by moment, over the campaign:",
-      "    start: 2 ratio(s), median 1.39, worst 1.89, 0.90-1.89; 2 at least, left out",
-      "    install: 18 ratio(s), median 1.25, worst 3.42, 0.62-3.42; 13 at least, left out",
-      "    count met: 3 ratio(s), median 0.50, worst 0.17, 0.17-4.21; 3 at least, left out",
-      "    joined: 2 ratio(s), median 1.74, worst 2.02, 1.45-2.02; 2 at least, left out",
-      "    donations install: 2 ratio(s), median 1.84, worst 2.89, 0.80-2.89; 2 at least, left out",
-      "    The Red Pill installed: 2 ratio(s), median 2.33, worst 4.00, 0.67-4.00; 2 at least, left out",
-      "  within ×1.25: 7 of 29; within ×1.5: 14; within ×2: 19 (Q9, #39; the estimates that aren't at least)",
+      "    start: 2 ratio(s), median 1.39, worst 1.89, 0.90-1.89; left out: 2 at least",
+      "    install: 18 ratio(s), median 1.25, worst 3.42, 0.62-3.42; left out: 13 at least",
+      "    count met: 3 ratio(s), median 0.50, worst 0.17, 0.17-4.21; left out: 3 at least",
+      "    joined: 2 ratio(s), median 1.74, worst 2.02, 1.45-2.02; left out: 2 at least",
+      "    donations install: 1 ratio(s), median 0.80, worst 0.80, 0.80-0.80; left out: 2 at least, 1 under 10 min left",
+      "    The Red Pill installed: no ratio; left out: 2 at least, 2 under 10 min left",
+      "  within ×1.25: 7 (27%) of 26; within ×1.5: 13 (50%); within ×2: 18 (69%) (Q9, #39; the measured rows: not " +
+        "at least, 10 min or more left, not a first look)",
     ]);
   });
 });
@@ -542,15 +547,61 @@ describe("the brain's rule (#360)", () => {
       lastAugReset: m(0),
       clock: { onlineMs: 4 * MINUTE },
     });
-    // A restart in the same cycle: no estimate again, the line kept; the clock goes on.
+    // A restart in the same cycle: no estimate again; the line kept, shown once a slow snapshot of its BitNode is seen
+    // (till then it could be another BitNode's); the clock goes on, and the prior with it.
     const second = ruleOf();
-    expect(second.rule.lines()).toEqual(first.rule.lines());
+    expect(second.rule.lines()).toEqual([]);
     for (let minute = 6; minute <= 7; minute++) update(second.rule, minute, 0, 0);
+    expect(second.rule.lines()).toEqual(first.rule.lines());
     expect(second.events).toEqual([]);
     update(second.rule, 8, 7, 5);
-    expect(second.events.map((each) => [each.moment, minutes(each.onlineMs), each.late])).toEqual([
-      ["install", 7, false],
+    // 7 × 25/5 by the mean, and the prior's B + C and D: the note's prior, not the seed's (asked once a BitNode).
+    expect(
+      second.events.map((each) => [each.moment, minutes(each.onlineMs), each.late, minutes(each.remainingMs)]),
+    ).toEqual([["install", 7, false, 35 + 100 + 3]]);
+  });
+
+  test("once across a restart in the joined cycle, and after levelling's first choice: the note keeps both", () => {
+    const first = ruleOf();
+    update(first.rule, 1, 0, 0);
+    update(first.rule, 2, 1, 31);
+    update(first.rule, 3, 1, 31, { daedalus: 0, eta: 100 });
+    expect(first.events.map((each) => each.moment)).toEqual(["start", "install", "joined"]);
+    const second = ruleOf();
+    update(second.rule, 4, 1, 31, { daedalus: 0, eta: 90 });
+    expect(second.events).toEqual([]);
+    // The install after the join, the donations': its count met and its join kept by the note (B + C the prior's cycle).
+    update(second.rule, 5, 4, 35);
+    expect(second.events.map((each) => [each.stage, minutes(each.remainingMs)])).toEqual([
+      ["donations install", 18 + 3],
     ]);
+    update(second.rule, 6, 5, 36, { redPill: true });
+    update(second.rule, 7, 5, 36, { redPill: true, levelling: 600 });
+    expect(second.events.map((each) => each.moment)).toEqual(["install", "install", "levelling"]);
+    const third = ruleOf();
+    update(third.rule, 8, 5, 36, { redPill: true, levelling: 540 });
+    expect(third.events).toEqual([]);
+  });
+
+  test("a cycle whose first estimate has levelling's already: one estimate, not a second with the same figures", () => {
+    const { rule, events } = ruleOf();
+    update(rule, 1, 0, 0);
+    update(rule, 2, 1, 36, { redPill: true, levelling: 600 });
+    update(rule, 3, 1, 36, { redPill: true, levelling: 540 });
+    expect(events.map((each) => [each.moment, minutes(each.terms[2]?.ms ?? null)])).toEqual([
+      ["start", 3],
+      ["install", 10],
+    ]);
+  });
+
+  test("a save loaded (an earlier lastAugReset): no estimate; the install after it is", () => {
+    const { rule, events } = ruleOf();
+    update(rule, 1, 0, 0);
+    update(rule, 2, 1, 5);
+    update(rule, 3, 0, 0);
+    expect(events.map((each) => each.moment)).toEqual(["start", "install"]);
+    update(rule, 4, 3.5, 6);
+    expect(events.map((each) => each.moment)).toEqual(["start", "install", "install"]);
   });
 
   test("an install while the brain was down: estimated at the first slow snapshot after it, marked late", () => {
@@ -567,18 +618,32 @@ describe("the brain's rule (#360)", () => {
 
   test("a brain first seeing a BitNode in The Red Pill's cycle: Daedalus's favour says the donations install was made", () => {
     const { rule, events } = ruleOf();
-    // No note: joined again with favour 152 (the donations' 150), A5's choice none (donations buy it).
+    // No note: joined again with favour 152 (the donations' 150), A5's choice none (donations buy it). A first look
+    // at a later cycle, and no join (no A5 choice for the hold).
     update(rule, 50, 40, 36, { daedalus: 152 });
     expect(events.map((each) => [each.moment, each.stage, minutes(each.terms[1]?.ms ?? null)])).toEqual([
-      ["install", "donations install", 18],
-      ["joined", "joined", 18],
+      ["first seen", "first seen", 18],
     ]);
   });
 
   test("a brain first seeing a BitNode with Daedalus joined at favour 0: the hold, A5's ETA plus the prior's cycle", () => {
     const fresh = ruleOf();
     update(fresh.rule, 50, 40, 36, { daedalus: 0, eta: 60 });
-    expect(fresh.events.map((each) => minutes(each.terms[1]?.ms ?? null))).toEqual([60 + 18, 60 + 18]);
+    expect(fresh.events.map((each) => [each.moment, minutes(each.terms[1]?.ms ?? null)])).toEqual([
+      ["first seen", 60 + 18],
+      ["joined", 60 + 18],
+    ]);
+  });
+
+  test("Daedalus joined with no A5 choice for the hold yet: the join waits for it, as the hindcast keys on it", () => {
+    const { rule, events } = ruleOf();
+    update(rule, 1, 0, 0);
+    update(rule, 2, 1, 31);
+    update(rule, 3, 1, 31, { daedalus: 0 });
+    expect(events.map((each) => each.moment)).toEqual(["start", "install"]);
+    update(rule, 4, 1, 31, { daedalus: 0, eta: 100 });
+    expect(events.at(-1)).toMatchObject({ moment: "joined", onlineMs: 3 * MINUTE });
+    expect(minutes(events.at(-1)?.terms[1]?.ms ?? null)).toBe(100 + 18);
   });
 
   test("a term never (levelling at no rate) is stored as never, with no time", () => {

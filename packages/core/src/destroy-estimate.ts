@@ -7,12 +7,14 @@
  *   the prior's. Optimistic after a big early cycle (BN1.4's c3-c5: 0.30-0.53 of what was left), cautious where later
  *   factions bring more (BN4.1's c3-c7: 1.7-2.7): either way.
  * - BC, the invitation and The Red Pill: 0 once installed; after the donations install, the prior's Red Pill cycle;
- *   once Daedalus is joined, A5's ETA for the hold (to the favour target, with the share) plus that cycle, cautious
- *   (the level's rise left out); before, the prior's B + C less the time since the count was met, never less than the
+ *   once Daedalus is joined, A5's ETA for the hold (its first choice there, to the favour target: with the share if it
+ *   runs at the choice, else about 1.6× cautious, BN1.2's and BN1.3's 157 and 184 min against 98 and 114 with it) plus
+ *   that cycle, cautious (the level's rise left out); before, the prior's B + C less the time since the count was met, never less than the
  *   prior's Red Pill cycle (BN1's vary 2-4×: either way).
  * - D, w0r1d_d43m0n's level (3000 × `WorldDaemonDifficulty`, `worldDaemonRequiredLevel`): once The Red Pill is
  *   installed, levelling's chosen candidate's estimate (#336); before, the prior's D where its level is this BitNode's,
- *   else none (optimistic: the total is "at least").
+ *   else none (optimistic: the total is "at least"). A prior whose D came before levelling (no levelling choice before
+ *   its destroy: BN4.1's 419 min, 409 of them at the money pace) is cautious.
  * The prior is the last destroyed BitNode, the same number first (the brain's campaign fold measures its stretches).
  * With no prior, its terms are none and the total "at least". A term that's never (a rate of 0) makes the estimate
  * hopeless.
@@ -70,6 +72,8 @@ export interface DestroyPrior {
   dMs: number | null;
   /** Its w0r1d_d43m0n's level (`worldDaemonRequiredLevel`): its D is this BitNode's only at the same. */
   requiredLevel: number;
+  /** Its D came before levelling (#336): no levelling choice before its destroy, so the money pace's. Absent: not. */
+  dBeforeLevelling?: boolean;
 }
 
 /** Where Daedalus stands: not joined; joined (the hold); or the install after the join made (the donations install). */
@@ -165,7 +169,7 @@ function redPillTerm(inputs: DestroyEstimateInputs): DestroyTerm {
       ms: hold + (cycle ?? 0),
       atLeast: cycle === null,
       source:
-        "joined: A5's ETA for the hold" +
+        "joined: A5's ETA for the hold (with the share if it runs at the choice; ×~1.6 cautious otherwise)" +
         (cycle === null
           ? ", no prior's Red Pill cycle (at least)"
           : `, plus the prior's Red Pill cycle (${prior?.bitNode})`),
@@ -202,7 +206,24 @@ function levelTerm(inputs: DestroyEstimateInputs, requiredLevel: number): Destro
   if (prior.requiredLevel !== requiredLevel) {
     return none("D", `the prior's (${prior.bitNode}) at level ${prior.requiredLevel}, not ${requiredLevel}: none`);
   }
-  return { term: "D", ms: prior.dMs, atLeast: false, source: `the prior's (${prior.bitNode})`, label: "either way" };
+  // After The Red Pill, before levelling's first choice: the prior's, and said so.
+  const waiting = inputs.redPillInstalled ? ", levelling not yet chosen" : "";
+  if (prior.dBeforeLevelling === true) {
+    return {
+      term: "D",
+      ms: prior.dMs,
+      atLeast: false,
+      source: `the prior's (${prior.bitNode}), pre-#336 (no levelling choice before its destroy): cautious${waiting}`,
+      label: "cautious",
+    };
+  }
+  return {
+    term: "D",
+    ms: prior.dMs,
+    atLeast: false,
+    source: `the prior's (${prior.bitNode})${waiting}`,
+    label: "either way",
+  };
 }
 
 /** The estimate (#360): each term, the remaining and the total. */

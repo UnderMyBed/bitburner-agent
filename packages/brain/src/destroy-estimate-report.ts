@@ -31,14 +31,29 @@ import {
 } from "./destroy-estimate.ts";
 import { FACTION_WORK_CHOSEN_EVENT_KIND } from "./factions.ts";
 import { formatDuration } from "./gap-report.ts";
+import { LEVELLING_CHOSEN_EVENT_KIND } from "./levelling.ts";
 import type { SlowResetInfo, StoredEvent } from "./telemetry-store.ts";
 
-/** The events the section reads beside the campaign's: the brain's estimates, and A5's choices (the joins). */
+/**
+ * The events the section reads beside the campaign's: the brain's estimates, A5's choices (the joins), and levelling's
+ * choices (a prior's D from before levelling, #336, is cautious).
+ */
 export const DESTROY_ESTIMATE_REPORT_EVENT_KINDS = [
   ...CAMPAIGN_EVENT_KINDS,
   DESTROY_ESTIMATED_EVENT_KIND,
   FACTION_WORK_CHOSEN_EVENT_KIND,
+  LEVELLING_CHOSEN_EVENT_KIND,
 ];
+
+/**
+ * A row whose actual remaining is under this isn't measured (left out of the summaries): the steps are a slow snapshot
+ * a minute, so every time is ±1 min, over ±10% of what's left below 10 minutes (BN1.4's Red Pill row: 4 min against 1).
+ */
+export const SHORT_REMAINING_MS = 10 * 60_000;
+
+/** The levelling choices' times among `events`: a prior with none before its destroy has its D from before #336. */
+const levellingTimesOf = (events: readonly StoredEvent[]) =>
+  events.filter((event) => event.kind === LEVELLING_CHOSEN_EVENT_KIND).map((event) => event.atMs);
 
 /** The campaign's own events (`CAMPAIGN_EVENT_KINDS`): what its views read, so the section's others change none. */
 const isCampaignEvent = (event: StoredEvent) => CAMPAIGN_EVENT_KINDS.includes(event.kind);
@@ -131,7 +146,7 @@ export class DestroyHindcast {
     const view = views[index] as BitNodeView;
     // Its time online is the clock's from its start: none for a BitNode whose start the store didn't see.
     if (!view.startSeen || bitNode.installedBeforeFirstLook || bitNode.startMs < this.#firstMs) return;
-    const prior = destroyPriorOf(views, index);
+    const prior = destroyPriorOf(views, index, levellingTimesOf(this.#events.slice(0, this.#seen)));
     const { countMetOnlineMs } = destroyStretchesOf(view);
     const count = Object.keys(bitNode.ownedAugs).length;
     const redPillInstalled = Object.hasOwn(bitNode.ownedAugs, THE_RED_PILL);
@@ -228,6 +243,17 @@ export function worstRatio(ratios: readonly number[]): number | null {
 export const withinFactor = (ratios: readonly number[], factor: number) =>
   ratios.filter((ratio) => ratio >= 1 / factor && ratio <= factor).length;
 
+/**
+ * Why a row isn't measured (left out of the summaries), or null: an estimate that's at least (a bound), an actual
+ * remaining under `SHORT_REMAINING_MS` (the minute's steps too coarse), a first look (the hindcast has its install).
+ */
+export function unmeasuredReason(row: JudgedRow): "at least" | "under 10 min left" | "first seen" | null {
+  if (row.record.stage === "first seen") return "first seen";
+  if (row.ratio !== null && row.record.atLeast) return "at least";
+  if (row.actualRemainingMs !== null && row.actualRemainingMs < SHORT_REMAINING_MS) return "under 10 min left";
+  return null;
+}
+
 const describeRatio = (row: JudgedRow) =>
   row.record.never
     ? "never"
@@ -235,7 +261,8 @@ const describeRatio = (row: JudgedRow) =>
       ? row.actualTotalMs === null
         ? "open"
         : "-"
-      : `${row.record.atLeast ? "≥ " : ""}${row.ratio.toFixed(2)}`;
+      : `${row.record.atLeast ? "≥ " : ""}${row.ratio.toFixed(2)}` +
+        (unmeasuredReason(row) === "under 10 min left" ? " (under 10 min left)" : "");
 const describeMs = (ms: number | null, atLeast = false) =>
   ms === null ? "-" : `${atLeast ? "≥ " : ""}${formatDuration(ms)}`;
 const describeTermsShort = (record: DestroyEstimateRecord) =>
@@ -263,7 +290,8 @@ export function destroyEstimateSection(rows: readonly JudgedRow[], unread: numbe
     "Time to the destroy (#360), an estimate per row: the brain's own (destroyEstimated) and, before the brain made " +
       "them, hindcast from the store as it was at each moment (the same function, nothing after the moment read; A5's " +
       "ETA at a join as it was then); the ratio is the estimated remaining time online over the actual (≥: the " +
-      "estimate is at least that, a term none; open: not destroyed yet):",
+      "estimate is at least that, a term none; open: not destroyed yet; under 10 min left: a minute's steps make it ±10% " +
+      "or worse). The summaries take the measured rows: not at least, 10 min or more left, not a first look:",
   ];
   if (unread > 0) lines.push(`  ${unread} destroyEstimated event(s) the report can't read, left out`);
   if (rows.length === 0) {
@@ -295,15 +323,18 @@ export function destroyEstimateSection(rows: readonly JudgedRow[], unread: numbe
     describeTermsShort(row.record),
   ]);
   lines.push(...table([header, ...body]));
-  // A ratio of an estimate that's at least (a term none) is a bound, not a measure: listed, left out of these.
+  // Only the measured rows (`unmeasuredReason`): a bound, a short remainder or a first look are listed, left out of these.
   const ratiosOf = (each: readonly JudgedRow[]) =>
-    each.flatMap((row) => (row.ratio === null || row.record.atLeast ? [] : [row.ratio]));
+    each.flatMap((row) => (row.ratio === null || unmeasuredReason(row) !== null ? [] : [row.ratio]));
   const describeSpread = (each: readonly JudgedRow[]) => {
     const ratios = ratiosOf(each);
     const mid = median(ratios);
     const worst = worstRatio(ratios);
-    const bounds = each.filter((row) => row.ratio !== null && row.record.atLeast).length;
-    const leftOut = bounds === 0 ? "" : `; ${bounds} at least, left out`;
+    const reasons = (["at least", "under 10 min left", "first seen"] as const)
+      .map((reason) => [reason, each.filter((row) => unmeasuredReason(row) === reason).length] as const)
+      .filter(([, count]) => count > 0);
+    const leftOut =
+      reasons.length === 0 ? "" : `; left out: ${reasons.map(([reason, count]) => `${count} ${reason}`).join(", ")}`;
     return mid === null || worst === null
       ? `no ratio${leftOut}`
       : `${ratios.length} ratio(s), median ${mid.toFixed(2)}, worst ${worst.toFixed(2)}, ` +
@@ -320,9 +351,11 @@ export function destroyEstimateSection(rows: readonly JudgedRow[], unread: numbe
   }
   const all = ratiosOf(rows);
   if (all.length > 0) {
+    const band = (factor: number) =>
+      `${withinFactor(all, factor)} (${Math.round((100 * withinFactor(all, factor)) / all.length)}%)`;
     lines.push(
-      `  within ×1.25: ${withinFactor(all, 1.25)} of ${all.length}; within ×1.5: ${withinFactor(all, 1.5)}; ` +
-        `within ×2: ${withinFactor(all, 2)} (Q9, #39; the estimates that aren't at least)`,
+      `  within ×1.25: ${band(1.25)} of ${all.length}; within ×1.5: ${band(1.5)}; within ×2: ${band(2)} ` +
+        "(Q9, #39; the measured rows: not at least, 10 min or more left, not a first look)",
     );
   }
   return lines;

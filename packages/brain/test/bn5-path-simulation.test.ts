@@ -226,6 +226,11 @@ test("an install at BN5's prices: CyberSec's five, home's RAM and NeuroFlux Gove
   );
   // Nothing through the page: every action with a backend went through Singularity.
   expect(lines.filter((line) => /^ {4}\w+\(.*\((ui|sim)\)/.test(line))).toEqual([]);
+  // The time to the destroy (#360): section 3 lists the estimates, section 4 judges them (none never).
+  expect(lines).toContainEqual(expect.stringMatching(/^ {4}\S+ {2}time to the destroy \(#360\), at install with /));
+  const judged = lines.indexOf("  the time to the destroy (#360: a term never reached):");
+  expect(judged).toBeGreaterThan(0);
+  expect(lines[judged + 1]).toBe("    none");
   expect(failures).toEqual([]);
   expect(lines.at(-1)).toBe("Verdict: PASS");
   console.log(
@@ -354,12 +359,12 @@ test("the destroy at BN5's World Daemon: held short of 4,500, then the brain's o
   );
   expect(lines).toContain("    Source-Files: SF1.3, SF4.3, SF5.1 (unchanged)");
   // The time to the destroy (#360): at the first cycle the brain sees, The Red Pill's (the harness installed it before the
-  // Agent, so an install): A and B + C done, D none (no BitNode destroyed in the store for a prior), at 4,500. None in
-  // BN2 (the gang's route, #357), said once.
+  // Agent, so a first look at a cycle not the BitNode's first): A and B + C done, D none (no BitNode destroyed in the
+  // store for a prior), at 4,500. None in BN2 (the gang's route, #357), said once.
   const estimates = stored(DESTROY_ESTIMATED_EVENT_KIND) as DestroyEstimateRecord[];
   expect(estimates[0]).toMatchObject({
-    moment: "install",
-    stage: "The Red Pill installed",
+    moment: "first seen",
+    stage: "first seen",
     bitNode: "BN5.1",
     requiredLevel: 4_500,
     atLeast: true,

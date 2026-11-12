@@ -630,9 +630,14 @@ export function destroyStretchesOf(view: BitNodeView): DestroyStretches {
 /**
  * The prior for the BitNode `views[index]` (#360): the last destroyed before it, the same BitNode number first (by
  * its `currentNode`), else the last destroyed of any; its stretches (`destroyStretchesOf`) and w0r1d_d43m0n's level
- * there; null with none destroyed.
+ * there; null with none destroyed. Its D is from before levelling (#336) where no levelling choice
+ * (`levellingChosenAtMs`, the brain's clock) came between its start and its destroy: the money pace's, cautious.
  */
-export function destroyPriorOf(views: readonly BitNodeView[], index: number): DestroyPrior | null {
+export function destroyPriorOf(
+  views: readonly BitNodeView[],
+  index: number,
+  levellingChosenAtMs: readonly number[],
+): DestroyPrior | null {
   const current = views[index];
   if (current === undefined) return null;
   const destroyed = views.slice(0, index).filter((view) => view.ending.destroyedAtMs !== null);
@@ -648,5 +653,10 @@ export function destroyPriorOf(views: readonly BitNodeView[], index: number): De
     redPillCycleMs: stretches.redPillCycleMs,
     dMs: stretches.dMs,
     requiredLevel: worldDaemonRequiredLevel(prior.bitNode.currentNode, prior.bitNode.firstOwnedSF),
+    dBeforeLevelling:
+      stretches.dMs !== null &&
+      !levellingChosenAtMs.some(
+        (atMs) => atMs >= prior.bitNode.startMs && atMs <= (prior.ending.destroyedAtMs ?? Number.POSITIVE_INFINITY),
+      ),
   };
 }
