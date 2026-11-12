@@ -13,6 +13,7 @@ import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BitNodeHackingMultipliers,
+  type Bn2Route,
   bitNodeAssumptions,
   type DesiredState,
   EFFECTOR_BACKENDS,
@@ -20,6 +21,7 @@ import {
   type FactionWorkType,
   type FastSnapshotData,
   factionReadingOf,
+  GANG_ROUTE_SERVER,
   type GangState,
   gangSellsRedPill,
   type Intent,
@@ -38,6 +40,7 @@ import {
   resetsTheGame,
   type SlowSnapshotData,
   type StaticSnapshotData,
+  THE_RED_PILL,
   TOR_ROUTER,
 } from "@bitburner-agent/core";
 import {
@@ -103,6 +106,9 @@ import {
   writeFactionWorkEnabled,
 } from "./factions.ts";
 import {
+  bitNodeOfSlow,
+  GANG_BITNODE,
+  type GangEvent,
   type GangMoneyHold,
   GangRule,
   type GangView,
@@ -268,7 +274,8 @@ export type RuleEvent =
   | InvitationEvent
   | BitNodeEndEvent
   | LevellingEvent
-  | DestroyEstimateEvent;
+  | DestroyEstimateEvent
+  | GangEvent;
 
 /** What the dashboard shows of the stop at the BitNode's end (#303). */
 export interface StopAtBitNodeEndView {
@@ -480,6 +487,7 @@ export class DesiredStateController {
     saveBackups = null,
     log = () => {},
     installTiming = "planner",
+    bn2Route = "planner",
     environment = null,
   }: {
     channel: ControlChannel;
@@ -488,6 +496,8 @@ export class DesiredStateController {
     log?: (line: string) => void;
     /** Who times installs short of Daedalus's count (#343): the planner; the count rule for a test's A/B alone. */
     installTiming?: InstallTimingPolicy;
+    /** BN2's route (#357): the planner's; the rules' (#343's before the gang, money at 12) for a test's A/B alone. */
+    bn2Route?: Bn2Route;
     /**
      * The store's environment (#360): the destroy estimate's prior is read from its slow snapshots, once a BitNode.
      * Null (tests of other rules): no prior, the estimate's time online from 0.
@@ -498,8 +508,14 @@ export class DesiredStateController {
     this.#store = store;
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
-    this.#gang = new GangRule(log, store);
-    this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event), installTiming });
+    this.#gang = new GangRule(log, store, { emit: (event) => this.#emit(event), route: bn2Route });
+    this.#augmentations = new AugmentationRule({
+      store,
+      log,
+      emit: (event) => this.#emit(event),
+      installTiming,
+      bn2Route,
+    });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
     this.#levelling = new LevellingRule({ log, emit: (event) => this.#emit(event) });
@@ -1707,12 +1723,36 @@ export class DesiredStateController {
     }
   }
 
+  /**
+   * BN2 before the gang (#357's (1)): avmnite-02h's required level (its roll, the connected Agent's static snapshot)
+   * while the gang rule reads no gang in BN2 (none formed, a gang faction joined or not), or one formed whose faction no
+   * slow snapshot shows yet; null otherwise.
+   */
+  #gangFormingInputs(): { required: number; unread: boolean } | null {
+    const stage = this.#gang.view().stage;
+    // Unread with no gang known (#368's review: no reading yet, a worker's problem, a brain just restarted): the gang's
+    // route too, installing now held, as #343's install now would otherwise go before a gang there may be.
+    const unread = stage === "waiting" && this.#gang.gangUnread();
+    // Formed, its faction not in a slow snapshot yet (one a minute): still the gang's route, not Daedalus's count, which
+    // the faction's shop ends (`gangSellsRedPill`). Else #343's install now could go in that minute (#363's seed 5).
+    const forming =
+      unread || stage === "noFaction" || stage === "forming" || (stage === "managed" && this.#gangShop === null);
+    if (bitNodeOfSlow(this.#slowSnapshot) !== GANG_BITNODE || !forming) return null;
+    const required = this.#staticData?.servers.find(
+      (server) => server?.hostname === GANG_ROUTE_SERVER,
+    )?.requiredHackingSkill;
+    return typeof required === "number" && Number.isFinite(required) ? { required, unread } : null;
+  }
+
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     // The gang (#325) first: its faction, once formed, is left out of what the other rules see as joined.
+    // The Red Pill reported bought, not yet shown queued (A6's queue as of its last update): the objective's money (#357).
     const gang = this.#gang.update({
       mediumData: this.#mediumData,
       slowData: this.#slowSnapshot,
+      nowMs: this.#lastEventAtMs,
+      redPillBought: this.#augmentations.queued().includes(THE_RED_PILL),
       mediumAtMs: this.#mediumAtMs,
     });
     this.#gangIntent = gang.intent;
@@ -1752,6 +1792,8 @@ export class DesiredStateController {
       // #228's invitation hold, as of the invitations rule's last update (#343: installing now held meanwhile).
       invitationHold: this.#invitations.hold(),
       shareBonus,
+      // BN2 before the gang (#357's (1)): avmnite-02h's level, while the gang rule reads none.
+      gangForming: this.#gangFormingInputs(),
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;

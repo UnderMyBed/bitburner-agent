@@ -21,11 +21,13 @@
 // - BN2's win route (G5, #334): BN2 played with its own multipliers, so the hour's batcher stays in step with no
 //   allowance; and the gang's faction, its reputation set to The Red Pill's 2.5m and $10b given (harness edits, as
 //   no short run earns either): A6 buys there, augmentations its own shop lacks, The Red Pill last, and installs.
-import type { FastSnapshotData, MediumSnapshotData, SlowSnapshotData } from "@bitburner-agent/core";
 import {
+  AGENT_SIM_EFFECTORS_GLOBAL,
   augmentationsSoldBy,
+  type FastSnapshotData,
   GANG_AUGMENTATION_HORIZON_MS,
   GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
+  gangAscensionToMake,
   gangBestWork,
   gangEquipment,
   gangEquipmentAppraisal,
@@ -38,13 +40,16 @@ import {
   gangWarfareCrew,
   gangWarfareMeasure,
   isWorthInstalling,
+  type MediumSnapshotData,
   planGangEquipment,
+  type SlowSnapshotData,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { gangSnapshotOf, gangWarfareFiguresOf } from "../src/gang.ts";
+import { type GangEvent, gangSnapshotOf, gangWarfareFiguresOf } from "../src/gang.ts";
 import { GANG_WANTED_OVER_BOUND_MS } from "../src/gang-report.ts";
 import { formatDuration } from "../src/gap-report.ts";
 import { runReport } from "../src/run-report.ts";
+import { writeWorldDaemonEnabled } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { type FreshGame, ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 
@@ -346,6 +351,26 @@ test("equipment (G3): a grown gang and $10b, then the brain for 45 minutes: none
 }, 120_000);
 
 /**
+ * The Red Pill installed (#357), a harness edit as bn2-end-simulation's: queued, then the simulator's own install. Then
+ * money at 12 is the planner's own choice (#357's (2): once The Red Pill is bought, queued or installed), as these
+ * suites of a gang of 12 on Money Laundering need. Before the gang's faction is joined: an install leaves it.
+ */
+async function redPillInstalled(game: FreshGame) {
+  await game.simulation.diagnostics.queueAugmentation("The Red Pill");
+  await ownerRunsOnHome(
+    game,
+    `export async function main(ns) { globalThis.${AGENT_SIM_EFFECTORS_GLOBAL}.installQueuedAugmentations(""); }`,
+  );
+}
+
+/** The brain's objective events at 12 (#357): each its objective and why. */
+const objectivesOf = (fresh: Awaited<ReturnType<typeof freshStartOf>>) =>
+  fresh.data.store
+    .eventsInWindow({ environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() })
+    .filter((event) => event.kind === "gangObjectiveChosen")
+    .map((event) => `${(event.detail as GangEvent).objective} (${(event.detail as GangEvent).reason})`);
+
+/**
  * The owner's gang, NiteSec's, of 12: the three free recruits, then the gang's respect set to 2 million by a harness
  * edit (`setGangRespect`) and nine more recruited, all training. So the brain's objective is money (12 members), and
  * its plan puts a member strong enough on Money Laundering: under 12 the plan has members on respect tasks or training,
@@ -355,6 +380,7 @@ test("equipment (G3): a grown gang and $10b, then the brain for 45 minutes: none
  * works. Then $100b.
  */
 async function boostedGang(game: FreshGame) {
+  await redPillInstalled(game);
   await game.simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
   const names = Array.from({ length: 12 }, (_, index) => `member-${String(index + 1).padStart(2, "0")}`);
   const recruit = (some: string[]) =>
@@ -385,6 +411,9 @@ test("equipment (G3) end to end: a member boosted far past an hour's play, on Mo
     fixture: BN2,
     beforeAgent: boostedGang,
   });
+  // The Red Pill installed (#357's harness edit) with the destroy wanted would hold every purchase for it (#215): the
+  // World Daemon's switch off, so A6 buys as before.
+  writeWorldDaemonEnabled(fresh.data.store, false);
   await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
   const lastAugReset = () => fresh.latest<SlowSnapshotData>("slow")?.resetInfo?.lastAugReset;
   const before = lastAugReset();
@@ -400,6 +429,9 @@ test("equipment (G3) end to end: a member boosted far past an hour's play, on Mo
   if (last.kind !== "gang") throw new Error("no gang read");
   const { section, failures } = reportOf(fresh);
   console.log(section);
+  // Money at 12, the planner's own choice with The Red Pill installed (#357), from the first reading on.
+  console.log(objectivesOf(fresh).join(", "));
+  expect(new Set(objectivesOf(fresh))).toEqual(new Set(["money (The Red Pill owned)"]));
   // On the plan's money task, which earns the money back.
   expect(last.members).toHaveLength(12);
   expect(last.members[0]?.task).toBe("Money Laundering");
@@ -436,6 +468,7 @@ test("equipment (G3) end to end: a member boosted far past an hour's play, on Mo
  * kill them (`Gang.ts:298`, 0.005 / 1^0.6 when won, in 35% of clashes).
  */
 async function fightingGang(game: FreshGame) {
+  await redPillInstalled(game);
   await game.simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
   const names = Array.from({ length: 12 }, (_, index) => `member-${String(index + 1).padStart(2, "0")}`);
   const recruit = (some: string[]) =>
@@ -463,11 +496,40 @@ async function fightingGang(game: FreshGame) {
   await withoutSimEffectors(game);
 }
 
+/** Core's warfare crew (G4) recomputed from a reading at 12 members, money's objective (#368's review); null with an ascension due. */
+function coreCrewOf(reading: ReturnType<typeof gangSnapshotOf>): number | null {
+  if (reading.kind !== "gang") return null;
+  const warfare = gangWarfareFiguresOf(reading.gang);
+  if (warfare === undefined) return null;
+  const inputs = {
+    gang: { respect: reading.gang.respect, wantedLevel: reading.gang.wantedLevel, territory: reading.gang.territory },
+    isHacking: reading.gang.isHacking,
+    members: reading.members,
+    softcap: 1,
+    warfare,
+  };
+  if (gangAscensionToMake(inputs, "money") !== null) return null;
+  const basis = gangWarfareBasis(inputs, "money");
+  const crew = gangWarfareCrew(inputs, basis).crew;
+  const clashing = warfare.engaged || warfare.clashChance > 0;
+  return crew.length > 0 && clashing && !gangWarfareMeasure(inputs, basis, crew).pays ? 0 : crew.length;
+}
+
 test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare engaged, territory grows, deaths counted", async () => {
   const fresh = await freshStartOf({ withDesiredState: true, fixture: BN2, beforeAgent: fightingGang });
+  // As G3's: The Red Pill installed (#357), the destroy not wanted, so A6 buys as before.
+  writeWorldDaemonEnabled(fresh.data.store, false);
   await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
   // Every 5 minutes: territory, power, the flag and the crew.
-  const readings: { minute: number; territory: number; power: number; engaged: boolean; crew: number }[] = [];
+  const readings: {
+    minute: number;
+    territory: number;
+    power: number;
+    engaged: boolean;
+    crew: number;
+    planCrew: number | null;
+    coreCrew: number | null;
+  }[] = [];
   for (let minute = 5; minute <= 20; minute += 5) {
     await fresh.game.run(5 * 60_000);
     const reading = gangSnapshotOf(fresh.medium());
@@ -478,12 +540,34 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
       power: reading.gang.power,
       engaged: reading.gang.territoryWarfareEngaged === true,
       crew: reading.members.filter((each) => each.task === "Territory Warfare").length,
+      // The rule's warfare plan on that reading (`GangWarfarePlan`'s crew), as the brain sent it.
+      planCrew: fresh.controller().gangView().plan?.warfare?.crew.length ?? null,
+      // Core's rule recomputed from the reading (#368's review): `gangWarfareCrew` on money's basis, the crew dropped
+      // while clashes run and the measure says they don't pay (as `planGang`); null where an ascension comes first
+      // (the plan's crew is then the ascended gang's).
+      coreCrew: coreCrewOf(reading),
     });
   }
   console.log(readings.map((each) => JSON.stringify(each)).join("\n"));
   const { section, failures } = reportOf(fresh);
   console.log(section);
   console.log(fresh.controller().gangView().line);
+  console.log(
+    fresh.data.store
+      .eventsInWindow({ environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() })
+      .filter((event) => event.kind === "augmentationInstallChosen")
+      .map(
+        (event) =>
+          `install chosen at ${formatDuration(event.atMs - EPOCH_MS)}: ${(event.detail as { reason: string }).reason}`,
+      )
+      .join("\n"),
+  );
+  // Money at 12, the planner's own choice with The Red Pill installed (#357), from the first reading on.
+  console.log(objectivesOf(fresh).join(", "));
+  expect(new Set(objectivesOf(fresh))).toEqual(new Set(["money (The Red Pill owned)"]));
+  expect(fresh.controller().gangView().line).toContain(
+    "; objective at 12: money, The Red Pill bought, queued or installed; ",
+  );
   const last = gangSnapshotOf(fresh.medium());
   if (last.kind !== "gang") throw new Error("no gang read");
   // Measured on 2026-11-10 (seed 1), with PR #333's third review's model (crew slots, the others dropping out at no
@@ -501,15 +585,27 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   // review (2026-11-11): the gang's faction kept across each install's restart (no slow snapshot then), so after them
   // A8 holds for The Red Pill at NiteSec and invitations no longer travel for Daedalus's count (15, then 27 of 30); the
   // same four installs, a run a little different, and a second death, member-09's, in the last minutes: its recruit
-  // trains at the 20-minute reading, nine on Territory Warfare.
+  // trains at the 20-minute reading, nine on Territory Warfare. Since #357 (2026-11-11), The Red Pill installed by a
+  // harness edit (money at 12 the planner's own choice) and the World Daemon's switch off (A6 buying, not held for the
+  // destroy): four quick installs (4 min 28 s, 8 min 53 s, 12 min 27 s, 15 min 42 s) in place of main's quick install,
+  // The Red Pill's and two for the level, the run shifted (the harness's install before the Agent, #341): crew 9, 9,
+  // 9, 9, two on Identity Theft from the first plan; engaged throughout, 19 min 30 s, territory 17.4%; two deaths,
+  // member-04 and member-08. The crew read is the plan's at each reading, not a fixed list.
   expect(readings.every((each) => each.engaged)).toBe(true);
-  expect(readings.map((each) => each.crew)).toEqual([10, 10, 10, 9]);
+  // Core's crew recomputed on most readings (none with an ascension due then).
+  expect(readings.filter((each) => each.coreCrew !== null).length).toBeGreaterThanOrEqual(2);
+  for (const { minute, crew, planCrew, engaged } of readings) {
+    expect(crew, `minute ${minute}`).toBe(planCrew);
+    const core = readings.find((each) => each.minute === minute)?.coreCrew;
+    if (core !== null && core !== undefined) expect(planCrew, `minute ${minute}: core's crew`).toBe(core);
+    if (engaged) expect(crew, `minute ${minute}`).toBeGreaterThanOrEqual(1);
+  }
   expect(last.gang.territory).toBeGreaterThan(1 / 7 + 0.02);
   expect(section).toMatch(
-    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 2 deaths \(member-06, member-09\)\n/,
+    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 2 deaths \(member-04, member-08\)\n/,
   );
   expect(fresh.controller().gangView().line).toMatch(
-    /; warfare on: .*; 9 on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 2 deaths seen; /,
+    /; warfare on: .*; \d+ on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 2 deaths seen; /,
   );
   expect(section).toContain(
     "territory warfare engaged while the rule's measure says it loses for 1 min or more:\n    none",
@@ -566,4 +662,124 @@ test("BN2's win route (G5): the gang's faction at The Red Pill's reputation, the
   expect(section).toMatch(/; bought there in the window: \d+ \(/);
   expect(text).toContain("    The Red Pill: installed\n");
   expect(failures).toEqual([]);
+}, 120_000);
+
+/**
+ * The owner's gang, NiteSec's, of 12 (#357's (2)): the three free recruits, the respect set to 2 million and nine more
+ * recruited, all training, as G3's end-to-end test; then member-01 grown by a harness edit to ascension points of
+ * 4.5e11 (×15,000) and 4.5e9 hacking experience, about 7.7 million hacking: its ascension converts a hundredth more,
+ * so it doesn't pay, and a minute's training adds too little to pay within a day, so it works. The other eleven train.
+ */
+async function twelveToChoose(game: FreshGame) {
+  await game.simulation.diagnostics.joinFactionWithReputation("NiteSec", 0);
+  const names = Array.from({ length: 12 }, (_, index) => `member-${String(index + 1).padStart(2, "0")}`);
+  const recruit = (some: string[]) =>
+    ownerRunsOnHome(
+      game,
+      `export async function main(ns) {
+  if (!ns.gang.inGang()) ns.gang.createGang("NiteSec");
+  for (const name of ${JSON.stringify(some)}) {
+    ns.gang.recruitMember(name);
+    ns.gang.setMemberTask(name, "Train Hacking");
+  }
+}`,
+    );
+  await recruit(names.slice(0, 3));
+  await game.simulation.diagnostics.setGangRespect(2e6);
+  await recruit(names.slice(3));
+  await game.simulation.diagnostics.setGangMemberFigures("member-01", { hack_asc_points: 4.5e11, hack_exp: 4.5e9 });
+  await withoutSimEffectors(game);
+}
+
+/** #357's (2), 20 virtual minutes an arm: NiteSec's reputation gained (its slow snapshots), and the planner's events. */
+async function objectiveArm(bn2Route: "planner" | "rules") {
+  // A6 off: nothing bought or installed (an install zeroes the faction's reputation, `Faction/Faction.ts:77-85`).
+  const fresh = await freshStartOf({
+    withDesiredState: true,
+    fixture: BN2,
+    augmentations: false,
+    bn2Route,
+    beforeAgent: twelveToChoose,
+  });
+  await fresh.game.runUntil(() => gangSnapshotOf(fresh.medium()).kind === "gang", 30_000);
+  const reputation = () =>
+    fresh.latest<SlowSnapshotData>("slow")?.factions?.state?.joined.find((each) => each.name === "NiteSec")
+      ?.reputation ?? Number.NaN;
+  // From the first slow snapshot after the gang's first reading.
+  const startSlow = fresh.latest<SlowSnapshotData>("slow");
+  await fresh.game.runUntil(() => fresh.latest<SlowSnapshotData>("slow") !== startSlow, 70_000);
+  const from = { atMs: fresh.game.clock.now(), reputation: reputation() };
+  // Every 10 s, member-01's task, its equipment and the respect it earns a cycle (#368's re-review: money's rate before
+  // its first purchase).
+  const member01: { task: string; items: number; respectGain: number }[] = [];
+  for (let step = 0; step < 120; step += 1) {
+    await fresh.game.run(10_000);
+    const reading = gangSnapshotOf(fresh.medium());
+    const one = reading.kind === "gang" ? reading.members[0] : undefined;
+    if (one !== undefined) {
+      const items = (one.upgrades ?? []).length + (one.augmentations ?? []).length;
+      member01.push({ task: one.task, items, respectGain: one.respectGain });
+    }
+  }
+  const to = { atMs: fresh.game.clock.now(), reputation: reputation() };
+  const events = fresh.data.store
+    .eventsInWindow({ environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() })
+    .filter((event) => event.kind === "gangObjectiveChosen")
+    .map((event) => event.detail as GangEvent);
+  const last = gangSnapshotOf(fresh.medium());
+  const { failures, section } = reportOf(fresh);
+  return { fresh, from, to, events, last, failures, section, member01 };
+}
+
+test("the objective at 12 (#357's (2)) A/B, 20 virtual minutes an arm: the planner's respect earns NiteSec more than the rules' money, at its estimate's rate", async () => {
+  const planner = await objectiveArm("planner");
+  const rules = await objectiveArm("rules");
+  const gained = (arm: typeof planner) => arm.to.reputation - arm.from.reputation;
+  const perSecond = (arm: typeof planner) => (gained(arm) / (arm.to.atMs - arm.from.atMs)) * 1000;
+  const first = planner.events[0];
+  console.log(
+    `the planner: ${planner.events.map((each) => `${each.objective} (${each.reason})`).join(", ")}; NiteSec ` +
+      `${Math.round(gained(planner)).toLocaleString("en-US")} in 20 min, ${perSecond(planner).toFixed(1)}/s against ` +
+      `its estimate's ${first?.respect?.reputationPerSecond.toFixed(1)}/s; the rules (money): ` +
+      `${Math.round(gained(rules)).toLocaleString("en-US")}, ${perSecond(rules).toFixed(1)}/s against money's estimate ` +
+      `${first?.money?.reputationPerSecond.toFixed(1)}/s`,
+  );
+  console.log(planner.section);
+  // The planner chose respect, by the time to The Red Pill's 2.5m (its two estimates in the event), and held it.
+  expect(first).toMatchObject({ objective: "respect", reason: "estimates", members: 12, needed: 2.5e6 });
+  expect(planner.events).toHaveLength(1);
+  // The rules: money at 12, no event.
+  expect(rules.events).toEqual([]);
+  // Measured on 2026-11-11 (seed 1, about 19 s of real time an arm): the planner's respect, NiteSec 1,367,540 in the
+  // 20 minutes, 1,139.6 a second against its estimate's 1,150.3 (The Red Pill in 36 min, money's 4.3 h); the rules'
+  // money, 346,055, 288.4 a second against money's estimate of 161.8: G3's equipment for member-01, bought within its
+  // first minutes (see below).
+  expect(gained(planner)).toBeGreaterThan(gained(rules));
+  const estimate = first?.respect?.reputationPerSecond as number;
+  expect(perSecond(planner)).toBeGreaterThan(estimate / 2);
+  expect(perSecond(planner)).toBeLessThan(estimate * 2);
+  // Money's estimate against the rules arm's measure before member-01's first equipment purchase (#368's re-review):
+  // its respect a cycle on Money Laundering then, at the gang's penalty of 1. After it, the eight hacking items G3
+  // buys it (`Gang/data/upgrades.ts:133-217`, ×2.2724 its hacking multiplier, `GangMember.ts:78-85`: 7.7m to
+  // 17.4m) raise it to about 3,745 a cycle, 319.6 a second: core's left-out "what money buys toward it", cautious
+  // for money. The planner's arm buys none (its member-01 on Cyberterrorism, which earns no money).
+  const unequipped = rules.member01.filter((each) => each.task === "Money Laundering" && each.items === 0);
+  const equipped = rules.member01.filter((each) => each.items > 0);
+  console.log(
+    `the rules' member-01: ${unequipped.length} readings on Money Laundering before its equipment, respect a cycle ` +
+      `${unequipped.map((each) => each.respectGain.toFixed(1)).join(", ")}; then ${equipped.at(-1)?.items} items, ` +
+      `${equipped.at(-1)?.respectGain.toFixed(1)} a cycle; money's estimate ${first?.money?.respectPerCycle.toFixed(1)}`,
+  );
+  expect(unequipped.length).toBeGreaterThan(0);
+  for (const { respectGain } of unequipped) {
+    expect(respectGain).toBeCloseTo(first?.money?.respectPerCycle as number, -1);
+  }
+  expect(planner.member01.every((each) => each.items === 0)).toBe(true);
+  // Member-01 on the objective's task in each arm, and both reports pass.
+  if (planner.last.kind !== "gang" || rules.last.kind !== "gang") throw new Error("no gang read");
+  expect(planner.last.members[0]?.task).not.toBe(rules.last.members[0]?.task);
+  expect(planner.failures).toEqual([]);
+  expect(planner.section).toContain(
+    "  the objective at 12 differing from core's (from the snapshots) for 1 min or more:\n    none\n",
+  );
 }, 120_000);

@@ -64,6 +64,13 @@
 //   an invitation's money is held (#228's hold), installing now is held unless the set meets the count; held for the
 //   income past two of its windows it's `augmentationIncomeHeld` (an event, a run report failure). T counts the
 //   cycle's time before the brain first saw it.
+// - BN2 before the gang (#357's first slice, core's gang-route.ts): with no gang read and avmnite-02h's level in the
+//   static snapshot (`gangForming`), the planned branch's candidates are wait for the gang (τ_g: avmnite-02h's level at
+//   the measured experience rate, `#expRate`, and 70 s for the backdoor, the join and the forming) or install now (the
+//   commit and the level again from 0 at the install's multipliers), by the time to the gang formed, a tie to waiting,
+//   installing now held with no rate measured. Waiting is a wait as #343's: no countdown, no money held, kept in the
+//   store (`route` "gang forming"), overdue at twice τ_g and 10 minutes. The A/B's baseline (`bn2Route` "rules", tests
+//   alone) takes #343's candidates there, as before.
 //   Once the count is met (Daedalus inviting or joined), or never short (The Red Pill elsewhere), the count rule times
 //   installs as before (amended #343: until the planner's next slice, the Daedalus/Red Pill stretch), with The Red
 //   Pill's way, Daedalus donations and levelling. The count rule short of the count stays only as the A/B's baseline
@@ -77,6 +84,8 @@ import {
   augmentationCost,
   augmentationEndgame,
   augmentationShops,
+  type Bn2Route,
+  bitNodeHackingMultipliers,
   type CountableToCome,
   type CountableWithinReach,
   chooseAugmentationsToBuy,
@@ -98,6 +107,9 @@ import {
   factionReadingKind,
   factionReadingOf,
   GANG_RED_PILL_HOLD_MS,
+  GANG_ROUTE_SERVER,
+  type GangFormingTiming,
+  gangFormingTiming,
   gangSellsRedPill,
   type HoldWork,
   INSTALL_COUNTDOWN_MS,
@@ -108,6 +120,7 @@ import {
   installTiming,
   intentId,
   type JoinedFaction,
+  levellingInstallMultipliers,
   type MediumSnapshotData,
   NEUROFLUX_GOVERNOR,
   type NextCountable,
@@ -124,6 +137,7 @@ import { workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
+import { HackingExpRate } from "./world-daemon.ts";
 
 // What's within reach beyond a joined seller's reputation moved to core (#260); these names stay here for the brain's
 // other modules and tests.
@@ -254,7 +268,17 @@ export type InstallTimingView = InstallTiming & {
   /** The time online this cycle (T, `onlineMs`, also counts the cycle's time before the brain first saw it). */
   timeOnlineMs: number;
   words: string;
+  /**
+   * BN2 before the gang (#357's (1)): its candidates in place of #343's, install now (k 0) and wait for the gang (k 1),
+   * each by the time to the gang formed; absent, #343's.
+   */
+  route?: typeof GANG_FORMING_ROUTE;
+  /** (1)'s figures (#357): τ_g, R, the level, avmnite-02h's roll, the rate and the install's multipliers. */
+  gang?: GangFormingTiming;
 };
+
+/** The planner's route before the gang in BN2 (#357's (1)), as the timing view, the wait and the events name it. */
+export const GANG_FORMING_ROUTE = "gang forming";
 
 /** The install of the queued augmentations (#164), as the rule asks for it: the owner's has the same id. */
 export const AUGMENTATION_INSTALL_INTENT: Intent = {
@@ -342,6 +366,8 @@ export type AugmentationEvent =
       firstTauMs: number;
       untilAdding: number;
       timing: InstallTimingView;
+      /** A wait for the gang (#357's (1)); absent, #343's for the count. */
+      route?: typeof GANG_FORMING_ROUTE;
     }
   | {
       type: typeof AUGMENTATION_DONATED_EVENT_KIND;
@@ -539,6 +565,12 @@ export interface AugmentationInputs {
    * install. Absent, 1: none running.
    */
   shareBonus?: number;
+  /**
+   * BN2 before the gang (#357's (1)): avmnite-02h's required level (its roll, the static snapshot's), given while the
+   * gang rule reads no gang in BN2; then the planner's candidates there are wait for the gang or install now. Absent or
+   * null, #343's.
+   */
+  gangForming?: { required: number; unread?: boolean } | null;
 }
 
 /** What the rule asks of the controller. */
@@ -568,6 +600,27 @@ function playerOf(mediumData: MediumSnapshotData) {
   const player = mediumData.player as { money?: unknown } | undefined;
   if (person === null || !isFiniteNumber(player?.money)) return null;
   return { person, money: player.money };
+}
+
+/**
+ * The hacking level, experience and level multiplier (#357's (1)): `mults.hacking` × the BitNode's
+ * `HackingLevelMultiplier` (`PersonObjects/formulas/skill.ts:13`, `BitNode/BitNode.tsx`), or, unread, the multiplier
+ * the level and experience imply (the World Daemon's `hackingEtaSeconds`'s). No experience read: 0, so no rate either.
+ */
+function hackingFiguresOf(mediumData: MediumSnapshotData, currentNode: number) {
+  const player = mediumData.player as
+    | { skills?: { hacking?: unknown }; exp?: { hacking?: unknown }; mults?: { hacking?: unknown } }
+    | undefined;
+  const level = isFiniteNumber(player?.skills?.hacking) ? player.skills.hacking : 1;
+  const exp = isFiniteNumber(player?.exp?.hacking) ? player.exp.hacking : 0;
+  const read = player?.mults?.hacking;
+  const base = 32 * Math.log(exp + 534.6) - 200;
+  const levelMult = isFiniteNumber(read)
+    ? read * (bitNodeHackingMultipliers(currentNode)?.HackingLevelMultiplier ?? 1)
+    : base > 0
+      ? level / base
+      : 1;
+  return { exp, level, levelMult };
 }
 
 /** The slow snapshot's reset info as the rule needs it, or null where it doesn't say. */
@@ -913,6 +966,8 @@ export interface InstallWait {
   firstTauMs: number;
   untilAdding: number;
   overdue: boolean;
+  /** A wait for the gang (#357's (1)): it ends as the gang forms, whatever n; absent, #343's for the count. */
+  route?: typeof GANG_FORMING_ROUTE;
 }
 
 /** The wait as stored, or null; a value the brain didn't write fails, as the count hold's does. */
@@ -925,18 +980,26 @@ export function readInstallWait(store: TelemetryStore): InstallWait | null {
   } catch {
     throw new Error(`the store's ${AUGMENTATION_INSTALL_WAIT_SETTING} isn't JSON`);
   }
-  const { lastAugReset, sinceOnlineMs, firstTauMs, untilAdding, overdue } = wait ?? {};
+  const { lastAugReset, sinceOnlineMs, firstTauMs, untilAdding, overdue, route } = wait ?? {};
   if (
     !isFiniteNumber(lastAugReset) ||
     !isFiniteNumber(sinceOnlineMs) ||
     !isFiniteNumber(firstTauMs) ||
     firstTauMs < 0 ||
     !Number.isInteger(untilAdding) ||
-    typeof overdue !== "boolean"
+    typeof overdue !== "boolean" ||
+    (route !== undefined && route !== GANG_FORMING_ROUTE)
   ) {
     throw new Error(`the store's ${AUGMENTATION_INSTALL_WAIT_SETTING} isn't a wait the brain wrote`);
   }
-  return { lastAugReset, sinceOnlineMs, firstTauMs, untilAdding: untilAdding as number, overdue };
+  return {
+    lastAugReset,
+    sinceOnlineMs,
+    firstTauMs,
+    untilAdding: untilAdding as number,
+    overdue,
+    ...(route === undefined ? {} : { route }),
+  };
 }
 
 function writeInstallWait(store: TelemetryStore, wait: InstallWait | null): void {
@@ -1026,6 +1089,38 @@ export function describeInstallTiming(
     `${count.installed} of ${count.required} installed, ${timing.adding} new at an install, ` +
     `${formatEta(timing.onlineMs)} this cycle (T${online}); to Daedalus's count: ` +
     `${candidates.join(", ") || "no estimate"}${scaled}; chosen: ${chosen}${held}`
+  );
+}
+
+/**
+ * The planner's choice before the gang in words (#357's (1)), for the log, the dashboard and the report: "no gang yet:
+ * wait for the gang (avmnite-02h's 218 at 214, 13 min) against install now (1.8 h: the commit and 1.7 h from 0 at 64.8
+ * experience a second); chosen: wait".
+ */
+export function describeGangFormingTiming(gang: GangFormingTiming): string {
+  // R's rate: the rate now at the install's experience and speed multipliers (#368's review), as R reads it.
+  const scaledRate =
+    gang.expPerSecond === null ? null : gang.expPerSecond * gang.gain.hackingExp * gang.gain.hackingSpeed;
+  const rate =
+    scaledRate === null || gang.expPerSecond === null
+      ? "the rate not measured"
+      : `${scaledRate.toFixed(1)} experience a second (${gang.expPerSecond.toFixed(1)} now, at the install's multipliers)`;
+  const install =
+    gang.installNowMs === null
+      ? gang.heldForRate
+        ? "install now (held: the experience rate not measured yet, a minute of medium snapshots)"
+        : "install now (nothing new to install)"
+      : `install now (${formatEta(gang.installNowMs)}: the commit and ${formatEta(gang.rebuildMs)} from 0 at ${rate})`;
+  const scaled =
+    (gang.tauScale > 1 ? `; τ_g ×${gang.tauScale.toFixed(1)}, the overdue wait's measured error` : "") +
+    (gang.heldForInvitation ? "; install now held: the money held for an invitation (#228)" : "") +
+    (gang.heldForGangUnread
+      ? "; install now held: the gang's reading unread, so whether there's a gang isn't known"
+      : "");
+  return (
+    `no gang yet: wait for the gang (${GANG_ROUTE_SERVER}'s ${gang.required} at ${gang.level}, ` +
+    `${gang.waitMs === null ? "not measured yet" : formatEta(gang.waitMs)}) ` +
+    `against ${install}${scaled}; chosen: ${gang.choice}`
   );
 }
 
@@ -1128,6 +1223,12 @@ export class AugmentationRule {
   #countHoldEndLogged = false;
   /** Who times installs short of Daedalus's count (#343): the planner, or (the A/B's baseline) the count rule. */
   readonly #timingPolicy: InstallTimingPolicy;
+  /** BN2's route (#357): the planner's before the gang, or (the A/B's baseline) #343's candidates there too. */
+  readonly #bn2Route: Bn2Route;
+  /** The hacking experience rate (#357's τ_g and R), from the medium snapshots: a 10-minute window, a minute at least. */
+  readonly #expRate = new HackingExpRate();
+  /** The medium snapshot's game time last sampled for it: each is taken once (the rate restarts on a time not later). */
+  #expSampledAtMs: number | null = null;
   /** The planner's choice and n as last decided (#343), or null when it isn't timing installs: logged on a change. */
   #timingLogged: string | null = null;
   /** Installing now held for the income (#343): the cycle, when it began (online), and whether it's been reported. */
@@ -1165,17 +1266,21 @@ export class AugmentationRule {
     log = () => {},
     emit = () => {},
     installTiming: timingPolicy = "planner",
+    bn2Route = "planner",
   }: {
     store: TelemetryStore;
     log?: (line: string) => void;
     emit?: (event: AugmentationEvent) => void;
     /** Who times installs short of Daedalus's count (#343): the planner unless a test asks for the count rule. */
     installTiming?: InstallTimingPolicy;
+    /** BN2's route (#357): the planner's unless a test asks for the rules' (#343's before the gang). */
+    bn2Route?: Bn2Route;
   }) {
     this.#store = store;
     this.#log = log;
     this.#emit = emit;
     this.#timingPolicy = timingPolicy;
+    this.#bn2Route = bn2Route;
     readAugmentationCycle(store);
     readCountHold(store);
     readInstallWait(store);
@@ -1345,6 +1450,12 @@ export class AugmentationRule {
       return { intent: null, install: false, committed };
     };
     if (slowData !== null) this.#sample(slowData, slowGameTimeMs, atMs, inputs.shareBonus ?? 1);
+    // The hacking experience rate (#357): each medium snapshot's, on the game's clock (an install's fall restarts it).
+    const hackingExp = (mediumData?.player as { exp?: { hacking?: unknown } } | undefined)?.exp?.hacking;
+    if (mediumGameTimeMs !== null && mediumGameTimeMs !== this.#expSampledAtMs && isFiniteNumber(hackingExp)) {
+      this.#expSampledAtMs = mediumGameTimeMs;
+      this.#expRate.add(mediumGameTimeMs, hackingExp);
+    }
     this.#recordDone(doneIds, fastGameTimeMs, atMs);
     this.#watchInstallDone(doneIds, slowGameTimeMs, atMs);
     // Spending a medium snapshot taken after it already shows.
@@ -1401,6 +1512,7 @@ export class AugmentationRule {
         levellingInstall: inputs.levellingInstall ?? false,
         invitationHold: inputs.invitationHold ?? 0,
         shareBonus: shareBonusMean(this.#shareSamples.map((sample) => sample.bonus)),
+        gangForming: inputs.gangForming ?? null,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -1496,11 +1608,17 @@ export class AugmentationRule {
     onlineMs: number,
     atMs: number,
   ): void {
-    const { choice, adding } = timing;
+    const { choice, adding, route } = timing;
     let wait = current === null || choice === 0 ? null : { ...current };
     if (wait === null && choice !== null && choice > 0) {
       const firstTauMs = timing.candidates.find((candidate) => candidate.k === choice)?.tauMs ?? 0;
-      wait = { lastAugReset, sinceOnlineMs: onlineMs, firstTauMs, untilAdding: adding + choice, overdue: false };
+      // The wait for the gang (#357) begins only with a τ_g measured (none held for the rate, none never), its end the
+      // gang formed, whatever n.
+      if (route === undefined) {
+        wait = { lastAugReset, sinceOnlineMs: onlineMs, firstTauMs, untilAdding: adding + choice, overdue: false };
+      } else if (Number.isFinite(firstTauMs) && timing.candidates.some((candidate) => candidate.k === choice)) {
+        wait = { lastAugReset, sinceOnlineMs: onlineMs, firstTauMs, untilAdding: adding, overdue: false, route };
+      }
     }
     const overdue =
       wait !== null &&
@@ -1518,11 +1636,16 @@ export class AugmentationRule {
       firstTauMs,
       untilAdding,
       timing,
+      ...(route === undefined ? {} : { route }),
     });
     this.#log(
-      `augmentations: WAIT OVERDUE: the planner's wait for Daedalus's count, from ${formatEta(sinceOnlineMs)} online, ` +
-        `expected ${untilAdding} new at an install in ~${formatEta(firstTauMs)}, still ${adding} at ` +
-        `${formatEta(onlineMs)} online: the estimate was wrong; ${timing.words}`,
+      route === undefined
+        ? `augmentations: WAIT OVERDUE: the planner's wait for Daedalus's count, from ${formatEta(sinceOnlineMs)} ` +
+            `online, expected ${untilAdding} new at an install in ~${formatEta(firstTauMs)}, still ${adding} at ` +
+            `${formatEta(onlineMs)} online: the estimate was wrong; ${timing.words}`
+        : `augmentations: WAIT OVERDUE: the planner's wait for the gang, from ${formatEta(sinceOnlineMs)} online, ` +
+            `expected in ~${formatEta(firstTauMs)}, still none at ${formatEta(onlineMs)} online: the estimate was ` +
+            `wrong; ${timing.words}`,
     );
   }
 
@@ -1747,6 +1870,7 @@ export class AugmentationRule {
     levellingInstall,
     invitationHold,
     shareBonus,
+    gangForming,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -1765,6 +1889,7 @@ export class AugmentationRule {
     levellingInstall: boolean;
     invitationHold: number;
     shareBonus: number;
+    gangForming: { required: number; unread?: boolean } | null;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -2001,62 +2126,116 @@ export class AugmentationRule {
         const cycleMs =
           onlineMs +
           (seen?.lastAugReset === resetInfo.lastAugReset ? Math.max(0, seen.gameTimeMs - resetInfo.lastAugReset) : 0);
-        const toCome = countablesToCome({
-          sold,
-          state: purchaseState,
-          set,
-          joined,
-          shops,
-          terms,
-          person: player.person,
-          conditions: workConditionsOf(resetInfo, slowData, shareBonus),
-          work: holdWork,
-          money: budget,
-          income,
-        });
         const needed = count.required - count.installed;
         // New to the count: NeuroFlux Governor's levels only while none is installed (one entry).
         const adding = countAfterInstall(ownedAugs, installing) - count.installed;
-        const next = nextCountables({
-          toCome,
-          set,
-          state: purchaseState,
-          money: budget,
-          income,
-          upTo: Math.max(0, needed - adding),
-        });
-        // The wait under way (kept in the store, a restart keeps it): once overdue, each fresh τ scaled by its measured
-        // error, the wait so far over its first τ (decision 67's rates fitted online), so a stalled wait gives way,
-        // except at the last countable, where the scaled wait never exceeds T; the overdue failure reports it.
         const stored = readInstallWait(this.#store);
-        const wait = stored?.lastAugReset === resetInfo.lastAugReset && adding < stored.untilAdding ? stored : null;
-        const tauScale = wait?.overdue === true ? Math.max(1, (onlineMs - wait.sinceOnlineMs) / wait.firstTauMs) : 1;
-        const figures = {
-          ...installTiming({
+        // BN2 before the gang (#357's (1)): wait for the gang or install now, in place of #343's candidates.
+        const gangRoute = this.#bn2Route === "planner" && gangForming !== null ? gangForming : null;
+        let next: NextCountable[] = [];
+        if (gangRoute !== null) {
+          // Its wait under way (the store's, a restart keeps it), and once overdue its measured error on τ_g.
+          const wait =
+            stored?.lastAugReset === resetInfo.lastAugReset && stored.route === GANG_FORMING_ROUTE ? stored : null;
+          const tauScale = wait?.overdue === true ? Math.max(1, (onlineMs - wait.sinceOnlineMs) / wait.firstTauMs) : 1;
+          // What the install would install: the queue, the set and NeuroFlux Governor's levels, each's multipliers.
+          const neuroFluxLevels =
+            installable.filter((name) => name === NEUROFLUX_GOVERNOR).length + counts.neuroFluxLevels;
+          const others = [...installable, ...setNames].filter((name) => name !== NEUROFLUX_GOVERNOR);
+          const gang = gangFormingTiming({
+            ...hackingFiguresOf(mediumData, currentNode),
+            required: gangRoute.required,
+            expPerSecond: this.#expRate.perSecond(),
+            gain: levellingInstallMultipliers(neuroFluxLevels, others),
+            installable: adding > 0,
+            tauScale,
+            invitationHeld: invitationHold > 0,
+            // The gang's reading unread, no gang known (#368's review): whether there's one isn't known yet.
+            gangUnread: gangRoute.unread === true,
+          });
+          const figures: Omit<InstallTimingView, "words"> = {
             needed,
             adding,
             onlineMs: cycleMs,
-            next,
-            incomeMeasured: income !== null,
-            invitationHeld: invitationHold > 0,
+            candidates: [
+              ...(gang.installNowMs === null ? [] : [{ k: 0, tauMs: 0, estimateMs: gang.installNowMs }]),
+              ...(gang.waitMs === null ? [] : [{ k: 1, tauMs: gang.waitMs, estimateMs: gang.waitMs }]),
+            ],
+            choice: gang.choice === "install" ? 0 : 1,
+            heldForIncome: false,
+            heldForInvitation: gang.heldForInvitation,
             tauScale,
-          }),
-          next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
-          timeOnlineMs: onlineMs,
-        };
-        timing = { ...figures, words: describeInstallTiming(figures, count) };
-        this.#watchIncomeHold(timing, resetInfo.lastAugReset, onlineMs, atMs);
-        this.#watchWait(timing, wait, stored, resetInfo.lastAugReset, onlineMs, atMs);
+            next: [],
+            timeOnlineMs: onlineMs,
+            route: GANG_FORMING_ROUTE,
+            gang,
+          };
+          timing = { ...figures, words: describeGangFormingTiming(gang) };
+          this.#incomeHeld = null;
+          this.#watchWait(timing, wait, stored, resetInfo.lastAugReset, onlineMs, atMs);
+        } else {
+          const toCome = countablesToCome({
+            sold,
+            state: purchaseState,
+            set,
+            joined,
+            shops,
+            terms,
+            person: player.person,
+            conditions: workConditionsOf(resetInfo, slowData, shareBonus),
+            work: holdWork,
+            money: budget,
+            income,
+          });
+          next = nextCountables({
+            toCome,
+            set,
+            state: purchaseState,
+            money: budget,
+            income,
+            upTo: Math.max(0, needed - adding),
+          });
+          // The wait under way (kept in the store, a restart keeps it): once overdue, each fresh τ scaled by its
+          // measured error, the wait so far over its first τ (decision 67's rates fitted online), so a stalled wait
+          // gives way, except at the last countable, where the scaled wait never exceeds T; the overdue failure reports
+          // it.
+          const wait =
+            stored?.lastAugReset === resetInfo.lastAugReset && stored.route === undefined && adding < stored.untilAdding
+              ? stored
+              : null;
+          const tauScale = wait?.overdue === true ? Math.max(1, (onlineMs - wait.sinceOnlineMs) / wait.firstTauMs) : 1;
+          const figures = {
+            ...installTiming({
+              needed,
+              adding,
+              onlineMs: cycleMs,
+              next,
+              incomeMeasured: income !== null,
+              invitationHeld: invitationHold > 0,
+              tauScale,
+            }),
+            next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
+            timeOnlineMs: onlineMs,
+          };
+          timing = { ...figures, words: describeInstallTiming(figures, count) };
+          this.#watchIncomeHold(timing, resetInfo.lastAugReset, onlineMs, atMs);
+          this.#watchWait(timing, wait, stored, resetInfo.lastAugReset, onlineMs, atMs);
+        }
         // A wait (or nothing) logged as the choice or n changes; an install, in its own line.
-        const logged = `${timing.choice} ${timing.adding}`;
+        const logged = `${timing.route ?? "count"} ${timing.choice} ${timing.adding}`;
         if (logged !== this.#timingLogged && timing.choice !== 0) {
           this.#log(`augmentations: the planner's install timing: ${timing.words}`);
         }
         this.#timingLogged = logged;
         if (timing.choice !== 0) {
           // Waiting (or nothing to install or wait for): the set's and the waited-for's money held back only for a wait
-          // within the lookahead's 15 minutes (A2's payback limit, as before the countdown, #213 review).
-          this.#cancelCountdown("the planner times installs short of Daedalus's count");
+          // within the lookahead's 15 minutes (A2's payback limit, as before the countdown, #213 review). The wait for
+          // the gang (#357) holds none: no money is needed for it.
+          this.#cancelCountdown(
+            timing.route === GANG_FORMING_ROUTE
+              ? "the planner waits for the gang"
+              : "the planner times installs short of Daedalus's count",
+          );
           const waitedFor = timing.choice === null ? [] : next.slice(0, timing.choice);
           this.#waitedFor = waitedFor;
           const last = waitedFor.at(-1);
@@ -2065,16 +2244,23 @@ export class AugmentationRule {
               ? set.money + set.donationMoney + last.addedMoney
               : 0;
           const waiting = progress(null, null, null, timing);
-          this.#recordProgress(waiting, `timing: ${timing.choice}`, atMs);
+          this.#recordProgress(waiting, `timing: ${timing.route ?? "count"} ${timing.choice}`, atMs);
           return this.#ask(null, {
             ...notCommittedDonations,
             progress: waiting,
             reserve,
-            waitingFor: `the planner's time to Daedalus's count: ${timing.words}`,
+            waitingFor:
+              timing.route === GANG_FORMING_ROUTE
+                ? `the planner's time to the gang formed: ${timing.words}`
+                : `the planner's time to Daedalus's count: ${timing.words}`,
           });
         }
         // Installing now: the progress it's chosen on, for the run report (the counts and donations, as a countdown's).
-        this.#recordProgress(progress(null, "Daedalus's count", null, timing), `timing: ${timing.choice}`, atMs);
+        this.#recordProgress(
+          progress(null, "Daedalus's count", null, timing),
+          `timing: ${timing.route ?? "count"} ${timing.choice}`,
+          atMs,
+        );
       }
       const stored = readCountHold(this.#store);
       const heldSinceOnlineMs = stored?.lastAugReset === resetInfo.lastAugReset ? stored.sinceOnlineMs : null;
@@ -2294,7 +2480,9 @@ export class AugmentationRule {
         `augmentations: install chosen, ${formatEta(onlineMs)} online this cycle: buying ` +
           `${setView.map((each) => each.augmentation).join(", ") || "nothing more"} (${formatMoney(set.money)}), ` +
           (donations.length === 0 ? "" : `donating ${donations.map(describeDonation).join(", ")} first, `) +
-          describeReason(reason, rule) +
+          (timing?.route === GANG_FORMING_ROUTE
+            ? "BN2 before the gang: installing now is the planner's shortest time to the gang formed (#357)"
+            : describeReason(reason, rule)) +
           (timing === null ? "" : `; ${timing.words}`),
       );
     }

@@ -6,6 +6,7 @@ import path from "node:path";
 import type { InGameBuild } from "@bitburner-agent/bridge";
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
+  type Bn2Route,
   BOOT_SCRIPT,
   type FastSnapshotData,
   type MediumSnapshotData,
@@ -24,6 +25,14 @@ import { CONTROL_URL, EPOCH_MS } from "./agent-in-simulation.ts";
 import { BRAIN_RFA_SETTINGS, DEPLOY_WITHIN_MS, RFA_URL, startBrainInSimulation } from "./brain-in-simulation.ts";
 
 const STEP_MS = 200;
+
+/**
+ * Where `fixedAgentStart` starts the Agent, after the page's boot (#341): a fixed point after any deploy, its own
+ * constant so the deploy's timeout (`DEPLOY_WITHIN_MS`) can grow with the bundles without moving a suite that uses it.
+ * It must exceed that timeout, so the deploy, and the owner's setup after it, are done by then (checked when it's used,
+ * and by `fixed-agent-start.test.ts`). Raising it moves those suites' figures: re-measure them.
+ */
+export const FIXED_AGENT_START_MS = 90_000;
 
 export interface FreshGame {
   simulation: Simulation;
@@ -75,6 +84,7 @@ export function useFreshStarts() {
     batcher = true,
     augmentations = true,
     installTiming = "planner",
+    bn2Route = "planner",
     fixedAgentStart = false,
   }: {
     withDesiredState: boolean;
@@ -94,13 +104,14 @@ export function useFreshStarts() {
     augmentations?: boolean;
     /** Who times installs short of Daedalus's count (#343): the planner, as on Steam; the count rule for an A/B. */
     installTiming?: InstallTimingPolicy;
+    /** BN2's route (#357): the planner's, as on Steam; the rules' for an A/B. */
+    bn2Route?: Bn2Route;
     /**
      * The Agent's start independent of the deploy's length (#341's second item): each bundle the deployer pushes and
      * RAM-checks is a lockstep step before the Agent starts (`packages/bridge/src/deployer.ts:156-161`), so a bundle
      * added moves the Agent's start, and with it the seeded game's draws and its boot-anchored timers. With this, the
-     * Agent starts at a fixed virtual time, `DEPLOY_WITHIN_MS` after the page's boot (the deploy's own bound, so it's
-     * always done by then), and the seeded random streams start again from `seed` at its first connection. Off by
-     * default: every other suite's figures stay as measured.
+     * Agent starts at `FIXED_AGENT_START_MS` after the page's boot, and the seeded random streams start again from
+     * `seed` at its first connection. Off by default: every other suite's figures stay as measured.
      */
     fixedAgentStart?: boolean;
   }) {
@@ -120,12 +131,13 @@ export function useFreshStarts() {
     if (!batcher) store.setSetting(BATCHER_ENABLED_SETTING, "false");
     if (!augmentations) writeAugmentationsEnabled(store, false);
     const data = { store, brainRelease: "fresh-start-test", dataDirectory };
-    const brain = startBrainInSimulation(game, { build, data, withDesiredState, installTiming });
+    const brain = startBrainInSimulation(game, { build, data, withDesiredState, installTiming, bn2Route });
     await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);
     expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
     await beforeAgent({ simulation, game });
     if (fixedAgentStart) {
-      const waitMs = bootMs + DEPLOY_WITHIN_MS - game.clock.now();
+      expect(FIXED_AGENT_START_MS, "the fixed start after the deploy's timeout").toBeGreaterThan(DEPLOY_WITHIN_MS);
+      const waitMs = bootMs + FIXED_AGENT_START_MS - game.clock.now();
       expect(waitMs, "the deploy and the owner's setup done by the fixed start").toBeGreaterThan(0);
       await game.run(waitMs);
     }

@@ -575,11 +575,16 @@ export type HostMessage =
   | { type: "response"; id: number; ok: true; result: unknown }
   | { type: "response"; id: number; ok: false; error: { message: string; stack?: string } };
 
-export function validateHostOptions(options: HostOptions): void {
-  const { seed, epochMs } = options;
+/** A seed as the host takes one, at its start and in `diagnostics.reseedRandom` (#341): an integer in [0, 2^32). */
+export function validateSeed(seed: number): void {
   if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) {
     throw new RangeError(`seed must be an integer in [0, 2^32), got ${seed}`);
   }
+}
+
+export function validateHostOptions(options: HostOptions): void {
+  const { seed, epochMs } = options;
+  validateSeed(seed);
   if (!Number.isSafeInteger(epochMs) || epochMs < 0) {
     throw new RangeError(`epochMs must be a non-negative integer, got ${epochMs}`);
   }

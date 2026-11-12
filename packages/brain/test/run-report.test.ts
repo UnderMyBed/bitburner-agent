@@ -27,6 +27,7 @@ import { formatDuration } from "../src/gap-report.ts";
 import { describeCeiling, type HackingCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import {
   findIncomeStalls,
+  gangObjectivesBefore,
   inferHackTargets,
   RELOAD_LAG_MS,
   RELOAD_LEAD_MS,
@@ -2287,6 +2288,30 @@ describe("augmentations and the reset (#210)", () => {
       expect(failuresOf(report)).toEqual([line]);
       // Section 3's decisions, section 4's, and the failures' list.
       expect(report.text.split("\n").filter((each) => each.endsWith(line))).toHaveLength(3);
+    });
+
+    test("fails a wait for the gang the brain found overdue (#357's (1)), in its own words", () => {
+      const words = "no gang yet: wait for the gang (avmnite-02h's 217 at 216, 25 min) against install now (2.0 h)";
+      const report = augmentationRun({
+        events: [
+          [
+            10 * MINUTE,
+            "augmentationWaitOverdue",
+            {
+              onlineMs: 33 * MINUTE,
+              sinceOnlineMs: 1 * MINUTE,
+              firstTauMs: 6 * MINUTE,
+              untilAdding: 4,
+              route: "gang forming",
+              timing: timing({ choice: 1, adding: 4, words: `${words}; chosen: wait` }),
+            },
+          ],
+        ],
+      });
+      const line =
+        "wait overdue: the planner's wait for the gang from 1 min online, in ~6 min, still none at 33 min online: " +
+        `${words}; chosen: wait`;
+      expect(failuresOf(report)).toEqual([line]);
     });
   });
 });
@@ -5329,5 +5354,21 @@ describe("the time to the destroy (#360)", () => {
     const { failures, warnings } = report();
     expect(failures).toEqual([]);
     expect(warnings).toContainEqual(expect.stringMatching(/^destroy estimate never at .* so a warning\)$/));
+  });
+});
+
+describe("the gang's objective before the window (#357, #368's re-review)", () => {
+  test("the last of each BitNode, however long before: an event 25 h before the window is carried in", () => {
+    const chosen = (offsetMs: number, bitNode: string, objective: string) =>
+      event(offsetMs, "gangObjectiveChosen", { objective, reason: "estimates", bitNode, members: 12 });
+    chosen(-30 * 3_600_000, "2:0", "money");
+    chosen(-25 * 3_600_000, "2:0", "respect");
+    chosen(-26 * 3_600_000, "2:-5000", "respect");
+    chosen(60_000, "2:0", "money");
+    const before = gangObjectivesBefore(store, { environment: "E0", sinceMs: T0, untilMs: T0 + 3_600_000 });
+    expect(before.map((each) => [each.atMs - T0, (each.detail as { bitNode: string }).bitNode])).toEqual([
+      [-26 * 3_600_000, "2:-5000"],
+      [-25 * 3_600_000, "2:0"],
+    ]);
   });
 });

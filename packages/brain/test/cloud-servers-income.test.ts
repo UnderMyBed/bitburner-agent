@@ -138,8 +138,8 @@ test.each(SEEDS)(
 );
 
 test("over the seeds run, the runs with cloud servers earned more than without even less what the servers cost", () => {
-  // One seed may not (seed 1 of 8 didn't, by 2.5%): the servers bought last haven't paid back by the end. So CI runs
-  // two.
+  // One seed may not (before #341's fixed start, seed 1 of 8 didn't, by 2.5%): the servers bought last may not have paid
+  // back by the end. So CI runs two. With the fixed start (2026-11-12, UTC), all 8 did: $67.0b against $42.4b.
   expect(seedsRun).toHaveLength(SEEDS.length);
   const total = (each: (seed: (typeof seedsRun)[number]) => number) =>
     seedsRun.reduce((sum, seed) => sum + each(seed), 0);

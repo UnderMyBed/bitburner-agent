@@ -517,6 +517,25 @@ export {
   UNASSIGNED_GANG_TASK,
 } from "./gang.ts";
 export {
+  type Bn2Route,
+  GANG_FORMING_STEPS_MS,
+  GANG_RESPECT_PER_REPUTATION,
+  GANG_ROUTE_COMMIT_MS,
+  GANG_ROUTE_SERVER,
+  type GangFormingInputs,
+  type GangFormingTiming,
+  type GangObjectiveChoice,
+  type GangObjectiveEstimate,
+  type GangRouteFaction,
+  gangFormingChoice,
+  gangFormingTiming,
+  gangLevelEtaMs,
+  gangObjectiveChoice,
+  gangObjectiveEstimate,
+  gangReputationPerSecond,
+  gangRespectUnder,
+} from "./gang-route.ts";
+export {
   GANG_ASCENSION_HORIZON_CAP_MS,
   GANG_ASCENSION_MOST_LEFT_OUT,
   GANG_AUGMENTATION_HORIZON_MS,

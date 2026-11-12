@@ -18,6 +18,7 @@ import {
   validateHostOptions,
   validateRun,
   validateRunUntil,
+  validateSeed,
   validateWallClockStep,
 } from "../protocol.ts";
 import { timersFiredSoFar } from "./clock.ts";
@@ -167,7 +168,7 @@ async function start(options: HostOptions): Promise<Host> {
       return engine.homePeak();
     },
     "diagnostics.reseedRandom": ({ seed }) => {
-      if (!Number.isSafeInteger(seed)) throw new RangeError(`seed must be a whole number, not ${seed}`);
+      validateSeed(seed);
       reseedRandom(seed);
     },
     "diagnostics.random": ({ count }) => ({
