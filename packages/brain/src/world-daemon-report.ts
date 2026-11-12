@@ -17,6 +17,7 @@
 // the BitNode has taken so far, a hopeless one (decision 67's point 8). With the World Daemon's switch off, both are
 // warnings: the destroy isn't wanted, and money is what the owner asked for.
 import {
+  AUGMENTATIONS,
   gangFactionOf,
   LEVELLING_SWITCH_GAIN,
   type LevellingCandidate,
@@ -383,7 +384,13 @@ export class WorldDaemonFold {
         ? fields.factor
         : null;
     const levels = typeof fields.neuroFluxLevels === "number" ? fields.neuroFluxLevels : null;
-    const estimates = levellingEstimates(levellingInputsOf(figures, required, money, factor, levels));
+    // (c)'s set from the gang's shop (#355), as the brain last offered it: the game's names only (none before #355).
+    const augmentations = Array.isArray(fields.installAugmentations)
+      ? fields.installAugmentations.filter(
+          (name): name is string => typeof name === "string" && Object.hasOwn(AUGMENTATIONS, name),
+        )
+      : [];
+    const estimates = levellingEstimates(levellingInputsOf(figures, required, money, factor, levels, augmentations));
     const best = shortestLevellingCandidate(estimates);
     const words = LEVELLING_CANDIDATE_WORDS;
     const lines = [

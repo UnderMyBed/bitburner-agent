@@ -3463,7 +3463,7 @@ describe("the levelling choice (#336)", () => {
     bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6);
     const { text, failures } = report();
     expect(text).toMatch(
-      /levelling \(the hacking level all that's left since .*, #336\): batching for money about 2[0-9]{3}\.\d h, levelling mode about \d+ min, NeuroFlux Governor, then an install none \(no levelling choice in the window: a brain from before #336, or none yet\)/,
+      /levelling \(the hacking level all that's left since .*, #336\): batching for money about 2[0-9]{3}\.\d h, levelling mode about \d+ min, augmentations, then an install none \(no levelling choice in the window: a brain from before #336, or none yet\)/,
     );
     expect(text).toContain("the brain's choice: batching for money since");
     expect(text).toContain("levelling's target joesguns; levelling's fitted factor not measured (1 taken, optimistic)");
@@ -3536,6 +3536,47 @@ describe("the levelling choice (#336)", () => {
     expect(failures.filter((failure) => failure.startsWith("income stalled"))).toEqual([]);
     // The event in sections 3 and 4, not section 1's timeline.
     expect(text).not.toContain("levellingChosen:");
+  });
+
+  test("the install with the gang's shop's set alone (#355): scored with the set the brain offered, so it's the shortest", () => {
+    bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6);
+    const chosen = (installAugmentations: unknown) =>
+      event(MINUTE, "levellingChosen", {
+        mode: "install",
+        from: "money",
+        estimates: { money: 8.3e6, level: 4600, install: 1500 },
+        target: "joesguns",
+        money: { expPerSecond: 2.65e6, atLevel: 6779 },
+        factor: null,
+        neuroFluxLevels: 0,
+        installAugmentations,
+        detail: "batching for money to augmentations, then an install",
+      });
+    // QLink and BitRunners Neurolink, an unknown name and a number among them (dropped, not thrown).
+    chosen(["QLink", "BitRunners Neurolink", "no such augmentation", 7]);
+    const { text, failures } = report();
+    expect(text).toMatch(/levelling mode about \d+ min, augmentations, then an install about \d+(\.\d)? min/);
+    expect(text).toContain("the brain's choice: augmentations, then an install since");
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
+  });
+
+  test("an install chosen with neither a level nor the set (a brain before #355's, say): none to score, so it fails", () => {
+    bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6);
+    event(MINUTE, "levellingChosen", {
+      mode: "install",
+      from: "money",
+      estimates: { money: 8.3e6, level: 4600, install: 1500 },
+      target: "joesguns",
+      money: { expPerSecond: 2.65e6, atLevel: 6779 },
+      factor: null,
+      neuroFluxLevels: 0,
+      detail: "batching for money to augmentations, then an install",
+    });
+    const { text, failures } = report();
+    expect(text).toMatch(/, augmentations, then an install none/);
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([
+      expect.stringMatching(/^levelling: the brain on augmentations, then an install \(none\) for 19 min, since /),
+    ]);
   });
 });
 

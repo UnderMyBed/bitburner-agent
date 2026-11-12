@@ -7,10 +7,10 @@
  * - **level:** levelling mode, grow or weaken loops on the server and with the operation that earn the most experience
  *   per thread-second at its minimum security, on the RAM the batcher would batch with (`levellingExpPerThreadSecond`,
  *   the formula's prediction, times the factor fitted from the measured rate in that mode);
- * - **install:** NeuroFlux Governor's levels the money buys, an install, w0r1d_d43m0n rooted again
- *   (`LEVELLING_REROOT_MS`), then levelling mode from zero experience at the new multipliers, on home's RAM alone (the
- *   cloud servers are lost, `Prestige.ts`, and bought back later: left out, cautious), after the install's own time
- *   (`LEVELLING_INSTALL_MS`).
+ * - **install:** NeuroFlux Governor's levels the money buys and, with a gang (#355), the set A6 would buy that the
+ *   gang's faction's shop sells, an install, w0r1d_d43m0n rooted again (`LEVELLING_REROOT_MS`), then levelling mode from
+ *   zero experience at the new multipliers, on home's RAM alone (the cloud servers are lost, `Prestige.ts`, and bought
+ *   back later: left out, cautious), after the install's own time (`LEVELLING_INSTALL_MS`).
  * Every rate scales with the level as `level + 50`: an operation's time is `5 × (2.5 × required × security + 500) /
  * (hacking + 50)` over the speed (`Hacking.ts:60-80`), so on fixed RAM the threads land that much more often, each
  * giving the same experience (`Hacking.ts:30-38`). The same scaling for the batcher's measured rate values both sides
@@ -202,6 +202,53 @@ export function neuroFluxMultipliers(): { hacking: number; hackingExp: number; h
   };
 }
 
+/** The three multipliers levelling's time reads (`secondsToHackingLevel`, `levellingExpPerThreadSecond`). */
+export interface LevellingMultipliers {
+  hacking: number;
+  hackingExp: number;
+  hackingSpeed: number;
+}
+
+/**
+ * The multipliers an install gives levelling (#355): NeuroFlux Governor's to the power of `levels`
+ * (`neuroFluxMultipliers`), times each of `augmentations`' (the set A6 would buy, by the game's names; its
+ * multipliers `AUGMENTATIONS`', `Augmentation/Augmentations.ts`; an unknown name throws). An install applies each
+ * queued augmentation's by product (`applyAugmentation`, `Augmentation/AugmentationHelpers.ts:39-50`;
+ * `mergeMultipliers`, `PersonObjects/Multipliers.ts:71-79`), no BitNode scaling them. Only the three levelling's time
+ * reads: the level's (`hacking`, `PersonObjects/formulas/skill.ts:13`), the experience's (`hacking_exp`,
+ * `Hacking.ts:37`) and the speed's (`hacking_speed`, `Hacking.ts:60-80`); a grow or weaken always lands, so the
+ * chance's is moot. Their `hacking_grow` would fill the target in fewer threads after the install, less security
+ * raised to weaken back: left out of the preparation (cautious).
+ */
+export function levellingInstallMultipliers(
+  levels: number,
+  augmentations: readonly string[] = [],
+): LevellingMultipliers {
+  const neuroFlux = neuroFluxMultipliers();
+  const product = {
+    hacking: neuroFlux.hacking ** levels,
+    hackingExp: neuroFlux.hackingExp ** levels,
+    hackingSpeed: neuroFlux.hackingSpeed ** levels,
+  };
+  for (const name of augmentations) {
+    if (!Object.hasOwn(AUGMENTATIONS, name)) throw new RangeError(`no augmentation ${JSON.stringify(name)}`);
+    const { multipliers } = AUGMENTATIONS[name] as { multipliers: Readonly<Record<string, number>> };
+    product.hacking *= multipliers.hacking ?? 1;
+    product.hackingExp *= multipliers.hacking_exp ?? 1;
+    product.hackingSpeed *= multipliers.hacking_speed ?? 1;
+  }
+  return product;
+}
+
+/**
+ * Whether `augmentations` add to levelling (#355): one of the three multipliers (`levellingInstallMultipliers`) above
+ * 1. An install of none of them, and no NeuroFlux Governor level, would only lose the experience.
+ */
+export function addsToLevelling(augmentations: readonly string[]): boolean {
+  const product = levellingInstallMultipliers(0, augmentations);
+  return product.hacking > 1 || product.hackingExp > 1 || product.hackingSpeed > 1;
+}
+
 /** What the candidates are scored on. */
 export interface LevellingInputs {
   /** The player's hacking experience and level now, the level w0r1d_d43m0n needs, and the level multiplier. */
@@ -218,13 +265,21 @@ export interface LevellingInputs {
    */
   levelling: { predicted: LevellingRate; factor: number | null } | null;
   /**
-   * (c) NeuroFlux Governor's levels the money buys (A6's count, donations included: decision 53), home's level loop
+   * (c) NeuroFlux Governor's levels the money buys (A6's count, donations included: decision 53), and (#355)
+   * `augmentations`, the set A6 would buy first that the gang's faction sells (absent, none); home's level loop
    * threads (home's RAM is kept through an install, `Prestige.ts`), and one thread's predicted rate on the levelling
-   * target after it (before the levels): the grow's, after the target's preparation (`preparationMs`,
+   * target after it (before the levels and the set): the grow's, after the target's preparation (`preparationMs`,
    * `levellingPreparationMs`), as the install leaves every server at its starting security and money (the servers
-   * made afresh, `Prestige.ts:74`, `:98`; `Server/Server.ts:74-76`); null with no levels to buy or no levelling target.
+   * made afresh, `Prestige.ts:74`, `:98`; `Server/Server.ts:74-76`); null with nothing to install for or no levelling
+   * target.
    */
-  install: { levels: number; homeThreads: number; perThread: LevellingRate; preparationMs?: number } | null;
+  install: {
+    levels: number;
+    augmentations?: readonly string[];
+    homeThreads: number;
+    perThread: LevellingRate;
+    preparationMs?: number;
+  } | null;
 }
 
 /** Each candidate's estimated seconds to the level, null where it has none (unmeasured, or not on offer). */
@@ -233,9 +288,11 @@ export type LevellingEstimates = Record<LevellingCandidate, number | null>;
 /**
  * The candidates' estimates (#336): (a) at its measured rate; (b) at the formula's prediction times its fitted factor;
  * (c) the install's own time, w0r1d_d43m0n's root again (`LEVELLING_REROOT_MS`, one live BN4 measurement) and the
- * target's preparation for the grow (`preparationMs`: its experience left out, cautious), then from 0 experience at the multipliers the levels give (`levelMult`, `hacking_exp` and `hacking_speed` × NeuroFlux
- * Governor's each, `neuroFluxMultipliers`), at (b)'s factor, on home's threads alone. Left out of (c): the cloud servers
- * bought back, the experience while w0r1d_d43m0n is rooted again, and the set's other augmentations A6 buys first (all
+ * target's preparation for the grow (`preparationMs`: its experience left out, cautious), then from 0 experience at the
+ * multipliers the levels and the gang's shop's set give (`levelMult`, `hacking_exp` and `hacking_speed` × theirs,
+ * `levellingInstallMultipliers`), at (b)'s factor, on home's threads alone. On offer with a level to buy or a set that
+ * adds to levelling (`addsToLevelling`, #355), and home's threads. Left out of (c): the cloud servers bought back, the
+ * experience while w0r1d_d43m0n is rooted again, and the set's augmentations the gang's faction doesn't sell (all
  * cautious).
  */
 export function levellingEstimates(inputs: LevellingInputs): LevellingEstimates {
@@ -251,19 +308,16 @@ export function levellingEstimates(inputs: LevellingInputs): LevellingEstimates 
         });
   let install: number | null = null;
   const offer = inputs.install;
-  if (offer !== null && offer.levels > 0 && offer.homeThreads > 0) {
-    const neuroFlux = neuroFluxMultipliers();
+  const augmentations = offer?.augmentations ?? [];
+  if (offer !== null && (offer.levels > 0 || addsToLevelling(augmentations)) && offer.homeThreads > 0) {
+    const gain = levellingInstallMultipliers(Math.max(0, offer.levels), augmentations);
     const rate = {
-      expPerSecond:
-        offer.perThread.expPerSecond *
-        offer.homeThreads *
-        factor *
-        (neuroFlux.hackingExp * neuroFlux.hackingSpeed) ** offer.levels,
+      expPerSecond: offer.perThread.expPerSecond * offer.homeThreads * factor * gain.hackingExp * gain.hackingSpeed,
       atLevel: offer.perThread.atLevel,
     };
     install =
       (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS + (offer.preparationMs ?? 0)) / 1000 +
-      secondsToHackingLevel(0, required, levelMult * neuroFlux.hacking ** offer.levels, rate);
+      secondsToHackingLevel(0, required, levelMult * gain.hacking, rate);
   }
   return { money, level, install };
 }

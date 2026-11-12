@@ -485,7 +485,10 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   // territory). The fighters on Territory Warfare from the brain's first plan (at equal powers, not engaged yet): they
   // earn nothing, so their deaths cost little, defence 1 and all. The gang's power passes the others' at the first
   // territory update (11 × 2,200 × 0.015 × 1/7, about 52 an update, against their 1), and warfare is engaged from then
-  // on: 19 min 30 s of it, territory 14.3% → 16.9% in 20 minutes, power 3,059 (2026-11-10, after #335's review). One fighter died (member-06; about 0.35
+  // on: 19 min 30 s of it, territory 14.3% → 17.1% in 20 minutes, power 2,986 (2026-11-11, after #355: the gang's
+  // respect earns NiteSec The Red Pill, A6 installs it, and levelling then installs the gang's shop's set for the
+  // level three times, sets of 2, 6 and 1 that add to it, 45 bought there in all; 17.3% and 3,086 before #355, 26
+  // bought, no install after The Red Pill's). One fighter died (member-06; about 0.35
   // × 0.005 a clash at defence 1, 2 clashes an update: about 2.3 deaths expected among 11 over 60 updates); its recruit
   // trains, as a slot's later deaths each cost the respect toll, and the ten others stayed. The dashboard expects
   // about 111 deaths on the ten slots in a day engaged. Expected 9.4% territory an hour at the end.
