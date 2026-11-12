@@ -11,6 +11,8 @@ import {
   type FastSnapshotData,
   type IntentOutcome,
   type MediumSnapshotData,
+  NEUROFLUX_GOVERNOR,
+  neuroFluxLadder,
   newBatcherHealth,
   type SlowSnapshotData,
   type StaticSnapshotData,
@@ -36,6 +38,7 @@ import {
 import { thinStore } from "../src/store-thinning.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { writeWorldDaemonEnabled } from "../src/world-daemon.ts";
+import { batchFiguresOf } from "../src/world-daemon-report.ts";
 import { staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const REPORT_CLI = path.resolve(import.meta.dirname, "../src/report-cli.ts");
@@ -3511,7 +3514,7 @@ describe("the levelling choice (#336)", () => {
     bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6);
     const { text, failures } = report();
     expect(text).toMatch(
-      /levelling \(the hacking level all that's left since .*, #336\): batching for money about 2[0-9]{3}\.\d h, levelling mode about \d+ min, augmentations, then an install none \(no levelling choice in the window: a brain from before #336, or none yet\)/,
+      /levelling \(the hacking level all that's left since .*, #336\): batching for money about 2[0-9]{3}\.\d h, levelling mode about \d+ min, augmentations, then an install none, batching for the money, then an install none \(no levelling choice in the window: a brain from before #336, or none yet\)/,
     );
     expect(text).toContain("the brain's choice: batching for money since");
     expect(text).toContain("levelling's target joesguns; levelling's fitted factor not measured (1 taken, optimistic)");
@@ -3656,6 +3659,76 @@ describe("the levelling choice (#336)", () => {
     expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([
       expect.stringMatching(/^levelling: the brain on augmentations, then an install \(none\) for 19 min, since /),
     ]);
+  });
+
+  /**
+   * (d) chosen at a minute (#380): A6's ladder as the event carries it (NeuroFlux Governor's levels after 76, BN4.1's
+   * count before its last install, every level's reputation reached), the money rising `incomePerSecond` from $6.96e15.
+   */
+  function batchChosen(incomePerSecond: number) {
+    const ladder = neuroFluxLadder({
+      state: {
+        installed: { [NEUROFLUX_GOVERNOR]: 76 },
+        queued: [],
+        sourceFile11Level: 0,
+        bitNodeMultipliers: { AugmentationMoneyCost: 1, AugmentationRepCost: 1 },
+      },
+      set: { purchases: [], money: 0, donations: [], donationMoney: 0, byDonation: [] },
+      neuroFluxReputation: Number.POSITIVE_INFINITY,
+    });
+    bn4Run(
+      (offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6,
+      (offsetMs) => 6.96e15 + (offsetMs / 1000) * incomePerSecond,
+    );
+    event(MINUTE, "levellingChosen", {
+      mode: "batch",
+      from: "money",
+      estimates: { money: 8.3e6, level: 3700, install: null, batch: 2000 },
+      target: "joesguns",
+      money: { expPerSecond: 2.65e6, atLevel: 6779 },
+      factor: null,
+      neuroFluxLevels: null,
+      installAugmentations: [],
+      batch: { incomePerSecond, ladder, augmentations: [], levels: 18, money: ladder[18] },
+      detail: "batching for money to batching for the money, then an install",
+    });
+  }
+
+  test("(d) chosen (#380): scored with the event's ladder and the income measured while batching; the shortest, no failure", () => {
+    // $10t a second: ×18 ($1.50e16) in about 13 min of batching, then the install's 21 min.
+    batchChosen(1e13);
+    const { text, failures } = report();
+    expect(text).toMatch(
+      /levelling mode about \d+ min, augmentations, then an install none, batching for the money, then an install about \d+ min/,
+    );
+    expect(text).toContain("the brain's choice: batching for the money, then an install since");
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
+    // The batching earns: no income stall.
+    expect(failures.filter((failure) => failure.startsWith("income stalled"))).toEqual([]);
+  });
+
+  test("(d) at a trickle (#380): levelling mode 1.25 times shorter for over 10 minutes: the report fails it", () => {
+    // $1b a second, measured by the report while batching: ×18 would take 3 months.
+    batchChosen(1e9);
+    const { text, failures } = report();
+    expect(text).toMatch(/batching for the money, then an install about [\d.]+ h/);
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toContainEqual(
+      expect.stringMatching(
+        /^levelling: the brain on batching for the money, then an install \(about [\d.,]+ h\) for /,
+      ),
+    );
+  });
+
+  test("(d)'s figures from the event (#380): numbers and the game's names only; a brain before #380, none", () => {
+    expect(batchFiguresOf(undefined)).toBeNull();
+    expect(batchFiguresOf({ incomePerSecond: 5 })).toBeNull();
+    expect(batchFiguresOf({ incomePerSecond: 5, ladder: [1, "x", 3], augmentations: ["QLink", "no such", 7] })).toEqual(
+      { incomePerSecond: 5, ladder: [1, 3], augmentations: ["QLink"] },
+    );
+    // The income the report measured while batching wins; unmeasured (null), the event's.
+    expect(batchFiguresOf({ incomePerSecond: 5, ladder: [] }, 9)?.incomePerSecond).toBe(9);
+    expect(batchFiguresOf({ incomePerSecond: 5, ladder: [] }, null)?.incomePerSecond).toBe(5);
+    expect(batchFiguresOf({ ladder: [] })?.incomePerSecond).toBeNull();
   });
 });
 

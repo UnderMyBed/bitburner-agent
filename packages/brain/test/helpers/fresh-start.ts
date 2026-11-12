@@ -87,6 +87,7 @@ export function useFreshStarts() {
     bn2Route = "planner",
     gangRoute = bn2Route,
     fixedAgentStart = false,
+    levellingBatch = true,
   }: {
     withDesiredState: boolean;
     beforeAgent?: (fresh: FreshGame) => Promise<void>;
@@ -117,6 +118,8 @@ export function useFreshStarts() {
      * `seed` at its first connection. Off by default: every other suite's figures stay as measured.
      */
     fixedAgentStart?: boolean;
+    /** Levelling's (d) (#380): weighed, as on Steam; off for the A/B's other arm. */
+    levellingBatch?: boolean;
   }) {
     const simulation = await start({
       seed,
@@ -134,7 +137,15 @@ export function useFreshStarts() {
     if (!batcher) store.setSetting(BATCHER_ENABLED_SETTING, "false");
     if (!augmentations) writeAugmentationsEnabled(store, false);
     const data = { store, brainRelease: "fresh-start-test", dataDirectory };
-    const brain = startBrainInSimulation(game, { build, data, withDesiredState, installTiming, bn2Route, gangRoute });
+    const brain = startBrainInSimulation(game, {
+      build,
+      data,
+      withDesiredState,
+      installTiming,
+      bn2Route,
+      gangRoute,
+      levellingBatch,
+    });
     await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);
     expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
     await beforeAgent({ simulation, game });

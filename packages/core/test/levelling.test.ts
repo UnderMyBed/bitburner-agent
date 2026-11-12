@@ -2,15 +2,20 @@
 // time to a level, and the planner's three candidates and choice, on figures shaped like BN4.1's last snapshot
 // (2026-11-10's run; its hacking_speed and NeuroFlux Governor levels assumed, not read).
 import { describe, expect, test } from "vitest";
+import { AUGMENTATIONS } from "../src/augmentation-data.ts";
+import { neuroFluxLadder } from "../src/augmentation-plan.ts";
+import { augmentationBitNodeMultipliers, NEUROFLUX_GOVERNOR } from "../src/augmentations.ts";
 import { hackingExpOfLevel, hackingLevelOfExp } from "../src/batcher.ts";
 import { LEVEL_LOOP_RAM_GB } from "../src/hack-loop.ts";
 import type { HackingPlayer, HackingTarget } from "../src/hacking-ceiling.ts";
 import {
+  batchThenInstallPlan,
   chooseLevelling,
   chooseLevellingTarget,
   LEVELLING_INSTALL_MS,
   LEVELLING_REROOT_MS,
   LEVELLING_SWITCH_GAIN,
+  type LevellingBatchOffer,
   levelLoopThreads,
   levellingEstimates,
   levellingExpPerThreadSecond,
@@ -328,18 +333,20 @@ describe("the candidates and the choice (#336), on BN4.1's last snapshot", () =>
 
   test("hysteresis: a move only once the shortest is 1.25 times shorter; money unmeasured waits for it", () => {
     expect(LEVELLING_SWITCH_GAIN).toBe(1.25);
-    expect(chooseLevelling({ money: 100, level: 81, install: null }, "money")).toBe("money");
-    expect(chooseLevelling({ money: 100, level: 79, install: null }, "money")).toBe("level");
-    expect(chooseLevelling({ money: 79, level: 100, install: null }, "level")).toBe("money");
-    expect(chooseLevelling({ money: 81, level: 100, install: null }, "level")).toBe("level");
-    expect(chooseLevelling({ money: null, level: 1, install: 1 }, "money")).toBe("money");
+    expect(chooseLevelling({ money: 100, level: 81, install: null, batch: null }, "money")).toBe("money");
+    expect(chooseLevelling({ money: 100, level: 79, install: null, batch: null }, "money")).toBe("level");
+    expect(chooseLevelling({ money: 79, level: 100, install: null, batch: null }, "level")).toBe("money");
+    expect(chooseLevelling({ money: 81, level: 100, install: null, batch: null }, "level")).toBe("level");
+    expect(chooseLevelling({ money: null, level: 1, install: 1, batch: null }, "money")).toBe("money");
     // Levelling with no estimate (no target): to the shortest.
-    expect(chooseLevelling({ money: 100, level: null, install: null }, "level")).toBe("money");
+    expect(chooseLevelling({ money: 100, level: null, install: null, batch: null }, "level")).toBe("money");
     // A tie goes to the cheapest action; nothing to choose, as it is.
-    expect(chooseLevelling({ money: 1, level: 1, install: 1 }, "install")).toBe("install");
-    expect(chooseLevelling({ money: null, level: null, install: null }, "level")).toBe("level");
+    expect(chooseLevelling({ money: 1, level: 1, install: 1, batch: null }, "install")).toBe("install");
+    expect(chooseLevelling({ money: null, level: null, install: null, batch: null }, "level")).toBe("level");
     // Infinity (nothing measured earns) gives way to anything finite.
-    expect(chooseLevelling({ money: Number.POSITIVE_INFINITY, level: 1e9, install: null }, "money")).toBe("level");
+    expect(chooseLevelling({ money: Number.POSITIVE_INFINITY, level: 1e9, install: null, batch: null }, "money")).toBe(
+      "level",
+    );
   });
 
   test("after (c)'s install, the next must still pay by the same score: with little money, no install again", () => {
@@ -363,5 +370,318 @@ describe("the candidates and the choice (#336), on BN4.1's last snapshot", () =>
     const one = levellingEstimates({ ...after, install: { ...after.install, levels: 1 } });
     expect(chooseLevelling(one, "level")).toBe("level");
     expect(one.install as number).toBeGreaterThan(one.level as number);
+  });
+});
+
+describe("(d): batching for the money, then the augmentations and an install (#380)", () => {
+  /** A small case: the levels at $1m, $3m, $7m … ($2m in hand), home's 1,000 threads, the level 2,000 of 3,000 at ×4. */
+  const ladder = [0, 1e6, 3e6, 7e6, 15e6, 31e6, 63e6, 127e6, 255e6];
+  const small = {
+    exp: hackingExpOfLevel(2000, 4),
+    level: 2000,
+    required: 3000,
+    levelMult: 4,
+    money: null,
+    levelling: { predicted: { expPerSecond: 1e9, atLevel: 2000 }, factor: null },
+    install: null,
+    batch: {
+      money: 2e6,
+      incomePerSecond: 1e5,
+      ladder,
+      homeThreads: 1000,
+      perThread: { expPerSecond: 1e6, atLevel: 2000 },
+    } as LevellingBatchOffer,
+  };
+  /** (d) at k levels alone: the batching to the ladder's k, then (c)'s install at k levels. */
+  const atLevels = (k: number, inputs = small) =>
+    ((ladder[k] as number) - inputs.batch.money) / (inputs.batch.incomePerSecond as number) +
+    (levellingEstimates({
+      ...inputs,
+      batch: null,
+      install: { levels: k, homeThreads: 1000, perThread: { expPerSecond: 1e6, atLevel: 2000 } },
+    }).install as number);
+
+  test("the least total of the ladder's counts beyond the money now: (M − money) / income, then (c)'s install at them", () => {
+    const plan = batchThenInstallPlan(small);
+    // Every count beyond the money ($2m: 1 level is in hand, (c)'s), by brute force: the plan's is the least.
+    const totals = ladder.map((_, k) => (k >= 2 ? atLevels(k) : Number.POSITIVE_INFINITY));
+    const least = totals.indexOf(Math.min(...totals));
+    expect(least).toBeGreaterThan(2);
+    expect(least).toBeLessThan(ladder.length - 1);
+    expect(plan).toEqual({
+      seconds: expect.closeTo(totals[least] as number, 6),
+      levels: least,
+      money: ladder[least],
+      batchingSeconds: expect.closeTo(((ladder[least] as number) - 2e6) / 1e5, 9),
+    });
+    expect(levellingEstimates(small).batch).toBeCloseTo(totals[least] as number, 6);
+    // Half the income: longer.
+    const slower = batchThenInstallPlan({ ...small, batch: { ...small.batch, incomePerSecond: 5e4 } });
+    expect(slower?.seconds as number).toBeGreaterThan(plan?.seconds as number);
+    // At (b)'s fitted factor, as (c).
+    const fitted = { ...small, levelling: { ...small.levelling, factor: 0.5 } };
+    expect(batchThenInstallPlan(fitted)?.seconds as number).toBeGreaterThan(plan?.seconds as number);
+  });
+
+  test("the search stops once the batching alone, with the install's fixed time, is past the best: exact, whatever the income", () => {
+    for (const income of [1, 1e2, 1e4, 1e6, 1e9, 1e15]) {
+      const inputs = { ...small, batch: { ...small.batch, incomePerSecond: income } };
+      const plan = batchThenInstallPlan(inputs);
+      const brute = Math.min(...ladder.map((_, k) => (k >= 2 ? atLevels(k, inputs) : Number.POSITIVE_INFINITY)));
+      expect(plan?.seconds, `income ${income}`).toBeCloseTo(brute, 6);
+    }
+    // A flood buys the most levels; a trickle the fewest beyond the money.
+    const flood = batchThenInstallPlan({ ...small, batch: { ...small.batch, incomePerSecond: 1e15 } });
+    expect(flood?.levels).toBe(ladder.length - 1);
+    const trickle = batchThenInstallPlan({ ...small, batch: { ...small.batch, incomePerSecond: 1 } });
+    expect(trickle?.levels).toBe(2);
+    // An entry past what can be named (Infinity) stops it, never a NaN.
+    const infinite = { ...small, batch: { ...small.batch, ladder: [0, 1e6, 3e6, Number.POSITIVE_INFINITY, 15e6] } };
+    expect(batchThenInstallPlan({ ...infinite, batch: { ...infinite.batch, incomePerSecond: 1e15 } })?.levels).toBe(2);
+  });
+
+  test("on offer with an income above 0, home's threads, and a level beyond the money or a set that adds", () => {
+    const with_ = (batch: Partial<LevellingBatchOffer>) =>
+      batchThenInstallPlan({ ...small, batch: { ...small.batch, ...batch } });
+    expect(batchThenInstallPlan({ ...small, batch: null })).toBeNull();
+    expect(batchThenInstallPlan({ ...small, batch: undefined })).toBeNull();
+    expect(levellingEstimates({ ...small, batch: null }).batch).toBeNull();
+    for (const incomePerSecond of [null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(with_({ incomePerSecond }), String(incomePerSecond)).toBeNull();
+    }
+    expect(with_({ homeThreads: 0 })).toBeNull();
+    // Every count within the money now: (c)'s, none for (d).
+    expect(with_({ money: 1e9 })).toBeNull();
+    // The set alone (k = 0) beyond the money: on offer only if it adds to levelling.
+    const setAlone = { ladder: [5e6], money: 0 };
+    expect(with_(setAlone)).toBeNull();
+    expect(with_({ ...setAlone, augmentations: ["Combat Rib I"] })).toBeNull();
+    expect(with_({ ...setAlone, augmentations: ["QLink"] })).toMatchObject({
+      levels: 0,
+      money: 5e6,
+      batchingSeconds: 50,
+    });
+    // The set's multipliers with the levels, as (c)'s.
+    expect(with_({ augmentations: ["QLink"] })?.seconds as number).toBeLessThan(with_({})?.seconds as number);
+  });
+
+  test("the choice: (d) once 1.25 times shorter; from (d), the install once (c) is no longer than (d), at once", () => {
+    const of = (money: number | null, level: number | null, install: number | null, batch: number | null) => ({
+      money,
+      level,
+      install,
+      batch,
+    });
+    expect(chooseLevelling(of(1000, 100, null, 79), "level")).toBe("batch");
+    expect(chooseLevelling(of(1000, 100, null, 81), "level")).toBe("level");
+    expect(chooseLevelling(of(1000, 100, null, 79), "money")).toBe("batch");
+    // A tie goes to the cheapest action: (d) last.
+    expect(chooseLevelling(of(50, 1000, 50, 50), "level")).toBe("money");
+    // From (d): the money in hand reaches M, (c) no longer than (d): the install, no hysteresis.
+    expect(chooseLevelling(of(1000, 100, 60, 60), "batch")).toBe("install");
+    expect(chooseLevelling(of(1000, 100, 59, 60), "batch")).toBe("install");
+    // (c) longer than (d): batching goes on.
+    expect(chooseLevelling(of(1000, 100, 61, 60), "batch")).toBe("batch");
+    // The income fell (#380's "a drop in income re-decides"): (d) past levelling mode by 1.25 times, levelling mode.
+    expect(chooseLevelling(of(1000, 100, null, 126), "batch")).toBe("level");
+    expect(chooseLevelling(of(1000, 100, null, 124), "batch")).toBe("batch");
+    // From (d) to the install, another 1.25 times shorter than the install wins instead.
+    expect(chooseLevelling(of(1000, 40, 60, 60), "batch")).toBe("level");
+    // (d) gone: to the shortest.
+    expect(chooseLevelling(of(1000, 100, null, null), "batch")).toBe("level");
+  });
+});
+
+describe("(d)'s golden cases (#380): BN4.1's and BN4.2's figures", () => {
+  const BN4_COSTS = augmentationBitNodeMultipliers(4, {});
+  const NO_SET = { purchases: [], money: 0, donations: [], donationMoney: 0, byDonation: [] };
+
+  test("BN4.1: at The Red Pill, (d) batches to $3.09e13 for ×10 (31 min), not to $70e15 for ×20 (68.8 h)", () => {
+    // Shaped like BN4.1 rooted again after The Red Pill (#339: hacking 2,938, its money spent), at #336's fixture's
+    // multipliers and RAM, NeuroFlux Governor at 76 (the destroy's 96 less the last install's 20), the reputation for
+    // every level taken as reached (assumed), and the online money pace: $6.96e15 in 6.82 h (#336, before the offline
+    // gap), 2.835e11/s. Levelling mode's 61.9 min against (d)'s 31.1 min: (d), at once.
+    const state = {
+      installed: { [NEUROFLUX_GOVERNOR]: 76 },
+      queued: [],
+      sourceFile11Level: 0,
+      bitNodeMultipliers: BN4_COSTS,
+    };
+    const bn4Ladder = neuroFluxLadder({ state, set: NO_SET, neuroFluxReputation: Number.POSITIVE_INFINITY });
+    // The first level after 76: 750e3 × 1.14^76 (`Augmentation/AugmentationHelpers.ts:128-140`); ×20 about $70e15.
+    expect((bn4Ladder[1] as number) / (750e3 * 1.14 ** 76)).toBeCloseTo(1, 9);
+    expect((bn4Ladder[20] as number) / 1e15).toBeCloseTo(70.19, 1);
+    const income = 6.96e15 / (6.82 * 3600);
+    const joesguns = SERVERS[3]?.figures as HackingTarget;
+    const joesgunsRate = levellingExpPerThreadSecond(joesguns, BN4_PLAYER, BN4_HACKING_EXP, "grow");
+    const homeThreads = levelLoopThreads([HOME_GB - 32]);
+    const atRoot = {
+      exp: hackingExpOfLevel(2938, BN4_LEVEL_MULT),
+      level: 2938,
+      required: BN4_REQUIRED,
+      levelMult: BN4_LEVEL_MULT,
+      money: null,
+      levelling: {
+        predicted: { expPerSecond: joesgunsRate * levelLoopThreads([CLOUD_GB, HOME_GB - 32]), atLevel: 6779 },
+        factor: null,
+      },
+      install: null,
+      batch: {
+        money: 0,
+        incomePerSecond: income,
+        ladder: bn4Ladder,
+        homeThreads,
+        perThread: { expPerSecond: joesgunsRate, atLevel: 6779 },
+        preparationMs: 2.15 * 60_000,
+      },
+    };
+    // (a), batching's experience: #336's measured 2.65e6/s.
+    const measuredMoney = { expPerSecond: 2.65e6, atLevel: 6779 };
+    const estimates = levellingEstimates(atRoot);
+    const plan = batchThenInstallPlan(atRoot);
+    expect((estimates.level as number) / 60).toBeCloseTo(61.9, 1);
+    expect(plan?.levels).toBe(10);
+    expect((plan?.money as number) / 1e13).toBeCloseTo(3.09, 2);
+    expect((plan?.batchingSeconds as number) / 60).toBeCloseTo(1.8, 1);
+    expect((estimates.batch as number) / 60).toBeCloseTo(31.1, 1);
+    expect(chooseLevelling(estimates, "money")).toBe("money");
+    expect(chooseLevelling(levellingEstimates({ ...atRoot, money: measuredMoney }), "money")).toBe("batch");
+    // ×20: 68.8 h of batching at that pace. BN4.1 bought it with $7.09e16 in hand after a 13.2-hour offline gap:
+    // (c)'s, the money already there; (d) then looks past it.
+    expect((bn4Ladder[20] as number) / income / 3600).toBeCloseTo(68.8, 1);
+    const inHand = levellingEstimates({ ...atRoot, batch: { ...atRoot.batch, money: 7.09e16 } });
+    expect(inHand.batch as number).toBeGreaterThan(estimates.batch as number);
+  });
+
+  test("BN4.2: at 8,148 with its income at The Red Pill, (d) is about 40 min (×14), against levelling mode's 7.3 h", () => {
+    // BN4.2's last snapshot (2026-11-12's run report): hacking 8,148 of 9,000, home 16,777,216 GB and 1,200,756 GB on
+    // the hack loop's hosts, $288,624, levelling's fitted factor 0.96. Its multipliers from its installed list (the
+    // campaign report's), SF1.3's ×1.28 (`SourceFile/applySourceFile.ts`) and NeuroFlux Governor at 73; BitRunners
+    // (110,603) and Daedalus (96,515), donations unlocked (`Faction/formulas/donation.ts:8-10`, BN4's
+    // FactionWorkRepGain 0.75, `BitNode/BitNode.tsx:651`). The income: the batcher's best hour before The Red Pill,
+    // $1.83e12/s (the report's section 5). No set: assumed, none of the joined shops' left.
+    const installed = [
+      "Artificial Synaptic Potentiation",
+      "Cranial Signal Processors - Gen I",
+      "Speech Processor Implant",
+      "Neurotrainer II",
+      "INFRARET Enhancement",
+      "Social Negotiation Assistant (S.N.A)",
+      "Combat Rib I",
+      "Nuoptimal Nootropic Injector Implant",
+      "ADR-V1 Pheromone Gene",
+      "Augmented Targeting I",
+      "Speech Enhancement",
+      "BitWire",
+      "Synaptic Enhancement Implant",
+      "Neurotrainer I",
+      "Wired Reflexes",
+      "NutriGen Implant",
+      "Neural-Retention Enhancement",
+      "Embedded Netburner Module",
+      "Cranial Signal Processors - Gen II",
+      "Neural Wit Amplifier",
+      "Magnetism Amplifier",
+      "Cranial Signal Processors - Gen III",
+      "CRTX42-AA Gene Modification",
+      "CashRoot Starter Kit",
+      "Augmented Targeting II",
+      "Combat Rib II",
+      "DermaForce Particle Barrier",
+      "Nanofiber Weave",
+      "Neuregen Gene Modification",
+      "Neuralstimulator",
+      "Enhanced Myelin Sheathing",
+      "Cranial Signal Processors - Gen IV",
+      "The Black Hand",
+      "DataJack",
+      "Artificial Bio-neural Network Implant",
+      "Embedded Netburner Module Core Implant",
+      "Cranial Signal Processors - Gen V",
+      "Neural Accelerator",
+      "Embedded Netburner Module Core V2 Upgrade",
+      "BitRunners Neurolink",
+      "Embedded Netburner Module Core V3 Upgrade",
+      "Embedded Netburner Module Direct Memory Access Upgrade",
+      "Embedded Netburner Module Analyze Engine",
+      "The Red Pill",
+    ];
+    const multiplierOf = (name: string, key: string) =>
+      (AUGMENTATIONS[name]?.multipliers as Readonly<Record<string, number>> | undefined)?.[key] ?? 1;
+    const mult = (key: string) =>
+      installed.reduce((product, name) => product * multiplierOf(name, key), 1.28) *
+      multiplierOf(NEUROFLUX_GOVERNOR, key) ** 73;
+    const levelMult = mult("hacking");
+    expect(levelMult).toBeCloseTo(11.04, 2);
+    const player: HackingPlayer = {
+      skills: { hacking: 8148, intelligence: 0 },
+      mults: { hacking_chance: 1, hacking_speed: mult("hacking_speed"), hacking_money: 1, hacking_grow: 1 },
+    };
+    // joesguns at BN4's ServerMaxMoney 0.1125 (`BitNode/BitNode.tsx:635`): the preparation's grow alone reads it.
+    const joesguns = { ...(SERVERS[3]?.figures as HackingTarget), moneyMax: 6.25e7 * 0.1125 };
+    const rate = levellingExpPerThreadSecond(joesguns, player, mult("hacking_exp") * 0.4, "grow");
+    const homeThreads = levelLoopThreads([16_777_216 - 32]);
+    const threads = levelLoopThreads([1_200_756]) + homeThreads;
+    // The run report's formula: 2.01e9/s for the RAM it runs on.
+    expect((rate * threads) / 1e9).toBeCloseTo(2.02, 2);
+    const state = {
+      installed: { [NEUROFLUX_GOVERNOR]: 73 },
+      queued: [],
+      sourceFile11Level: 0,
+      bitNodeMultipliers: BN4_COSTS,
+    };
+    const bn4Ladder = neuroFluxLadder({
+      state,
+      set: NO_SET,
+      neuroFluxReputation: 110_603,
+      donations: {
+        sellers: {},
+        neuroFluxSellers: [
+          { faction: "Daedalus", reputation: 96_515 },
+          { faction: "BitRunners", reputation: 110_603 },
+        ],
+        factionRep: mult("faction_rep"),
+        factionWorkRepGain: 0.75,
+      },
+    });
+    // The first level's reputation, 500 × 1.14^73 (7.2m), is mostly its donation's: $2.81e12, past the $789b in hand
+    // at The Red Pill, so (c) had none.
+    expect((bn4Ladder[1] as number) / 1e12).toBeCloseTo(2.81, 2);
+    const after = { ...player, skills: { hacking: hackingLevelOfExp(0, levelMult), intelligence: 0 } };
+    const inputs = {
+      exp: hackingExpOfLevel(8148, levelMult),
+      level: 8148,
+      required: BN4_REQUIRED,
+      levelMult,
+      money: null,
+      levelling: { predicted: { expPerSecond: rate * threads, atLevel: 8148 }, factor: 0.96 },
+      install: null,
+      batch: {
+        money: 288_624,
+        incomePerSecond: 1.83e12,
+        ladder: bn4Ladder,
+        homeThreads,
+        perThread: { expPerSecond: rate, atLevel: 8148 },
+        preparationMs: levellingPreparationMs(joesguns, after, homeThreads),
+      },
+    };
+    const estimates = levellingEstimates(inputs);
+    const plan = batchThenInstallPlan(inputs);
+    // Levelling mode's 7.3 h, as the report said.
+    expect((estimates.level as number) / 3600).toBeCloseTo(7.28, 2);
+    expect(plan?.levels).toBe(14);
+    expect((plan?.money as number) / 1e14).toBeCloseTo(4.74, 2);
+    expect((plan?.batchingSeconds as number) / 60).toBeCloseTo(4.3, 1);
+    expect((estimates.batch as number) / 60).toBeCloseTo(40.3, 1);
+    expect(chooseLevelling(estimates, "level")).toBe("batch");
+    // At the window's mean income ($1.01e12/s) and the hour of The Red Pill's install ($6.44e11/s): ×13 each.
+    for (const [incomePerSecond, minutes] of [
+      [1.01e12, 43.6],
+      [6.44e11, 45.7],
+    ] as const) {
+      const slower = { ...inputs, batch: { ...inputs.batch, incomePerSecond } };
+      expect(batchThenInstallPlan(slower)?.levels).toBe(13);
+      expect((levellingEstimates(slower).batch as number) / 60).toBeCloseTo(minutes, 1);
+    }
   });
 });

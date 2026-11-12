@@ -10,7 +10,10 @@
  * - **install:** NeuroFlux Governor's levels the money buys and (#355) the set A6 would buy that adds to levelling
  *   (the gang's shop's in BN2, which sells no NeuroFlux Governor), an install, w0r1d_d43m0n rooted again (`LEVELLING_REROOT_MS`), then levelling mode from
  *   zero experience at the new multipliers, on home's RAM alone (the cloud servers are lost, `Prestige.ts`, and bought
- *   back later: left out, cautious), after the install's own time (`LEVELLING_INSTALL_MS`).
+ *   back later: left out, cautious), after the install's own time (`LEVELLING_INSTALL_MS`);
+ * - **batch** (#380): batching for the money M the set and NeuroFlux Governor's levels cost beyond the money now, at
+ *   the batcher's measured income, then buying them, the install, and levelling as (c) from the install's start
+ *   (`batchThenInstallPlan`): M the least total of the levels' ladder (core's `neuroFluxLadder`).
  * Every rate scales with the level as `level + 50`: an operation's time is `5 × (2.5 × required × security + 500) /
  * (hacking + 50)` over the speed (`Hacking.ts:60-80`), so on fixed RAM the threads land that much more often, each
  * giving the same experience (`Hacking.ts:30-38`). The same scaling for the batcher's measured rate values both sides
@@ -35,7 +38,7 @@ export const LEVELLING_OPERATIONS = ["grow", "weaken"] as const;
 export type LevellingOperation = (typeof LEVELLING_OPERATIONS)[number];
 
 /** The candidates, in the order a tie goes: the cheapest action first. */
-export const LEVELLING_CANDIDATES = ["money", "level", "install"] as const;
+export const LEVELLING_CANDIDATES = ["money", "level", "install", "batch"] as const;
 export type LevellingCandidate = (typeof LEVELLING_CANDIDATES)[number];
 
 /**
@@ -280,10 +283,99 @@ export interface LevellingInputs {
     perThread: LevellingRate;
     preparationMs?: number;
   } | null;
+  /** (d) (#380): batching for the money, then the set and the levels and an install; absent or null, none. */
+  batch?: LevellingBatchOffer | null;
+}
+
+/**
+ * (d)'s offer (#380): what the batching would buy and how fast it earns, and the install's figures as (c)'s.
+ * - `money`: the money now; `incomePerSecond`: the batcher's measured income (the brain's levelling rule takes the hack
+ *   loop's, `HackLoopIncome`, cloud-servers.ts, once the batcher has run its whole window), null unmeasured.
+ * - `ladder`: entry k the money the set (`augmentations`, A6's at any money that adds to levelling) and k NeuroFlux
+ *   Governor levels after it cost, donations included (core's `neuroFluxLadder`); rising.
+ * - `homeThreads`, `perThread`: as (c)'s. `preparationMs`: the target's preparation at the set alone's level and speed
+ *   (more levels only shorten it: cautious by under its own couple of minutes).
+ */
+export interface LevellingBatchOffer {
+  money: number;
+  incomePerSecond: number | null;
+  ladder: readonly number[];
+  augmentations?: readonly string[];
+  homeThreads: number;
+  perThread: LevellingRate;
+  preparationMs?: number;
+}
+
+/** (d)'s best plan (#380): its estimate, the levels to buy after the set, M, and the batching's part of the time. */
+export interface LevellingBatchPlan {
+  seconds: number;
+  levels: number;
+  money: number;
+  batchingSeconds: number;
 }
 
 /** Each candidate's estimated seconds to the level, null where it has none (unmeasured, or not on offer). */
 export type LevellingEstimates = Record<LevellingCandidate, number | null>;
+
+/**
+ * The seconds from an install's commit to the level (#336, #355): the install's own time, w0r1d_d43m0n's root again
+ * and the target's preparation, then from 0 experience at the multipliers `levels` and `augmentations` give
+ * (`levellingInstallMultipliers`), at `factor` (b)'s, on home's threads alone.
+ */
+function afterInstallSeconds(
+  levels: number,
+  augmentations: readonly string[],
+  offer: { homeThreads: number; perThread: LevellingRate; preparationMs?: number },
+  factor: number,
+  required: number,
+  levelMult: number,
+): number {
+  const gain = levellingInstallMultipliers(Math.max(0, levels), augmentations);
+  const rate = {
+    expPerSecond: offer.perThread.expPerSecond * offer.homeThreads * factor * gain.hackingExp * gain.hackingSpeed,
+    atLevel: offer.perThread.atLevel,
+  };
+  return (
+    (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS + (offer.preparationMs ?? 0)) / 1000 +
+    secondsToHackingLevel(0, required, levelMult * gain.hacking, rate)
+  );
+}
+
+/**
+ * (d)'s plan (#380), or null with none: of the ladder's counts k whose money M_k is beyond the money now (the money in
+ * hand buys (c)'s install), the least of (M_k − money) / income (the batching; the income held constant, cautious, as
+ * it rises with the level) + `afterInstallSeconds` at the set and k levels. On offer with an income measured above 0,
+ * home's threads, and k above 0 or the set adding to levelling (`addsToLevelling`).
+ * The search ends at the first k whose batching alone, with the install's fixed time, is past the best total: M_k
+ * rises with k (each level costs more than none, `neuroFluxLadder`), so every later k's batching is longer still,
+ * and its time after the install is at least 0. So the least is found exactly, whatever the shape of the time after
+ * the install; it takes about log(best × income / first price) / log(2.17) steps past the best k, each level costing
+ * about 2.17 times the one before it (×1.14 a level, `NEUROFLUX_LEVEL_GROWTH`; ×1.9 a purchase,
+ * `Augmentation/AugmentationHelpers.ts:29-31`). Left out, as (c)'s: the cloud servers bought back, the experience
+ * while w0r1d_d43m0n is rooted again (cautious), and later installs (toward (d)); and (d)'s own: the experience
+ * batching earns, which the install takes (none lost to it), and the share's trade-off with the income (#342).
+ */
+export function batchThenInstallPlan(inputs: LevellingInputs): LevellingBatchPlan | null {
+  const offer = inputs.batch ?? null;
+  if (offer === null || offer.homeThreads <= 0) return null;
+  const income = offer.incomePerSecond;
+  if (income === null || !(income > 0) || !Number.isFinite(income)) return null;
+  const augmentations = offer.augmentations ?? [];
+  const setAdds = addsToLevelling(augmentations);
+  const factor = inputs.levelling?.factor ?? 1;
+  const fixedSeconds = (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS + (offer.preparationMs ?? 0)) / 1000;
+  let best: LevellingBatchPlan | null = null;
+  for (let levels = 0; levels < offer.ladder.length; levels++) {
+    const money = offer.ladder[levels] as number;
+    if (!(money > offer.money) || (levels === 0 && !setAdds)) continue;
+    const batchingSeconds = (money - offer.money) / income;
+    if (!(batchingSeconds + fixedSeconds < (best?.seconds ?? Number.POSITIVE_INFINITY))) break;
+    const seconds =
+      batchingSeconds + afterInstallSeconds(levels, augmentations, offer, factor, inputs.required, inputs.levelMult);
+    if (best === null || seconds < best.seconds) best = { seconds, levels, money, batchingSeconds };
+  }
+  return best;
+}
 
 /**
  * The candidates' estimates (#336): (a) at its measured rate; (b) at the formula's prediction times its fitted factor;
@@ -312,16 +404,9 @@ export function levellingEstimates(inputs: LevellingInputs): LevellingEstimates 
   const offer = inputs.install;
   const augmentations = offer?.augmentations ?? [];
   if (offer !== null && (offer.levels > 0 || addsToLevelling(augmentations)) && offer.homeThreads > 0) {
-    const gain = levellingInstallMultipliers(Math.max(0, offer.levels), augmentations);
-    const rate = {
-      expPerSecond: offer.perThread.expPerSecond * offer.homeThreads * factor * gain.hackingExp * gain.hackingSpeed,
-      atLevel: offer.perThread.atLevel,
-    };
-    install =
-      (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS + (offer.preparationMs ?? 0)) / 1000 +
-      secondsToHackingLevel(0, required, levelMult * gain.hacking, rate);
+    install = afterInstallSeconds(offer.levels, augmentations, offer, factor, required, levelMult);
   }
-  return { money, level, install };
+  return { money, level, install, batch: batchThenInstallPlan(inputs)?.seconds ?? null };
 }
 
 /** The candidate whose estimate is least, ties to the cheapest action (`LEVELLING_CANDIDATES`' order); null with none. */
@@ -339,8 +424,17 @@ export function shortestLevellingCandidate(estimates: LevellingEstimates): Level
  * The planner's choice (#336), from `current`: the shortest candidate once its estimate is `LEVELLING_SWITCH_GAIN`
  * times shorter than `current`'s, else `current`. With `current`'s estimate unmeasured: money (the mode a run is in as
  * the level becomes all that's left) waits for its measurement, a minute's; any other moves to the shortest.
+ * From (d) (#380), once (c) is no longer than (d) the money in hand is (d)'s M or better: its plan's next step, the
+ * install, with no hysteresis, as from the install (a move away from it once another is 1.25 times shorter).
  */
 export function chooseLevelling(estimates: LevellingEstimates, current: LevellingCandidate): LevellingCandidate {
+  if (
+    current === "batch" &&
+    estimates.install !== null &&
+    (estimates.batch === null || estimates.install <= estimates.batch)
+  ) {
+    return chooseLevelling({ ...estimates, batch: null }, "install");
+  }
   const best = shortestLevellingCandidate(estimates);
   if (best === null || best === current) return current;
   const currentSeconds = estimates[current];

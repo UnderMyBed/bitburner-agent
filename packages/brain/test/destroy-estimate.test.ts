@@ -530,7 +530,7 @@ const levellingView = (estimateSeconds?: number): LevellingView =>
     : {
         applies: true,
         mode: "money",
-        estimates: { money: estimateSeconds, level: null, install: null },
+        estimates: { money: estimateSeconds, level: null, install: null, batch: null },
         target: null,
         fit: null,
         lines: [],

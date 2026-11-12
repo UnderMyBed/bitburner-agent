@@ -44,6 +44,8 @@ export {
   installGains,
   installRule,
   isWorthInstalling,
+  NEUROFLUX_LADDER_LEVELS,
+  neuroFluxLadder,
   QUICK_INSTALL_AT_AUGMENTATIONS,
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
@@ -773,6 +775,7 @@ export {
 } from "./intents.ts";
 export {
   addsToLevelling,
+  batchThenInstallPlan,
   chooseLevelling,
   chooseLevellingTarget,
   LEVELLING_CANDIDATES,
@@ -780,6 +783,8 @@ export {
   LEVELLING_OPERATIONS,
   LEVELLING_REROOT_MS,
   LEVELLING_SWITCH_GAIN,
+  type LevellingBatchOffer,
+  type LevellingBatchPlan,
   type LevellingCandidate,
   type LevellingEstimates,
   type LevellingInputs,
