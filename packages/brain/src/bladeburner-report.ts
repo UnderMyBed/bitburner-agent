@@ -18,6 +18,7 @@ import {
   BLADEBURNER_FACTION,
   BLADEBURNER_FACTION_RANK,
   bladeburnerWorkerFits,
+  type ClassChoice,
   COMBAT_STATS,
   type CombatPerson,
   combatPersonOf,
@@ -123,8 +124,8 @@ export class BladeburnerFold {
   #mediumInBitNode = 0;
   #lastAtMs: number | null = null;
   readonly #trainings: Training[] = [];
-  /** The gym the report's plan last chose, as the brain keeps it (`chooseGym`'s `kept`). */
-  #gym: string | null = null;
+  /** The class the report's plan last chose, as the brain keeps it (`chooseGym`'s `kept`). */
+  #class: ClassChoice | null = null;
   #joined: { atMs: number; before: boolean } | null = null;
   #sawNotJoined = false;
   #ranks: { atMs: number; rank: number }[] = [];
@@ -166,7 +167,7 @@ export class BladeburnerFold {
       for (const stretches of [this.#overdue, this.#notJoined, this.#unread, this.#factionWaiting]) {
         stretches.add(atMs, null);
       }
-      this.#gym = null;
+      this.#class = null;
       return;
     }
     this.#mediumInBitNode += 1;
@@ -195,13 +196,13 @@ export class BladeburnerFold {
           lastLevels: levelsOf(person),
         };
         this.#trainings.push(current);
-        this.#gym = null;
+        this.#class = null;
       }
       current.lastAtMs = atMs;
       current.lastLevels = levelsOf(person);
       if (typeof money === "number" && typeof city === "string") {
-        const plan = planCombatTraining(person, { money, city, kept: this.#gym });
-        this.#gym = plan.gym ?? this.#gym;
+        const plan = planCombatTraining(person, { money, city, kept: this.#class });
+        this.#class = plan.work ?? this.#class;
         if (current.estimate === null && plan.etaSeconds !== null && plan.gym !== null) {
           current.estimate = { atMs, seconds: plan.etaSeconds, gym: plan.gym };
         }

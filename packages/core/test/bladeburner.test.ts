@@ -179,41 +179,86 @@ describe("the experience to 100", () => {
 
 describe("the gym, by money", () => {
   test("Sector-12: Powerhouse from 10 minutes of its $2,400 a second, $1.44m; under it the next a travel away; Iron from $72,000; under that none", () => {
-    expect(chooseGym({ money: 1_440_000, city: "Sector-12", kept: null })).toBe("Powerhouse Gym");
-    expect(chooseGym({ money: 1_439_999, city: "Sector-12", kept: null })).toBe("Snap Fitness Gym");
-    expect(chooseGym({ money: 415_999, city: "Sector-12", kept: null })).toBe("Iron Gym");
-    expect(chooseGym({ money: 72_000, city: "Sector-12", kept: null })).toBe("Iron Gym");
-    expect(chooseGym({ money: 71_999, city: "Sector-12", kept: null })).toBeNull();
+    expect(chooseGym({ money: 1_440_000, city: "Sector-12", kept: null, classType: "str" })).toBe("Powerhouse Gym");
+    expect(chooseGym({ money: 1_439_999, city: "Sector-12", kept: null, classType: "str" })).toBe("Snap Fitness Gym");
+    expect(chooseGym({ money: 415_999, city: "Sector-12", kept: null, classType: "str" })).toBe("Iron Gym");
+    expect(chooseGym({ money: 72_000, city: "Sector-12", kept: null, classType: "str" })).toBe("Iron Gym");
+    expect(chooseGym({ money: 71_999, city: "Sector-12", kept: null, classType: "str" })).toBeNull();
   });
 
   test("a gym under way is kept while the money covers a minute of it: Powerhouse to $144,000, Iron to $7,200", () => {
     expect(GYM_KEPT_SECONDS).toBe(60);
-    expect(chooseGym({ money: 144_000, city: "Sector-12", kept: "Powerhouse Gym" })).toBe("Powerhouse Gym");
-    expect(chooseGym({ money: 143_999, city: "Sector-12", kept: "Powerhouse Gym" })).toBe("Iron Gym");
-    expect(chooseGym({ money: 7_200, city: "Sector-12", kept: "Iron Gym" })).toBe("Iron Gym");
-    expect(chooseGym({ money: 7_199, city: "Sector-12", kept: "Iron Gym" })).toBeNull();
+    expect(
+      chooseGym({
+        money: 144_000,
+        city: "Sector-12",
+        kept: { location: "Powerhouse Gym", classType: "str" },
+        classType: "str",
+      }),
+    ).toBe("Powerhouse Gym");
+    expect(
+      chooseGym({
+        money: 143_999,
+        city: "Sector-12",
+        kept: { location: "Powerhouse Gym", classType: "str" },
+        classType: "str",
+      }),
+    ).toBe("Iron Gym");
+    expect(
+      chooseGym({
+        money: 7_200,
+        city: "Sector-12",
+        kept: { location: "Iron Gym", classType: "str" },
+        classType: "str",
+      }),
+    ).toBe("Iron Gym");
+    expect(
+      chooseGym({
+        money: 7_199,
+        city: "Sector-12",
+        kept: { location: "Iron Gym", classType: "str" },
+        classType: "str",
+      }),
+    ).toBeNull();
+    // A stat changed at Powerhouse with $500,000 (#373's re-review): defense is a new class, which the effectors start
+    // only with 10 minutes of its cost, so not Powerhouse ($1.44m), nor Snap or Millenium a travel away ($920,000, $704,000):
+    // Crush's, in Aevum, from $416,000 with the travel.
+    const strength = { location: "Powerhouse Gym", classType: "str" };
+    expect(chooseGym({ money: 500_000, city: "Sector-12", kept: strength, classType: "str" })).toBe("Powerhouse Gym");
+    expect(chooseGym({ money: 500_000, city: "Sector-12", kept: strength, classType: "def" })).toBe(
+      "Crush Fitness Gym",
+    );
     // A kept gym never holds back a better one the money covers.
-    expect(chooseGym({ money: 2e6, city: "Sector-12", kept: "Iron Gym" })).toBe("Powerhouse Gym");
+    expect(
+      chooseGym({ money: 2e6, city: "Sector-12", kept: { location: "Iron Gym", classType: "str" }, classType: "str" }),
+    ).toBe("Powerhouse Gym");
   });
 
   test("any city, the travel's $200,000 counted for another: from Ishima, Powerhouse from $1.64m, Snap from $920,000", () => {
     expect(TRAVEL_COST).toBe(200_000);
     expect(gameSource("Constants.ts")).toContain("TravelCost: 200e3,");
     // Ishima has no gym: each is a travel away.
-    expect(chooseGym({ money: 1_640_000, city: "Ishima", kept: null })).toBe("Powerhouse Gym");
-    expect(chooseGym({ money: 1_639_999, city: "Ishima", kept: null })).toBe("Snap Fitness Gym");
-    expect(chooseGym({ money: 920_000, city: "Ishima", kept: null })).toBe("Snap Fitness Gym");
+    expect(chooseGym({ money: 1_640_000, city: "Ishima", kept: null, classType: "str" })).toBe("Powerhouse Gym");
+    expect(chooseGym({ money: 1_639_999, city: "Ishima", kept: null, classType: "str" })).toBe("Snap Fitness Gym");
+    expect(chooseGym({ money: 920_000, city: "Ishima", kept: null, classType: "str" })).toBe("Snap Fitness Gym");
     // Then Millenium (4 a second, $840) from $704,000, Crush (2, $360) from $416,000, Iron (1, $120) from $272,000.
-    expect(chooseGym({ money: 919_999, city: "Ishima", kept: null })).toBe("Millenium Fitness Gym");
-    expect(chooseGym({ money: 703_999, city: "Ishima", kept: null })).toBe("Crush Fitness Gym");
-    expect(chooseGym({ money: 415_999, city: "Ishima", kept: null })).toBe("Iron Gym");
-    expect(chooseGym({ money: 272_000, city: "Ishima", kept: null })).toBe("Iron Gym");
-    expect(chooseGym({ money: 271_999, city: "Ishima", kept: null })).toBeNull();
+    expect(chooseGym({ money: 919_999, city: "Ishima", kept: null, classType: "str" })).toBe("Millenium Fitness Gym");
+    expect(chooseGym({ money: 703_999, city: "Ishima", kept: null, classType: "str" })).toBe("Crush Fitness Gym");
+    expect(chooseGym({ money: 415_999, city: "Ishima", kept: null, classType: "str" })).toBe("Iron Gym");
+    expect(chooseGym({ money: 272_000, city: "Ishima", kept: null, classType: "str" })).toBe("Iron Gym");
+    expect(chooseGym({ money: 271_999, city: "Ishima", kept: null, classType: "str" })).toBeNull();
     // In Aevum, its own Snap without the travel ($720,000), before Powerhouse with it.
-    expect(chooseGym({ money: 1_639_999, city: "Aevum", kept: null })).toBe("Snap Fitness Gym");
-    expect(chooseGym({ money: 1e9, city: "Aevum", kept: null })).toBe("Powerhouse Gym");
+    expect(chooseGym({ money: 1_639_999, city: "Aevum", kept: null, classType: "str" })).toBe("Snap Fitness Gym");
+    expect(chooseGym({ money: 1e9, city: "Aevum", kept: null, classType: "str" })).toBe("Powerhouse Gym");
     // A gym kept from another city (a travel since) isn't kept: it's not where the player is.
-    expect(chooseGym({ money: 200_000, city: "Aevum", kept: "Powerhouse Gym" })).toBeNull();
+    expect(
+      chooseGym({
+        money: 200_000,
+        city: "Aevum",
+        kept: { location: "Powerhouse Gym", classType: "str" },
+        classType: "str",
+      }),
+    ).toBeNull();
   });
 
   test("a gym's experience a second: its expMult times the stat's multiplier", () => {

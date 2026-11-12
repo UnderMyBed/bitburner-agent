@@ -5374,3 +5374,50 @@ describe("the gang's objective before the window (#357, #368's re-review)", () =
     ]);
   });
 });
+
+describe("section 8, Bladeburner (#367): the owner's hold, stored, stops the training's overdue clock", () => {
+  /** A BN6 slow snapshot, and a medium one with every combat stat at `level` (no experience), no multipliers. */
+  const bn6Slow = (): SlowSnapshotData => {
+    const data = slowData();
+    return { ...data, resetInfo: { ...data.resetInfo, currentNode: 6 } as SlowSnapshotData["resetInfo"] };
+  };
+  const bn6Medium = (level: number) => {
+    const data = mediumData({ money: 0 });
+    const stats = ["strength", "defense", "dexterity", "agility"];
+    data.player = {
+      ...data.player,
+      skills: { ...(data.player.skills as object), ...Object.fromEntries(stats.map((each) => [each, level])) },
+      exp: Object.fromEntries(stats.map((each) => [each, 0])),
+      mults: Object.fromEntries(
+        stats.flatMap((each) => [
+          [each, 1],
+          [`${each}_exp`, 1],
+        ]),
+      ),
+      city: "Sector-12",
+    };
+    return { ...data, inBladeburner: false };
+  };
+  /** Twice Iron Gym's 4 × 11,255.3 s from nothing, and 10 min: 25 h 10 min. */
+  const BOUND_MS = 25 * 60 * MINUTE + 10 * MINUTE;
+  const overdue = (failures: string[]) => failures.filter((each) => each.startsWith("the training past"));
+  const run = (held: boolean) => {
+    event(0, "brainStarted", { release: "r" });
+    snapshot("slow", 10 * SECOND, bn6Slow());
+    snapshot("medium", 10 * SECOND, bn6Medium(1));
+    if (held) {
+      event(MINUTE, "bladeburnerTrainingHeld", { held: true });
+      event(3 * 60 * MINUTE, "bladeburnerTrainingHeld", { held: false });
+    }
+    snapshot("medium", BOUND_MS + 30 * MINUTE, bn6Medium(50));
+    return runReport(store, { environment: "E0", sinceMs: T0, untilMs: T0 + BOUND_MS + 31 * MINUTE });
+  };
+
+  test("unheld, the training 30 min past its bound fails", () => {
+    expect(overdue(run(false).failures)).toHaveLength(1);
+  });
+
+  test("held for 2 h 59 min by the owner's work, stored as the rule's events: the same reading passes", () => {
+    expect(overdue(run(true).failures)).toEqual([]);
+  });
+});

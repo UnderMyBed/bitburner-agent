@@ -231,6 +231,23 @@ describe("the rule", () => {
     expect(location(decide(new BladeburnerRule(), medium({ money: 200_000 })).work)).toBe("Iron Gym");
   });
 
+  test("a stat changed at Powerhouse with $500,000: a new class, so the effectors' 10 minutes: Crush's, a travel away", () => {
+    const rule = new BladeburnerRule();
+    expect(decide(rule, medium({ money: 2e6 })).work).toEqual({
+      kind: "class",
+      location: "Powerhouse Gym",
+      classType: "str",
+    });
+    expect(decide(rule, medium({ money: 500_000 })).work?.location).toBe("Powerhouse Gym");
+    // Strength at 100: defense next, which the effectors would refuse at Powerhouse under $1.44m.
+    expect(decide(rule, medium({ money: 500_000, levels: { strength: 100 } }))).toEqual({
+      work: null,
+      intent: travelIntent("Aevum"),
+      state: null,
+    });
+    expect(rule.view().training?.gym).toBe("Crush Fitness Gym");
+  });
+
   test("all four at 100, not in the division: its join, no work; one at 99, never", () => {
     const rule = new BladeburnerRule();
     expect(decide(rule, medium({ levels: TRAINED }))).toEqual({
@@ -433,14 +450,24 @@ describe("the controller (#367)", () => {
     expect(last()?.bladeburner).toBeUndefined();
     expect(controller.bladeburnerView().stage).toBe("training");
     // The owner's work still wins.
+    const held: unknown[] = [];
+    controller.subscribe((event) => {
+      if (event.type === BLADEBURNER_TRAINING_HELD_EVENT_KIND) held.push(event);
+    });
     controller.setWork({ kind: "crime", crime: "Shoplift" });
     expect(last()?.work).toMatchObject({ kind: "crime", crime: "Shoplift" });
+    // Its event goes out (#373's re-review): the run report's overdue clock stops on it.
+    expect(held).toEqual([expect.objectContaining({ type: BLADEBURNER_TRAINING_HELD_EVENT_KIND, held: true })]);
     // The training held for it: no travel either, from a city with no gym, and A5 and the invitations free.
     send("medium", cyberSec({ city: "Ishima" }));
     expect(controller.bladeburnerView().line).toContain("held for your work on the dashboard");
     expect(last()?.intents.map((each) => each.id)).not.toContain("travel(Sector-12)");
     controller.setWork(null);
     expect(last()?.intents.map((each) => each.id)).toContain("travel(Sector-12)");
+    expect(held).toEqual([
+      expect.objectContaining({ held: true }),
+      expect.objectContaining({ type: BLADEBURNER_TRAINING_HELD_EVENT_KIND, held: false }),
+    ]);
   });
 
   test("trained: A5's faction work back; the join only through the gate, after two medium snapshots and a backup", async () => {

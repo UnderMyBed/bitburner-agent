@@ -193,17 +193,30 @@ export const SLOWEST_GYM = "Iron Gym";
  * The gym with the most experience a second the money covers (#367), in any city: each by its `expMult`, the most
  * first. One in the player's city is started past core's class guard (10 minutes of its cost); one in another city
  * needs that and the travel there too, `TRAVEL_COST` ($200,000, `Constants.ts:28`, `PersonObjects/Person.ts:243-252`),
- * which the rule then asks for. `kept` (the gym the rule last chose) is kept while the player is in its city and the
- * money covers `GYM_KEPT_SECONDS` of it. Null with none the money covers.
+ * which the rule then asks for. `kept` (the class the rule last sent) is kept while it's the class still wanted (#373's
+ * re-review: its gym, and `classType`, the stat now), the player is in its city, and the money covers
+ * `GYM_KEPT_SECONDS` of it: a new class, a stat changed included, needs the 10 minutes the effectors start one with
+ * (core's `classStartProblem`), or they'd refuse it and the old class would run on. Null with none the money covers.
  */
-export function chooseGym({ money, city, kept }: { money: number; city: string; kept: string | null }): string | null {
+export function chooseGym({
+  money,
+  city,
+  kept,
+  classType,
+}: {
+  money: number;
+  city: string;
+  kept: ClassChoice | null;
+  classType: string;
+}): string | null {
   const gyms = CLASS_LOCATION_NAMES.filter((name) => CLASS_LOCATIONS[name]?.kind === "gym").sort(
     (a, b) => (CLASS_LOCATIONS[b]?.expMult ?? 0) - (CLASS_LOCATIONS[a]?.expMult ?? 0),
   );
   for (const gym of gyms) {
     const choice: ClassChoice = { location: gym, classType: "str" };
     const here = CLASS_LOCATIONS[gym]?.city === city;
-    if (here && gym === kept && money >= classCostPerSecond(choice) * GYM_KEPT_SECONDS) return gym;
+    const underWay = kept?.location === gym && kept.classType === classType;
+    if (here && underWay && money >= classCostPerSecond(choice) * GYM_KEPT_SECONDS) return gym;
     const travel = here ? 0 : TRAVEL_COST;
     if (money >= classCostPerSecond(choice) * CLASS_MONEY_GUARD_SECONDS + travel) return gym;
   }
@@ -254,12 +267,12 @@ export function slowestTrainingSeconds(person: CombatPerson): number {
  */
 export function planCombatTraining(
   person: CombatPerson,
-  where: { money: number; city: string; kept: string | null },
+  where: { money: number; city: string; kept: ClassChoice | null },
 ): CombatTrainingPlan {
   const expLeft = combatExpLeft(person);
   const stat = COMBAT_STATS.find((each) => person.skills[each] < BLADEBURNER_JOIN_LEVEL) ?? null;
   if (stat === null) return { stat, gym: null, travel: null, work: null, expLeft, etaSeconds: 0, waitingFor: null };
-  const gym = chooseGym(where);
+  const gym = chooseGym({ ...where, classType: COMBAT_GYM_TYPES[stat] });
   if (gym === null) {
     const least = classCostPerSecond({ location: SLOWEST_GYM, classType: "str" }) * CLASS_MONEY_GUARD_SECONDS;
     const travel =

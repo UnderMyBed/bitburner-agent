@@ -37,6 +37,7 @@ import {
   type BladeburnerReading,
   type BladeburnerState,
   bladeburnerWorkerFits,
+  type ClassChoice,
   COMBAT_STATS,
   type CombatTrainingPlan,
   classLabel,
@@ -165,8 +166,8 @@ export class BladeburnerRule {
     line: "Bladeburner: not managed (no slow snapshot yet)",
     training: null,
   };
-  /** The gym the training last chose, kept while the money covers a minute of it (core's `chooseGym`). */
-  #gym: string | null = null;
+  /** The class the training last sent, kept while it's still wanted and the money covers a minute of it (`chooseGym`). */
+  #class: ClassChoice | null = null;
   #lastLogged = "";
 
   readonly #emit: (event: BladeburnerEvent) => void;
@@ -237,7 +238,7 @@ export class BladeburnerRule {
       );
     }
     if (!BLADEBURNER_BITNODES.includes(bitNode)) {
-      this.#gym = null;
+      this.#class = null;
       const line = `Bladeburner: not managed (played in BN6 and BN7 only for now; this is BN${bitNode})`;
       return this.#decide({ stage: "notManaged", line, training: null }, none);
     }
@@ -251,8 +252,9 @@ export class BladeburnerRule {
     const snapshot = bladeburnerSnapshotOf(mediumData);
     if (snapshot.joined !== true) {
       if (!combatTrained(person)) {
-        const training = planCombatTraining(person, { money, city, kept: this.#gym });
-        this.#gym = training.gym ?? this.#gym;
+        const training = planCombatTraining(person, { money, city, kept: this.#class });
+        // The class sent, if one is: kept only while it's still the one wanted.
+        this.#class = training.work ?? this.#class;
         if (ownersWork) {
           const line = `Bladeburner: training to join held for your work on the dashboard (${describeLevels(person.skills)})`;
           return this.#decide({ stage: "training", line, training }, none);
@@ -267,7 +269,7 @@ export class BladeburnerRule {
         (snapshot.joined === null ? "; this Agent doesn't say whether it's in" : "");
       return this.#decide({ stage: "joining", line, training: null }, { ...none, intent: JOIN_BLADEBURNER_INTENT });
     }
-    this.#gym = null;
+    this.#class = null;
     const homeMaxRamGb = homeMaxRamOf(mediumData);
     if (homeMaxRamGb === null || !bladeburnerWorkerFits({ homeMaxRamGb, homeKeptGb })) {
       const line =
