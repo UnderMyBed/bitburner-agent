@@ -239,6 +239,21 @@ describe("the path", () => {
     rate.add(60_000 + 6 * MINUTE, 0);
     expect(rate.perSecond()).toBeNull();
   });
+
+  test("the window full (#378's review): its samples spanning the 10 minutes, kept so; a fall starts it again", () => {
+    const rate = new HackingExpRate();
+    for (let minute = 0; minute <= 9; minute++) rate.add(minute * MINUTE, minute * 100);
+    expect(rate.perSecond()).not.toBeNull();
+    expect(rate.windowFull()).toBe(false);
+    rate.add(10 * MINUTE - 1, 999);
+    expect(rate.windowFull()).toBe(false);
+    rate.add(10 * MINUTE, 1_000);
+    expect(rate.windowFull()).toBe(true);
+    rate.add(11 * MINUTE, 1_100);
+    expect(rate.windowFull()).toBe(true);
+    rate.add(12 * MINUTE, 0);
+    expect(rate.windowFull()).toBe(false);
+  });
 });
 
 describe("the destroy", () => {

@@ -19,6 +19,7 @@
 // the planner's runs here, loudly.
 import { AGENT_SIM_EFFECTORS_GLOBAL, type SlowSnapshotData, type StaticSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
+import { DESTROY_ESTIMATED_EVENT_KIND, type DestroyEstimateRecord, describeTerms } from "../src/destroy-estimate.ts";
 import { type GangView, gangSnapshotOf } from "../src/gang.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -278,6 +279,33 @@ test.each(SEEDS)(
     expect(section).toMatch(/\n {2}formed: with NiteSec, first seen /);
     expect(section).toContain("no gang formed with a gang faction joined for 5 min or more:\n    none");
     expect(section).toContain("the gang unread in BN2 for 5 min or more:\n    none");
+
+    // The time to the destroy by the gang's route (#357's slice 3), at 15,000: the start, made once the planner's τ_g
+    // is measured (over the rate's whole window, #378's review; A τ_g, BC and D none: at least), and the gang formed
+    // (A done, BC none while the fresh gang trains first, D none).
+    const estimates = fresh.data.store
+      .eventsInWindow(window)
+      .filter((event) => event.kind === DESTROY_ESTIMATED_EVENT_KIND)
+      .map((event) => event.detail as DestroyEstimateRecord);
+    console.log(
+      estimates
+        .map((each) => `${each.bitNode} ${each.moment} at ${each.onlineMs} ms online: ${describeTerms(each.terms)}`)
+        .join("\n"),
+    );
+    expect(estimates.map((each) => [each.bitNode, each.moment, each.requiredLevel, each.atLeast, each.never])).toEqual([
+      ["BN2.1", "start", 15_000, true, false],
+      ["BN2.1", "gang formed", 15_000, true, false],
+    ]);
+    expect(estimates[0]?.terms.map((term) => [term.term, term.ms !== null && term.ms > 0, term.label])).toEqual([
+      ["A", true, "cautious"],
+      ["BC", false, "optimistic"],
+      ["D", false, "optimistic"],
+    ]);
+    expect(estimates[1]?.terms.map((term) => [term.term, term.ms, term.label])).toEqual([
+      ["A", 0, "done"],
+      ["BC", null, "optimistic"],
+      ["D", null, "optimistic"],
+    ]);
     expect(failures).toEqual([]);
     expect(lines.at(-1)).toBe("Verdict: PASS");
   },

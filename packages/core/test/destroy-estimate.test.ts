@@ -1,13 +1,19 @@
 // The time to the destroy (#360): w0r1d_d43m0n's level by BitNode, each term's cases, and golden cases from the
 // store's tables (#360: the 2026-11-11 analyses of install timing and the Red Pill stretch, BN1.2 to BN4.1, online
-// minutes).
+// minutes); BN2's gang route (#357's slice 3) from slice 1's and 2's goldens.
 import { describe, expect, test } from "vitest";
+import { hackingExpOfLevel } from "../src/batcher.ts";
 import {
+  DESTROY_ESTIMATE_BITNODES,
   type DestroyEstimateInputs,
+  type DestroyGangInputs,
   type DestroyPrior,
   destroyEstimate,
+  destroyRouteOf,
   worldDaemonRequiredLevel,
 } from "../src/destroy-estimate.ts";
+import { GANG_ROUTE_COMMIT_MS, gangFormingTiming, gangInstallTiming } from "../src/gang-route.ts";
+import { levellingInstallMultipliers } from "../src/levelling.ts";
 
 const MINUTE = 60_000;
 const min = (ms: number | null) => (ms === null ? null : ms / MINUTE);
@@ -289,5 +295,185 @@ describe("golden cases from the store's tables (#360)", () => {
     expect(termsOf(joined)).toEqual({ A: 0, BC: 165 + 8, D: null });
     expect(ratio(joined, 1624, 1083)).toBe(0.32);
     expect([start, met, joined].every((each) => each.atLeast)).toBe(true);
+  });
+});
+
+/** BN2 with SF1.3, SF4.3 and SF5.1 (the campaign's entry from BN5.1), at `t` minutes: the gang's route, `gang`'s. */
+const bn2 = (
+  t: number,
+  gang: Partial<DestroyGangInputs> = {},
+  fields: Partial<DestroyEstimateInputs> = {},
+): DestroyEstimateInputs =>
+  inputs(t, 0, {
+    currentNode: 2,
+    ownedSF: { 1: 3, 4: 3, 5: 1 },
+    gang: { formed: false, waitMs: null, redPill: null, earningInMs: null, ...gang },
+    ...fields,
+  });
+const HOUR = 60 * MINUTE;
+/** BN2's level multiplier with SF1.3 (`SourceFile/applySourceFile.ts:18`) at BN2's `HackingLevelMultiplier` 0.8. */
+const BN2_LEVEL_MULT = 1.28 * 0.8;
+const bn2Exp = (level: number) => hackingExpOfLevel(level, BN2_LEVEL_MULT);
+/** #363's seed 1's mean rate from 201 to 212 (24 min 31 s): 64.8 a second, #357's golden. */
+const SEED_1_RATE = (bn2Exp(212) - bn2Exp(201)) / (24 * 60 + 31);
+
+describe("BN2's route, the gang's (#357's slice 3)", () => {
+  test("the routes: Daedalus's in BN1, BN4 and BN5, the gang's in BN2, none elsewhere", () => {
+    expect(DESTROY_ESTIMATE_BITNODES).toEqual([1, 2, 4, 5]);
+    expect([1, 2, 3, 4, 5, 6, 7, 12].map(destroyRouteOf)).toEqual([
+      "daedalus",
+      "gang",
+      null,
+      "daedalus",
+      "daedalus",
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  test("A: τ_g before the gang (seed 3's 214 of 218: 13.0 min), cautious; none unmeasured; never; 0 once formed", () => {
+    // Slice 1's golden, through core's own (1): the figure A6's timing carries.
+    const { waitMs } = gangFormingTiming({
+      exp: bn2Exp(214),
+      level: 214,
+      required: 218,
+      levelMult: BN2_LEVEL_MULT,
+      expPerSecond: SEED_1_RATE,
+      gain: levellingInstallMultipliers(0),
+      installable: true,
+    });
+    const estimate = destroyEstimate(bn2(30, { waitMs }));
+    expect(min(estimate.terms[0]?.ms ?? null)).toBeCloseTo(13.0, 1);
+    expect(estimate.terms[0]).toMatchObject({ term: "A", label: "cautious", atLeast: false });
+    expect(estimate.terms[0]?.source).toMatch(/^τ_g, the planner's wait for the gang \(#357's \(1\)\): avmnite-02h's/);
+    expect(estimate.terms[0]?.source).toContain(
+      "over the rate's whole window (the rate's rise with the level and the hack loop's growth left out: cautious",
+    );
+    expect(destroyEstimate(bn2(30)).terms[0]).toMatchObject({ ms: null, atLeast: true, label: "optimistic" });
+    expect(destroyEstimate(bn2(30)).terms[0]?.source).toMatch(/^before the gang: τ_g not measured/);
+    expect(destroyEstimate(bn2(30, { waitMs: Number.POSITIVE_INFINITY }))).toMatchObject({ never: true });
+    // Formed, τ_g given or not: done; The Red Pill installed too.
+    expect(destroyEstimate(bn2(40, { formed: true, waitMs: 5 * MINUTE })).terms[0]).toMatchObject({
+      ms: 0,
+      label: "done",
+      source: "the gang formed",
+    });
+    expect(destroyEstimate(bn2(40, { waitMs: 5 * MINUTE }, { redPillInstalled: true })).terms[0]).toMatchObject({
+      ms: 0,
+      source: "The Red Pill installed",
+    });
+  });
+
+  test("BC: (3)'s chosen estimate and the install's commit (from favour 0: bank, 66.4 h + 2 min), either way", () => {
+    // Slice 2's golden, through core's own (3): twelve at 5.875 rep/s, p 0.979, from favour 0.
+    const timing = gangInstallTiming({
+      needed: 2.5e6,
+      reputation: 0,
+      favor: 0,
+      rateKept: 0.979,
+      factionRepGain: 1,
+      reputationPerSecond: 5.875,
+      installable: true,
+    });
+    expect(timing.choice).toBe("bank");
+    const estimate = destroyEstimate(
+      bn2(40, { formed: true, redPill: { choice: "bank", ms: timing.bankMs as number } }),
+    );
+    expect(((estimate.terms[1]?.ms as number) - GANG_ROUTE_COMMIT_MS) / HOUR).toBeCloseTo(66.4, 1);
+    expect(estimate.terms[1]?.ms).toBe((timing.bankMs as number) + GANG_ROUTE_COMMIT_MS);
+    expect(estimate.terms[1]).toMatchObject({ term: "BC", label: "either way", atLeast: false });
+    expect(estimate.terms[1]?.source).toBe(
+      "(3)'s choice, bank: its estimate to The Red Pill's reputation at the gang's faction (#357), then its install, " +
+        "the commit (2 min, #343)",
+    );
+    for (const choice of ["keep", "install"] as const) {
+      expect(destroyEstimate(bn2(40, { formed: true, redPill: { choice, ms: 30 * MINUTE } })).terms[1]?.source).toMatch(
+        new RegExp(`^\\(3\\)'s choice, ${choice}: `),
+      );
+    }
+    // Reached: 0, and the install alone.
+    expect(destroyEstimate(bn2(40, { formed: true, redPill: { choice: "keep", ms: 0 } })).terms[1]?.ms).toBe(
+      GANG_ROUTE_COMMIT_MS,
+    );
+    // The Red Pill installed: done, whatever (3) said.
+    expect(
+      destroyEstimate(bn2(90, { formed: true, redPill: { choice: "keep", ms: HOUR } }, { redPillInstalled: true }))
+        .terms[1],
+    ).toMatchObject({ ms: 0, label: "done" });
+  });
+
+  test("BC none: before the gang; (3) not made; at no rate in a pause, its end said (#374); never at no rate otherwise", () => {
+    expect(destroyEstimate(bn2(30, { waitMs: MINUTE })).terms[1]).toMatchObject({
+      ms: null,
+      atLeast: true,
+      label: "optimistic",
+      source: "before the gang: The Red Pill's reputation at its faction, (3)'s once it forms: none",
+    });
+    expect(destroyEstimate(bn2(40, { formed: true })).terms[1]?.source).toBe(
+      "with the gang: (3)'s estimate not made (the gang unread, or no respect earned this cycle): none",
+    );
+    // A fresh gang training first: (3) not made, its plan's time to earning said.
+    expect(destroyEstimate(bn2(40, { formed: true, earningInMs: 9 * MINUTE })).terms[1]).toMatchObject({
+      ms: null,
+      atLeast: true,
+      source:
+        "with the gang: (3)'s estimate not made (the gang unread, or no respect earned this cycle); the gang's plan " +
+        "earning no respect now, about 9 min more by the gang rule's estimate (#374): none",
+    });
+    const paused = destroyEstimate(
+      bn2(40, { formed: true, earningInMs: 4 * MINUTE, redPill: { choice: "keep", ms: Number.POSITIVE_INFINITY } }),
+    );
+    expect(paused).toMatchObject({ never: false, atLeast: true });
+    expect(paused.terms[1]?.source).toMatch(
+      /^with the gang: \(3\)'s keep at no rate now, a pause; .* about 4 min more/,
+    );
+    expect(
+      destroyEstimate(bn2(40, { formed: true, redPill: { choice: "keep", ms: Number.POSITIVE_INFINITY } })),
+    ).toMatchObject({ never: true, remainingMs: Number.POSITIVE_INFINITY });
+    // Its source says when that is: every working member earning 0 respect (gang-stalls.ts's `gangPlanEarnsNone`).
+    expect(
+      destroyEstimate(bn2(40, { formed: true, redPill: { choice: "keep", ms: Number.POSITIVE_INFINITY } })).terms[1]
+        ?.source,
+    ).toMatch(
+      /; at no rate with no pause: every working member earning 0 respect \(a money task with respect and wanted 0\)$/,
+    );
+    expect(
+      destroyEstimate(bn2(40, { formed: true, redPill: { choice: "keep", ms: MINUTE } })).terms[1]?.source,
+    ).not.toContain("no pause");
+  });
+
+  test("D: none before The Red Pill (no BN2 prior: at least); a prior at 4,500 isn't; levelling's after it", () => {
+    const before = destroyEstimate(bn2(30, { waitMs: 13 * MINUTE }));
+    expect(before.terms[2]).toMatchObject({ ms: null, atLeast: true, source: "no prior: none" });
+    expect(before).toMatchObject({ atLeast: true, requiredLevel: 15_000, remainingMs: 13 * MINUTE });
+    const bn51 = { ...prior("BN5.1", 300, 200, 20, 40, 4_500), currentNode: 5 };
+    expect(destroyEstimate(bn2(30, { waitMs: 13 * MINUTE }, { prior: bn51 })).terms[2]?.source).toBe(
+      "the prior's (BN5.1) at level 4500, not 15000: none",
+    );
+    // The Red Pill installed: A and BC done; levelling's estimate (#336) for D, the whole estimate measured.
+    const after = destroyEstimate(bn2(400, { formed: true }, { redPillInstalled: true, levellingMs: 6 * HOUR }));
+    expect(after.terms.map((term) => [term.term, term.ms, term.label])).toEqual([
+      ["A", 0, "done"],
+      ["BC", 0, "done"],
+      ["D", 6 * HOUR, "either way"],
+    ]);
+    expect(after).toMatchObject({ atLeast: false, never: false, totalMs: 400 * MINUTE + 6 * HOUR });
+  });
+
+  test("the total in BN2: A + BC + D, at least while a term is none; its figures needed there, ignored elsewhere", () => {
+    const formed = destroyEstimate(bn2(60, { formed: true, redPill: { choice: "keep", ms: 10 * HOUR } }));
+    expect(formed).toMatchObject({
+      remainingMs: 10 * HOUR + GANG_ROUTE_COMMIT_MS,
+      totalMs: 60 * MINUTE + 10 * HOUR + GANG_ROUTE_COMMIT_MS,
+      atLeast: true,
+      never: false,
+    });
+    expect(() => destroyEstimate({ ...bn2(60), gang: undefined })).toThrow(/gang's route \(#357\)/);
+    // In BN1 the gang's figures change nothing.
+    const bn1 = inputs(87, 5, { prior: BN1_2 });
+    expect(destroyEstimate({ ...bn1, gang: { formed: true, waitMs: 0, redPill: null, earningInMs: null } })).toEqual(
+      destroyEstimate(bn1),
+    );
   });
 });
