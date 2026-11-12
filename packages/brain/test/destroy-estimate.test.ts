@@ -28,6 +28,7 @@ import {
   type DestroyGangFacts,
   type DestroySeed,
   destroyGangInputsOf,
+  levellingLookTimesOf,
   readDestroySeed,
 } from "../src/destroy-estimate.ts";
 import {
@@ -530,7 +531,7 @@ const levellingView = (estimateSeconds?: number): LevellingView =>
     : {
         applies: true,
         mode: "money",
-        estimates: { money: estimateSeconds, level: null, install: null },
+        estimates: { money: estimateSeconds, level: null, install: null, batch: null },
         target: null,
         fit: null,
         lines: [],
@@ -1243,4 +1244,18 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
       destroyGangInputsOf({ formed: false, timing: { choice: 1 } as unknown as InstallTimingView, pause: null }, false),
     ).toMatchObject({ waitMs: null, redPill: null });
   });
+});
+
+test("levelling's first look (#382's review): a choice, or an estimate at levelling's moment while money waits; no other", () => {
+  const event = (kind: string, atMs: number, detail: unknown) =>
+    ({ id: atMs, kind, atMs, detail }) as unknown as Parameters<typeof levellingLookTimesOf>[0][number];
+  expect(
+    levellingLookTimesOf([
+      event("levellingChosen", 1, { mode: "level" }),
+      event(DESTROY_ESTIMATED_EVENT_KIND, 2, { moment: "levelling" }),
+      event(DESTROY_ESTIMATED_EVENT_KIND, 3, { moment: "install" }),
+      event(DESTROY_ESTIMATED_EVENT_KIND, 4, null),
+      event("brainStarted", 5, {}),
+    ]),
+  ).toEqual([1, 2]);
 });

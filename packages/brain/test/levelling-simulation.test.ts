@@ -15,7 +15,10 @@
 //   and installed, then NiteSec's reputation at 1m and $1t: its shop's hacking augmentations within reach and no
 //   NeuroFlux Governor (no gang's shop sells it). Rooted, the planner chooses the install with the set alone; A6 buys it
 //   at NiteSec and installs ("the hacking level"), the gang kept, and the planner is back on money.
-// CI runs seed 1 (BN2's case once); `LEVELLING_SEEDS` (`1,2,3`, say) runs others.
+// - BN4's A/B (#380): levelling mode against (d), batching for the money then the install, from The Red Pill with the
+//   level short (harness edits shaped like BN4.2: the first NeuroFlux Governor level's donation past the money the
+//   first minutes bring, so (c) has none as levelling chooses); the time to the destroy in each arm.
+// CI runs seed 1 (BN2's case and the A/B once); `LEVELLING_SEEDS` (`1,2,3`, say) runs others.
 import {
   AUGMENTATIONS,
   addsToLevelling,
@@ -33,10 +36,11 @@ import { AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND, writeAugmentationsEnabled } fro
 import { CLOUD_SERVERS_ENABLED_SETTING } from "../src/cloud-servers.ts";
 import { gangSnapshotOf } from "../src/gang.ts";
 import { HOME_RAM_ENABLED_SETTING } from "../src/home-ram.ts";
-import { LEVELLING_CHOSEN_EVENT_KIND } from "../src/levelling.ts";
+import { LEVELLING_CHOSEN_EVENT_KIND, type LevellingEvent } from "../src/levelling.ts";
 import { runReport } from "../src/run-report.ts";
 import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
 import { writeSwitch } from "../src/switches.ts";
+import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 
@@ -248,7 +252,7 @@ test("BN2 (#355): The Red Pill installed, the gang's faction's reputation for it
   const { text, failures } = runReport(data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs }, {});
   const line = text.split("\n").find((each) => each.includes("levelling (the hacking level all that's left"));
   console.log(`${line}\n${failures.join("\n")}`);
-  expect(line).toMatch(/, augmentations, then an install about [^,]+$/);
+  expect(line).toMatch(/, augmentations, then an install about [^,]+, batching for the money, then an install none$/);
   expect(text).toContain("the brain's choice: augmentations, then an install since");
   expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
   // On, $1t again (the install took the money, `Prestige.ts`: a harness edit for the port openers), w0r1d_d43m0n
@@ -282,4 +286,118 @@ test("BN2 (#355): The Red Pill installed, the gang's faction's reputation for it
       /^levelling: the brain's choice, .*, past the .* the BitNode has taken so far: a hopeless estimate$/,
     ),
   ]);
+});
+
+/** BN4 with SF1.3, as the campaign enters it (bn4-start-simulation.test.ts's fixture). */
+const BN4 = { kind: "bitnode", n: 4, sourceFiles: { 1: 3 } } as const;
+/** CyberSec's five that add to levelling (its shop, `Faction/Factions.ts`), given installed: no set to buy there. */
+const CYBERSEC_FIVE = [
+  "BitWire",
+  "Synaptic Enhancement Implant",
+  "Neurotrainer I",
+  "Cranial Signal Processors - Gen I",
+  "Cranial Signal Processors - Gen II",
+];
+/** Other augmentations with a hacking multiplier, the smallest first, while their product stays at 6.7 or under. */
+const BN4_AUGMENTATIONS = (() => {
+  const names: string[] = [];
+  let mult = 1;
+  const byHacking = Object.entries(AUGMENTATIONS).sort(
+    ([a, x], [b, y]) => (x.multipliers.hacking ?? 1) - (y.multipliers.hacking ?? 1) || (a < b ? -1 : 1),
+  );
+  for (const [name, data] of byHacking) {
+    const hacking = data.multipliers.hacking;
+    if (hacking === undefined || hacking <= 1 || mult * hacking > 6.7 || name === NEUROFLUX_GOVERNOR) continue;
+    if (CYBERSEC_FIVE.includes(name) || data.factions.length === 0 || !Number.isFinite(data.baseMoneyCost)) continue;
+    names.push(name);
+    mult *= hacking;
+  }
+  return names;
+})();
+
+test("BN4 A/B (#380): from The Red Pill with the level short, levelling mode against (d); the time to the destroy", {
+  timeout: 300_000,
+}, async () => {
+  /**
+   * One arm: BN4.2's shape by harness edits. Home 16 TB; the augmentations above and CyberSec's five installed, and
+   * NeuroFlux Governor's 50 levels and The Red Pill queued before the Agent (A6 installs them at once): ×16.3. Then
+   * hacking 5,000 of 9,000, $300m for the port openers, and CyberSec joined at no reputation with favour 200: each
+   * level by a donation (500 × 1.14^50 reputation, about $3e11), past the money the first minutes bring, so (c) has
+   * none as levelling chooses, as BN4.2's $2.8e12 first level was past its $789b. After each install, the money for
+   * the openers and CyberSec again (harness edits for the live 3.4-minute re-root). Cloud servers and home RAM off.
+   */
+  async function arm(levellingBatch: boolean) {
+    const fresh = await freshStartOf({
+      withDesiredState: true,
+      fixture: BN4,
+      levellingBatch,
+      beforeAgent: async ({ simulation }) => {
+        await simulation.diagnostics.setHomeRam(16_384);
+        for (const name of [...CYBERSEC_FIVE, ...BN4_AUGMENTATIONS]) {
+          await simulation.diagnostics.giveInstalledAugmentation(name);
+        }
+        for (let level = 0; level < 50; level++) await simulation.diagnostics.queueAugmentation(NEUROFLUX_GOVERNOR);
+        await simulation.diagnostics.queueAugmentation("The Red Pill");
+      },
+    });
+    const { game, simulation, data } = fresh;
+    writeSwitch(data.store, CLOUD_SERVERS_ENABLED_SETTING, false);
+    writeSwitch(data.store, HOME_RAM_ENABLED_SETTING, false);
+    const slow = () => fresh.latest<SlowSnapshotData>("slow");
+    const events = (kind: string) =>
+      data.store
+        .eventsInWindow({ environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() })
+        .filter((event) => event.kind === kind);
+    await game.runUntil(() => slow()?.resetInfo.ownedAugs["The Red Pill"] === 1, STAGE_MS);
+    const mult = (fresh.medium()?.player as { mults?: { hacking?: number } } | undefined)?.mults?.hacking as number;
+    const reroot = async () => {
+      await simulation.diagnostics.setMoney(3e8);
+      await simulation.diagnostics.joinFactionWithReputation("CyberSec", 0);
+      await simulation.diagnostics.setFactionFavor("CyberSec", 200);
+    };
+    await simulation.diagnostics.gainHackingExp(hackingExpOfLevel(5000, mult));
+    await reroot();
+    const startMs = game.clock.now();
+    let reset = slow()?.resetInfo.lastAugReset as number;
+    for (let minutes = 0; minutes < 120 && events(BITNODE_DESTROY_SENT_EVENT_KIND).length === 0; minutes++) {
+      await game.run(MINUTE);
+      if (slow()?.resetInfo.lastAugReset !== reset) {
+        reset = slow()?.resetInfo.lastAugReset as number;
+        await reroot();
+      }
+    }
+    const destroyed = events(BITNODE_DESTROY_SENT_EVENT_KIND)[0];
+    const chosen = events(LEVELLING_CHOSEN_EVENT_KIND).map((event) => ({
+      ...(event.detail as LevellingEvent),
+      afterMs: event.atMs - startMs,
+    }));
+    const installs = events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND).map((event) => event.detail as { reason: string });
+    console.log(
+      `(d) ${levellingBatch ? "on" : "off"}: ×${mult.toFixed(2)}; the destroy sent ${destroyed === undefined ? "never" : `at ${((destroyed.atMs - startMs) / MINUTE).toFixed(1)} min`}\n` +
+        chosen.map((each) => `  ${(each.afterMs / MINUTE).toFixed(1)} min: ${each.detail}`).join("\n"),
+    );
+    return { mult, destroyedMs: destroyed === undefined ? null : destroyed.atMs - startMs, chosen, installs };
+  }
+
+  const off = await arm(false);
+  const on = await arm(true);
+  expect(on.mult).toBeCloseTo(16.35, 2);
+  // Off (main's levelling): levelling mode at once, (c) none (the first level's donation past the money in hand), and
+  // (d) never weighed.
+  expect(off.chosen[0]).toMatchObject({ mode: "level", from: "money", estimates: { install: null, batch: null } });
+  expect(off.chosen.every((each) => each.estimates.batch === null)).toBe(true);
+  // On: (d) at once, the shortest (#382's review: its batching within the BitNode's time so far, fewer levels than
+  // without the bar), 1.25 times shorter than money; batching until (c), the money in hand, is no longer than (d) and
+  // the shortest, then the install for the level; after it, the level from the install's start.
+  const first = on.chosen[0] as LevellingEvent & { afterMs: number };
+  expect(first).toMatchObject({ mode: "batch", from: "money", estimates: { install: null } });
+  expect(first.estimates.batch as number).toBeLessThan(first.estimates.level as number);
+  expect((first.estimates.batch as number) * 1.25).toBeLessThan(first.estimates.money as number);
+  expect(first.batch).toMatchObject({ levels: expect.any(Number), money: expect.any(Number) });
+  expect(on.chosen.map((each) => each.mode).slice(0, 3)).toEqual(["batch", "install", "money"]);
+  expect(on.installs.filter((each) => each.reason === "the hacking level").length).toBeGreaterThan(0);
+  // The time to the destroy: (d)'s the shorter.
+  expect(on.destroyedMs).not.toBeNull();
+  expect(off.destroyedMs).not.toBeNull();
+  expect(on.destroyedMs as number).toBeLessThan(off.destroyedMs as number);
 });

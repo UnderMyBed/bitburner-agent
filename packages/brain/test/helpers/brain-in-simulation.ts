@@ -85,6 +85,7 @@ export function startBrainInSimulation(
     installTiming = "planner",
     bn2Route = "planner",
     gangRoute = bn2Route,
+    levellingBatch = true,
   }: {
     build: InGameBuild;
     token?: string;
@@ -105,6 +106,8 @@ export function startBrainInSimulation(
     bn2Route?: Bn2Route;
     /** The gang rule's own route (#357's (3) A/B): the planner's objective with the rules' installs. Absent, bn2Route. */
     gangRoute?: Bn2Route;
+    /** Levelling's (d) (#380): weighed, as main.ts has it; off for the A/B's other arm. */
+    levellingBatch?: boolean;
   },
 ): BrainInSimulation {
   const channel = data
@@ -133,6 +136,7 @@ export function startBrainInSimulation(
       installTiming,
       bn2Route,
       gangRoute,
+      levellingBatch,
       // The destroy estimate's prior from the simulator's store (#360), as main.ts reads the brain's.
       environment: "E1",
     });
