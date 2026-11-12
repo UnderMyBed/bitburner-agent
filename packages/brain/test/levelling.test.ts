@@ -866,14 +866,23 @@ describe("the levelling rule (#336)", () => {
     batchFor(levelling, atMs, 2 * MINUTE, { incomePerSecond: 1e7, money, expAt: (atMs / 1000) * 10 + 300 });
     expect(levelling.mode()).toBe("batch");
     expect(events.map((event) => (event as unknown as LevellingEvent).mode)).toEqual(["level", "batch"]);
-    // Idle past \`LEVELLING_INCOME_WAIT_MS\` from (d)'s start, the 0 counts: (d) none, the rest weighed.
-    const flatFrom = atMs + 2 * MINUTE + 10 * SECOND;
-    batchFor(levelling, flatFrom, LEVELLING_INCOME_WAIT_MS + 10 * MINUTE, {
-      incomePerSecond: 0,
-      money: money + 120 * 1e7,
-      expAt: (flatFrom / 1000) * 10 + 400,
-    });
-    expect(levelling.view().estimates?.batch).toBeNull();
+    // Past LEVELLING_INCOME_WAIT_MS from (d)'s start, a snapshot gap (4 min, past HACKING_EXP_GAP_MS) starts the window
+    // again, and it reads the money flat: the 0 counts, (d) is none, and the rest are weighed.
+    const flatFrom = atMs + 2 * MINUTE + 4 * MINUTE;
+    const expHeld = (flatFrom / 1000) * 10 + 400;
+    for (let at = flatFrom; at <= flatFrom + SETTLE_MS + 2 * MINUTE; at += 10 * SECOND) {
+      levelling.update(
+        inputsAt(at, {
+          mult: MULT,
+          batchOffer: OFFER,
+          money: money + 120 * 1e7,
+          expAbove: expHeld,
+          levelLoop: { sent: false, homeThreads: 0 },
+        }),
+      );
+    }
+    const left = events.at(-1) as unknown as LevellingEvent;
+    expect(left).toMatchObject({ from: "batch", estimates: { batch: null } });
     expect(levelling.mode()).not.toBe("batch");
   });
 
