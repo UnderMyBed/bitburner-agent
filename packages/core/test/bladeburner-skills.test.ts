@@ -31,6 +31,7 @@ import {
   bladeburnerSkillCostMultiplierOf,
   bladeburnerSkillMultsOf,
   cheapestBladeburnerSkillLevel,
+  EVERY_COUNT_UP_TO,
   NO_BLADEBURNER_SKILLS,
   planBladeburnerSkills,
 } from "../src/bladeburner-skills.ts";
@@ -308,6 +309,23 @@ describe("the rule's choice (#379): the levels that add the most rank a second a
     expect(
       planBladeburnerSkills({ levels: { Overclock: 87 }, points: 378, costMultiplier: 1, rankPerSecond }).buys,
     ).toEqual([]);
+    // A backlog (#381's review): with 10,000 points a step weighs each count to 8, then half as many again each time,
+    // not every count the points cover. A forecast with no gain: one step, the base forecast and the counts weighed.
+    let calls = 0;
+    planBladeburnerSkills({
+      levels: {},
+      points: 10_000,
+      costMultiplier: 1,
+      rankPerSecond: () => {
+        calls++;
+        return 1;
+      },
+    });
+    // Each of the nine: 8 counts, then ⌈×1.5⌉ up to what 10,000 points cover (about 90 levels of each, 89 of
+    // Overclock's): 12, 18, 27, 41, 62 (and 93 for the others, over the points but for Cyber's Edge's and Cloak's).
+    expect(EVERY_COUNT_UP_TO).toBe(8);
+    expect(calls).toBeLessThan(1 + 9 * 15);
+    expect(calls).toBeGreaterThan(1 + 9 * 8);
     // Left out: no forecast weighs Hands of Midas, Hyperdrive or Datamancer.
     expect(BLADEBURNER_RANK_SKILLS).not.toContain("Hands of Midas");
     expect(BLADEBURNER_RANK_SKILLS).not.toContain("Hyperdrive");

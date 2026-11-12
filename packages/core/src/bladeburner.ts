@@ -84,6 +84,14 @@ export function bladeburnerWorkerFileNames(): string[] {
  */
 export const BLADEBURNER_WORKER_RAM_GB = 50.6;
 
+/**
+ * `bladeburner-skill.js`'s RAM by the game's calculator (ram-budget.json, which a test keeps in step): 1.6 GB for a
+ * script, and 4 GB each for `getSkillLevel` and `upgradeSkill` (`Netscript/RamCostGenerator.ts:361`, `:363`). Home keeps
+ * it while the rule has skills to buy (#381's review): beside the reading worker, 65.9 + 50.6 + 9.6 = 126.1 GB at SF4.3,
+ * still a 128 GB home.
+ */
+export const BLADEBURNER_SKILL_WORKER_RAM_GB = 9.6;
+
 /** An action the brain asks `bladeburner.js` to run (#375): its type and name as the NS API has them, and its level. */
 export interface BladeburnerActionOrder {
   type: "Contracts" | "Operations" | "General";

@@ -467,6 +467,51 @@ describe("the run report's skills (#379)", () => {
     expect(withOverclock / without).toBeCloseTo(11 / 6, 2);
   });
 
+  test("by action (#381's review): attempts from the count's fall, successes from the rank, each its own bound", () => {
+    // Tracking under way, read every 11 s (its attempt's time at combat 100): its count down 1 a reading (its mean
+    // growth added), every other attempt a success of 0.3. Then Field Analysis for 60 s, its 0.1 each 30 s.
+    const growth = ((5 + 75) / 2 / 10 / 480) * 11;
+    const tracking = (index: number, rank: number) => {
+      const options = reading({ current: TRACKING, rank });
+      return {
+        ...options,
+        actions: options.actions.map((each) =>
+          each.name === "Tracking" ? { ...each, count: 100 - index + growth * index } : each,
+        ),
+      };
+    };
+    const FIELD = { type: "General", name: "Field Analysis" };
+    const folded = new BladeburnerFold();
+    folded.addSlow(T0, slow(6));
+    let rank = 0;
+    for (let index = 0; index <= 10; index++) {
+      if (index > 0 && index % 2 === 0) rank += 0.3;
+      folded.addMedium(T0 + index * 11 * SECOND, medium(tracking(index, rank), { factions: [] }));
+    }
+    const fieldFrom = T0 + 110 * SECOND;
+    for (let index = 1; index <= 6; index++) {
+      const field = reading({ current: FIELD, rank: rank + ((index - 1) * 10 * 0.1) / 30 });
+      folded.addMedium(
+        fieldFrom + index * 10 * SECOND,
+        medium({ ...field, found: index === 1 ? TRACKING : FIELD }, { factions: [] }),
+      );
+    }
+    const failures: string[] = [];
+    const text = folded.section(failures, T0 + 3600 * SECOND).join("\n");
+    const chance = (reading().actions.find((each) => each.name === "Tracking")?.chance[0] ?? 0) as number;
+    // Ten attempts, and the 10 s from its last reading to the switch: 10/11 of one more.
+    const expected = (10 + 10 / 11) * chance * 0.3;
+    expect(text).toContain("    by action, each judged as the whole (#381's review; ");
+    expect(text).toContain(
+      `      Tracking: about 10 attempts, 5 successes; 1.50 measured against ${expected.toFixed(2)} forecast (σ `,
+    );
+    // Field Analysis: 50 s, its 0.1 each 30 s, no variance; the window's end cuts one.
+    expect(text).toContain(
+      "      Field Analysis: about 2 attempts, 2 successes; 0.17 measured against 0.17 forecast (σ 0.00, at most 0.00 " +
+        "under an attempt's mean, cuts 0.10), its own bound 0.07\n",
+    );
+  });
+
   test("an older Agent's readings (no skills): said, no failure", () => {
     const folded = new BladeburnerFold();
     folded.addSlow(T0, slow(6));

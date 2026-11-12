@@ -15,6 +15,10 @@
 //   that the forecast counts in part. The low end is the game's lowest chance (`Actions/Action.ts:144-167`: never above
 //   the real one), so a rank under the bound is the rule or the formulas wrong, not luck. Rank lost below 0 isn't
 //   (`:1271-1274`): it only lifts the rank measured.
+// - **By action** (#381's review): each action's own forecast, measured rank and bound, as the whole's (its own
+//   Bernstein margin at the same α, its own cuts), with its attempts (a contract's or operation's count's fall, its mean
+//   growth added back) and successes (the rank over a success's gain and a failure's loss): estimates, shown, not
+//   judged. So a rare, rich action's luck (Raid's 0 of 5 at a 5.5% low end, chance 0.75) is seen apart from the rest.
 // - **A stop:** the action under way at one reading, and none found under way at the next (the worker reads before
 //   it acts). At a stamina under that action's cost an attempt and the regain over the interval (#377's review: bonus
 //   time's regain is five times the real seconds'), the stamina went to 0 (`Bladeburner.ts:1370-1374`), a failure; with
@@ -54,6 +58,7 @@ import {
   BLADEBURNER_REST_SECONDS,
   type BladeburnerActionPlan,
   type BladeburnerForecastInput,
+  type BladeburnerLevelledAction,
   type BladeburnerPerson,
   type BladeburnerSkillLevels,
   type BladeburnerSkillMults,
@@ -65,6 +70,7 @@ import {
   bladeburnerSkillMultsOf,
   chooseBladeburnerAction,
   chooseBladeburnerSkills,
+  countGrowthPerSecond,
   FIELD_ANALYSIS,
   fieldAnalysisRank,
   INTENT_RETRY_ROUNDS,
@@ -137,6 +143,8 @@ interface Kept {
 /** The action under way at `kept`, as the forecast takes it: an attempt's figures, or a rest's rank a second. */
 interface Running {
   name: string;
+  /** The action's own name, its level aside (#381's review: the lines by action). */
+  action: string;
   /** A rest (Field Analysis, the Chamber, Training), not a contract or operation. */
   resting: boolean;
   /** Rank a game second, its mean (a contract's or operation's attempts, or Field Analysis's). */
@@ -153,6 +161,10 @@ interface Running {
     stamina: number;
     hpLoss: number;
     chance: number;
+    /** A success's rank and a failure's loss, their means; the action, for its count's growth. */
+    gain: number;
+    loss: number;
+    levelled: BladeburnerLevelledAction;
   } | null;
 }
 
@@ -169,6 +181,7 @@ function runningOf(kept: Kept): Running | null {
     const gain = fieldAnalysis ? fieldAnalysisRank(kept.rankMultiplier) : 0;
     return {
       name: current.name,
+      action: current.name,
       resting: true,
       rate: fieldAnalysis ? gain / BLADEBURNER_REST_SECONDS[FIELD_ANALYSIS] : 0,
       cut: gain,
@@ -178,7 +191,7 @@ function runningOf(kept: Kept): Running | null {
   const action = bladeburnerLevelledAction(current.type, current.name);
   const read = kept.reading.actions.find((each) => each.type === current.type && each.name === current.name);
   if (action === null || read === undefined)
-    return { name: current.name, resting: false, rate: 0, cut: 0, attempt: null };
+    return { name: current.name, action: current.name, resting: false, rate: 0, cut: 0, attempt: null };
   const seconds = actionSeconds(action, read.level, kept.person, kept.mults);
   const chance = read.chance[0];
   const gain = actionRankGain(action, read.level, kept.rankMultiplier);
@@ -186,6 +199,7 @@ function runningOf(kept: Kept): Running | null {
   const { mean, variance } = attemptRankMoments(chance, gain, loss);
   return {
     name: `${current.name} level ${read.level}`,
+    action: current.name,
     resting: false,
     rate: mean / seconds,
     cut: chance * gain,
@@ -197,8 +211,27 @@ function runningOf(kept: Kept): Running | null {
       stamina: actionStaminaCost(action, read.level),
       hpLoss: actionHpLoss(action, read.level),
       chance,
+      gain,
+      loss,
+      levelled: action,
     },
   };
+}
+
+/**
+ * One action's own forecast and rank over the window (#381's review), as the whole's: its intervals, attempts (a
+ * contract's or operation's count's fall, its mean growth added back; a rest's time over its 30 s), successes (the rank
+ * over a success's gain and a failure's loss, each interval's: an estimate, as the ±10% and a cut attempt blur it), the
+ * rank measured and forecast, the forecast's variance, how far under its mean an attempt can go, and its cuts.
+ */
+interface ByAction {
+  attempts: number;
+  successes: number;
+  measured: number;
+  expected: number;
+  variance: number;
+  below: number;
+  cuts: number;
 }
 
 /** A stretch resting while the plan has work: from, to, and its bound (twice the time to the max, and the slack). */
@@ -239,6 +272,8 @@ export class BladeburnerActionsFold {
   #hpLost = 0;
   #gameSeconds = 0;
   readonly #byAction = new Map<string, number>();
+  /** Each action's own figures (#381's review), by its name. */
+  readonly #perAction = new Map<string, ByAction>();
   #actingMs = 0;
   #restingMs = 0;
   #restingRank = 0;
@@ -303,7 +338,7 @@ export class BladeburnerActionsFold {
     this.#watchSkills(atMs, kept, broken);
     if (broken) {
       // A stretch begins: the last one's end cut (the window's last, in `section`), and none to place yet here.
-      if (previous !== null) this.#allowance += runningOf(previous)?.cut ?? 0;
+      if (previous !== null) this.#cut(runningOf(previous));
       this.#stretches += 1;
       return;
     }
@@ -314,6 +349,7 @@ export class BladeburnerActionsFold {
     this.#measured += rank - previous.rank;
     const name = before?.name ?? "idle";
     this.#byAction.set(name, (this.#byAction.get(name) ?? 0) + intervalMs);
+    if (before !== null) this.#addByAction(before, previous, kept, seconds);
     if (before !== null) {
       this.#actingMs += intervalMs;
       if (before.resting) {
@@ -334,7 +370,7 @@ export class BladeburnerActionsFold {
     if (!sameAction(wasRunning, reading.current) || !sameAction(wasRunning, reading.found)) {
       if (wasRunning !== null || reading.current !== null) {
         this.#switches += 1;
-        this.#allowance += before?.cut ?? 0;
+        this.#cut(before);
       }
     }
     // A stop: under way at the last reading, none found now.
@@ -370,6 +406,50 @@ export class BladeburnerActionsFold {
         this.#visits.push({ atMs, leastBill: Math.min(0.1 * Math.max(0, money), now.max * HOSPITAL_COST_PER_HP) });
       }
     }
+  }
+
+  #byActionOf(name: string): ByAction {
+    let found = this.#perAction.get(name);
+    if (found === undefined) {
+      found = { attempts: 0, successes: 0, measured: 0, expected: 0, variance: 0, below: 0, cuts: 0 };
+      this.#perAction.set(name, found);
+    }
+    return found;
+  }
+
+  /** An attempt cut short (a switch, a stretch's end): the whole's allowance and its action's. */
+  #cut(running: Running | null): void {
+    this.#allowance += running?.cut ?? 0;
+    if (running !== null) this.#byActionOf(running.action).cuts += running.cut;
+  }
+
+  /** An interval's figures for the action under way at its start (#381's review). */
+  #addByAction(running: Running, previous: Kept, kept: Kept, seconds: number): void {
+    const each = this.#byActionOf(running.action);
+    const rank = kept.rank - previous.rank;
+    each.measured += rank;
+    const attempt = running.attempt;
+    if (attempt === null) {
+      each.expected += running.rate * seconds;
+      // Field Analysis always succeeds (`Bladeburner.ts:1136-1140`); the other rests gain no rank.
+      if (running.action === FIELD_ANALYSIS) {
+        each.attempts += seconds / BLADEBURNER_REST_SECONDS[FIELD_ANALYSIS];
+        each.successes += seconds / BLADEBURNER_REST_SECONDS[FIELD_ANALYSIS];
+      }
+      return;
+    }
+    const attempts = seconds / attempt.seconds;
+    each.expected += attempts * attempt.mean;
+    each.variance += attempts * attempt.variance;
+    each.below = Math.max(each.below, attempt.below);
+    const id = (read: { type: string; name: string }) =>
+      read.type === attempt.levelled.type && read.name === attempt.levelled.name;
+    const before = previous.reading.actions.find(id);
+    const after = kept.reading.actions.find(id);
+    if (before === undefined || after === undefined) return;
+    const fell = Math.max(0, before.count - after.count + countGrowthPerSecond(attempt.levelled) * seconds);
+    each.attempts += fell;
+    each.successes += Math.min(fell, Math.max(0, (rank + fell * attempt.loss) / (attempt.gain + attempt.loss)));
   }
 
   /** Stuck resting: the plan has work and a rest is under way; each stretch's bound from its first reading. */
@@ -529,6 +609,7 @@ export class BladeburnerActionsFold {
     const margin = bernsteinMargin(this.#variance, this.#below, BLADEBURNER_RANK_ALPHA);
     // The last stretch's end, with the others' ends and the switches.
     const allowance = this.#allowance + (runningOf(last)?.cut ?? 0);
+    const lastCut = runningOf(last);
     const bound = this.#expected - margin - allowance;
     lines.push(
       `    rank from the actions run: ${this.#measured.toFixed(2)} measured against ${this.#expected.toFixed(2)} ` +
@@ -537,6 +618,20 @@ export class BladeburnerActionsFold {
         `${this.#switches} switch${this.#switches === 1 ? "" : "es"} and the stretches' ends; over ` +
         `${formatDuration(this.#gameSeconds * 1000)} of game time`,
     );
+    lines.push(
+      `    by action, each judged as the whole (#381's review; attempts from its count's fall, successes from its rank: ` +
+        "estimates):",
+    );
+    for (const [name, each] of [...this.#perAction].sort((a, b) => b[1].expected - a[1].expected)) {
+      const cuts = each.cuts + (lastCut?.action === name ? lastCut.cut : 0);
+      const own = each.expected - bernsteinMargin(each.variance, each.below, BLADEBURNER_RANK_ALPHA) - cuts;
+      lines.push(
+        `      ${name}: about ${Math.round(each.attempts)} attempts, ${Math.round(each.successes)} successes; ` +
+          `${each.measured.toFixed(2)} measured against ${each.expected.toFixed(2)} forecast (σ ` +
+          `${Math.sqrt(each.variance).toFixed(2)}, at most ${each.below.toFixed(2)} under an attempt's mean, cuts ` +
+          `${cuts.toFixed(2)}), its own bound ${own.toFixed(2)}`,
+      );
+    }
     const bills = this.#visits.reduce((total, each) => total + each.leastBill, 0);
     const maxHp = last.hp?.max;
     lines.push(

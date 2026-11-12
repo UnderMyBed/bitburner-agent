@@ -14,6 +14,7 @@ import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BitNodeHackingMultipliers,
+  BLADEBURNER_SKILL_WORKER_RAM_GB,
   BLADEBURNER_WORKER_RAM_GB,
   type BladeburnerState,
   type Bn2Route,
@@ -1618,10 +1619,12 @@ export class DesiredStateController {
   /**
    * What home keeps beside `homeKeptGbOf` for the batches, the share and levelling mode (#377's review): Bladeburner's
    * reading worker's `BLADEBURNER_WORKER_RAM_GB` while the rule asks for it (in the division, the RAM gate open: the
-   * gate counts home's RAM beyond `homeKeptGbOf` alone, so this doesn't close it), else nothing.
+   * gate counts home's RAM beyond `homeKeptGbOf` alone, so this doesn't close it), else nothing; and (#381's review)
+   * the skills' worker's `BLADEBURNER_SKILL_WORKER_RAM_GB` while the rule has skills to buy.
    */
   #homeAlsoKeptGb(): number {
-    return this.#bladeburnerState === null ? 0 : BLADEBURNER_WORKER_RAM_GB;
+    const reading = this.#bladeburnerState === null ? 0 : BLADEBURNER_WORKER_RAM_GB;
+    return reading + (this.#bladeburnerSkillIntents.length > 0 ? BLADEBURNER_SKILL_WORKER_RAM_GB : 0);
   }
 
   #chooseMode(

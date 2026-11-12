@@ -199,8 +199,13 @@ export interface BladeburnerSkillPlan {
   rankPerSecondAfter: number;
 }
 
-/** The most levels of one skill the rule weighs at a time: past that, the points' own limit is far smaller. */
-const MOST_LEVELS_WEIGHED = 1_000;
+/**
+ * The counts of one skill's levels the rule weighs at a step (#381's review: every count up to what the points cover took
+ * 2.5 s at 10,000 points, each reading): each from 1 to `EVERY_COUNT_UP_TO`, then half as many again each time, up to
+ * what the points cover. A forecast's whole-second step a few levels on is still seen; one far on, nearer.
+ */
+export const EVERY_COUNT_UP_TO = 8;
+const nextCount = (count: number) => (count < EVERY_COUNT_UP_TO ? count + 1 : Math.ceil(count * 1.5));
 
 /**
  * The levels to buy with `points` (#379), each step the levels of one skill that add the most rank a second a point,
@@ -215,7 +220,9 @@ const MOST_LEVELS_WEIGHED = 1_000;
  *   operation worth working). The points of each skill's levels are the game's for the whole count, from the level read
  *   (one `upgradeSkill` call's, `Skill.ts:76-80`): a step's are the rise in that.
  * Left out, and labelled: saving points for a dearer level that gains more a point (the points are spent within a
- * reading of coming, #379); the skills whose worth isn't rank (`BLADEBURNER_RANK_SKILLS`).
+ * reading of coming, #379); the skills whose worth isn't rank (`BLADEBURNER_RANK_SKILLS`); the best mix of skills
+ * (#381's review: one skill's levels a step matched an exhaustive search in 14 of 18 cases, its largest gap 1.37% of
+ * the forecast); counts past `EVERY_COUNT_UP_TO` but those weighed.
  */
 export function planBladeburnerSkills({
   levels,
@@ -241,7 +248,7 @@ export function planBladeburnerSkills({
       const skill = bladeburnerSkill(name) as BladeburnerSkill;
       const at = planned[name] ?? 0;
       const paid = costOf(skill, at);
-      for (let count = 1; count <= MOST_LEVELS_WEIGHED; count++) {
+      for (let count = 1; ; count = nextCount(count)) {
         const cost = costOf(skill, at + count) - paid;
         if (!(spent + cost <= points)) break;
         const rate = rankPerSecond({ ...planned, [name]: at + count });

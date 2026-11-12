@@ -11,6 +11,7 @@ import {
   BATCHER_RAM_BUDGET_GB,
   BATCHER_SCRIPT_NAME,
   BLADEBURNER_SKILL_WORKER_NAME,
+  BLADEBURNER_SKILL_WORKER_RAM_GB,
   BLADEBURNER_WORKER_NAME,
   BLADEBURNER_WORKER_RAM_GB,
   bladeburnerWorkerFileNames,
@@ -123,6 +124,7 @@ test("the Agent's budget plus the division's join fits BN6's home as the campaig
   );
   expect(homeGb).toBe(32);
   expect(budgets[BLADEBURNER_WORKER_NAME]).toBe(BLADEBURNER_WORKER_RAM_GB);
+  expect(budgets[BLADEBURNER_SKILL_WORKER_NAME]).toBe(BLADEBURNER_SKILL_WORKER_RAM_GB);
   expect((budgets["agent.js"] as number) + BLADEBURNER_WORKER_RAM_GB).toBeGreaterThan(homeGb);
 });
 
