@@ -612,12 +612,28 @@ interface ProgressSegment {
   factionState: FactionStateFolding;
 }
 
+/**
+ * The brain's last `gangObjectiveChosen` (#357) of each BitNode (its `bitNode`) before `window`, however long before:
+ * it's sent only on a change, so a window opening a day after it would see none (#368's re-review). In their order.
+ */
+export function gangObjectivesBefore(store: TelemetryStore, window: RunWindow): StoredEvent[] {
+  const events = store.eventsInWindow({
+    environment: window.environment,
+    sinceMs: Number.MIN_SAFE_INTEGER,
+    untilMs: window.sinceMs - 1,
+    kinds: [GANG_OBJECTIVE_CHOSEN_EVENT_KIND],
+  });
+  const last = new Map<string, StoredEvent>();
+  for (const event of events) last.set(String(fieldsOf(event.detail).bitNode), event);
+  return [...last.values()].sort((a, b) => a.atMs - b.atMs);
+}
+
 /** What the report reads from the store for a window, folded as it's read. */
 interface RunFacts extends RunWindow {
   events: StoredEvent[];
   /** The reloads' events in the `RELOAD_LEAD_MS` before the window (#240): one can explain a gap at its start. */
   reloadsBefore: StoredEvent[];
-  /** The brain's last objective at 12 chosen in the day before the window (#357), for the gang section's checks. */
+  /** The brain's last objective at 12 of each BitNode before the window (#357), for the gang section's checks. */
   gangObjectiveBefore: StoredEvent[];
   /** Every fast snapshot's times, thinned or not (#283): the time checks. */
   fastTimes: FastTime[];
@@ -883,7 +899,9 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       ...window,
       events,
       reloadsBefore,
-      gangObjectiveBefore: dayBefore.filter((event) => event.kind === GANG_OBJECTIVE_CHOSEN_EVENT_KIND).slice(-1),
+      // The brain's last objective at 12 of each BitNode before the window, however long before (#368's re-review: it's
+      // sent only on a change, so a window opening a day after it would see none).
+      gangObjectiveBefore: gangObjectivesBefore(store, window),
       fastTimes,
       fast,
       thinned,

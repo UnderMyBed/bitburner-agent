@@ -86,6 +86,7 @@ import {
 import {
   AUGMENTATION_BOUGHT_EVENT_KIND,
   AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+  AUGMENTATION_NOT_QUEUED_EVENT_KIND,
   formatEta,
   GANG_FORMING_ROUTE,
 } from "./augmentations.ts";
@@ -804,13 +805,22 @@ export class GangFold {
     // At each reading at 12: the brain's objective then (its last event by then, of the same BitNode, the event's
     // `bitNode`, #368's review), against core's. Core's is money from The Red Pill's `augmentationBought` in the
     // BitNode on (#368's review): A6's queue has it before a slow snapshot shows it queued, and the brain's choice with it.
-    const redPillBought = events
+    // Bought until a purchase reported done shows never queued (`augmentationNotQueued`, #368's re-review): the brain's
+    // queue drops it then, and so its owned (that alert's own failure, not this one's).
+    const redPillEvents = events
       .filter(
         (event) =>
-          event.kind === AUGMENTATION_BOUGHT_EVENT_KIND &&
+          (event.kind === AUGMENTATION_BOUGHT_EVENT_KIND || event.kind === AUGMENTATION_NOT_QUEUED_EVENT_KIND) &&
           (event.detail as { augmentation?: unknown } | null)?.augmentation === THE_RED_PILL,
       )
-      .map((event) => ({ atMs: event.atMs, bitNode: gangBitNodeKeyOf(this.#slowAt(event.atMs)) }));
+      .map((event) => ({
+        atMs: event.atMs,
+        bought: event.kind === AUGMENTATION_BOUGHT_EVENT_KIND,
+        bitNode: gangBitNodeKeyOf(this.#slowAt(event.atMs)),
+      }));
+    /** The Red Pill bought by `atMs` in `bitNode`: the last of its events there by then a purchase. */
+    const boughtAt = (atMs: number, bitNode: string) =>
+      redPillEvents.findLast((each) => each.atMs <= atMs && each.bitNode === bitNode)?.bought === true;
     const owned: GangObjectiveChoice = { objective: "money", reason: "The Red Pill owned", respect: null, money: null };
     const differs = new Stretches();
     let neverMs = 0;
@@ -822,8 +832,7 @@ export class GangFold {
         const event = chosen[index] as StoredEvent;
         latest.set(String((event.detail as { bitNode?: unknown } | null)?.bitNode), event);
       }
-      const bought = redPillBought.some((each) => each.atMs <= atMs && each.bitNode === bitNode);
-      const choice = bought ? owned : read;
+      const choice = boughtAt(atMs, bitNode) ? owned : read;
       const brains = latest.get(bitNode);
       const brainObjective = (brains?.detail as { objective?: unknown } | undefined)?.objective;
       if (brainObjective === undefined) {

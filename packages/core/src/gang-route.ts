@@ -37,14 +37,14 @@
  * Singularity.ts:808-810`, `:934-935`). The rate: the members' respect a cycle under that objective's plan (core's
  * `planGang` given the objective, so with its training, ascension, justice and warfare; `Gang/formulas/formulas.ts:
  * 15-31` at the gang's penalty now), × 5 cycles a second (`GANG_CYCLE_MS`). Left out, labelled:
- * - the members' growth, by training or their work's own experience (`GangMember.ts:155-210`, × the ascension
- *   multiplier): either way. In #357's A/B it favoured money: Money Laundering grew member-01's hacking ×2.3 in four
- *   minutes (7.7m to 17.4m), its rate then 319.6 a second against the 161.8 estimated at the choice; Cyberterrorism
- *   grew it by a thousandth. Respect still won, 1,150 a second;
+ * - the members' growth: either way;
  * - the penalty's course, and each plan's training, ascension or warfare counted at once as no output (the plan's
  *   tasks now, at the penalty now): against the objective whose plan invests;
  * - bonus time's faster cycles: cautious for both;
- * - what money buys toward it (gang equipment, a `faction_rep` set at an install): cautious for money.
+ * - what money buys toward it (gang equipment, a `faction_rep` set at an install): cautious for money. In #357's A/B,
+ *   G3 bought member-01 the eight hacking items on Money Laundering (`Gang/data/upgrades.ts:133-217`, ×2.2724 its
+ *   hacking multiplier, `GangMember.ts:78-85`) within minutes: money's rate 161.8 a second at the choice, 319.6 after
+ *   them; respect's still won, at 1,150.
  * The least wins; a tie goes to money, the rule's objective before #357. Under 12 it's respect (the rule's, recruiting);
  * once The Red Pill is bought, queued or installed it's money, as before, and said so. No hysteresis: a choice made on
  * one reading can flip on the next. A static probe (#368's review) flips it at respect 1,000, wanted 100 and hacking

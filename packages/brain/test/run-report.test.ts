@@ -27,6 +27,7 @@ import { formatDuration } from "../src/gap-report.ts";
 import { describeCeiling, type HackingCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import {
   findIncomeStalls,
+  gangObjectivesBefore,
   inferHackTargets,
   RELOAD_LAG_MS,
   RELOAD_LEAD_MS,
@@ -5353,5 +5354,21 @@ describe("the time to the destroy (#360)", () => {
     const { failures, warnings } = report();
     expect(failures).toEqual([]);
     expect(warnings).toContainEqual(expect.stringMatching(/^destroy estimate never at .* so a warning\)$/));
+  });
+});
+
+describe("the gang's objective before the window (#357, #368's re-review)", () => {
+  test("the last of each BitNode, however long before: an event 25 h before the window is carried in", () => {
+    const chosen = (offsetMs: number, bitNode: string, objective: string) =>
+      event(offsetMs, "gangObjectiveChosen", { objective, reason: "estimates", bitNode, members: 12 });
+    chosen(-30 * 3_600_000, "2:0", "money");
+    chosen(-25 * 3_600_000, "2:0", "respect");
+    chosen(-26 * 3_600_000, "2:-5000", "respect");
+    chosen(60_000, "2:0", "money");
+    const before = gangObjectivesBefore(store, { environment: "E0", sinceMs: T0, untilMs: T0 + 3_600_000 });
+    expect(before.map((each) => [each.atMs - T0, (each.detail as { bitNode: string }).bitNode])).toEqual([
+      [-26 * 3_600_000, "2:-5000"],
+      [-25 * 3_600_000, "2:0"],
+    ]);
   });
 });

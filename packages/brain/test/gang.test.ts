@@ -646,6 +646,25 @@ describe("the run report's section", () => {
       expect(judged(steps, [bought, owned]).failures).toEqual([]);
       // Without it, the brain's money is a minute against core's respect: the failure.
       expect(judged(steps, [owned]).failures).toHaveLength(1);
+      // Bought at a later reading (#368's re-review): the brain's money a minute before it fails; 50 s before, not.
+      const later = (atMs: number) => ({ ...bought, atMs });
+      expect(judged(steps + 1, [owned, later(GANG_OBJECTIVE_DIFFERS_WITHIN_MS + 10_000)]).failures).toHaveLength(1);
+      expect(judged(steps + 1, [owned, later(GANG_OBJECTIVE_DIFFERS_WITHIN_MS - 10_000)]).failures).toEqual([]);
+      // Reported done and never queued (`augmentationNotQueued`): owned no more, so the brain's respect after it is core's.
+      const notQueued: StoredEvent = {
+        atMs: 20_000,
+        kind: "augmentationNotQueued",
+        detail: { augmentation: "The Red Pill", level: 1, boughtAtMs: 0 },
+      };
+      expect(judged(steps * 2, [bought, owned, notQueued, chosenEvent(20_000, "respect")]).failures).toEqual([]);
+      // One bought in another BitNode (its slow snapshot's `lastNodeReset`) isn't this one's.
+      const gang = new GangFold();
+      gang.addSlow(-100_000, { ...niteSec, resetInfo: { ...niteSec.resetInfo, lastNodeReset: -200_000 } });
+      gang.addSlow(0, niteSec);
+      for (let index = 0; index < steps; index += 1) gang.addMedium(index * 10_000, atTwelve(index));
+      const failures: string[] = [];
+      gang.section(failures, steps * 10_000, [later(-50_000), owned]);
+      expect(failures).toHaveLength(1);
     });
 
     test("(2) the brain's objective against core's from the snapshots: a minute apart fails, under it not", () => {

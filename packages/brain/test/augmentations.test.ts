@@ -3497,7 +3497,7 @@ describe("BN2 before the gang (#357's (1)): wait for the gang, or install now", 
     expect(gang?.installNowMs).toBeCloseTo(120_000 + (gang?.rebuildMs as number), 3);
     expect(gang).toMatchObject({ required: 218, level: 214, heldForRate: false, choice: "wait" });
     expect(timing()?.words).toMatch(
-      /^no gang yet: wait for the gang \(avmnite-02h's 218 at 214, 12 min\) against install now \(34 min: the commit and 32 min from 0 at \d+\.\d experience a second \(64\.8 now, at the install's multipliers\)\); chosen: wait$/,
+      /^no gang yet: wait for the gang \(avmnite-02h's 218 at 214, 12 min\) against install now \(34 min: the commit and 32 min from 0 at 75\.6 experience a second \(64\.8 now, at the install's multipliers\)\); chosen: wait$/,
     );
     expect(rule.view().waitingFor).toBe(`the planner's time to the gang formed: ${timing()?.words}`);
     // No money held for it, no countdown, nothing for A5 to work for; the wait kept in the store.

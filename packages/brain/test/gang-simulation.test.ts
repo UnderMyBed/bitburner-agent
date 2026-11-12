@@ -709,7 +709,18 @@ async function objectiveArm(bn2Route: "planner" | "rules") {
   const startSlow = fresh.latest<SlowSnapshotData>("slow");
   await fresh.game.runUntil(() => fresh.latest<SlowSnapshotData>("slow") !== startSlow, 70_000);
   const from = { atMs: fresh.game.clock.now(), reputation: reputation() };
-  await fresh.game.run(20 * 60_000);
+  // Every 10 s, member-01's task, its equipment and the respect it earns a cycle (#368's re-review: money's rate before
+  // its first purchase).
+  const member01: { task: string; items: number; respectGain: number }[] = [];
+  for (let step = 0; step < 120; step += 1) {
+    await fresh.game.run(10_000);
+    const reading = gangSnapshotOf(fresh.medium());
+    const one = reading.kind === "gang" ? reading.members[0] : undefined;
+    if (one !== undefined) {
+      const items = (one.upgrades ?? []).length + (one.augmentations ?? []).length;
+      member01.push({ task: one.task, items, respectGain: one.respectGain });
+    }
+  }
   const to = { atMs: fresh.game.clock.now(), reputation: reputation() };
   const events = fresh.data.store
     .eventsInWindow({ environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() })
@@ -717,7 +728,7 @@ async function objectiveArm(bn2Route: "planner" | "rules") {
     .map((event) => event.detail as GangEvent);
   const last = gangSnapshotOf(fresh.medium());
   const { failures, section } = reportOf(fresh);
-  return { fresh, from, to, events, last, failures, section };
+  return { fresh, from, to, events, last, failures, section, member01 };
 }
 
 test("the objective at 12 (#357's (2)) A/B, 20 virtual minutes an arm: the planner's respect earns NiteSec more than the rules' money, at its estimate's rate", async () => {
@@ -741,18 +752,29 @@ test("the objective at 12 (#357's (2)) A/B, 20 virtual minutes an arm: the plann
   expect(rules.events).toEqual([]);
   // Measured on 2026-11-11 (seed 1, about 19 s of real time an arm): the planner's respect, NiteSec 1,367,540 in the
   // 20 minutes, 1,139.6 a second against its estimate's 1,150.3 (The Red Pill in 36 min, money's 4.3 h); the rules'
-  // money, 346,055, 288.4 a second against money's estimate of 161.8 (×1.78, inside ×2 too, not asserted).
+  // money, 346,055, 288.4 a second against money's estimate of 161.8: G3's equipment for member-01, bought within its
+  // first minutes (see below).
   expect(gained(planner)).toBeGreaterThan(gained(rules));
   const estimate = first?.respect?.reputationPerSecond as number;
   expect(perSecond(planner)).toBeGreaterThan(estimate / 2);
   expect(perSecond(planner)).toBeLessThan(estimate * 2);
-  // Money's estimate against the rules arm's measure (#368's review), the same ×2. Money's is under it: member-01's
-  // hacking grows ×2.3 in the first four minutes on Money Laundering (7.7m to 17.4m, its work's own experience at its
-  // ×15,000 multiplier, `GangMember.ts:155-210`), its rate then 319.6 a second, against 161.8 at the choice
-  // (core's left-out "members' growth"); on Cyberterrorism it grows a thousandth. Measured on 2026-11-11.
-  const moneyEstimate = first?.money?.reputationPerSecond as number;
-  expect(perSecond(rules)).toBeGreaterThan(moneyEstimate / 2);
-  expect(perSecond(rules)).toBeLessThan(moneyEstimate * 2);
+  // Money's estimate against the rules arm's measure before member-01's first equipment purchase (#368's re-review):
+  // its respect a cycle on Money Laundering then, at the gang's penalty of 1. After it, the eight hacking items G3
+  // buys it (`Gang/data/upgrades.ts:133-217`, ×2.2724 its hacking multiplier, `GangMember.ts:78-85`: 7.7m to
+  // 17.4m) raise it to about 3,745 a cycle, 319.6 a second: core's left-out "what money buys toward it", cautious
+  // for money. The planner's arm buys none (its member-01 on Cyberterrorism, which earns no money).
+  const unequipped = rules.member01.filter((each) => each.task === "Money Laundering" && each.items === 0);
+  const equipped = rules.member01.filter((each) => each.items > 0);
+  console.log(
+    `the rules' member-01: ${unequipped.length} readings on Money Laundering before its equipment, respect a cycle ` +
+      `${unequipped.map((each) => each.respectGain.toFixed(1)).join(", ")}; then ${equipped.at(-1)?.items} items, ` +
+      `${equipped.at(-1)?.respectGain.toFixed(1)} a cycle; money's estimate ${first?.money?.respectPerCycle.toFixed(1)}`,
+  );
+  expect(unequipped.length).toBeGreaterThan(0);
+  for (const { respectGain } of unequipped) {
+    expect(respectGain).toBeCloseTo(first?.money?.respectPerCycle as number, -1);
+  }
+  expect(planner.member01.every((each) => each.items === 0)).toBe(true);
   // Member-01 on the objective's task in each arm, and both reports pass.
   if (planner.last.kind !== "gang" || rules.last.kind !== "gang") throw new Error("no gang read");
   expect(planner.last.members[0]?.task).not.toBe(rules.last.members[0]?.task);
