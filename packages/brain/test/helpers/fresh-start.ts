@@ -26,6 +26,14 @@ import { BRAIN_RFA_SETTINGS, DEPLOY_WITHIN_MS, RFA_URL, startBrainInSimulation }
 
 const STEP_MS = 200;
 
+/**
+ * Where `fixedAgentStart` starts the Agent, after the page's boot (#341): a fixed point after any deploy, its own
+ * constant so the deploy's timeout (`DEPLOY_WITHIN_MS`) can grow with the bundles without moving a suite that uses it.
+ * It must exceed that timeout, so the deploy, and the owner's setup after it, are done by then (checked when it's used,
+ * and by `fixed-agent-start.test.ts`). Raising it moves those suites' figures: re-measure them.
+ */
+export const FIXED_AGENT_START_MS = 90_000;
+
 export interface FreshGame {
   simulation: Simulation;
   game: SimulatedGame;
@@ -78,6 +86,7 @@ export function useFreshStarts() {
     installTiming = "planner",
     bn2Route = "planner",
     gangRoute = bn2Route,
+    fixedAgentStart = false,
   }: {
     withDesiredState: boolean;
     beforeAgent?: (fresh: FreshGame) => Promise<void>;
@@ -100,6 +109,14 @@ export function useFreshStarts() {
     bn2Route?: Bn2Route;
     /** The gang rule's own route (#357's (3) A/B): the planner's objective with the rules' installs. Absent, bn2Route. */
     gangRoute?: Bn2Route;
+    /**
+     * The Agent's start independent of the deploy's length (#341's second item): each bundle the deployer pushes and
+     * RAM-checks is a lockstep step before the Agent starts (`packages/bridge/src/deployer.ts:156-161`), so a bundle
+     * added moves the Agent's start, and with it the seeded game's draws and its boot-anchored timers. With this, the
+     * Agent starts at `FIXED_AGENT_START_MS` after the page's boot, and the seeded random streams start again from
+     * `seed` at its first connection. Off by default: every other suite's figures stay as measured.
+     */
+    fixedAgentStart?: boolean;
   }) {
     const simulation = await start({
       seed,
@@ -109,6 +126,7 @@ export function useFreshStarts() {
       gameSettings: { ...BRAIN_RFA_SETTINGS, AutoexecScript: BOOT_SCRIPT },
     });
     const game = await SimulatedGame.create({ simulation, stepMs: STEP_MS });
+    const bootMs = game.clock.now();
     const dataDirectory = path.join(temporaryDirectory, `data-${++storeCount}`);
     mkdirSync(dataDirectory);
     const store = TelemetryStore.open(path.join(dataDirectory, "telemetry.sqlite"));
@@ -120,8 +138,15 @@ export function useFreshStarts() {
     await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);
     expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
     await beforeAgent({ simulation, game });
+    if (fixedAgentStart) {
+      expect(FIXED_AGENT_START_MS, "the fixed start after the deploy's timeout").toBeGreaterThan(DEPLOY_WITHIN_MS);
+      const waitMs = bootMs + FIXED_AGENT_START_MS - game.clock.now();
+      expect(waitMs, "the deploy and the owner's setup done by the fixed start").toBeGreaterThan(0);
+      await game.run(waitMs);
+    }
     expect((await simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();
     await game.runUntil(() => brain.channelEvents.some((event) => event.type === "agentConnected"), 10_000);
+    if (fixedAgentStart) await simulation.diagnostics.reseedRandom(seed);
     const latest = <Data>(tier: string) =>
       (store.latestSnapshot({ environment: "E1", tier })?.data as Data | undefined) ?? null;
     return {

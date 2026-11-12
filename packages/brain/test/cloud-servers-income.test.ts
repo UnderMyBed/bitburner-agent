@@ -48,7 +48,8 @@ function earned(samples: { money: number }[]): number {
 
 /** One run of `RUN_MS` from a fresh start, cloud servers on or off: what it earned, and what it bought. */
 async function run(seed: number, cloudServers: boolean) {
-  const fresh = await freshStartOf({ withDesiredState: true, seed, batcher: false });
+  // The Agent started at a fixed time, its draws from its first connection (#341): the path doesn't move with the deploy.
+  const fresh = await freshStartOf({ withDesiredState: true, seed, batcher: false, fixedAgentStart: true });
   if (!cloudServers) fresh.controller().setCloudServersEnabled(false);
   // Augmentations (#210) off: the count rule (#222, owner decision 51) installs within the 3 hours (seed 1: CyberSec's
   // three and 8 NeuroFlux Governor levels, 11 of 11 at 2.4 h with cloud servers, 2.7 h without), and the install loses
@@ -137,8 +138,8 @@ test.each(SEEDS)(
 );
 
 test("over the seeds run, the runs with cloud servers earned more than without even less what the servers cost", () => {
-  // One seed may not (seed 1 of 8 didn't, by 2.5%): the servers bought last haven't paid back by the end. So CI runs
-  // two.
+  // One seed may not (before #341's fixed start, seed 1 of 8 didn't, by 2.5%): the servers bought last may not have paid
+  // back by the end. So CI runs two. With the fixed start (2026-11-12, UTC), all 8 did: $67.0b against $42.4b.
   expect(seedsRun).toHaveLength(SEEDS.length);
   const total = (each: (seed: (typeof seedsRun)[number]) => number) =>
     seedsRun.reduce((sum, seed) => sum + each(seed), 0);
