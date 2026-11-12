@@ -56,6 +56,7 @@ try {
       DaedalusAugsRequirement: all.DaedalusAugsRequirement as number,
       FactionWorkRepGain: all.FactionWorkRepGain as number,
       FavorToDonateToFaction: all.FavorToDonateToFaction as number,
+      WorldDaemonDifficulty: all.WorldDaemonDifficulty as number,
     };
   }
 
@@ -70,7 +71,7 @@ try {
           data.augmentations.map((augmentation) => [augmentation.name, coreAugmentation(augmentation)]),
         ),
       )};\n\n` +
-      "/** Each BitNode's multipliers on augmentations and faction work, at level 1 (`getBitNodeMultipliers`): BN12's change with it. */\n" +
+      "/** Each BitNode's multipliers on augmentations, faction work and w0r1d_d43m0n, at level 1 (`getBitNodeMultipliers`): BN12's change with it. */\n" +
       `export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNodeMultipliers> = ${literal(bitNodes)};\n`,
   );
 

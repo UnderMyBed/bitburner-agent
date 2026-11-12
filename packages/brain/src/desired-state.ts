@@ -91,6 +91,7 @@ import {
   type MoneyReserve,
   readCloudServersEnabled,
 } from "./cloud-servers.ts";
+import { type DestroyEstimateEvent, DestroyEstimateRule, readDestroySeed } from "./destroy-estimate.ts";
 import {
   countOf,
   FactionRule,
@@ -136,7 +137,7 @@ import {
   writeShareEnabled,
 } from "./share.ts";
 import { writeSwitch } from "./switches.ts";
-import type { TelemetryStore } from "./telemetry-store.ts";
+import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 import {
   parseOwnersWork,
   readOwnersWork,
@@ -265,7 +266,8 @@ export type RuleEvent =
   | WorldDaemonEvent
   | InvitationEvent
   | BitNodeEndEvent
-  | LevellingEvent;
+  | LevellingEvent
+  | DestroyEstimateEvent;
 
 /** What the dashboard shows of the stop at the BitNode's end (#303). */
 export interface StopAtBitNodeEndView {
@@ -451,6 +453,8 @@ export class DesiredStateController {
   /** The planner's levelling choice (#336): the rule, and its plan as of the last update. */
   readonly #levelling: LevellingRule;
   #levellingPlan: LevellingPlan = { mode: "money", levelling: null };
+  /** The time to the destroy (#360): estimated at the BitNode's start, each install, Daedalus joined and levelling. */
+  readonly #destroyEstimate: DestroyEstimateRule;
   /** The BitNode whose BN1-only assumptions (#321) were last logged: logged again only for another. */
   #assumptionsLoggedFor: number | null = null;
   /** `HACKING_MULTIPLIERS_UNREAD` logged, until a slow snapshot says the BitNode: once, not every update. */
@@ -475,6 +479,7 @@ export class DesiredStateController {
     saveBackups = null,
     log = () => {},
     installTiming = "planner",
+    environment = null,
   }: {
     channel: ControlChannel;
     store: TelemetryStore;
@@ -482,6 +487,11 @@ export class DesiredStateController {
     log?: (line: string) => void;
     /** Who times installs short of Daedalus's count (#343): the planner; the count rule for a test's A/B alone. */
     installTiming?: InstallTimingPolicy;
+    /**
+     * The store's environment (#360): the destroy estimate's prior is read from its slow snapshots, once a BitNode.
+     * Null (tests of other rules): no prior, the estimate's time online from 0.
+     */
+    environment?: Environment | null;
   }) {
     this.#channel = channel;
     this.#store = store;
@@ -494,6 +504,12 @@ export class DesiredStateController {
     this.#levelling = new LevellingRule({ log, emit: (event) => this.#emit(event) });
     this.#invitations = new InvitationRule({ log, emit: (event) => this.#emit(event) });
     this.#bitNodeEnd = new BitNodeEndWatch({ log, emit: (event) => this.#emit(event) });
+    this.#destroyEstimate = new DestroyEstimateRule({
+      store,
+      log,
+      emit: (event) => this.#emit(event),
+      ...(environment === null ? {} : { seedOf: (live) => readDestroySeed(store, environment, live) }),
+    });
     this.#resetSent = readResetSentNote(store);
     // A restarted brain with its destroy out (#215 review): held, and its note kept, until the BitNode's reset shows.
     const restoredInto = this.#resetSent?.field === "lastNodeReset" ? worldDaemonDestroyInto(this.#resetSent.id) : null;
@@ -736,7 +752,10 @@ export class DesiredStateController {
   worldDaemonView(): WorldDaemonView {
     const owners = readManualIntents(this.#store).find((each) => each.action === "destroyBitNode");
     const daemon = this.#worldDaemon.view();
-    const view = { ...daemon, lines: [...daemon.lines, ...this.#levelling.view().lines] };
+    const view = {
+      ...daemon,
+      lines: [...daemon.lines, ...this.#levelling.view().lines, ...this.#destroyEstimate.lines()],
+    };
     // The owner's queued destroy goes instead (#321): the dashboard names the BitNode it enters.
     return owners?.action === "destroyBitNode"
       ? { ...view, ownersDestroy: true, nextBitNode: owners.args.nextBitNode, replay: null, skipped: null }
@@ -1817,6 +1836,16 @@ export class DesiredStateController {
     this.#join = factions.join;
     this.#joinAlongside = factions.joinAlongside;
     this.#factionWork = factions.work;
+    // The time to the destroy (#360), after A5's choice (the hold's ETA) and levelling's (the level's).
+    const factionsView = this.#factions.view();
+    this.#destroyEstimate.update({
+      slowData: this.#slowData,
+      slowGameTimeMs: this.#slowGameTimeMs,
+      slowAtMs: this.#slowAtMs,
+      factionChoice: factionsView.sent ? factionsView.choice : null,
+      levelling: this.#levelling.view(),
+      nowMs: this.#lastEventAtMs,
+    });
     // The owner's queue and the brain's resets first, then the rules' intents (`#ruleIntents`, in its order). The
     // purchases before the backdoor: a `buy` never waits for its terminal action.
     const manual = readManualIntents(this.#store);

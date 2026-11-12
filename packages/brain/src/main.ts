@@ -151,7 +151,14 @@ try {
   });
   // What the brain wants running in the game (#134): set before the channel listens, so the first Agent is given it.
   // It logs the backdoors it asks for, and sees installed (#195), and its joins and faction work (#203).
-  const desiredState = new DesiredStateController({ channel, store, saveBackups, log });
+  // Its destroy estimate (#360) reads its prior from this environment's slow snapshots, once a BitNode.
+  const desiredState = new DesiredStateController({
+    channel,
+    store,
+    saveBackups,
+    log,
+    environment: config.environment,
+  });
   // The money's last rise (#184), for the incomeStalled alert, logged as a stall starts and ends: after the controller,
   // so each snapshot's hack loop target is set when it looks.
   const incomeWatch = new IncomeWatch({

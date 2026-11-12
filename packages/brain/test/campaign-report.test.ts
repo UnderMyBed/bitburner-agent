@@ -204,8 +204,8 @@ describe("the campaign report", () => {
       `Campaign report (E0): every BitNode and release in the store, from ${at(0)} to ${at(870.3)} (14 h 30 min)`,
     );
     expect(text).toContain(
-      "  read: 751 slow snapshots and the events of the brain's starts (5), installs and destroys, never a medium or " +
-        "fast snapshot",
+      "  read: 751 slow snapshots and the events of the brain's starts (5), installs and destroys, the destroy's " +
+        "estimates and A5's choices (#360), never a medium or fast snapshot",
     );
     expect(text).toContain('the Agent\'s deployment after the "+" left out): v1.0.0, v1.0.1, v1.1.0');
     const rows = bitNodeRows();

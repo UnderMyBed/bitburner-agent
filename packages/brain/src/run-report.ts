@@ -770,7 +770,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       singularity.push({ atMs, multiplier: singularityRamMultiplierOf(data) });
       factionState.add(atMs, data);
       cycles.addSlow(atMs, gameTimeMs, data);
-      worldDaemon.addSlow(gameTimeMs);
+      worldDaemon.addSlow(gameTimeMs, atMs, data);
       const segment = segmentAt(cycles.bitNodes.length - 1);
       segment.slowFirst ??= data;
       segment.slowLast = data;

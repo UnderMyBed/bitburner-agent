@@ -326,6 +326,19 @@ export {
   TOKEN_FILE_NAME,
 } from "./deploy-layout.ts";
 export {
+  type DaedalusStage,
+  DESTROY_ESTIMATE_BITNODES,
+  type DestroyEstimate,
+  type DestroyEstimateInputs,
+  type DestroyPrior,
+  type DestroyTerm,
+  type DestroyTermLabel,
+  type DestroyTermName,
+  destroyEstimate,
+  WORLD_DAEMON_BASE_LEVEL,
+  worldDaemonRequiredLevel,
+} from "./destroy-estimate.ts";
+export {
   acceptsDonations,
   BASE_FAVOR_TO_DONATE,
   DONATE_MONEY_TO_REPUTATION_DIVISOR,

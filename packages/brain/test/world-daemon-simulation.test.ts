@@ -21,6 +21,7 @@ import {
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { AUGMENTATION_BOUGHT_EVENT_KIND, AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND } from "../src/augmentations.ts";
+import { DESTROY_ESTIMATED_EVENT_KIND, type DestroyEstimateRecord } from "../src/destroy-estimate.ts";
 import { runReport } from "../src/run-report.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -166,6 +167,14 @@ test.each(SEEDS)(
       expect(lines).not.toContainEqual(expect.stringMatching(new RegExp(`^ {4}${id.source}: not done`)));
     }
     expect(failures).toEqual([]);
+    // The time to the destroy (#360): at the join, A5's ETA for the hold (its choice then, from Daedalus's reputation
+    // before the harness edit), no prior for its Red Pill cycle; in BN4.1, BN1.1 (just destroyed) as the prior, D none
+    // at 9,000. Reported, not judged: the harness-made BN1.1 is minutes online.
+    const estimates = events(DESTROY_ESTIMATED_EVENT_KIND).map((event) => event.detail as DestroyEstimateRecord);
+    const join = estimates.find((each) => each.moment === "joined");
+    expect(join?.terms[1]).toMatchObject({ term: "BC", label: "cautious", atLeast: true });
+    expect(join?.terms[1]?.source).toMatch(/^joined: A5's ETA for the hold/);
+    expect(estimates.at(-1)).toMatchObject({ moment: "start", bitNode: "BN4.1", prior: "BN1.1", requiredLevel: 9_000 });
     console.log(
       `seed ${seed}: ${bought.length} bought for The Red Pill's install (${bought.map((each) => each.augmentation).join(", ")}); ` +
         `destroyed at ${((game.clock.now() - EPOCH_MS) / MINUTE).toFixed(1)} min`,
