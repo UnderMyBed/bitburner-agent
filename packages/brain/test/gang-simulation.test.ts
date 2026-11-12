@@ -841,12 +841,16 @@ async function installArm(
       atMs: event.atMs - startMs,
       ...(event.detail as { reason: string; gangCost?: GangInstallCost; timing?: InstallTimingView }),
     }));
-  // The planner's first (3) estimate (its progress events): when, and its figures then.
-  const first = events().find(
-    (event) =>
+  // The planner's first (3) estimate with something to install (its progress events; banking needs it too, #372's
+  // review, so before NiteSec's reputation reaches any augmentation it keeps): when, and its figures then.
+  const first = events().find((event) => {
+    const timing = (event.detail as { timing?: { route?: string; gangInstall?: { installable?: boolean } } }).timing;
+    return (
       event.kind === "augmentationProgress" &&
-      (event.detail as { timing?: { route?: string } }).timing?.route === "gang formed",
-  );
+      timing?.route === "gang formed" &&
+      timing.gangInstall?.installable === true
+    );
+  });
   const estimate =
     first === undefined
       ? null
