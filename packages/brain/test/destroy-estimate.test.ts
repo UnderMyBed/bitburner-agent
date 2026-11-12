@@ -249,6 +249,10 @@ describe("the campaign fold's stretches and the prior (#360)", () => {
     expect(destroyPriorOf(views, 1, [])).toMatchObject({ bitNode: "BN1.2", requiredLevel: 3000, aMs: 570 * MINUTE });
     expect(destroyPriorOf(views, 3, [])).toMatchObject({ bitNode: "BN1.4", currentNode: 1, requiredLevel: 3000 });
     expect(destroyPriorOf(views, 4, [])).toMatchObject({ bitNode: "BN1.4", currentNode: 1 });
+    // Its D from before levelling (#336) with no levelling choice between its start and its destroy; after one, not.
+    expect(destroyPriorOf(views, 1, [])?.dBeforeLevelling).toBe(true);
+    expect(destroyPriorOf(views, 1, [m(669)])?.dBeforeLevelling).toBe(false);
+    expect(destroyPriorOf(views, 1, [m(700)])?.dBeforeLevelling).toBe(true);
   });
 
   test("a save loaded: its cycle left out of the count; an open BitNode's so far, D none", () => {
