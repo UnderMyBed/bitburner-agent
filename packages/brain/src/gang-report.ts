@@ -315,6 +315,8 @@ export class GangFold {
    * p was knowable in that cycle from then on, so an install there without (3)'s estimates fails.
    */
   readonly #earningAt: { atMs: number; cycle: number | undefined }[] = [];
+  /** The last gang reading's cycle if it was earning, or null: `#earningAt` counts the second in a row. */
+  #lastEarning: { cycle: number | undefined } | null = null;
   /** The readings at 12 members (#357), with core's choice. */
   readonly #atTwelve: AtTwelve[] = [];
   /** Core's last choice (#357), and the slow snapshot and members it's from: worked out again as either changes. */
@@ -402,9 +404,14 @@ export class GangFold {
     if (snapshot.kind === "none" || snapshot.kind === "gang") {
       this.#formedAt.push({ atMs, formed: snapshot.kind === "gang" });
     }
-    if (snapshot.kind === "gang" && snapshot.gang.respectGainRate > 0) {
-      this.#earningAt.push({ atMs, cycle: this.#slowAt(atMs)?.resetInfo?.lastAugReset });
+    // Earning, counted in a cycle from its first slow snapshot on, and only at the second reading in a row earning there
+    // (#372's re-review): just after an install the first can still show the old cycle's tasks while the new plan trains.
+    const earning = snapshot.kind === "gang" && snapshot.gang.respectGainRate > 0;
+    const earningCycle = this.#slowAt(atMs)?.resetInfo?.lastAugReset;
+    if (earning && earningCycle !== undefined && this.#lastEarning?.cycle === earningCycle) {
+      this.#earningAt.push({ atMs, cycle: earningCycle });
     }
+    if (snapshot.kind === "gang") this.#lastEarning = earning ? { cycle: earningCycle } : null;
     if (snapshot.kind !== "gang") {
       this.#recruitWaiting.add(atMs, null);
       this.#overBound.add(atMs, null);
@@ -939,9 +946,11 @@ export class GangFold {
       // training from the start): the rules' install, as A6 has it, said; else one without (3)'s estimates fails.
       const cycle = this.#slowAt(atMs)?.resetInfo?.lastAugReset;
       const earned = this.#earningAt.some((each) => each.atMs <= atMs && each.cycle === cycle);
-      if (!earned)
+      const beforeRedPill = reason !== THE_RED_PILL && reason !== "the hacking level" && !redPillInstalled;
+      if (beforeRedPill && !estimated && !earned) {
         lines.push("      (the gang earned no respect in its cycle by then: p never known, the rules' install)");
-      if (reason !== THE_RED_PILL && reason !== "the hacking level" && !redPillInstalled && !estimated && earned) {
+      }
+      if (beforeRedPill && !estimated && earned) {
         fail(
           `install chosen in BN2 with the gang before The Red Pill without the planner's estimates: at ` +
             `${formatIsoTime(atMs)}, its reason ${reason}`,

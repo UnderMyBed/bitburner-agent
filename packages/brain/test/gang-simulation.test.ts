@@ -25,6 +25,7 @@ import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   augmentationsSoldBy,
   type FastSnapshotData,
+  favorAfterInstall,
   GANG_AUGMENTATION_HORIZON_MS,
   GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
   gangAscensionToMake,
@@ -893,7 +894,12 @@ test("installing with the gang (#357's (3)) A/B from 0: banking to R* against th
     `the favour after the install: the planner's ${measured.toFixed(1)} against its ${chosen?.gangCost?.favorAfter.toFixed(1)}; ` +
       `the rules' ${rules.last.favor.toFixed(1)} against their ${rules.installs[0]?.gangCost?.favorAfter.toFixed(1)}`,
   );
-  expect(Math.abs(measured - (chosen?.gangCost?.favorAfter as number))).toBeLessThan(3);
+  // A computed range (#372's re-review): the commit is never negative and never longer than its `aheadMs`, so the
+  // favour lies from r's at the choice to the estimate's (r and the rate over `aheadMs`).
+  const gangInstall = chosen?.timing?.gangInstall as NonNullable<InstallTimingView["gangInstall"]>;
+  expect(measured).toBeGreaterThanOrEqual(favorAfterInstall(gangInstall.favor, gangInstall.reputation));
+  expect(measured).toBeLessThanOrEqual(chosen?.gangCost?.favorAfter as number);
+  expect(rules.last.favor).toBeLessThanOrEqual(rules.installs[0]?.gangCost?.favorAfter as number);
   expect(planner.installs.at(-1)?.reason).toBe("The Red Pill");
   expect(planner.estimate).toMatchObject({ choice: "bank" });
   expect(planner.reachedMs).not.toBeNull();

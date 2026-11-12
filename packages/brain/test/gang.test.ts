@@ -772,20 +772,47 @@ describe("the run report's section", () => {
         "install chosen in BN2 with the gang before The Red Pill without the planner's estimates: at " +
           "1970-01-01T00:00:50.000Z, its reason count reached",
       ]);
-      // An earning reading in another cycle (an install's since) isn't this one's.
-      const other = new GangFold();
-      other.addSlow(0, { ...niteSec, resetInfo: { ...niteSec.resetInfo, lastAugReset: -100_000 } });
-      const earningData = atTwelve(0);
-      const earningReading = earningData.gang as GangReading;
-      other.addMedium(5_000, {
-        ...earningData,
-        gang: { ...earningReading, gang: { ...(earningReading.gang as GangInformation), respectGainRate: 1e6 } },
-      } as MediumSnapshotData);
-      other.addSlow(10_000, niteSec);
-      other.addMedium(15_000, atTwelve(1));
-      const otherFailures: string[] = [];
-      other.section(otherFailures, 30_000, [install(20_000, { reason: "count reached", gangCost: cost })]);
-      expect(otherFailures).toEqual([]);
+      // Earning readings in another cycle (an install's since) aren't this one's; nor (#372's re-review) the first
+      // reading of a cycle earning on the old cycle's tasks, the plan training: only a second in a row counts.
+      const earningAt = (index: number) => {
+        const data = atTwelve(index);
+        const reading = data.gang as GangReading;
+        return {
+          ...data,
+          gang: { ...reading, gang: { ...(reading.gang as GangInformation), respectGainRate: 1e6 } },
+        } as MediumSnapshotData;
+      };
+      const reset = (stale: boolean) => {
+        const fold = new GangFold();
+        fold.addSlow(0, { ...niteSec, resetInfo: { ...niteSec.resetInfo, lastAugReset: -100_000 } });
+        fold.addMedium(3_000, earningAt(0));
+        fold.addMedium(6_000, earningAt(1));
+        fold.addSlow(10_000, niteSec);
+        fold.addMedium(15_000, stale ? earningAt(2) : atTwelve(2));
+        fold.addMedium(25_000, atTwelve(3));
+        const failures: string[] = [];
+        const text = fold
+          .section(failures, 40_000, [
+            install(30_000, { reason: "count reached", gangCost: cost }),
+            install(35_000, { reason: "The Red Pill" }),
+          ])
+          .join("\n");
+        return { text, failures };
+      };
+      for (const stale of [false, true]) {
+        const { text, failures } = reset(stale);
+        expect(failures, `stale ${stale}`).toEqual([]);
+        // The note for the rules' install alone, not The Red Pill's own (#372's re-review).
+        expect(text.split("p never known, the rules' install").length - 1, `stale ${stale}`).toBe(1);
+      }
+      // Two in a row in the new cycle: p knowable, the failure.
+      const sustained = new GangFold();
+      sustained.addSlow(0, niteSec);
+      sustained.addMedium(5_000, earningAt(0));
+      sustained.addMedium(15_000, earningAt(1));
+      const sustainedFailures: string[] = [];
+      sustained.section(sustainedFailures, 30_000, [install(20_000, { reason: "count reached", gangCost: cost })]);
+      expect(sustainedFailures).toHaveLength(1);
       // None in the window: said. The Red Pill installed (a slow snapshot shows it): levelling's or any, no failure.
       expect(judged(3).text).toContain(
         "  installs chosen in BN2 with the gang (#357's (3)), each one's cost:\n    none",

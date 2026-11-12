@@ -3850,6 +3850,18 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     rule = newRule("planner");
     at(2e6, training);
     expect(timing()?.gangInstall).toMatchObject({ choice: "keep", rateKept: 0.979 });
+    // The gang unread (a restart's first updates): the stored p isn't used (#372's re-review), so at 500k, where p
+    // would install now, nothing is installed; read again, it is.
+    rule = newRule("planner");
+    at(5e5, withGang(5e5, 0, null));
+    expect(timing()?.gangInstall).toMatchObject({ choice: "keep", rateKept: null, heldForRate: true });
+    expect(chosen()).toEqual([]);
+    at(5e5, withGang(5e5, 0, training.gangInstall));
+    expect(chosen()).toHaveLength(1);
+    expect(chosen()[0]?.reason).toBe("the gang's favour");
+    store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+    events.length = 0;
+    rule = newRule("planner");
     // Another cycle (an install since): p never known there, so the rules, as G3's never-earning gang.
     at(2e6, { ...training, slowData: slow({ ...bn2Fields, lastAugReset: 5 * MINUTE }) });
     expect(timing()?.route).toBeUndefined();

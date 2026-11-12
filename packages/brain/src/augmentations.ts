@@ -1020,9 +1020,10 @@ export const AUGMENTATION_INSTALL_WAIT_SETTING = "augmentations.installWait";
 
 /**
  * The cycle's last p known (#357's (3), #372's review): the rate an install leaves, kept by `lastAugReset` in the store
- * so a restart keeps it. It's a ratio of the members' figures, not of the plan's tasks, so a pause to train, a stretch
- * on justice or warfare, keeps it: (3) decides with it then, and only a cycle where it was never known falls back to
- * the rules (G5's hold, the count rule).
+ * so a restart keeps it. It's the last earning plan's mix (`gangInstallRateKept` on that plan's tasks), so a pause to
+ * train, a stretch on justice or warfare, keeps it: (3) decides with it then, and only a cycle where it was never
+ * known falls back to the rules (G5's hold, the count rule). Never with the gang unread (#372's re-review): no install
+ * on a stored p alone.
  */
 export const AUGMENTATION_GANG_RATE_KEPT_SETTING = "augmentations.gangRateKept";
 
@@ -2291,7 +2292,8 @@ export class AugmentationRule {
               needed: augmentationCost(THE_RED_PILL, purchaseState).reputation,
               reputation: reputationOf(gangFaction),
               favor: gangFavor,
-              rateKept: cycleRateKept,
+              // The cycle's last p, only with the gang read (#372's re-review): unread, p unknown, no install.
+              rateKept: gangInstall === null ? null : cycleRateKept,
               factionRepGain: factionRepInstallMultiplier(
                 installable.filter((name) => name === NEUROFLUX_GOVERNOR).length + counts.neuroFluxLevels,
                 [...installable, ...setNames].filter((name) => name !== NEUROFLUX_GOVERNOR),
