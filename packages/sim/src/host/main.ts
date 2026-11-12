@@ -25,7 +25,7 @@ import { events } from "./events.ts";
 import { installHost } from "./install.ts";
 import { heapLimit, heapUsed, startProfile, stopProfile } from "./measure.ts";
 import { pinnedLocale } from "./parity/locale.ts";
-import { randomState, restoreRandomState } from "./random.ts";
+import { randomState, reseedRandom, restoreRandomState } from "./random.ts";
 import { runUntil, watchBitNodeEntries } from "./run-until.ts";
 
 const send = (message: HostMessage) => process.send?.(message);
@@ -165,6 +165,10 @@ async function start(options: HostOptions): Promise<Host> {
     "diagnostics.homePeak": () => {
       booted();
       return engine.homePeak();
+    },
+    "diagnostics.reseedRandom": ({ seed }) => {
+      if (!Number.isSafeInteger(seed)) throw new RangeError(`seed must be a whole number, not ${seed}`);
+      reseedRandom(seed);
     },
     "diagnostics.random": ({ count }) => ({
       math: Array.from({ length: count }, () => Math.random()),

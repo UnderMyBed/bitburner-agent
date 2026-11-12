@@ -228,6 +228,8 @@ export class Simulation {
      */
     homePeak: () => this.rpc.call("diagnostics.homePeak", {}),
     random: (count: number) => this.rpc.call("diagnostics.random", { count }),
+    /** Starts the seeded random streams again from `seed`, as at boot (#341). A harness edit. */
+    reseedRandom: (seed: number) => this.rpc.call("diagnostics.reseedRandom", { seed }),
     /** Test-only: changes game state (going to the BitVerse kills every script). Scenarios must not use it. */
     toPage: (page: string, flume = false) => this.rpc.call("diagnostics.toPage", { page, flume }),
     /** Test-only, like `toPage`. */

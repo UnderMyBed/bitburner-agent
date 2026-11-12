@@ -48,7 +48,8 @@ function earned(samples: { money: number }[]): number {
 
 /** One run of `RUN_MS` from a fresh start, cloud servers on or off: what it earned, and what it bought. */
 async function run(seed: number, cloudServers: boolean) {
-  const fresh = await freshStartOf({ withDesiredState: true, seed, batcher: false });
+  // The Agent started at a fixed time, its draws from its first connection (#341): the path doesn't move with the deploy.
+  const fresh = await freshStartOf({ withDesiredState: true, seed, batcher: false, fixedAgentStart: true });
   if (!cloudServers) fresh.controller().setCloudServersEnabled(false);
   // Augmentations (#210) off: the count rule (#222, owner decision 51) installs within the 3 hours (seed 1: CyberSec's
   // three and 8 NeuroFlux Governor levels, 11 of 11 at 2.4 h with cloud servers, 2.7 h without), and the install loses

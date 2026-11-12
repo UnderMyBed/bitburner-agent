@@ -38,6 +38,20 @@ export function restoreRandomState(state: RandomState): void {
   streams.crypto.setState(state.crypto);
 }
 
+/** Both seeded streams' starting states for `seed`: Math.random's, and Web Crypto's from the seed mixed. */
+function seededStates(seed: number): RandomState {
+  return { math: sfc32(seed).state(), crypto: sfc32((seed ^ 0x5bd1e995) >>> 0).state() };
+}
+
+/**
+ * Starts both seeded streams again from `seed`, as `installSeededRandom` did, in place (#341): the draws from here on
+ * are the same whatever was drawn before, so a harness can take them from a point of its choosing (the Agent's first
+ * connection) rather than from the page's boot, which every step of the deploy before it moves.
+ */
+export function reseedRandom(seed: number): void {
+  restoreRandomState(seededStates(seed));
+}
+
 export function installSeededRandom(seed: number): void {
   const math = sfc32(seed);
   const byte = sfc32((seed ^ 0x5bd1e995) >>> 0);

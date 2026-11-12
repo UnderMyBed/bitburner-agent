@@ -75,6 +75,7 @@ export function useFreshStarts() {
     batcher = true,
     augmentations = true,
     installTiming = "planner",
+    fixedAgentStart = false,
   }: {
     withDesiredState: boolean;
     beforeAgent?: (fresh: FreshGame) => Promise<void>;
@@ -93,6 +94,15 @@ export function useFreshStarts() {
     augmentations?: boolean;
     /** Who times installs short of Daedalus's count (#343): the planner, as on Steam; the count rule for an A/B. */
     installTiming?: InstallTimingPolicy;
+    /**
+     * The Agent's start independent of the deploy's length (#341's second item): each bundle the deployer pushes and
+     * RAM-checks is a lockstep step before the Agent starts (`packages/bridge/src/deployer.ts:156-161`), so a bundle
+     * added moves the Agent's start, and with it the seeded game's draws and its boot-anchored timers. With this, the
+     * Agent starts at a fixed virtual time, `DEPLOY_WITHIN_MS` after the page's boot (the deploy's own bound, so it's
+     * always done by then), and the seeded random streams start again from `seed` at its first connection. Off by
+     * default: every other suite's figures stay as measured.
+     */
+    fixedAgentStart?: boolean;
   }) {
     const simulation = await start({
       seed,
@@ -102,6 +112,7 @@ export function useFreshStarts() {
       gameSettings: { ...BRAIN_RFA_SETTINGS, AutoexecScript: BOOT_SCRIPT },
     });
     const game = await SimulatedGame.create({ simulation, stepMs: STEP_MS });
+    const bootMs = game.clock.now();
     const dataDirectory = path.join(temporaryDirectory, `data-${++storeCount}`);
     mkdirSync(dataDirectory);
     const store = TelemetryStore.open(path.join(dataDirectory, "telemetry.sqlite"));
@@ -113,8 +124,14 @@ export function useFreshStarts() {
     await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);
     expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
     await beforeAgent({ simulation, game });
+    if (fixedAgentStart) {
+      const waitMs = bootMs + DEPLOY_WITHIN_MS - game.clock.now();
+      expect(waitMs, "the deploy and the owner's setup done by the fixed start").toBeGreaterThan(0);
+      await game.run(waitMs);
+    }
     expect((await simulation.run("home", BOOT_SCRIPT)).error).toBeUndefined();
     await game.runUntil(() => brain.channelEvents.some((event) => event.type === "agentConnected"), 10_000);
+    if (fixedAgentStart) await simulation.diagnostics.reseedRandom(seed);
     const latest = <Data>(tier: string) =>
       (store.latestSnapshot({ environment: "E1", tier })?.data as Data | undefined) ?? null;
     return {
