@@ -19,6 +19,7 @@ import { CampaignTimeline, type CampaignTimelineView } from "../src/dashboard/ti
 import type { DataBackupProblem } from "../src/data-backup.ts";
 import type { CloudServersView, HackLoopView, HomeRamView, IntentView, ProgramsView } from "../src/desired-state.ts";
 import { FACTION_WORK_STALLED_AFTER_MS, type FactionsView, type FactionWorkStall } from "../src/factions.ts";
+import type { GangStallStretch } from "../src/gang-stalls.ts";
 import { describeCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import { RELAUNCH_EVENT_KIND, recordSupervisionGaveUp, setSupervisionPaused } from "../src/supervision.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
@@ -87,6 +88,7 @@ const status = (
     installAwaitingRestart = null,
     storeThinningFailure = null,
     dataBackupProblem = null,
+    gangStalls,
     timeline,
   }: {
     income?: IncomeFacts | null;
@@ -99,6 +101,7 @@ const status = (
     installAwaitingRestart?: { id: string; sinceMs: number } | null;
     storeThinningFailure?: { atMs: number; failure: string } | null;
     dataBackupProblem?: DataBackupProblem | null;
+    gangStalls?: GangStallStretch[];
     timeline?: CampaignTimelineView;
   } = {},
 ) =>
@@ -124,6 +127,7 @@ const status = (
     installAwaitingRestart,
     storeThinningFailure,
     dataBackupProblem,
+    ...(gangStalls === undefined ? {} : { gangStalls }),
     timeline,
     nowMs,
   });
@@ -262,6 +266,27 @@ test("cloudServerProblem (#194): from the controller's view of cloud servers, wh
   expect(status(nowMs, { cloud: { ...cloudServers, problem } }).alerts).toMatchObject([
     { name: "cloudServerProblem", sinceMs: nowMs, detail: expect.stringContaining(problem) },
   ]);
+  expect(status(nowMs).alerts).toEqual([]);
+});
+
+test("gangStalled (#354): from the gang rule's stalls past their bounds, one alert each", () => {
+  const nowMs = STARTED_AT_MS + 30_000;
+  const stall: GangStallStretch = {
+    kind: "task",
+    fromMs: STARTED_AT_MS,
+    toMs: STARTED_AT_MS + 60_000,
+    detail: "member-01 on Unassigned, the rule's Train Hacking",
+  };
+  expect(status(nowMs, { gangStalls: [stall] }).alerts).toEqual([
+    {
+      name: "gangStalled",
+      sinceMs: STARTED_AT_MS,
+      detail:
+        "a member off the rule's task for 1 min (member-01 on Unassigned, the rule's Train Hacking): the run report " +
+        "fails it too",
+    },
+  ]);
+  expect(status(nowMs, { gangStalls: [] }).alerts).toEqual([]);
   expect(status(nowMs).alerts).toEqual([]);
 });
 

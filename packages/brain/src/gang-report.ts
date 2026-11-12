@@ -226,7 +226,11 @@ export class GangFold {
   readonly #warfareLosing = new Stretches();
   readonly #warfarePaying = new Stretches();
   readonly #deaths: Death[] = [];
-  /** The silent stalls (#354): their stretches closed, and the watch with those open. */
+  /**
+   * The silent stalls (#354): their stretches closed, and the watch with those open. An open one ends at the last
+   * reading showing it, not at the window's end as the section's others do (#364's review): it's judged between
+   * readings, and there's none after the last.
+   */
   readonly #stallStretches: GangStallStretch[] = [];
   readonly #stalls = new GangStallWatch((stretch) => this.#stallStretches.push(stretch));
   /** The rule's justice members in its plan at the reading before, as the brain keeps them; null: none read yet. */

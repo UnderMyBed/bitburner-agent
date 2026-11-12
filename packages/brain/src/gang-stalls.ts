@@ -11,7 +11,9 @@
 //   `GANG_RESPECT_FLAT_WITHIN_MS`. Respect is the gang's faction's only reputation (`Gang.ts:144-155`), so this stalls
 //   The Red Pill's route in BN2.
 // The live brain (../gang.ts, `GangRule`) and the run report feed it each gang reading in order; a reading with no
-// gang (none formed, unread, absent, or outside BN2) ends every stretch.
+// gang (none formed, unread, absent, or outside BN2) ends every stretch, and so does a gap: readings further apart than
+// the medium snapshots' cadence allows (`MEDIUM_SNAPSHOT_GAP_MS`, a thinned store's minute or a degraded medium tier),
+// where one reading would already be a stretch of the gap's length (#364's review).
 import {
   GANG_CYCLE_MS,
   GANG_CYCLES_PER_PROCESS,
@@ -24,6 +26,7 @@ import {
   gangTrainingTask,
   MAX_GANG_MEMBER_NAME_LENGTH,
 } from "@bitburner-agent/core";
+import { MEDIUM_SNAPSHOT_GAP_MS } from "./backdoors.ts";
 
 /**
  * How long one problem of the worker's may be in every reading: 1 minute. The Agent runs the worker when the brain's
@@ -141,7 +144,7 @@ export function gangStallsAt(before: GangStallReading | null, now: GangStallRead
     const perCycle = gangPlannedRespectPerCycle(before);
     const perProcess = perCycle * GANG_CYCLES_PER_PROCESS;
     const rise = now.gang.respect - before.gang.respect;
-    // A fall is an ascension's or a death's (`Gang.ts:390-404`, `:291-303`), the only ways down: not judged. A
+    // A fall is an ascension's or a death's (`Gang.ts:390-404`, `:371-375`), the only ways down: not judged. A
     // process's worth too small for a double to show on the respect isn't expected to show.
     const shows = perProcess > Math.abs(before.gang.respect) * Number.EPSILON;
     if (rise >= 0 && shows && rise < perProcess) {
@@ -161,7 +164,8 @@ export function gangStallsAt(before: GangStallReading | null, now: GangStallRead
 
 /**
  * The stalls over a run of readings: each holding stretch, open while each reading shows it, closed (to `onClosed`)
- * on the first that doesn't, or a reading with no gang.
+ * on the first that doesn't, a reading with no gang, or a gap (`MEDIUM_SNAPSHOT_GAP_MS`): the reading after it is judged
+ * as a first.
  */
 export class GangStallWatch {
   readonly #open = new Map<string, GangStallStretch>();
@@ -174,10 +178,10 @@ export class GangStallWatch {
 
   /** A gang reading, in order; null for one with no gang. */
   add(reading: GangStallReading | null): void {
-    if (reading === null) {
+    if (reading === null || (this.#before !== null && reading.atMs - this.#before.atMs > MEDIUM_SNAPSHOT_GAP_MS)) {
       this.#closeAll();
       this.#before = null;
-      return;
+      if (reading === null) return;
     }
     const conditions = gangStallsAt(this.#before, reading);
     const holding = new Set(conditions.map((each) => each.key));

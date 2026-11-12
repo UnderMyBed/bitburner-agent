@@ -41,6 +41,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { donationStatus } from "../src/augmentation-report.ts";
 import { AUGMENTATION_RESERVE_LOOKAHEAD_MS } from "../src/augmentations.ts";
+import { MEDIUM_SNAPSHOT_GAP_MS } from "../src/backdoors.ts";
 import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "../src/cloud-servers.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
@@ -850,6 +851,52 @@ describe("the gang's silent stalls (#354)", () => {
     rule.update({ mediumData: { ...off }, slowData: slowData(1), mediumAtMs: 70_000 });
     expect(rule.stalls()).toEqual([]);
   });
+
+  test("the live watch starts again after a reading with no gang (#364's review): unread, or absent", () => {
+    const off = withGang(formed([member("member-01", 1, "Unassigned"), member("member-02"), member("member-03")]));
+    for (const gap of [
+      withGang({ gang: null, members: [], problems: ["the gang state isn't one to do"] }),
+      withGang(undefined),
+    ]) {
+      const rule = new GangRule();
+      const read = (mediumData: MediumSnapshotData, mediumAtMs: number) =>
+        rule.update({ mediumData: { ...mediumData }, slowData: slowData(2), mediumAtMs });
+      for (const atMs of [0, 10_000, 20_000, 30_000]) read(off, atMs);
+      read(gap, 40_000);
+      expect(rule.stalls()).toEqual([]);
+      // From the first reading after it: 50 s at 100 s, a minute at 110 s.
+      for (const atMs of [50_000, 60_000, 70_000, 80_000, 90_000, 100_000]) read(off, atMs);
+      expect(rule.stalls()).toEqual([]);
+      read(off, 110_000);
+      expect(rule.stalls()).toEqual([expect.objectContaining({ kind: "task", fromMs: 50_000, toMs: 110_000 })]);
+    }
+  });
+
+  test("a gap in the readings (over 30 s, `MEDIUM_SNAPSHOT_GAP_MS`) ends every stretch (#364's review)", () => {
+    expect(MEDIUM_SNAPSHOT_GAP_MS).toBe(30_000);
+    // A thinned store's minute apart, or a degraded medium tier: a member off its task, and the respect flat with the
+    // grown hacker on Money Laundering, at every reading. None judged across a gap.
+    const off = withGang(formed([member("member-01", 1, "Unassigned"), member("member-02"), member("member-03")]));
+    const flat = withGang(formed(twelveWith(grownHacker("member-01")), GROWN_GANG));
+    const sparse = (data: MediumSnapshotData, everyMs: number, count: number) => {
+      const gang = new GangFold();
+      gang.addSlow(0, slowData(2));
+      for (let index = 0; index < count; index += 1) gang.addMedium(index * everyMs, data);
+      const failures: string[] = [];
+      gang.section(failures, count * everyMs);
+      return failures;
+    };
+    expect(sparse(off, 60_000, 10)).toEqual([]);
+    expect(sparse(flat, 60_000, 10)).toEqual([]);
+    expect(sparse(off, 31_000, 10)).toEqual([]);
+    // At the gap's edge, 30 s apart, still judged: a minute is three readings.
+    expect(sparse(off, 30_000, 3)).toEqual([
+      expect.stringMatching(/^a member off the rule's task for 1 min, from 1970-01-01T00:00:00\.000Z /),
+    ]);
+    expect(sparse(flat, 30_000, 3)).toEqual([
+      expect.stringMatching(/^the gang's respect flat with the rule's members working for 1 min, /),
+    ]);
+  });
 });
 
 test("the wanted grace is one justice member's time to halve the wanted level: about 23 min", () => {
@@ -973,6 +1020,26 @@ describe("the controller (#325)", () => {
     expect(last()?.intents).toEqual([]);
     expect(lines).toContain("gang: forming with NiteSec");
     expect(controller.gangView().stage).toBe("forming");
+  });
+
+  test("the silent stalls (#354) from the snapshots in: the controller's `gangStalls()`, the alert's, past a minute", () => {
+    const { controller, send } = connected();
+    send("slow", niteSecSlow(2));
+    // member-01 left Unassigned at every reading, the rule's Train Hacking: the game refusing it, say.
+    const off = formed([member("member-01", 1, "Unassigned"), member("member-02"), member("member-03")]);
+    send("medium", niteSecMedium(off));
+    for (let step = 1; step <= 5; step += 1) {
+      clock.advance(10_000);
+      send("medium", niteSecMedium(off));
+    }
+    expect(controller.gangStalls()).toEqual([]);
+    clock.advance(10_000);
+    send("medium", niteSecMedium(off));
+    expect(controller.gangStalls()).toEqual([
+      expect.objectContaining({ kind: "task", detail: "member-01 on Unassigned, the rule's Train Hacking" }),
+    ]);
+    const [stall] = controller.gangStalls();
+    expect((stall?.toMs ?? 0) - (stall?.fromMs ?? 0)).toBe(60_000);
   });
 
   test("formed: its recruits and tasks sent, and the gang's faction gets none of the brain's faction work", () => {
