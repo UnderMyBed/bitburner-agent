@@ -2340,7 +2340,9 @@ function stallLines(facts: RunFacts, gaps: Gap[], failures: string[]): string[] 
     const line =
       `income stalled from ${formatIsoTime(stall.fromMs)} to ${end} (${formatDuration(stall.lengthMs)}): money ` +
       `${formatMoney(stall.moneyFrom)} → ${formatMoney(stall.moneyTo)}${overGaps}`;
-    const levelling = levellingModeAt(facts.events, stall.fromMs + INCOME_STALLED_AFTER_MS) !== "money";
+    // Levelling mode and the install earn nothing (#336); (d) batches, and a stall there keeps M away (#382's review).
+    const mode = levellingModeAt(facts.events, stall.fromMs + INCOME_STALLED_AFTER_MS);
+    const levelling = mode === "level" || mode === "install";
     lines.push(`    ${line}${levelling ? " (levelling mode, #336: no income expected, not counted)" : ""}`);
     if (facts.hackLoopEnabled && !levelling) failures.push(line);
   }

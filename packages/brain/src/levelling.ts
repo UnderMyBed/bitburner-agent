@@ -95,6 +95,15 @@ export type LevellingEvent = {
  */
 export const LEVELLING_SETTLE_MS = 60_000;
 
+/**
+ * How long money waits for (d)'s income once batching's rate is measured, while A6's ladder is on offer and the
+ * income measured is none (#382's review): 5 minutes. After an install the batcher may still be preparing its target,
+ * earning nothing for minutes (BN4.2's moves left it idle 0.4 to 7.5 min), and a choice made then would leave (d) out
+ * for good, as levelling mode earns nothing to measure. Bounded so the wait, with the settle and money's minute, stays
+ * inside the 10 minutes the run report allows off the shortest (`LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS`).
+ */
+export const LEVELLING_INCOME_WAIT_MS = 5 * 60_000;
+
 /** The candidates in the dashboard's and the report's words. */
 export const LEVELLING_CANDIDATE_WORDS: Record<LevellingCandidate, string> = {
   money: "batching for money",
@@ -488,8 +497,10 @@ export class LevellingRule {
   #settledAtGameMs: number | null = null;
   /** (a)'s last measured rate, and (b)'s last fit. */
   #money: LevellingRate | null = null;
-  /** (d)'s income (#380): measured with (a)'s rate while the batcher runs, kept while it doesn't. */
+  /** (d)'s income (#380): measured with (a)'s rate while the batcher runs, kept while it doesn't; null at 0 or less. */
   #income: number | null = null;
+  /** The game's time money began waiting for (d)'s income (#382's review), or null. */
+  #incomeAwaitedSinceGameMs: number | null = null;
   #fit: { measured: number; predicted: number; factor: number } | null = null;
   #lastAugReset: number | null = null;
   /** The first update with a medium snapshot is past (it settles too: a restarted brain's loops still land). */
@@ -526,6 +537,7 @@ export class LevellingRule {
         this.#money = null;
         this.#fit = null;
         this.#income = null;
+        this.#incomeAwaitedSinceGameMs = null;
         this.#window.clear();
         this.#settledAtGameMs = null;
       }
@@ -568,7 +580,10 @@ export class LevellingRule {
     const target = figures.target;
     if (measured !== null && batching) {
       this.#money = measured;
-      this.#income = this.#window.income() ?? this.#income;
+      // None or less is unmeasured (#382's review): the batcher earning nothing yet, or no longer (then (d) is weighed
+      // no more, its M out of reach). Unread, the last measured.
+      const income = this.#window.income();
+      if (income !== null) this.#income = income > 0 ? income : null;
     }
     if (measured !== null && this.#mode === "level" && target !== null) {
       // For the threads running (#339's re-review): the hosts' as sent, home's as the fast snapshot shows them.
@@ -599,7 +614,14 @@ export class LevellingRule {
     const onOffer =
       (inputs.neuroFluxLevels ?? 0) > 0 || (inputs.neuroFluxLevels !== null && addsToLevelling(augmentations));
     const installHeld = this.#mode === "install" && (inputs.installCommitted || onOffer);
-    const choice = installHeld ? "install" : chooseLevelling(estimates, this.#mode);
+    // Money waits for (d)'s income (#382's review), `LEVELLING_INCOME_WAIT_MS` at most from batching's rate measured.
+    const gameMs = isFiniteNumber(mediumGameTimeMs) ? mediumGameTimeMs : null;
+    const awaiting = this.#mode === "money" && batchOffer !== null && this.#money !== null && this.#income === null;
+    if (!awaiting) this.#incomeAwaitedSinceGameMs = null;
+    else if (gameMs !== null) this.#incomeAwaitedSinceGameMs ??= gameMs;
+    const waitsForIncome =
+      awaiting && gameMs !== null && gameMs - (this.#incomeAwaitedSinceGameMs ?? gameMs) < LEVELLING_INCOME_WAIT_MS;
+    const choice = installHeld ? "install" : waitsForIncome ? "money" : chooseLevelling(estimates, this.#mode);
     if (choice !== this.#mode) this.#switch(choice, inputs, estimates, figures, null, plan, batch);
     this.#view = {
       applies: true,

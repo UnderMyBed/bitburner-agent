@@ -294,7 +294,7 @@ export interface LevellingInputs {
  * - `ladder`: entry k the money the set (`augmentations`, A6's at any money that adds to levelling) and k NeuroFlux
  *   Governor levels after it cost, donations included (core's `neuroFluxLadder`); rising.
  * - `homeThreads`, `perThread`: as (c)'s. `preparationMs`: the target's preparation at the set alone's level and speed
- *   (more levels only shorten it: cautious by under its own couple of minutes).
+ *   (more levels only shorten it: cautious by a fraction of its own few minutes, 186 s on BN4.2's figures).
  */
 export interface LevellingBatchOffer {
   money: number;
@@ -428,17 +428,21 @@ export function shortestLevellingCandidate(estimates: LevellingEstimates): Level
  * times shorter than `current`'s, else `current`. With `current`'s estimate unmeasured: money (the mode a run is in as
  * the level becomes all that's left) waits for its measurement, a minute's; any other moves to the shortest.
  * From (d) (#380), once (c) is no longer than (d) the money in hand is (d)'s M or better: its plan's next step, the
- * install, with no hysteresis, as from the install (a move away from it once another is 1.25 times shorter).
+ * install, with no hysteresis, but only while (d) has an estimate and the install is the shortest of all (#382's
+ * review: a (d) gone null, its income unmeasured, is no plan to finish, and an install no shorter than another isn't
+ * worth a reset); otherwise from (d) as from any mode.
  */
 export function chooseLevelling(estimates: LevellingEstimates, current: LevellingCandidate): LevellingCandidate {
+  const best = shortestLevellingCandidate(estimates);
   if (
     current === "batch" &&
     estimates.install !== null &&
-    (estimates.batch === null || estimates.install <= estimates.batch)
+    estimates.batch !== null &&
+    estimates.install <= estimates.batch &&
+    best === "install"
   ) {
-    return chooseLevelling({ ...estimates, batch: null }, "install");
+    return "install";
   }
-  const best = shortestLevellingCandidate(estimates);
   if (best === null || best === current) return current;
   const currentSeconds = estimates[current];
   if (currentSeconds === null) return current === "money" ? current : best;

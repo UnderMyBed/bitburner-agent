@@ -45,6 +45,7 @@ import {
   describeEstimate,
   describeEstimates,
   LEVELLING_CHOSEN_EVENT_KIND,
+  LEVELLING_INCOME_WAIT_MS,
   LEVELLING_SETTLE_MS,
   type LevellingEvent,
   LevellingRateWindow,
@@ -778,6 +779,36 @@ describe("the levelling rule (#336)", () => {
     expect(events.at(-1)).toMatchObject({ from: "batch" });
   });
 
+  test("(d) (#382's review): a first minute with no income (the target preparing) keeps (d): money waits, then (d)", () => {
+    const levelling = rule();
+    const measuredMs = SETTLE_MS + MINUTE + 10 * SECOND;
+    batchFor(levelling, 0, measuredMs, { incomePerSecond: 0 });
+    expect(levelling.mode()).toBe("money");
+    // The batcher earning from 2 minutes on: the window's income above 0, (d) weighed and chosen.
+    const fromMs = measuredMs + 10 * SECOND;
+    batchFor(levelling, fromMs, 2 * MINUTE, { incomePerSecond: 1e7, expAt: (fromMs / 1000) * 10 });
+    expect(levelling.mode()).toBe("batch");
+    expect(events.map((event) => (event as unknown as LevellingEvent).mode)).toEqual(["batch"]);
+  });
+
+  test("(d) (#382's review): from levelling mode, (d) once A6's ladder comes on offer, at the income kept", () => {
+    const levelling = rule();
+    // No ladder (A6 off, say) as money measures: levelling mode, the income measured all the same.
+    const measuredMs = SETTLE_MS + MINUTE + 10 * SECOND;
+    batchFor(levelling, 0, measuredMs, { incomePerSecond: 1e7, batchOffer: null });
+    expect(levelling.mode()).toBe("level");
+    // The ladder on offer, levelling mode earning nothing: (d) at the income kept, 1.25 times shorter.
+    const plan = levelling.update(
+      inputsAt(measuredMs + 10 * SECOND, { mult: MULT, batchOffer: OFFER, expAbove: (measuredMs / 1000) * 10 + 100 }),
+    );
+    expect(plan).toEqual({ mode: "batch", levelling: null });
+    expect(events.at(-1)).toMatchObject({
+      mode: "batch",
+      from: "level",
+      batch: { incomePerSecond: expect.closeTo(1e7, -3) },
+    });
+  });
+
   test("(d) (#380): money and (d) both batch: the move between them keeps the window, the income measured on", () => {
     const levelling = rule();
     const switchedMs = SETTLE_MS + MINUTE + 10 * SECOND;
@@ -823,10 +854,23 @@ describe("the levelling rule (#336)", () => {
     batchFor(without, 0, SETTLE_MS + MINUTE + 10 * SECOND, { incomePerSecond: 1e7, batchOffer: null });
     expect(without.mode()).toBe("level");
     expect(without.view().estimates?.batch).toBeNull();
-    // No income (the money flat): none either.
+    // No income (the money flat): money waits for one (#382's review), `LEVELLING_INCOME_WAIT_MS` at most, then
+    // levelling mode with (d) none.
     events.length = 0;
     const flat = rule();
-    batchFor(flat, 0, SETTLE_MS + MINUTE + 10 * SECOND, { incomePerSecond: 0 });
+    const measuredMs = SETTLE_MS + MINUTE + 10 * SECOND;
+    batchFor(flat, 0, measuredMs, { incomePerSecond: 0 });
+    expect(flat.mode()).toBe("money");
+    expect(flat.view().estimates?.batch).toBeNull();
+    batchFor(flat, measuredMs + 10 * SECOND, LEVELLING_INCOME_WAIT_MS - 20 * SECOND, {
+      incomePerSecond: 0,
+      expAt: ((measuredMs + 10 * SECOND) / 1000) * 10,
+    });
+    expect(flat.mode()).toBe("money");
+    batchFor(flat, measuredMs + LEVELLING_INCOME_WAIT_MS, 20 * SECOND, {
+      incomePerSecond: 0,
+      expAt: ((measuredMs + LEVELLING_INCOME_WAIT_MS) / 1000) * 10,
+    });
     expect(flat.mode()).toBe("level");
     expect(flat.view().estimates?.batch).toBeNull();
     // Measured while batching, then a trickle: levelling mode, the income kept (it earns none there), so (d) still
@@ -904,17 +948,19 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
       .filter((message) => message.type === "desiredState")
       .at(-1) as unknown as DesiredState | undefined;
   /**
-   * The Agent's snapshots for 3 minutes: experience rising slowly, as batching ecorp; the first update settles, then
-   * money's rate takes a minute.
+   * The Agent's snapshots for 3 minutes: experience rising slowly, as batching ecorp, and the money a trickle ($1k a
+   * second: an income measured, so money needn't wait for one, #382's review); the first update settles, then money's
+   * rate takes a minute.
    */
   function aMinuteOf(
     connection: MemoryConnection,
-    { money = 1e6, slowData = slow(), fromMs = 1_000, level = 2000, gang = undefined as unknown } = {},
+    { money = 1e6, slowData = slow(), fromMs = 1_000, level = 2000, gang = undefined as unknown, mult = 2 } = {},
   ) {
     send(connection, "static", STATIC, fromMs);
     send(connection, "slow", slowData, fromMs);
     for (let atMs = fromMs; atMs <= fromMs + 3 * MINUTE; atMs += 10 * SECOND) {
-      send(connection, "medium", medium({ level, money, expAbove: (atMs - fromMs) / 100, gang }), atMs);
+      const now = money + (atMs - fromMs);
+      send(connection, "medium", medium({ level, money: now, expAbove: (atMs - fromMs) / 100, gang, mult }), atMs);
       if (atMs % (60 * SECOND) === 1_000) send(connection, "slow", slowData, atMs);
     }
   }
@@ -977,10 +1023,11 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     controller.subscribe((event) => events.push(event));
     const connection = connectAgent();
     // $1t buys NeuroFlux Governor's levels at CyberSec (its reputation reaches them, after its own few augmentations,
-    // the set A6 buys first): the install is the shortest.
+    // the set A6 buys first): the install is the shortest. At ×8 (#380): at ×2 every estimate is hopeless, and (d)'s
+    // 23 levels at a trickle's income beat the 14 in hand.
     const slowData = slow({ faction: "CyberSec" });
-    aMinuteOf(connection, { money: 1e12, slowData });
-    send(connection, "medium", medium({ level: 2000, money: 1e12, expAbove: 3000 }), 200 * SECOND);
+    aMinuteOf(connection, { money: 1e12, slowData, mult: 8 });
+    send(connection, "medium", medium({ level: 2000, money: 1e12, expAbove: 3000, mult: 8 }), 200 * SECOND);
     send(connection, "slow", slowData, 200 * SECOND);
     const levellingEvents = events.filter((event) => event.type === LEVELLING_CHOSEN_EVENT_KIND);
     expect(levellingEvents.at(-1)).toMatchObject({ mode: "install", neuroFluxLevels: expect.any(Number) });

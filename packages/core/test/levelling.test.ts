@@ -485,10 +485,15 @@ describe("(d): batching for the money, then the augmentations and an install (#3
     // The income fell (#380's "a drop in income re-decides"): (d) past levelling mode by 1.25 times, levelling mode.
     expect(chooseLevelling(of(1000, 100, null, 126), "batch")).toBe("level");
     expect(chooseLevelling(of(1000, 100, null, 124), "batch")).toBe("batch");
-    // From (d) to the install, another 1.25 times shorter than the install wins instead.
+    // From (d) to the install, another 1.25 times shorter than (d) wins instead.
     expect(chooseLevelling(of(1000, 40, 60, 60), "batch")).toBe("level");
-    // (d) gone: to the shortest.
+    // The install no longer than (d) but not the shortest (#382's review): no shortcut; levelling mode within 1.25
+    // times of (d), so (d) stays.
+    expect(chooseLevelling(of(1000, 55, 60, 60), "batch")).toBe("batch");
+    // (d) gone (its income unmeasured, #382's review): the shortest, never the install by the shortcut.
     expect(chooseLevelling(of(1000, 100, null, null), "batch")).toBe("level");
+    expect(chooseLevelling(of(1000, 100, 120, null), "batch")).toBe("level");
+    expect(chooseLevelling(of(1000, 130, 120, null), "batch")).toBe("install");
   });
 });
 

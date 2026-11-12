@@ -3720,6 +3720,31 @@ describe("the levelling choice (#336)", () => {
     );
   });
 
+  test("(d) and an income stall (#382's review): counted, as (d) batches and its M is out of reach without income", () => {
+    // Batching from a minute in, the money flat from then: in levelling mode not counted (above); in (d), a failure.
+    bn4Run(
+      (offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6,
+      (offsetMs) => 6e15 + Math.min(offsetMs, MINUTE) * 1e9,
+    );
+    event(MINUTE, "levellingChosen", {
+      mode: "batch",
+      from: "money",
+      estimates: { money: 8.3e6, level: 3700, install: null, batch: 2000 },
+      target: "joesguns",
+      money: { expPerSecond: 2.65e6, atLevel: 6779 },
+      factor: null,
+      neuroFluxLevels: null,
+      installAugmentations: [],
+      batch: { incomePerSecond: 1e12, ladder: [0, 1e16, 2e16], augmentations: [], levels: 1, money: 1e16 },
+      detail: "batching for money to batching for the money, then an install",
+    });
+    const { text, failures } = report();
+    expect(text).not.toContain("(levelling mode, #336: no income expected, not counted)");
+    expect(failures.filter((failure) => failure.startsWith("income stalled"))).toEqual([
+      expect.stringMatching(/^income stalled from /),
+    ]);
+  });
+
   test("(d)'s figures from the event (#380): numbers and the game's names only; a brain before #380, none", () => {
     expect(batchFiguresOf(undefined)).toBeNull();
     expect(batchFiguresOf({ incomePerSecond: 5 })).toBeNull();
