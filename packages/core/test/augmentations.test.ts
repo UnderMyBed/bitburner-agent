@@ -111,7 +111,10 @@ describe("the generated data", () => {
       DaedalusAugsRequirement: 30,
       FactionWorkRepGain: 1,
       FavorToDonateToFaction: 1,
+      WorldDaemonDifficulty: 1,
     });
+    // w0r1d_d43m0n's level over 3000 (#360): 5 in BN2, 3 in BN4, 1.5 in BN5 (`BitNode/BitNode.tsx:596`, `:660`, `:691`).
+    expect([2, 4, 5].map((n) => AUGMENTATION_BITNODE_MULTIPLIERS[n]?.WorldDaemonDifficulty)).toEqual([5, 3, 1.5]);
     // Donations' favour (#225): half in BN3, none in BN8 (`BitNode/BitNode.tsx:617`, `:782`).
     expect([3, 8].map((n) => AUGMENTATION_BITNODE_MULTIPLIERS[n]?.FavorToDonateToFaction)).toEqual([0.5, 0]);
     // Faction work's reputation (#203): the BitNodes that cut it, as the game sets them (`BitNode/BitNode.tsx`).
@@ -326,6 +329,7 @@ describe("the BitNode's multipliers, from resetInfo", () => {
       DaedalusAugsRequirement: 30,
       FactionWorkRepGain: 1,
       FavorToDonateToFaction: 0.5,
+      WorldDaemonDifficulty: 2,
     });
     expect(augmentationBitNodeMultipliers(3, { 3: 2 })).toEqual(augmentationBitNodeMultipliers(3, {}));
     // BN12 at level 3 (SF12.2): 1.02^3; another Source-File doesn't count.
@@ -335,6 +339,7 @@ describe("the BitNode's multipliers, from resetInfo", () => {
       DaedalusAugsRequirement: 31,
       FactionWorkRepGain: 1 / 1.02 ** 3,
       FavorToDonateToFaction: 1.02 ** 3,
+      WorldDaemonDifficulty: 1.02 ** 3,
     });
     expect(() => augmentationBitNodeMultipliers(16, {})).toThrow(/no BitNode 16/);
     expect(() => augmentationBitNodeMultipliers(0, {})).toThrow(/no BitNode 0/);

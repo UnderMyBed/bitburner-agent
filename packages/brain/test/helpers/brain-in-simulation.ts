@@ -124,6 +124,8 @@ export function startBrainInSimulation(
       saveBackups,
       log: (line) => logLines.push(line),
       installTiming,
+      // The destroy estimate's prior from the simulator's store (#360), as main.ts reads the brain's.
+      environment: "E1",
     });
   }
   const controller = desiredStateController;

@@ -168,7 +168,7 @@ test("augmentationsSoldBy in BN15 is the game's shop: Daedalus without The Red P
   expect(augmentationsSoldBy("Daedalus", 1, null)).toContain("The Red Pill");
 });
 
-test("the BitNode multipliers on augmentations and faction work are the engine's, every BitNode at levels 1-3, BN12 at more", async () => {
+test("the BitNode multipliers on augmentations, faction work and w0r1d_d43m0n are the engine's, every BitNode at levels 1-3, BN12 at more", async () => {
   const sim = await newGame();
   const pick = ({
     AugmentationMoneyCost,
@@ -176,12 +176,14 @@ test("the BitNode multipliers on augmentations and faction work are the engine's
     DaedalusAugsRequirement,
     FactionWorkRepGain,
     FavorToDonateToFaction,
+    WorldDaemonDifficulty,
   }: Record<string, number>) => ({
     AugmentationMoneyCost,
     AugmentationRepCost,
     DaedalusAugsRequirement,
     FactionWorkRepGain,
     FavorToDonateToFaction,
+    WorldDaemonDifficulty,
   });
   expect(Object.keys(AUGMENTATION_BITNODE_MULTIPLIERS).map(Number)).toEqual(
     Array.from({ length: BITNODE_COUNT }, (_, i) => i + 1),

@@ -66,6 +66,7 @@ import {
   TRAVEL_COST,
   type WorkConditions,
   type WorkingPerson,
+  worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import { batchesPeakGbOf, batchesUseFromPeak } from "./batches.ts";
 import { CALIBRATION, type Calibration, HACKER_FACTION_JOINS, ROOTED_WORLD_RAM_GB_BY_PORTS } from "./calibration.ts";
@@ -300,8 +301,6 @@ export function programsPrice(ports: number): number {
   return PROGRAM_PRICES.slice(0, ports + 1).reduce((sum, each) => sum + each, 0);
 }
 
-/** w0r1d_d43m0n's level: 3000 × the BitNode's `WorldDaemonDifficulty`, 1 in BN1 (`Server/ServerHelpers.ts:383-385`). */
-export const WORLD_DAEMON_HACKING = 3000;
 /** Home's RAM at a BitNode's start: 32 GB with SF1, else 8 (`Prestige.ts:254-260`). */
 export const startHomeRamGb = (sourceFile1Level: number) => (sourceFile1Level > 0 ? 32 : 8);
 /** An install puts the player in Sector-12 (`PlayerObjectGeneralMethods.ts:104`). */
@@ -319,6 +318,8 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
   const { currentNode, ownedSF } = start;
   const bitNode = augmentationBitNodeMultipliers(currentNode, ownedSF);
   const sourceFile1Level = ownedSF["1"] ?? 0;
+  // w0r1d_d43m0n's level: 3000 × the BitNode's `WorldDaemonDifficulty` (core's, #360; `Server/ServerHelpers.ts:383-385`).
+  const worldDaemonLevel = worldDaemonRequiredLevel(currentNode, ownedSF);
   const installed: Record<string, number> = { ...start.afterInstall?.installed };
   const favor = new Map<string, number>(Object.entries(start.afterInstall?.favor ?? {}));
   const cycles: ModelCycle[] = [];
@@ -418,7 +419,7 @@ export function runModel(start: ModelStart, options: ModelOptions = {}): ModelRu
       purse,
       clocks,
     });
-    if (Object.hasOwn(installed, THE_RED_PILL) && hacking >= WORLD_DAEMON_HACKING) {
+    if (Object.hasOwn(installed, THE_RED_PILL) && hacking >= worldDaemonLevel) {
       destroyedAtMs = now;
       events.push({ atMs: now, kind: "destroyed" });
       break;

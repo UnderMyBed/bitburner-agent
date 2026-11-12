@@ -11,6 +11,7 @@ import {
   hackingExpForLevel,
   installGains,
   NEUROFLUX_GOVERNOR,
+  worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import { describe, expect, test } from "vitest";
 import {
@@ -36,7 +37,6 @@ import {
   sourceFile1Bonus,
   startHomeRamGb,
   TODAYS_POLICY,
-  WORLD_DAEMON_HACKING,
 } from "../src/index.ts";
 import { fitError } from "./fit.ts";
 import { BN1_3, BN1_3_CYCLES, RUN_3_BN1_2 } from "./fixtures.ts";
@@ -446,8 +446,8 @@ describe("the model", () => {
     const redPill = run3.cycles.find((cycle) => cycle.installed.includes("The Red Pill"));
     const destroyed = run3.destroyedAtMs ?? 0;
     expect(destroyed).toBeGreaterThan(redPill?.endMs ?? Number.POSITIVE_INFINITY);
-    expect(steps.get(destroyed)?.hacking).toBeGreaterThanOrEqual(WORLD_DAEMON_HACKING);
-    expect(steps.get(destroyed - MINUTE_MS)?.hacking).toBeLessThan(WORLD_DAEMON_HACKING);
+    expect(steps.get(destroyed)?.hacking).toBeGreaterThanOrEqual(worldDaemonRequiredLevel(1, {}));
+    expect(steps.get(destroyed - MINUTE_MS)?.hacking).toBeLessThan(worldDaemonRequiredLevel(1, {}));
   });
 
   test("A6: nothing left at the joined factions installs what the money bought, short of the bars", () => {

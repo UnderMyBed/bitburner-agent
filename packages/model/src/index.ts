@@ -71,7 +71,6 @@ export {
   sourceFile1Bonus,
   startHomeRamGb,
   TODAYS_POLICY,
-  WORLD_DAEMON_HACKING,
 } from "./cycles.ts";
 export {
   backdoorMs,

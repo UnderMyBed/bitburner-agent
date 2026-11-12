@@ -5273,3 +5273,61 @@ describe("over a thinned store (#283)", () => {
     expect(thinned.text).toContain(expected);
   });
 });
+
+describe("the time to the destroy (#360)", () => {
+  /** An estimate as the brain stores it: from the count met, its D never (levelling at no rate) unless `d` is given. */
+  const estimate = (d: number | null) => ({
+    moment: "levelling",
+    stage: "levelling",
+    late: false,
+    bitNode: "BN1.1",
+    currentNode: 1,
+    lastNodeReset: T0,
+    lastAugReset: T0,
+    onlineMs: 10 * MINUTE,
+    remainingMs: d,
+    totalMs: d === null ? null : 10 * MINUTE + d,
+    atLeast: false,
+    never: d === null,
+    count: 31,
+    required: 30,
+    requiredLevel: 3000,
+    prior: null,
+    terms: [
+      { term: "A", ms: 0, never: false, atLeast: false, source: "The Red Pill installed", label: "done" },
+      { term: "BC", ms: 0, never: false, atLeast: false, source: "The Red Pill installed", label: "done" },
+      {
+        term: "D",
+        ms: d,
+        never: d === null,
+        atLeast: false,
+        source: "levelling's chosen candidate",
+        label: "either way",
+      },
+    ],
+  });
+
+  test("an estimate with a term never fails the run report; one past the time online so far is only listed", () => {
+    cleanRun();
+    event(15 * MINUTE, "destroyEstimated", estimate(null));
+    event(16 * MINUTE, "destroyEstimated", estimate(600 * MINUTE));
+    const { text, failures } = report();
+    const never = `destroy estimate never at ${at(15 * MINUTE)} (BN1.1, levelling): D: levelling's chosen candidate`;
+    expect(failures).toEqual([never]);
+    // Section 4's lines, and section 3's: each estimate listed, not in section 1's timeline.
+    expect(text).toContain(["  the time to the destroy (#360: a term never reached):", `    ${never}`].join("\n"));
+    expect(text).toContain(
+      `    ${at(16 * MINUTE)}  time to the destroy (#360), at levelling's first choice with 10 min online: 10 h 0 min to go`,
+    );
+    expect(text).not.toMatch(/^ {2}\S+ {2}destroyEstimated/m);
+  });
+
+  test("with the World Daemon's switch off, a term never is a warning", () => {
+    cleanRun();
+    event(15 * MINUTE, "destroyEstimated", estimate(null));
+    writeWorldDaemonEnabled(store, false);
+    const { failures, warnings } = report();
+    expect(failures).toEqual([]);
+    expect(warnings).toContainEqual(expect.stringMatching(/^destroy estimate never at .* so a warning\)$/));
+  });
+});
