@@ -79,6 +79,8 @@ export interface DashboardStatus {
   values: {
     money: number | null;
     hackingLevel: number | null;
+    /** Intelligence (#349), from the same snapshot's skills: 0 before BN5. */
+    intelligence: number | null;
     homeRamUsed: number | null;
     homeMaxRam: number | null;
     homeScripts: number | null;
@@ -338,6 +340,7 @@ export function buildDashboardStatus({
     values: {
       money: fast?.game?.money ?? null,
       hackingLevel: (medium?.player?.skills as { hacking?: number } | undefined)?.hacking ?? null,
+      intelligence: (medium?.player?.skills as { intelligence?: number } | undefined)?.intelligence ?? null,
       homeRamUsed: fast?.game?.homeRamUsed ?? null,
       homeMaxRam: fast?.game?.homeMaxRam ?? null,
       homeScripts: fast?.game?.homeProcesses.length ?? null,

@@ -31,6 +31,8 @@ test("1 virtual hour from BN4.1 with SF1.3: roots, batches, earns and buys throu
   const money = /^ {4}money: \$1,262 → \$([\d,]+)$/.exec(line("    money:") ?? "");
   expect(Number(money?.[1]?.replaceAll(",", ""))).toBeGreaterThan(10_000);
   expect(line("    hacking: 1 → ")).toMatch(/^ {4}hacking: 1 → \d{2,}$/);
+  // No intelligence before BN5 or SF5 (`PersonObjects/Person.ts:154`; #349): 0 throughout.
+  expect(line("    intelligence:")).toBe("    intelligence: 0 (unchanged)");
   expect(line("    the game's servers rooted:")).toMatch(/^ {4}the game's servers rooted: 0 → \d{2}$/);
   expect(line("    TOR router:")).toBe("    TOR router: no → yes");
   expect(line("    port openers:")).toMatch(/^ {4}port openers: none → BruteSSH\.exe/);
