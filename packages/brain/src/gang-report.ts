@@ -16,7 +16,11 @@
 //   (the brain's holds, as the worker was given them), not bought, for over `GANG_EQUIP_WITHIN_MS`;
 // - territory warfare (#332, G4) engaged while the rule's own measure (core's `gangWarfareMeasure`, with the members
 //   on Territory Warfare as read) says the clashes lose, or off while it says they pay, for over
-//   `GANG_WARFARE_WITHIN_MS`.
+//   `GANG_WARFARE_WITHIN_MS`;
+// - the silent stalls (#354, ./gang-stalls.ts): one of the worker's problems in every reading, a member off the rule's
+//   task, or the respect flat while the rule has members working, each for over a minute, the worker's cadence. The
+//   rule's plan for them is the brain's: its justice members kept as the brain keeps them (`placedOnJustice`, from
+//   the plan at the reading before; at the window's first, those on justice), and bonus time.
 // The gang's faction (#334, G5): its reputation and favour at the window's last slow snapshot, its reputation by hour
 // (the route's bottleneck, #335's review), the augmentations A6 bought there in the window (its `augmentationBought`
 // events), and The Red Pill's route there in BN2, with its estimate at the cycle's rate (core's `gangRedPillEtaMs`).
@@ -78,6 +82,7 @@ import {
   gangWarfareFiguresOf,
   topAscensionGain,
 } from "./gang.ts";
+import { GANG_STALL_KINDS, type GangStallStretch, GangStallWatch } from "./gang-stalls.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 
@@ -221,6 +226,11 @@ export class GangFold {
   readonly #warfareLosing = new Stretches();
   readonly #warfarePaying = new Stretches();
   readonly #deaths: Death[] = [];
+  /** The silent stalls (#354): their stretches closed, and the watch with those open. */
+  readonly #stallStretches: GangStallStretch[] = [];
+  readonly #stalls = new GangStallWatch((stretch) => this.#stallStretches.push(stretch));
+  /** The rule's justice members in its plan at the reading before, as the brain keeps them; null: none read yet. */
+  #placed: string[] | null = null;
   /** The cost multiplier at the reading before: what a purchase since cost. */
   #lastCostMult: number | null = null;
   /** Each member at the reading before, by name: its ascension points rising says it ascended. */
@@ -272,6 +282,8 @@ export class GangFold {
       ]) {
         stretches.add(atMs, null);
       }
+      this.#stalls.add(null);
+      this.#placed = null;
       this.#lastMembers = new Map();
       return;
     }
@@ -298,6 +310,9 @@ export class GangFold {
       this.#equipmentWaiting.add(atMs, null);
       this.#warfareLosing.add(atMs, null);
       this.#warfarePaying.add(atMs, null);
+      this.#stalls.add(null);
+      // The brain keeps its justice members while the gang is unread; none with none formed (../gang.ts).
+      if (snapshot.kind === "none") this.#placed = null;
       // A gang gone (another BitNode's start) has none of these members; one unread keeps them.
       if (snapshot.kind === "none") this.#lastMembers = new Map();
       return;
@@ -344,6 +359,15 @@ export class GangFold {
       softcap: gangSoftcapOf(GANG_BITNODE),
       ...(warfare === undefined ? {} : { warfare }),
     };
+    // The silent stalls (#354), on the rule's plan as the brain has it: its justice members and bonus time too.
+    const plan = planGang({
+      ...inputs,
+      placedOnJustice:
+        this.#placed ?? members.filter((member) => isGangJusticeTask(member.task)).map((each) => each.name),
+      bonusTime: gangInBonusTime(gang.bonusTimeMs),
+    });
+    this.#placed = plan.assignments.filter((each) => each.role === "justice").map((each) => each.name);
+    this.#stalls.add({ atMs, gang, members, problems, plan, softcap: inputs.softcap });
     // Territory warfare (G4): the rule's measure with the crew as read, against the flag. The measure's worth only
     // when the clashes gain territory at all: else they lose, whatever it's worth.
     if (warfare === undefined) {
@@ -584,24 +608,41 @@ export class GangFold {
     lines.push("  problems the gang worker reported, as first seen:");
     if (this.#problems.size === 0) lines.push("    none");
     for (const [problem, atMs] of this.#problems) lines.push(`    ${formatIsoTime(atMs)}: ${problem}`);
-    const judged = [
-      [this.#notFormed, GANG_FORM_WITHIN_MS, "no gang formed with a gang faction joined"],
-      [this.#recruitWaiting, GANG_RECRUIT_WITHIN_MS, "a recruit the respect allows not made"],
-      [this.#overBound, GANG_WANTED_OVER_BOUND_MS, "the wanted penalty over the rule's bound, off course,"],
+    const stalls = [...this.#stallStretches, ...this.#stalls.open()].sort((a, b) => a.fromMs - b.fromMs);
+    const judged: [readonly Stretch[], number, string][] = [
+      [this.#notFormed.all(endMs), GANG_FORM_WITHIN_MS, "no gang formed with a gang faction joined"],
+      [this.#recruitWaiting.all(endMs), GANG_RECRUIT_WITHIN_MS, "a recruit the respect allows not made"],
+      [this.#overBound.all(endMs), GANG_WANTED_OVER_BOUND_MS, "the wanted penalty over the rule's bound, off course,"],
       [
-        this.#overBoundOffJustice,
+        this.#overBoundOffJustice.all(endMs),
         GANG_WANTED_OUTCOME_MS,
         "the wanted penalty over the rule's bound with a member off justice",
       ],
-      [this.#unread, GANG_UNREAD_WITHIN_MS, "the gang unread in BN2"],
-      [this.#ascensionWaiting, GANG_ASCEND_WITHIN_MS, "an ascension the rule makes not made"],
-      [this.#equipmentWaiting, GANG_EQUIP_WITHIN_MS, "equipment the rule buys, with the money free, not bought"],
-      [this.#warfareLosing, GANG_WARFARE_WITHIN_MS, "territory warfare engaged while the rule's measure says it loses"],
-      [this.#warfarePaying, GANG_WARFARE_WITHIN_MS, "territory warfare off while the rule's measure says it pays"],
-    ] as const;
+      [this.#unread.all(endMs), GANG_UNREAD_WITHIN_MS, "the gang unread in BN2"],
+      [this.#ascensionWaiting.all(endMs), GANG_ASCEND_WITHIN_MS, "an ascension the rule makes not made"],
+      [
+        this.#equipmentWaiting.all(endMs),
+        GANG_EQUIP_WITHIN_MS,
+        "equipment the rule buys, with the money free, not bought",
+      ],
+      [
+        this.#warfareLosing.all(endMs),
+        GANG_WARFARE_WITHIN_MS,
+        "territory warfare engaged while the rule's measure says it loses",
+      ],
+      [
+        this.#warfarePaying.all(endMs),
+        GANG_WARFARE_WITHIN_MS,
+        "territory warfare off while the rule's measure says it pays",
+      ],
+      ...GANG_STALL_KINDS.map(
+        ({ kind, withinMs, what }) =>
+          [stalls.filter((each) => each.kind === kind), withinMs, what] as [readonly Stretch[], number, string],
+      ),
+    ];
     for (const [stretches, withinMs, what] of judged) {
       lines.push(`  ${what} for ${formatDuration(withinMs)} or more:`);
-      const long = stretches.all(endMs).filter((each) => each.toMs - each.fromMs >= withinMs);
+      const long = stretches.filter((each) => each.toMs - each.fromMs >= withinMs);
       if (long.length === 0) lines.push("    none");
       for (const { fromMs, toMs, detail } of long) {
         const line =

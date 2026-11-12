@@ -23,6 +23,9 @@
 // - Its shop (#334, G5): nearly every augmentation, The Red Pill too in BN2 (`Faction/FactionHelpers.tsx:172-202`,
 //   core's `augmentationsSoldBy`). A6 and A8, and the World Daemon's path, get it apart (`gangShopOf`): its reputation
 //   as the slow snapshot reports it, which the gang's respect feeds (`Gang.ts:144-155`).
+// - Its silent stalls (#354, ./gang-stalls.ts): a worker problem in every reading, a member off the rule's task, or
+//   the respect flat with members working, each for over a minute, watched on each new medium snapshot with the
+//   rule's own plan: `stalls`, the dashboard's `gangStalled` alerts (the run report judges the same).
 // - No switch (#325): in BN2 the gang is the brain's to play; the owner can move members in the game, and the brain
 //   sets them back within 10 s.
 import {
@@ -51,7 +54,6 @@ import {
   type Intent,
   intentId,
   type JoinedFaction,
-  MAX_GANG_MEMBER_NAME_LENGTH,
   type MediumSnapshotData,
   planGang,
   planGangEquipment,
@@ -59,6 +61,7 @@ import {
   TERRITORY_WARFARE_TASK,
 } from "@bitburner-agent/core";
 import type { CloudServerPurchase } from "./cloud-servers.ts";
+import { type GangStallStretch, GangStallWatch, isGangProtocolName } from "./gang-stalls.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
 /** The store's setting with the members the gang rule put on justice (#325's re-review), as a JSON list of names. */
@@ -236,8 +239,7 @@ export function gangShopOf(
   return joined.find((each) => each.name === faction) ?? null;
 }
 
-/** Whether the protocol takes `name` as a member's (core's `parseGangState`): an owner's longer name is skipped. */
-const isProtocolName = (name: string) => name !== "" && name.length <= MAX_GANG_MEMBER_NAME_LENGTH;
+const isProtocolName = isGangProtocolName;
 
 /**
  * The gang's faction carried forward within a BitNode (#325's re-review), for the reports: an Agent's first slow
@@ -485,6 +487,9 @@ export class GangRule {
   #lastMembers: { name: string; task: string }[] | null = null;
   /** The deaths seen since the brain started (G4). */
   #deaths = 0;
+  /** The silent stalls (#354), on each new medium snapshot, and the last one watched. */
+  readonly #stalls = new GangStallWatch();
+  #watched: unknown = null;
 
   /** `store`: where the rule's justice members are kept across a restart; none (the tests), in memory only. */
   constructor(log: (line: string) => void = () => {}, store: TelemetryStore | null = null) {
@@ -517,16 +522,33 @@ export class GangRule {
     return this.#holding ? GANG_FACTIONS : [];
   }
 
-  /** The decision on the latest snapshots. Null for both outside BN2: no gang is managed. */
+  /**
+   * The silent stalls (#354) at or past their bound, by the medium snapshots watched: the `gangStalled` alerts. None
+   * outside BN2, or with no gang.
+   */
+  stalls(): GangStallStretch[] {
+    return this.#stalls.stalls();
+  }
+
+  /**
+   * The decision on the latest snapshots, `mediumAtMs` when the medium one arrived (the stalls' times). Null for both
+   * outside BN2: no gang is managed.
+   */
   update({
     mediumData,
     slowData,
+    mediumAtMs = null,
   }: {
     mediumData: MediumSnapshotData | null;
     slowData: SlowSnapshotData | null;
+    mediumAtMs?: number | null;
   }): GangDecision {
+    // Each medium snapshot watched once (#354): the decision is made again on other snapshots with the same one.
+    const fresh = mediumData !== this.#watched;
+    this.#watched = mediumData;
     const bitNode = bitNodeOfSlow(slowData);
     if (bitNode !== GANG_BITNODE) {
+      this.#stalls.add(null);
       this.#faction = null;
       this.#holding = false;
       this.#setPlaced([]);
@@ -542,6 +564,7 @@ export class GangRule {
     // Managed from here on: the worker reads the gang even before one is formed.
     const read: GangState = { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null, warfare: null };
     const snapshot = gangSnapshotOf(mediumData);
+    if (snapshot.kind !== "gang") this.#stalls.add(null);
     if (snapshot.kind === "absent" || snapshot.kind === "unread") {
       this.#holding = this.#faction === null;
       const why = snapshot.kind === "unread" ? `unread: ${snapshot.problem}` : "waiting for the gang worker's reading";
@@ -586,6 +609,9 @@ export class GangRule {
     const plan = planGang(inputs);
     this.#basis = { mediumData, inputs, plan, costMult: gangEquipmentCostMultOf(gang) };
     this.#setPlaced(plan.assignments.filter((each) => each.role === "justice").map((each) => each.name));
+    if (fresh && mediumAtMs !== null) {
+      this.#stalls.add({ atMs: mediumAtMs, gang, members, problems: snapshot.problems, plan, softcap: inputs.softcap });
+    }
     const tasks: Record<string, string> = {};
     // A member the owner named past what the protocol takes is left as it is: the Agent would refuse the whole state.
     for (const { name, task } of plan.assignments) if (isProtocolName(name)) tasks[name] = task;
