@@ -1693,8 +1693,8 @@ export class DesiredStateController {
     const gangShop = gangShopOf(this.#slowSnapshot, this.#gang.gangFaction());
     // The same for the invitations' count (#335's re-review), which reads it from `#invitationInputs`.
     this.#gangShop = gangShop;
-    // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, and The Red Pill's. Not from
-    // a health gone stale, or a batcher reported not running (#226's review).
+    // The bonus of the share threads the batcher reports running (#224): A5's rate and ETA, The Red Pill's, and since
+    // #345 A6's estimates by work. Not from a health gone stale, or a batcher reported not running (#226's review).
     const shareBonus = shareBonusOf(
       this.#batcherHealth(),
       this.#fastGameTimeMs,
@@ -1722,6 +1722,7 @@ export class DesiredStateController {
       levellingInstall: this.#levelling.mode() === "install",
       // #228's invitation hold, as of the invitations rule's last update (#343: installing now held meanwhile).
       invitationHold: this.#invitations.hold(),
+      shareBonus,
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;

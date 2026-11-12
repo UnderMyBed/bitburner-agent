@@ -1068,7 +1068,7 @@ export function shareBonusOf(calibration: Calibration, installs: number): number
 /**
  * The brain's hold for Daedalus's count (#243, owner decision 56) on the model's state: core's `daedalusCountHold`,
  * the countables to come by core's `countablesToCome` over core's `augmentationShops`, A5 working for the held one.
- * The work's rate leaves the share's bonus out, as the brain's does (`workConditionsOf` without it: the safe side).
+ * The work's rate counts the cycle's share bonus (`conditions`), as the brain's counts the one it measures (#345).
  */
 export function countHoldOf({
   installed,
@@ -1113,7 +1113,7 @@ export function countHoldOf({
       shops: shops.shops,
       terms: decision.terms,
       person,
-      conditions: { ...conditions, shareBonus: 1 },
+      conditions,
       work: { owners: null, brainWorks: true },
       money,
       income,

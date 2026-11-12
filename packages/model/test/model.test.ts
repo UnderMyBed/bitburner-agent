@@ -492,7 +492,7 @@ describe("the model", () => {
     expect(decide(626e9)?.names).toContain("The Red Pill");
   });
 
-  test("#243's hold: one short of the count, the last by work at its seller within the window, at the share-less rate", () => {
+  test("#243's hold: one short of the count, the last by work at its seller within the window, at the share bonus rate (#345)", () => {
     // 28 installed (all The Black Hand sells but its own), BitWire to install: 29 of 30, one short.
     const theBlackHands = [
       "Artificial Synaptic Potentiation",
@@ -557,8 +557,12 @@ describe("the model", () => {
       });
     const held = hold(0, null);
     expect(held?.next).toMatchObject({ augmentation: "The Black Hand", faction: "The Black Hand", way: "work" });
-    // 10,000 reputation at the work's rate without the share's bonus (×1.45 would make it 1.45 times as soon).
-    const rate = factionReputationPerSecond(person, "hacking", { ...conditions, favor: 0, shareBonus: 1 });
+    // 10,000 reputation at the work's rate with the share's bonus (#345: ×1.45, so 1.45 times as soon as without).
+    const rate = factionReputationPerSecond(person, "hacking", { ...conditions, favor: 0 });
+    expect(rate).toBeCloseTo(
+      factionReputationPerSecond(person, "hacking", { ...conditions, favor: 0, shareBonus: 1 }) * 1.45,
+      9,
+    );
     expect(held?.next.etaMs).toBeCloseTo((10_000 / rate) * 1000, 3);
     // The window: 20 minutes from the first hold, never restarted.
     expect(hold(19 * 60_000, 0)).toBeNull();

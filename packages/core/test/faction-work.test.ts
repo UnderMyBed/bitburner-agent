@@ -17,6 +17,7 @@ import {
   UNFOCUSED_WORK_BONUS,
   type WorkingPerson,
 } from "../src/faction-work.ts";
+import { shareBonusOfPower } from "../src/share.ts";
 
 const source = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -222,3 +223,111 @@ test("passive reputation (#260): 1% plus a tenth of a percent a point of favour 
   expect(helpers).toContain("Math.min(0.1, faction.favor / 1000 + 0.01)");
   expect(helpers).toContain("fRep * favorMult, 1 / 120)");
 });
+
+test("the share bonus (#224, #345): 1 + ln(power)/25 multiplies hacking work's rate, and only field's hacking term", () => {
+  // `calculateShareBonus` (`NetworkShare/Share.ts:43-49`), read by each work formula (`reputation.ts`: three times).
+  expect(source("NetworkShare/Share.ts")).toContain("const bonus = 1 + Math.log(shareThreads) / 25;");
+  expect(source("PersonObjects/formulas/reputation.ts").match(/calculateCurrentShareBonus\(\)/g)).toHaveLength(3);
+  const conditions = { favor: 0, sourceFile15Level: 0, focused: true, implant: false, factionWorkRepGain: 1 };
+  // A million effective threads (BN1.2's hold ran 6.2 million): 1 + ln(1e6)/25 = 1.553.
+  const bonus = shareBonusOfPower(1e6);
+  expect(bonus).toBeCloseTo(1 + Math.log(1e6) / 25, 15);
+  const without = factionReputationPerSecond(MOVED, "hacking", conditions);
+  expect(factionReputationPerSecond(MOVED, "hacking", { ...conditions, shareBonus: 1 })).toBe(without);
+  expect(factionReputationPerSecond(MOVED, "hacking", { ...conditions, shareBonus: bonus })).toBeCloseTo(
+    without * bonus,
+    12,
+  );
+  // Field work: its (hacking + intelligence) term alone (`reputation.ts:40-52`), so less than × the bonus.
+  const field = factionReputationPerSecond(MOVED, "field", conditions);
+  const fieldShared = factionReputationPerSecond(MOVED, "field", { ...conditions, shareBonus: bonus });
+  expect(fieldShared).toBeGreaterThan(field);
+  expect(fieldShared).toBeLessThan(field * bonus);
+});
+
+/**
+ * The Red Pill holds of BN1.2, BN1.3, BN1.4 and BN4.1 (#345, the store to 2026-11-11): Daedalus's hacking work, favour
+ * 0, focused, from the hold's start (the work's choice) to the install's. The hacking level at each end; `faction_rep`,
+ * the last medium snapshot's `player.mults` at the hold's start; two share bonuses from the fast snapshots' batcher
+ * health: `share`, its mean over the hold, and `choiceShare`, the one the work's choice took (the last within 2 minutes
+ * of it; 1 in BN1.2 and BN1.3, whose logged rate is the formula's with none: no share ran yet); the BitNode's
+ * FactionWorkRepGain (0.75 in BN4, `BitNode.tsx:651`); Daedalus's reputation at each end over the online minutes
+ * taken; and the rate `factionWorkChosen` logged, to 0.1. Read from a copy of the store by #345's analysis, its
+ * queries' figures listed in #351.
+ */
+const RED_PILL_HOLDS = [
+  {
+    node: "BN1.2",
+    choiceShare: 1,
+    hacking: [2_970, 5_185],
+    factionRep: 3.221,
+    share: 1.603,
+    gain: 1,
+    rep: [28, 474_562],
+    min: 62.3,
+    logged: 49.1,
+  },
+  {
+    node: "BN1.3",
+    choiceShare: 1,
+    hacking: [2_679, 4_676],
+    factionRep: 3.041,
+    share: 1.625,
+    gain: 1,
+    rep: [24, 473_066],
+    min: 72.3,
+    logged: 41.8,
+  },
+  {
+    node: "BN1.4",
+    choiceShare: 1.555,
+    hacking: [5_569, 7_685],
+    factionRep: 4.986,
+    share: 1.615,
+    gain: 1,
+    rep: [130, 479_702],
+    min: 30.1,
+    logged: 221.4,
+  },
+  {
+    node: "BN4.1",
+    choiceShare: 1.582,
+    hacking: [2_633, 4_773],
+    factionRep: 2.913,
+    share: 1.625,
+    gain: 0.75,
+    rep: [27, 470_623],
+    min: 98.5,
+    logged: 46.7,
+  },
+] as const;
+
+test.each(RED_PILL_HOLDS)(
+  "golden (#345): $node's Red Pill hold, the formula with the share against the rate measured",
+  (hold) => {
+    const rateAt = (hacking: number, shareBonus: number) =>
+      factionReputationPerSecond(
+        {
+          skills: { hacking, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+          mults: { faction_rep: hold.factionRep },
+        },
+        "hacking",
+        { favor: 0, sourceFile15Level: 0, focused: true, implant: false, factionWorkRepGain: hold.gain, shareBonus },
+      );
+    const [fromLevel, toLevel] = hold.hacking;
+    const [fromRep, toRep] = hold.rep;
+    const measured = (toRep - fromRep) / (hold.min * 60);
+    // The measured rate lies between the formula's at the hold's first level and its last, both with the share: the
+    // level only rises over the work.
+    expect(rateAt(fromLevel, hold.share)).toBeLessThan(measured);
+    expect(rateAt(toLevel, hold.share)).toBeGreaterThan(measured);
+    // Without the share, even the last level's rate is under it: the level's rise alone can't account for it.
+    expect(rateAt(toLevel, 1)).toBeLessThan(measured);
+    // The logged rate is the formula at the first level with the bonus at the choice: in BN1.2 and BN1.3 none (no
+    // share ran yet), in BN1.4 and BN4.1 the one then, under the hold's mean.
+    expect(rateAt(fromLevel, hold.choiceShare)).toBeCloseTo(hold.logged, 1);
+    // The ETA at the first level with the hold's mean share is still too long: the level's rise, left out, is cautious for waiting.
+    const etaMinutes = (toRep - fromRep) / rateAt(fromLevel, hold.share) / 60;
+    expect(etaMinutes).toBeGreaterThan(hold.min);
+  },
+);
