@@ -4,6 +4,7 @@
  * so its names must not collide with NS function names (packages/ingame/README.md, "RAM").
  */
 import { type BatcherConfig, parseBatcherConfig } from "./batcher.ts";
+import { type BladeburnerState, parseBladeburnerState } from "./bladeburner.ts";
 import { isValidDeploymentId } from "./deploy-layout.ts";
 import { type GangState, parseGangState } from "./gang.ts";
 import { type Intent, intentId, MAX_INTENTS, parseIntentRequest } from "./intents.ts";
@@ -88,6 +89,12 @@ export interface DesiredState {
    */
   gang?: GangState | null;
   /**
+   * Bladeburner (#367): the faction to join once the rank allows, done and the rank read every 10 s by the Agent's
+   * Bladeburner worker, whose reading goes in the medium snapshot; or absent (null): none read, the worker not run (the
+   * division not joined, or home without the RAM for it). Not kept for safe mode, as the gang's isn't.
+   */
+  bladeburner?: BladeburnerState | null;
+  /**
    * Safe mode (#160, architecture §5.4): with the brain gone, the Agent keeps converging on this state, minus its
    * intents, for this long after it was last connected to the brain that sent it, at most `MAX_SAFE_MODE_TTL_MS`. Absent
    * (an older brain) or 0: it isn't kept past the brain.
@@ -143,7 +150,7 @@ export const MAX_HACK_LOOP_HOSTS = 1_000;
  * loop does. The batcher (#205) likewise: off (absent) goes as it is, stopping ours; on, it stays as last sent. So
  * turned off during a hold, nothing hacks the hosts the batcher had until the hold ends: the hack loop goes as last
  * sent, with none of them (#211's review, finding 16). No work either: the Agent leaves the work as it is (#151), nor
- * a gang (#325): the members keep their tasks.
+ * a gang (#325): the members keep their tasks; nor Bladeburner (#367).
  * `ttlMs` goes as the brain set it (#160): a held state starts nothing new, so safe mode keeping it starts nothing new
  * either.
  */
@@ -475,6 +482,8 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
       if (!batcher.ok) return { ok: false, reason: `desiredState's ${batcher.reason}` };
       const gang = parseGangState(fields.gang);
       if (!gang.ok) return { ok: false, reason: `desiredState's ${gang.reason}` };
+      const bladeburner = parseBladeburnerState(fields.bladeburner);
+      if (!bladeburner.ok) return { ok: false, reason: `desiredState's ${bladeburner.reason}` };
       const { ttlMs } = fields;
       if (ttlMs !== undefined && (!isSafeIntegerAtLeast(ttlMs, 0) || ttlMs > MAX_SAFE_MODE_TTL_MS)) {
         return { ok: false, reason: `desiredState's ttlMs is ${describeValue(ttlMs)}` };
@@ -492,6 +501,8 @@ export function parseBrainMessage(text: string): ParsedMessage<BrainMessage> {
           ...(work.message === null ? {} : { work: work.message }),
           // Absent and null are the same: no gang managed (#325).
           ...(gang.gang === null ? {} : { gang: gang.gang }),
+          // Absent and null are the same: none read (#367).
+          ...(bladeburner.bladeburner === null ? {} : { bladeburner: bladeburner.bladeburner }),
           // Absent and 0 are the same: not kept past the brain (#160).
           ...(ttlMs === undefined || ttlMs === 0 ? {} : { ttlMs }),
         },

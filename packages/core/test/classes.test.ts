@@ -23,7 +23,7 @@ function enumMembers(file: string, name: string): Record<string, string> {
   return Object.fromEntries([...body.matchAll(/^\s+(\w+) = "([^"]+)",/gm)].map((match) => [match[1], match[2]]));
 }
 
-test("CLASS_LOCATIONS are the game's universities and gyms, each with its city, kind and cost multiplier", () => {
+test("CLASS_LOCATIONS are the game's universities and gyms, each with its city, kind, and cost and experience multipliers", () => {
   const locationNames = enumMembers("Locations/Enums.ts", "LocationName");
   const cityNames = enumMembers("Locations/Enums.ts", "CityName");
   const blocks = gameSource("Locations/data/LocationsMetadata.ts").split(/\n {2}\{\n/);
@@ -34,7 +34,8 @@ test("CLASS_LOCATIONS are the game's universities and gyms, each with its city, 
       const name = locationNames[block.match(/name: LocationName\.(\w+)/)?.[1] as string];
       const city = cityNames[block.match(/city: CityName\.(\w+)/)?.[1] as string];
       const costMult = Number(block.match(/costMult: ([\d.]+)/)?.[1]);
-      return [[name, { city, kind: type === "Gym" ? "gym" : "university", costMult }]];
+      const expMult = Number(block.match(/expMult: ([\d.]+)/)?.[1]);
+      return [[name, { city, kind: type === "Gym" ? "gym" : "university", costMult, expMult }]];
     }),
   );
   expect(Object.keys(fromGame)).toHaveLength(8);

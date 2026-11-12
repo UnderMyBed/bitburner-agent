@@ -10,6 +10,7 @@ import {
 } from "../../../../../vendor/bitburner-src/src/Augmentation/AugmentationHelpers";
 import { Augmentations } from "../../../../../vendor/bitburner-src/src/Augmentation/Augmentations";
 import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
+import { currentNodeMults } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeMultipliers";
 import { getDefaultBitNodeOptions } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
 import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
 import { CompanyPositions } from "../../../../../vendor/bitburner-src/src/Company/CompanyPositions";
@@ -757,6 +758,27 @@ const effectors = {
       now === undefined
         ? `the game formed no gang with ${factionName}: not a member, or no gangs here (BN2, or SF2 with karma)`
         : `the gang is ${now}'s already: only one gang a BitNode`,
+    );
+  },
+  /**
+   * The NSA's "Apply to Bladeburner Division" (#367, `Locations/ui/SpecialLocation.tsx:54-113`): shown with access and
+   * Bladeburner on in the BitNode (`:105-110`), it takes the player in with all four combat stats at 100 (`:68-76`).
+   * The NSA is in Sector-12 (`Locations/data/LocationsMetadata.ts:317-321`): from another city it's refused, as the page
+   * can't reach it (#367's review). SF7.3's prompt over Stanek's Gift (`:77-95`) is left out: the campaign comes to BN6
+   * and BN7 without it. Done once the player is in it. Not named `joinBladeburnerDivision`, which is an NS function.
+   */
+  enlistInBladeburner(): EffectorResult {
+    if (!Player.bladeburner && Player.city !== CityName.Sector12) {
+      return result(false, `the NSA is in Sector-12, and the player is in ${Player.city} (travel there first)`);
+    }
+    if (!Player.bladeburner && Player.canAccessBladeburner() && currentNodeMults.BladeburnerRank !== 0) {
+      const { strength, defense, dexterity, agility } = Player.skills;
+      if (Math.min(strength, defense, dexterity, agility) >= 100) Player.startBladeburner();
+    }
+    return result(
+      Player.bladeburner !== null,
+      "the game didn't take the player into the Bladeburner division: a combat stat under 100, or no Bladeburner " +
+        "here (BN6, BN7, or SF6 or SF7; none in BN8)",
     );
   },
 };

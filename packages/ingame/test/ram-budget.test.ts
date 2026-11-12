@@ -10,6 +10,9 @@ import {
   BATCH_WEAKEN_SCRIPT_NAME,
   BATCHER_RAM_BUDGET_GB,
   BATCHER_SCRIPT_NAME,
+  BLADEBURNER_WORKER_NAME,
+  BLADEBURNER_WORKER_RAM_GB,
+  bladeburnerWorkerFileNames,
   freshSaveHomeWorkerFileNames,
   gangWorkerFileNames,
   HACK_LOOP_RAM_BUDGET_GB,
@@ -92,6 +95,21 @@ test("the Agent's budget plus its largest gang worker's fits BN2's home with SF1
   expect(largestGangWorkerBudget).toBe(budgets["gang.js"]);
   expect((budgets["agent.js"] as number) + largestGangWorkerBudget).toBeLessThanOrEqual(homeGb);
   expect(homeGb).toBe(32);
+});
+
+test("the Agent's budget plus its largest Bladeburner worker's fits BN6's home as the campaign enters it (#367); the reading's is core's", async () => {
+  // Bladeburner's workers run only in BN6 and BN7 for now, which the campaign comes to with SF1.3 (a 32 GB home,
+  // `Prestige.ts:246-251`), SF2.3, SF4.3 and SF5.1 (docs/synthesis.md §3). The brain runs the reading worker only once
+  // home's RAM beyond what it keeps holds core's figure for it, so that figure is the worker's.
+  const inBitNode6 = await start({
+    ...NEW_GAME,
+    fixture: { kind: "bitnode", n: 6, sourceFiles: { 1: 3, 2: 3, 4: 3, 5: 1 } },
+  });
+  const homeGb = (await inBitNode6.summary()).homeRamMax;
+  const largest = Math.max(...bladeburnerWorkerFileNames().map((fileName) => budgets[fileName] as number));
+  expect((budgets["agent.js"] as number) + largest).toBeLessThanOrEqual(homeGb);
+  expect(homeGb).toBe(32);
+  expect(budgets[BLADEBURNER_WORKER_NAME]).toBe(BLADEBURNER_WORKER_RAM_GB);
 });
 
 test("the loop's budget is core's, by which the brain counts a host's threads (#187)", () => {

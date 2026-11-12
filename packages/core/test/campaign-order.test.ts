@@ -2,7 +2,7 @@
 // with a level to gain that the brain can play, then a replay.
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
-import { bitNodeUnplayableReason } from "../src/bitnodes.ts";
+import { BITNODE_NO_WIN_ROUTE_REASON, bitNodeUnplayableReason } from "../src/bitnodes.ts";
 import {
   CAMPAIGN_ORDER,
   describeSkipped,
@@ -16,13 +16,17 @@ const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
 
 const NO_DATA = "no hacking multipliers or prices yet";
+/** BN6's and BN7's (#367): core has their tables, but no win route until Bladeburner's B6. */
+const NO_ROUTE = BITNODE_NO_WIN_ROUTE_REASON;
 /** Every BitNode the order holds that the brain can't play yet, in the order's sequence (BN2 playable since #334). */
 const UNPLAYABLE = [6, 7, 3, 9, 11, 8, 15, 10, 13, 14, 12];
+/** Why each is skipped: BN6 and BN7 for the win route (#367), the rest for core's tables. */
+const reasonOf = (bitNode: number) => (bitNode === 6 || bitNode === 7 ? NO_ROUTE : NO_DATA);
 const REPLAY =
   "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, " +
   "Source-File 4 at 3, Source-File 5 at 3), but the run";
 const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
-const skippedAll = UNPLAYABLE.map((bitNode) => ({ bitNode, reason: NO_DATA }));
+const skippedAll = UNPLAYABLE.map((bitNode) => ({ bitNode, reason: reasonOf(bitNode) }));
 /** Every BitNode playable: the order as it'll be once the brain plays them all. */
 const allPlayable = () => null;
 
@@ -81,7 +85,7 @@ test("a destroy raises its own Source-File a level, to the top but for BN12's, a
 
 test("playable: BN1, BN2, BN4 and BN5, whose hacking multipliers and prices core has; the rest say what's missing", () => {
   expect([1, 2, 4, 5].map(bitNodeUnplayableReason)).toEqual([null, null, null, null]);
-  expect(UNPLAYABLE.map(bitNodeUnplayableReason)).toEqual(UNPLAYABLE.map(() => NO_DATA));
+  expect(UNPLAYABLE.map(bitNodeUnplayableReason)).toEqual(UNPLAYABLE.map(reasonOf));
 });
 
 test.each([
@@ -105,14 +109,15 @@ test.each([
 });
 
 test("skipping: past BN2 ×3, the unplayable rows before BN5.2-3 are skipped, each said with why", () => {
-  // BN2.3 destroyed: BN6, BN7 and BN3 come first, and the brain plays none, so BN5 again, row 8's.
-  const skipped = [6, 7, 3].map((bitNode) => ({ bitNode, reason: NO_DATA }));
+  // BN2.3 destroyed: BN6, BN7 and BN3 come first, and the brain plays none, so BN5 again, row 8's. BN6 and BN7 (#367)
+  // for want of a win route only: core has their tables now.
+  const skipped = [6, 7, 3].map((bitNode) => ({ bitNode, reason: reasonOf(bitNode) }));
   expect(nextBitNodeOf({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } })).toEqual({
     bitNode: 5,
     replay: null,
     skipped,
   });
-  expect(describeSkipped(skipped)).toBe(`BN6, BN7 and BN3 skipped: ${NO_DATA}`);
+  expect(describeSkipped(skipped)).toBe(`BN6 and BN7 skipped: ${NO_ROUTE}; BN3 skipped: ${NO_DATA}`);
   // A save with SF2.3 already: BN5.1 has nothing to gain in BN2, never said as skipped.
   expect(nextBitNodeOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3, 2: 3 } })).toEqual({
     bitNode: 5,
@@ -130,7 +135,9 @@ test("skipping: past BN2 ×3, the unplayable rows before BN5.2-3 are skipped, ea
   const next = nextBitNodeOf({ currentNode: 4, ownedSF: { 1: 3, 2: 3, 4: 2 }, unplayable: noBn5 });
   expect(next.bitNode).toBe(1);
   expect(next.skipped.map((each) => each.bitNode)).toEqual([5, ...UNPLAYABLE]);
-  expect(describeSkipped(next.skipped.slice(0, 3))).toBe(`BN5 skipped: no prices yet; BN6 and BN7 skipped: ${NO_DATA}`);
+  expect(describeSkipped(next.skipped.slice(0, 3))).toBe(
+    `BN5 skipped: no prices yet; BN6 and BN7 skipped: ${NO_ROUTE}`,
+  );
   expect(describeSkipped([])).toBeNull();
 });
 
@@ -173,6 +180,6 @@ test("nothing playable left to gain: BN1 again, a replay saying why and what was
     expect(nextBitNodeOf({ currentNode, ownedSF })).toEqual({ bitNode: 1, replay: REPLAY, skipped: skippedAll });
   }
   expect(describeSkipped(skippedAll)).toBe(
-    `BN6, BN7, BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: ${NO_DATA}`,
+    `BN6 and BN7 skipped: ${NO_ROUTE}; BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: ${NO_DATA}`,
   );
 });
