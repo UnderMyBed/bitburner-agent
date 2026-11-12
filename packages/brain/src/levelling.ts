@@ -517,6 +517,12 @@ export class LevellingRule {
   #income: number | null = null;
   /** The game's time money began waiting for (d)'s income (#382's review), or null. */
   #incomeAwaitedSinceGameMs: number | null = null;
+  /**
+   * The game's time a batching mode began after one that doesn't batch (#382's re-review), or null: for
+   * `LEVELLING_INCOME_WAIT_MS` from it the window is fresh, and an income of 0 or less reads as unread, the income
+   * carried in kept (the batcher may be preparing its target, earning nothing yet).
+   */
+  #batchingSinceGameMs: number | null = null;
   #fit: { measured: number; predicted: number; factor: number } | null = null;
   #lastAugReset: number | null = null;
   /** The first update with a medium snapshot is past (it settles too: a restarted brain's loops still land). */
@@ -599,7 +605,17 @@ export class LevellingRule {
       // None or less is unmeasured (#382's review): the batcher earning nothing yet, or no longer (then (d) is weighed
       // no more, its M out of reach). Unread, the last measured.
       const income = this.#window.income();
-      if (income !== null) this.#income = income > 0 ? income : null;
+      // In a fresh window after a mode that doesn't batch (#382's re-review), none or less is unread, for
+      // `LEVELLING_INCOME_WAIT_MS` at most: levelling mode measures no income, so one lost now is lost to the install.
+      const since = this.#batchingSinceGameMs;
+      if (since !== null && isFiniteNumber(mediumGameTimeMs) && mediumGameTimeMs < since) {
+        this.#batchingSinceGameMs = mediumGameTimeMs;
+      }
+      const fresh =
+        this.#batchingSinceGameMs !== null &&
+        isFiniteNumber(mediumGameTimeMs) &&
+        mediumGameTimeMs - this.#batchingSinceGameMs < LEVELLING_INCOME_WAIT_MS;
+      if (income !== null && (income > 0 || !fresh)) this.#income = income > 0 ? income : null;
     }
     if (measured !== null && this.#mode === "level" && target !== null) {
       // For the threads running (#339's re-review): the hosts' as sent, home's as the fast snapshot shows them.
@@ -640,7 +656,12 @@ export class LevellingRule {
     const gameMs = isFiniteNumber(mediumGameTimeMs) ? mediumGameTimeMs : null;
     const awaiting = this.#mode === "money" && batchOffer !== null && this.#money !== null && this.#income === null;
     if (!awaiting) this.#incomeAwaitedSinceGameMs = null;
-    else if (gameMs !== null) this.#incomeAwaitedSinceGameMs ??= gameMs;
+    else if (gameMs !== null) {
+      // The game's clock set back (#382's re-review): the wait starts again from it, so it can't stretch.
+      if (this.#incomeAwaitedSinceGameMs === null || gameMs < this.#incomeAwaitedSinceGameMs) {
+        this.#incomeAwaitedSinceGameMs = gameMs;
+      }
+    }
     const waitsForIncome =
       awaiting && gameMs !== null && gameMs - (this.#incomeAwaitedSinceGameMs ?? gameMs) < LEVELLING_INCOME_WAIT_MS;
     const choice = installHeld ? "install" : waitsForIncome ? "money" : chooseLevelling(estimates, this.#mode);
@@ -732,6 +753,7 @@ export class LevellingRule {
       this.#settledAtGameMs = !isFiniteNumber(mediumGameTimeMs)
         ? null
         : mediumGameTimeMs + this.#settleMs(inputs, figures);
+      this.#batchingSinceGameMs = batchingMode(mode) && isFiniteNumber(mediumGameTimeMs) ? mediumGameTimeMs : null;
     }
     const detail =
       `${LEVELLING_CANDIDATE_WORDS[from]} to ${LEVELLING_CANDIDATE_WORDS[mode]}` +

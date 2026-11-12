@@ -843,6 +843,64 @@ describe("the levelling rule (#336)", () => {
     });
   });
 
+  test("(d) (#382's re-review): levelling mode to (d), an idle first minute (the target preparing), then income: (d) stays", () => {
+    const levelling = rule();
+    const measuredMs = SETTLE_MS + MINUTE + 10 * SECOND;
+    batchFor(levelling, 0, measuredMs, { incomePerSecond: 1e7, batchOffer: null });
+    expect(levelling.mode()).toBe("level");
+    const money = (measuredMs / 1000) * 1e7;
+    let atMs = measuredMs + 10 * SECOND;
+    levelling.update(
+      inputsAt(atMs, { mult: MULT, batchOffer: OFFER, money, expAbove: (measuredMs / 1000) * 10 + 100 }),
+    );
+    expect(levelling.mode()).toBe("batch");
+    // In (d), the batcher idle past its settle and a minute: a fresh window's 0 is unread, the income carried in kept.
+    atMs += 10 * SECOND;
+    const idleMs = SETTLE_MS + MINUTE + 10 * SECOND;
+    batchFor(levelling, atMs, idleMs, { incomePerSecond: 0, money, expAt: (atMs / 1000) * 10 + 200 });
+    expect(levelling.mode()).toBe("batch");
+    expect(levelling.view().estimates?.batch).not.toBeNull();
+    expect(levelling.view().lines.at(-1)).toMatch(/at \$1\.00e\+7\/s/);
+    // Then the batcher earns: (d) on, at the window's income.
+    atMs += idleMs + 10 * SECOND;
+    batchFor(levelling, atMs, 2 * MINUTE, { incomePerSecond: 1e7, money, expAt: (atMs / 1000) * 10 + 300 });
+    expect(levelling.mode()).toBe("batch");
+    expect(events.map((event) => (event as unknown as LevellingEvent).mode)).toEqual(["level", "batch"]);
+    // Idle past \`LEVELLING_INCOME_WAIT_MS\` from (d)'s start, the 0 counts: (d) none, the rest weighed.
+    const flatFrom = atMs + 2 * MINUTE + 10 * SECOND;
+    batchFor(levelling, flatFrom, LEVELLING_INCOME_WAIT_MS + 10 * MINUTE, {
+      incomePerSecond: 0,
+      money: money + 120 * 1e7,
+      expAt: (flatFrom / 1000) * 10 + 400,
+    });
+    expect(levelling.view().estimates?.batch).toBeNull();
+    expect(levelling.mode()).not.toBe("batch");
+  });
+
+  test("(d) (#382's re-review): the game's clock set back during money's wait starts it again, no longer", () => {
+    const levelling = rule();
+    const measuredMs = SETTLE_MS + MINUTE + 10 * SECOND;
+    batchFor(levelling, 0, measuredMs, { incomePerSecond: 0 });
+    expect(levelling.view()).toMatchObject({ mode: "money", waitingForIncome: true });
+    // An hour back: the wait runs from the new time, so it ends within its 5 minutes of it, not 65.
+    const back = measuredMs - 60 * MINUTE;
+    let leftMs: number | null = null;
+    for (let at = back; at <= back + 20 * MINUTE && leftMs === null; at += 10 * SECOND) {
+      levelling.update(
+        inputsAt(at, {
+          mult: MULT,
+          batchOffer: OFFER,
+          money: 0,
+          expAbove: 1e6 + (at - back) / 100,
+          levelLoop: { sent: false, homeThreads: 0 },
+        }),
+      );
+      if (levelling.mode() !== "money") leftMs = at - back;
+    }
+    expect(leftMs).not.toBeNull();
+    expect(leftMs as number).toBeLessThanOrEqual(LEVELLING_INCOME_WAIT_MS + SETTLE_MS + MINUTE + 10 * SECOND);
+  });
+
   test("(d) (#380): money and (d) both batch: the move between them keeps the window, the income measured on", () => {
     const levelling = rule();
     const switchedMs = SETTLE_MS + MINUTE + 10 * SECOND;
