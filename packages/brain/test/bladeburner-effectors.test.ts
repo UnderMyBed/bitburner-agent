@@ -2,16 +2,19 @@
 // effector and through its home worker (`join-bladeburner.js`, the NS API alone, so the `ui` backend's in any game),
 // each refusing what the game refuses (a combat stat under 100; no Bladeburner in BN1 without SF6 or SF7); and the
 // Agent's Bladeburner worker (`bladeburner.js`) reading the rank into the medium snapshot and joining the Bladeburners
-// faction at rank 25, with the medium snapshot's `inBladeburner`. The combat stats and the rank by harness edits.
+// faction at rank 25, with the medium snapshot's `inBladeburner`. The combat stats and the rank by harness edits. B3
+// (#379): the `upgradeBladeburnerSkill` intent through both backends (`bladeburner-skill.js` the ui's), each refusing
+// what the game refuses (out of the division; too few points), and the worker reading the points and the levels.
 import {
+  BLADEBURNER_SKILL_NAMES,
   type DesiredState,
   type FastSnapshotData,
   type Intent,
   type MediumSnapshotData,
   skillExpFor,
 } from "@bitburner-agent/core";
-import { expect, test } from "vitest";
-import { JOIN_BLADEBURNER_INTENT } from "../src/bladeburner.ts";
+import { describe, expect, test } from "vitest";
+import { JOIN_BLADEBURNER_INTENT, upgradeBladeburnerSkillIntent } from "../src/bladeburner.ts";
 import { type FreshGame, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 
 const freshStart = useFreshStarts();
@@ -19,7 +22,7 @@ const HACK_LOOP_OFF: DesiredState["hackLoop"] = { enabled: false, target: null, 
 const BN6 = { kind: "bitnode", n: 6, sourceFiles: { 1: 3 } } as const;
 /** Each combat stat to 100 at ×1 (core's `skillExpFor`), by the game's own gains. */
 const trained = ({ simulation }: FreshGame) => simulation.diagnostics.gainCombatExp(skillExpFor(100, 1) + 1);
-/** Trained, and home at 128 GB: room for the reading worker's 42.6 GB (#375) beside the Agent. */
+/** Trained, and home at 128 GB: room for the reading worker's 50.6 GB (#379) beside the Agent. */
 const trainedWithRoom = async (fresh: FreshGame) => {
   await trained(fresh);
   await fresh.simulation.diagnostics.setHomeRam(128);
@@ -192,5 +195,77 @@ test("the division's join (sim) from outside Sector-12: refused, as the NSA's bu
     done: false,
     backend: "sim",
     problem: "the NSA is in Sector-12, and the player is in Aevum (travel there first)",
+  });
+});
+
+describe("a skill to a level (#379): `upgradeBladeburnerSkill`", () => {
+  const OVERCLOCK_3 = upgradeBladeburnerSkillIntent("Overclock", 3);
+  /** Joined, at rank 30: 10 points. */
+  const joinedWithPoints = async (fresh: Fresh) => {
+    expect(await triedOnce(fresh, JOIN_BLADEBURNER_INTENT)).toMatchObject({ done: true });
+    await fresh.simulation.diagnostics.setBladeburnerRank(30);
+  };
+  /** The points and a skill's level, read by the owner's script. */
+  async function skillOf(fresh: Fresh, skill: string) {
+    await fresh.simulation.writeFile(
+      "home",
+      "skill.js",
+      `export async function main(ns) { ns.print("skill:" + JSON.stringify([ns.bladeburner.getSkillPoints(), ns.bladeburner.getSkillLevel(${JSON.stringify(skill)})])); }`,
+    );
+    const { pid, error } = await fresh.simulation.run("home", "skill.js");
+    expect(error).toBeUndefined();
+    await fresh.game.run(1_000);
+    const line = (await fresh.simulation.logs(pid)).find((each) => each.startsWith("skill:"));
+    return JSON.parse((line ?? "skill:null").slice(6)) as [number, number];
+  }
+
+  for (const backend of ["sim", "ui"] as const) {
+    test(`through ${backend === "sim" ? "the simulator's effector" : "its worker, the NS API as the ui backend"}: out of the division refused; bought for the game's points; again, done with none; too few, refused`, async () => {
+      const fresh = await freshStart({
+        withDesiredState: false,
+        fixture: BN6,
+        beforeAgent: async (game) => {
+          await trained(game);
+          if (backend === "ui") await withoutSimEffectors(game);
+        },
+      });
+      expect(await triedOnce(fresh, OVERCLOCK_3)).toMatchObject({
+        done: false,
+        backend,
+        problem: "not in the Bladeburner division",
+      });
+      await joinedWithPoints(fresh);
+      expect(await skillOf(fresh, "Overclock")).toEqual([10, 0]);
+      // Three levels from 0: round(3 × (3 + 1.4 × 1)) = 13 points, over the 10: refused, nothing spent.
+      expect(await triedOnce(fresh, OVERCLOCK_3)).toMatchObject({
+        done: false,
+        backend,
+        problem: "the game didn't raise Overclock from level 0 to 3: too few skill points, or past its max",
+      });
+      expect(await skillOf(fresh, "Overclock")).toEqual([10, 0]);
+      // Two: round(2 × (3 + 1.4 × 0.5)) = 7.
+      const overclock2 = upgradeBladeburnerSkillIntent("Overclock", 2);
+      expect(await triedOnce(fresh, overclock2)).toMatchObject({ done: true, backend, problem: null });
+      expect(await skillOf(fresh, "Overclock")).toEqual([3, 2]);
+      expect(await triedOnce(fresh, overclock2)).toMatchObject({ done: true, backend, problem: null });
+      expect(await skillOf(fresh, "Overclock")).toEqual([3, 2]);
+    }, 120_000);
+  }
+
+  test("the Bladeburner worker reads the points and every skill's level (#379)", async () => {
+    const fresh = await freshStart({ withDesiredState: false, fixture: BN6, beforeAgent: trainedWithRoom });
+    await joinedWithPoints(fresh);
+    expect(await triedOnce(fresh, upgradeBladeburnerSkillIntent("Cyber's Edge", 2))).toMatchObject({ done: true });
+    fresh.brain.channel.setDesiredState({
+      hackLoop: HACK_LOOP_OFF,
+      intents: [],
+      bladeburner: { joinTheFaction: false },
+    });
+    await fresh.game.runUntil(() => fresh.medium()?.bladeburner?.skillPoints !== undefined, 30_000);
+    // Cyber's Edge 2: round(2 × (1 + 3 × 0.5)) = 5 of the 10.
+    expect(fresh.medium()?.bladeburner).toMatchObject({
+      skillPoints: 5,
+      skillLevels: Object.fromEntries(BLADEBURNER_SKILL_NAMES.map((name) => [name, name === "Cyber's Edge" ? 2 : 0])),
+    });
   });
 });

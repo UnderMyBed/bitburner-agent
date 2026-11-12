@@ -12,6 +12,7 @@ import { Augmentations } from "../../../../../vendor/bitburner-src/src/Augmentat
 import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
 import { currentNodeMults } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeMultipliers";
 import { getDefaultBitNodeOptions } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
+import { BladeburnerSkillName } from "../../../../../vendor/bitburner-src/src/Bladeburner/Enums";
 import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
 import { CompanyPositions } from "../../../../../vendor/bitburner-src/src/Company/CompanyPositions";
 import { JobTracks } from "../../../../../vendor/bitburner-src/src/Company/data/JobTracks";
@@ -779,6 +780,26 @@ const effectors = {
       Player.bladeburner !== null,
       "the game didn't take the player into the Bladeburner division: a combat stat under 100, or no Bladeburner " +
         "here (BN6, BN7, or SF6 or SF7; none in BN8)",
+    );
+  },
+  /**
+   * The Skills page's "+" for a skill (#379, `Bladeburner/ui/SkillElem.tsx:30`), as many times as the levels short:
+   * `upgradeSkill` for them all at once, the game's one charge (`Bladeburner/Bladeburner.ts:198-212`, `Skill.ts:76-80`),
+   * refused with too few points or past the skill's max. Done once the skill is at `level` or over. Not named
+   * `upgradeSkill`, which is an NS function.
+   */
+  raiseBladeburnerSkill(skill: string, level: number): EffectorResult {
+    const bladeburner = Player.bladeburner;
+    if (!bladeburner) return result(false, "not in the Bladeburner division");
+    if (!Object.values(BladeburnerSkillName).includes(skill as BladeburnerSkillName)) {
+      return result(false, `no Bladeburner skill ${JSON.stringify(skill)}`);
+    }
+    const name = skill as BladeburnerSkillName;
+    const before = bladeburner.getSkillLevel(name);
+    if (before < level) bladeburner.upgradeSkill(name, level - before);
+    return result(
+      bladeburner.getSkillLevel(name) >= level,
+      `the game didn't raise ${skill} from level ${before} to ${level}: too few skill points, or past its max`,
     );
   },
 };

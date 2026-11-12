@@ -11,15 +11,18 @@
 //   (`Bladeburner.ts:178-180`): the brain holds its own meanwhile. The game refusing it (its count under 1) is a
 //   problem. None named: the game's action is left as it is.
 // - Then the rank; and in the division (B2), the stamina and its max, the bonus time, the action it found under way and
-//   the one after, and each contract's and operation's level, max level, count and the game's estimate's range there.
+//   the one after, and each contract's and operation's level, max level, count and the game's estimate's range there;
+//   and (B3, #379) the skill points unspent and each skill's level. The brain's intents buy the skills
+//   (`upgradeBladeburnerSkill`, ./bladeburner-skill.ts), not this worker.
 // RAM (`Netscript/RamCostGenerator.ts:334-376`): 4 GB each for `getRank`, `joinBladeburnerFaction`, `getStamina`,
 // `getActionEstimatedSuccessChance`, `getActionCountRemaining`, `getActionMaxLevel`, `getActionCurrentLevel`,
-// `startAction`, `setActionLevel` and `setActionAutolevel`; 1 GB for `getCurrentAction`; nothing for `inBladeburner`
-// and `getBonusTime`. The brain runs it only once home's RAM beyond what it keeps holds it (core's
+// `startAction`, `setActionLevel`, `setActionAutolevel`, `getSkillPoints` and `getSkillLevel`; 1 GB for
+// `getCurrentAction`; nothing for `inBladeburner` and `getBonusTime`. The brain runs it only once home's RAM beyond what it keeps holds it (core's
 // `bladeburnerWorkerFits`).
 import {
   BLADEBURNER_FACTION_RANK,
   BLADEBURNER_LEVELLED_ACTIONS,
+  BLADEBURNER_SKILL_NAMES,
   type BladeburnerActionOrder,
   type BladeburnerReading,
   type BladeburnerState,
@@ -28,6 +31,7 @@ import type { NS } from "../ns.ts";
 
 type ActionType = Parameters<NS["bladeburner"]["startAction"]>[0];
 type ActionName = Parameters<NS["bladeburner"]["startAction"]>[1];
+type SkillName = Parameters<NS["bladeburner"]["getSkillLevel"]>[0];
 
 /** The action under way, as type and name, or null idle. */
 function currentOf(ns: NS): { type: string; name: string } | null {
@@ -89,5 +93,9 @@ export function bladeburnerReading(ns: NS, state: BladeburnerState): Bladeburner
         chance: [low, high],
       };
     }),
+    skillPoints: ns.bladeburner.getSkillPoints(),
+    skillLevels: Object.fromEntries(
+      BLADEBURNER_SKILL_NAMES.map((name) => [name, ns.bladeburner.getSkillLevel(name as SkillName)]),
+    ),
   };
 }

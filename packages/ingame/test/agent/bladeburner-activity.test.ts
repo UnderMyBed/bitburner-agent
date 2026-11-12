@@ -1,10 +1,11 @@
 // The Agent's Bladeburner activity (#367): the worker run on the brain's state when it changes and every 10 s, its
 // reading kept for the medium snapshot, nothing with none asked for; and the workers themselves on a stand-in NS: the
-// division's join, and the reading with the faction's and (#375) the action's. The simulator runs the real ones
+// division's join, the reading with the faction's and (#375) the action's, and (#379) a skill raised to a level. The simulator runs the real ones
 // (packages/brain/test/bladeburner-effectors.test.ts).
 import {
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_READING_SECONDS,
+  BLADEBURNER_SKILL_NAMES,
   BLADEBURNER_WORKER_NAME,
   type BladeburnerState,
   deployedFilePath,
@@ -16,6 +17,7 @@ import { SNAPSHOT_ROUND_MS } from "../../src/agent/snapshotter.ts";
 import type { NS } from "../../src/ns.ts";
 import { bladeburnerDivisionJoin } from "../../src/workers/bladeburner-division.ts";
 import { bladeburnerReading } from "../../src/workers/bladeburner-reading.ts";
+import { bladeburnerSkillRaise } from "../../src/workers/bladeburner-skill.ts";
 
 function activity() {
   const runs: BladeburnerState[] = [];
@@ -103,6 +105,8 @@ function standIn({
   levels = {} as Record<string, number>,
   maxLevels = {} as Record<string, number>,
   starts = true,
+  points = 0,
+  skills = {} as Record<string, number>,
 } = {}) {
   const calls: string[] = [];
   let joined = inDivision;
@@ -139,6 +143,16 @@ function standIn({
         return joins;
       },
       getRank: () => rank,
+      getSkillPoints: () => points,
+      getSkillLevel: (name: string) => skills[name] ?? 0,
+      upgradeSkill: (name: string, count: number) => {
+        calls.push(`upgradeSkill(${name}, ${count})`);
+        // Each level 2 points, for the stand-in.
+        if (2 * count > points) return false;
+        points -= 2 * count;
+        skills[name] = (skills[name] ?? 0) + count;
+        return true;
+      },
     },
   } as unknown as NS;
   return { ns, calls };
@@ -211,6 +225,9 @@ test("bladeburner.js's action (#375): the level held, started unless under way; 
       count: 10,
       chance: [0.4, 0.5],
     })),
+    // B3 (#379): the points, and every skill's level.
+    skillPoints: 0,
+    skillLevels: Object.fromEntries(BLADEBURNER_SKILL_NAMES.map((name) => [name, 0])),
   });
   // Under way at its level: nothing started again, the level not set again.
   const again = standIn({ inDivision: true, current: tracking, levels: { Tracking: 2 }, maxLevels: { Tracking: 3 } });
@@ -245,4 +262,35 @@ test("bladeburner.js's action (#375): the level held, started unless under way; 
   const none = standIn({ inDivision: true, current: tracking });
   expect(bladeburnerReading(none.ns, { joinTheFaction: false })).toMatchObject({ found: tracking, current: tracking });
   expect(none.calls).toEqual([]);
+});
+
+test("bladeburner-skill.js (#379): at the level or over, done with nothing bought; else the levels short in one call; refusals", () => {
+  const at = standIn({ inDivision: true, points: 10, skills: { Overclock: 3 } });
+  expect(bladeburnerSkillRaise(at.ns, "Overclock", 3)).toEqual({ done: true, problem: null });
+  expect(bladeburnerSkillRaise(at.ns, "Overclock", 2)).toEqual({ done: true, problem: null });
+  expect(at.calls).toEqual([]);
+  const short = standIn({ inDivision: true, points: 10, skills: { Overclock: 1 } });
+  expect(bladeburnerSkillRaise(short.ns, "Overclock", 4)).toEqual({ done: true, problem: null });
+  expect(short.calls).toEqual(["upgradeSkill(Overclock, 3)"]);
+  const poor = standIn({ inDivision: true, points: 3 });
+  expect(bladeburnerSkillRaise(poor.ns, "Cloak", 2)).toEqual({
+    done: false,
+    problem: "the game didn't raise Cloak from level 0 to 2: too few skill points, or past its max",
+  });
+  const out = standIn({ points: 10 });
+  expect(bladeburnerSkillRaise(out.ns, "Cloak", 1)).toEqual({
+    done: false,
+    problem: "not in the Bladeburner division",
+  });
+  expect(out.calls).toEqual([]);
+  for (const [skill, level] of [
+    ["Overclocked", 1],
+    ["Cloak", 0],
+    ["Cloak", 1.5],
+  ] as const) {
+    expect(bladeburnerSkillRaise(standIn({ inDivision: true }).ns, skill, level)).toEqual({
+      done: false,
+      problem: `no Bladeburner skill ${JSON.stringify(skill)} at level ${level} to raise`,
+    });
+  }
 });

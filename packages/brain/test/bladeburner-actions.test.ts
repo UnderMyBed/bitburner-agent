@@ -229,7 +229,7 @@ describe("the rule (#375)", () => {
     ]) {
       expect(bladeburnerSnapshotOf(medium(bad)).reading).toEqual({
         kind: "unread",
-        problem: "the Bladeburner reading's stamina or actions aren't figures",
+        problem: "the Bladeburner reading's stamina, actions or skills aren't figures",
       });
     }
   });

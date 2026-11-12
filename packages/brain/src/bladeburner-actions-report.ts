@@ -15,6 +15,10 @@
 //   that the forecast counts in part. The low end is the game's lowest chance (`Actions/Action.ts:144-167`: never above
 //   the real one), so a rank under the bound is the rule or the formulas wrong, not luck. Rank lost below 0 isn't
 //   (`:1271-1274`): it only lifts the rank measured.
+// - **By action** (#381's review): each action's own forecast, measured rank and bound, as the whole's (its own
+//   Bernstein margin at the same α, its own cuts), with its attempts (a contract's or operation's count's fall, its mean
+//   growth added back) and successes (the rank over a success's gain and a failure's loss): estimates, shown, not
+//   judged. So a rare, rich action's luck (Raid's 0 of 5 at a 5.5% low end, chance 0.75) is seen apart from the rest.
 // - **A stop:** the action under way at one reading, and none found under way at the next (the worker reads before
 //   it acts). At a stamina under that action's cost an attempt and the regain over the interval (#377's review: bonus
 //   time's regain is five times the real seconds'), the stamina went to 0 (`Bladeburner.ts:1370-1374`), a failure; with
@@ -35,6 +39,12 @@
 //   all it gains then; the time and that rank are shown, the trade the planner's.
 // - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings): its cycle's rank a
 //   second, shown beside the rank measured over the readings; not judged, as a window cuts the cycle anywhere.
+// - **The skills** (B3, #379): the levels read are in the game's range read, and core's time and regain take them, so
+//   the forecast is the game's with them. Shown: the levels bought over the window, the points unspent and the rule's
+//   plan at the last reading, and its forecast there beside B2's at no skills. **Points unspent:** the rule's plan
+//   (core's `chooseBladeburnerSkills` on each reading) with levels to buy, and the levels not moving, for longer than
+//   `BLADEBURNER_SKILLS_WITHIN_MS`, is a failure: the brain sends the intents at the reading that shows the points, so
+//   the next reading shows them spent. A gap in the readings or an install ends the stretch, as stuck resting's.
 // - Left out, and labelled: the counts' growth (random, `:1388-1393`); a stretch's readings more than
 //   `BLADEBURNER_GAP_MS` apart split it (the snapshots missing: what ran meanwhile isn't known).
 import {
@@ -47,18 +57,33 @@ import {
   BLADEBURNER_READING_SECONDS,
   BLADEBURNER_REST_SECONDS,
   type BladeburnerActionPlan,
+  type BladeburnerForecastInput,
+  type BladeburnerLevelledAction,
   type BladeburnerPerson,
+  type BladeburnerSkillLevels,
+  type BladeburnerSkillMults,
+  type BladeburnerSkillPlan,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
+  bladeburnerSkillCostMultiplierOf,
+  bladeburnerSkillMultsOf,
   chooseBladeburnerAction,
+  chooseBladeburnerSkills,
+  countGrowthPerSecond,
   FIELD_ANALYSIS,
   fieldAnalysisRank,
+  INTENT_RETRY_ROUNDS,
   type MediumSnapshotData,
   REGENERATION_CHAMBER,
   staminaGainPerSecond,
 } from "@bitburner-agent/core";
-import { type BladeburnerActionId, type BladeburnerActionsReading, bladeburnerSpeedOf } from "./bladeburner.ts";
+import {
+  type BladeburnerActionId,
+  type BladeburnerActionsReading,
+  bladeburnerSpeedOf,
+  describeSkillPlan,
+} from "./bladeburner.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 
 /**
@@ -71,6 +96,14 @@ export const BLADEBURNER_RANK_ALPHA = 0.001;
 export const BLADEBURNER_GAP_MS = 3 * BLADEBURNER_READING_SECONDS * 1000;
 /** Stuck resting's slack beyond twice the rule's time to the max: 10 minutes, as #343's waits. */
 export const BLADEBURNER_REST_SLACK_MS = 10 * 60_000;
+/**
+ * How long the skills' plan may have levels to buy with none bought (#379): 52 s, from the reading cadence. The brain
+ * sends the intents at the medium snapshot that shows the points; the Agent runs them in its next round (2 s), its
+ * Bladeburner worker reads within 10 s (`BLADEBURNER_READING_SECONDS`), and the medium snapshot after carries that
+ * within 10 s more: two readings and a round. A try that fails goes again 30 s later (`INTENT_RETRY_ROUNDS`).
+ */
+export const BLADEBURNER_SKILLS_WITHIN_MS =
+  2 * BLADEBURNER_READING_SECONDS * 1000 + 2_000 + INTENT_RETRY_ROUNDS * 2_000;
 /** The hospital's bill an HP (`Constants.ts`: `HospitalCostPerHp: 100e3`). */
 const HOSPITAL_COST_PER_HP = 100e3;
 
@@ -96,6 +129,11 @@ interface Kept {
   reading: BladeburnerActionsReading;
   person: BladeburnerPerson;
   rankMultiplier: number;
+  /** The BitNode's `BladeburnerSkillCost` (#379). */
+  costMultiplier: number;
+  /** The skill levels read (#379), and their multipliers: none from a B2 Agent. */
+  levels: BladeburnerSkillLevels;
+  mults: BladeburnerSkillMults;
   money: number | null;
   hp: { current: number; max: number } | null;
   /** The cycle's install (the slow snapshot's `lastAugReset`), or null. */
@@ -105,6 +143,8 @@ interface Kept {
 /** The action under way at `kept`, as the forecast takes it: an attempt's figures, or a rest's rank a second. */
 interface Running {
   name: string;
+  /** The action's own name, its level aside (#381's review: the lines by action). */
+  action: string;
   /** A rest (Field Analysis, the Chamber, Training), not a contract or operation. */
   resting: boolean;
   /** Rank a game second, its mean (a contract's or operation's attempts, or Field Analysis's). */
@@ -121,6 +161,10 @@ interface Running {
     stamina: number;
     hpLoss: number;
     chance: number;
+    /** A success's rank and a failure's loss, their means; the action, for its count's growth. */
+    gain: number;
+    loss: number;
+    levelled: BladeburnerLevelledAction;
   } | null;
 }
 
@@ -137,6 +181,7 @@ function runningOf(kept: Kept): Running | null {
     const gain = fieldAnalysis ? fieldAnalysisRank(kept.rankMultiplier) : 0;
     return {
       name: current.name,
+      action: current.name,
       resting: true,
       rate: fieldAnalysis ? gain / BLADEBURNER_REST_SECONDS[FIELD_ANALYSIS] : 0,
       cut: gain,
@@ -146,14 +191,15 @@ function runningOf(kept: Kept): Running | null {
   const action = bladeburnerLevelledAction(current.type, current.name);
   const read = kept.reading.actions.find((each) => each.type === current.type && each.name === current.name);
   if (action === null || read === undefined)
-    return { name: current.name, resting: false, rate: 0, cut: 0, attempt: null };
-  const seconds = actionSeconds(action, read.level, kept.person);
+    return { name: current.name, action: current.name, resting: false, rate: 0, cut: 0, attempt: null };
+  const seconds = actionSeconds(action, read.level, kept.person, kept.mults);
   const chance = read.chance[0];
   const gain = actionRankGain(action, read.level, kept.rankMultiplier);
   const loss = actionRankLoss(action, read.level);
   const { mean, variance } = attemptRankMoments(chance, gain, loss);
   return {
     name: `${current.name} level ${read.level}`,
+    action: current.name,
     resting: false,
     rate: mean / seconds,
     cut: chance * gain,
@@ -165,8 +211,27 @@ function runningOf(kept: Kept): Running | null {
       stamina: actionStaminaCost(action, read.level),
       hpLoss: actionHpLoss(action, read.level),
       chance,
+      gain,
+      loss,
+      levelled: action,
     },
   };
+}
+
+/**
+ * One action's own forecast and rank over the window (#381's review), as the whole's: its intervals, attempts (a
+ * contract's or operation's count's fall, its mean growth added back; a rest's time over its 30 s), successes (the rank
+ * over a success's gain and a failure's loss, each interval's: an estimate, as the ±10% and a cut attempt blur it), the
+ * rank measured and forecast, the forecast's variance, how far under its mean an attempt can go, and its cuts.
+ */
+interface ByAction {
+  attempts: number;
+  successes: number;
+  measured: number;
+  expected: number;
+  variance: number;
+  below: number;
+  cuts: number;
 }
 
 /** A stretch resting while the plan has work: from, to, and its bound (twice the time to the max, and the slack). */
@@ -176,6 +241,21 @@ interface Resting {
   boundMs: number;
   detail: string;
 }
+
+/** A stretch of readings with the skills' plan buying and the levels as at its start (#379). */
+interface Unspent {
+  fromMs: number;
+  toMs: number;
+  levels: string;
+  detail: string;
+}
+
+/** "Overclock 3, Cyber's Edge 1": the levels over 0, or "none". */
+const levelsText = (levels: BladeburnerSkillLevels) =>
+  Object.entries(levels)
+    .filter(([, level]) => (level ?? 0) > 0)
+    .map(([name, level]) => `${name} ${level}`)
+    .join(", ") || "none";
 
 /** The actions over a window, folded from the medium snapshots in the division, in order. */
 export class BladeburnerActionsFold {
@@ -192,6 +272,8 @@ export class BladeburnerActionsFold {
   #hpLost = 0;
   #gameSeconds = 0;
   readonly #byAction = new Map<string, number>();
+  /** Each action's own figures (#381's review), by its name. */
+  readonly #perAction = new Map<string, ByAction>();
   #actingMs = 0;
   #restingMs = 0;
   #restingRank = 0;
@@ -201,6 +283,11 @@ export class BladeburnerActionsFold {
   readonly #resting: Resting[] = [];
   #restingOpen: Resting | null = null;
   #firstPlan: BladeburnerActionPlan | null = null;
+  /** The skills (#379): the first and last readings with them, the last plan, and the stretches with points unspent. */
+  #skillsFirst: Kept | null = null;
+  #skillsLast: { kept: Kept; points: number; plan: BladeburnerSkillPlan } | null = null;
+  readonly #unspent: Unspent[] = [];
+  #unspentOpen: Unspent | null = null;
 
   /** A medium snapshot in the division with B2's reading (`reading`), in BN6 or BN7 (`bitNode`). */
   add(
@@ -213,15 +300,20 @@ export class BladeburnerActionsFold {
   ): void {
     const person = bladeburnerPersonOf(data.player);
     const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
-    if (person === null || rankMultiplier === null) return;
+    const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode);
+    if (person === null || rankMultiplier === null || costMultiplier === null) return;
     const player = data.player as { money?: unknown; hp?: { current?: unknown; max?: unknown } } | undefined;
     const hp = player?.hp;
+    const levels = reading.skills?.levels ?? {};
     const kept: Kept = {
       atMs,
       rank,
       reading,
       person,
       rankMultiplier,
+      costMultiplier,
+      levels,
+      mults: bladeburnerSkillMultsOf(levels),
       money: isNumber(player?.money) ? player.money : null,
       hp: isNumber(hp?.current) && isNumber(hp?.max) ? { current: hp.current, max: hp.max } : null,
       lastAugReset,
@@ -243,9 +335,10 @@ export class BladeburnerActionsFold {
     const broken =
       previous === null || atMs - previous.atMs > BLADEBURNER_GAP_MS || previous.lastAugReset !== lastAugReset;
     this.#watchResting(atMs, kept, plan, running, broken);
+    this.#watchSkills(atMs, kept, broken);
     if (broken) {
       // A stretch begins: the last one's end cut (the window's last, in `section`), and none to place yet here.
-      if (previous !== null) this.#allowance += runningOf(previous)?.cut ?? 0;
+      if (previous !== null) this.#cut(runningOf(previous));
       this.#stretches += 1;
       return;
     }
@@ -256,6 +349,7 @@ export class BladeburnerActionsFold {
     this.#measured += rank - previous.rank;
     const name = before?.name ?? "idle";
     this.#byAction.set(name, (this.#byAction.get(name) ?? 0) + intervalMs);
+    if (before !== null) this.#addByAction(before, previous, kept, seconds);
     if (before !== null) {
       this.#actingMs += intervalMs;
       if (before.resting) {
@@ -276,7 +370,7 @@ export class BladeburnerActionsFold {
     if (!sameAction(wasRunning, reading.current) || !sameAction(wasRunning, reading.found)) {
       if (wasRunning !== null || reading.current !== null) {
         this.#switches += 1;
-        this.#allowance += before?.cut ?? 0;
+        this.#cut(before);
       }
     }
     // A stop: under way at the last reading, none found now.
@@ -285,7 +379,8 @@ export class BladeburnerActionsFold {
       // The stamina an attempt could leave and still have stopped it: its cost, and the regain since (at most the
       // interval's game seconds of it).
       const cost = before?.attempt?.stamina ?? 0;
-      const regained = staminaGainPerSecond(previous.person, previous.reading.maxStamina) * Math.max(0, seconds);
+      const regained =
+        staminaGainPerSecond(previous.person, previous.reading.maxStamina, previous.mults) * Math.max(0, seconds);
       const cause =
         before?.attempt != null && reading.stamina < cost + regained
           ? "stamina"
@@ -313,6 +408,50 @@ export class BladeburnerActionsFold {
     }
   }
 
+  #byActionOf(name: string): ByAction {
+    let found = this.#perAction.get(name);
+    if (found === undefined) {
+      found = { attempts: 0, successes: 0, measured: 0, expected: 0, variance: 0, below: 0, cuts: 0 };
+      this.#perAction.set(name, found);
+    }
+    return found;
+  }
+
+  /** An attempt cut short (a switch, a stretch's end): the whole's allowance and its action's. */
+  #cut(running: Running | null): void {
+    this.#allowance += running?.cut ?? 0;
+    if (running !== null) this.#byActionOf(running.action).cuts += running.cut;
+  }
+
+  /** An interval's figures for the action under way at its start (#381's review). */
+  #addByAction(running: Running, previous: Kept, kept: Kept, seconds: number): void {
+    const each = this.#byActionOf(running.action);
+    const rank = kept.rank - previous.rank;
+    each.measured += rank;
+    const attempt = running.attempt;
+    if (attempt === null) {
+      each.expected += running.rate * seconds;
+      // Field Analysis always succeeds (`Bladeburner.ts:1136-1140`); the other rests gain no rank.
+      if (running.action === FIELD_ANALYSIS) {
+        each.attempts += seconds / BLADEBURNER_REST_SECONDS[FIELD_ANALYSIS];
+        each.successes += seconds / BLADEBURNER_REST_SECONDS[FIELD_ANALYSIS];
+      }
+      return;
+    }
+    const attempts = seconds / attempt.seconds;
+    each.expected += attempts * attempt.mean;
+    each.variance += attempts * attempt.variance;
+    each.below = Math.max(each.below, attempt.below);
+    const id = (read: { type: string; name: string }) =>
+      read.type === attempt.levelled.type && read.name === attempt.levelled.name;
+    const before = previous.reading.actions.find(id);
+    const after = kept.reading.actions.find(id);
+    if (before === undefined || after === undefined) return;
+    const fell = Math.max(0, before.count - after.count + countGrowthPerSecond(attempt.levelled) * seconds);
+    each.attempts += fell;
+    each.successes += Math.min(fell, Math.max(0, (rank + fell * attempt.loss) / (attempt.gain + attempt.loss)));
+  }
+
   /** Stuck resting: the plan has work and a rest is under way; each stretch's bound from its first reading. */
   #watchResting(atMs: number, kept: Kept, plan: BladeburnerActionPlan, running: Running | null, broken: boolean): void {
     const stuck = plan.work !== null && running?.resting === true;
@@ -338,15 +477,91 @@ export class BladeburnerActionsFold {
     };
   }
 
-  #plan(kept: Kept): BladeburnerActionPlan {
-    return chooseBladeburnerAction({
+  /**
+   * The skills (#379): the plan on each reading with them; points unspent while it buys and the levels stay as at the
+   * stretch's start, which a gap or an install ends.
+   */
+  #watchSkills(atMs: number, kept: Kept, broken: boolean): void {
+    const skills = kept.reading.skills;
+    const plan =
+      skills === null
+        ? null
+        : chooseBladeburnerSkills(this.#forecastInput(kept), {
+            levels: kept.levels,
+            points: skills.points,
+            costMultiplier: kept.costMultiplier,
+          });
+    const levels = JSON.stringify(kept.levels);
+    const unspent = plan !== null && plan.buys.length > 0;
+    const open = this.#unspentOpen;
+    if (open !== null && (!unspent || broken || open.levels !== levels)) {
+      this.#unspent.push(open);
+      this.#unspentOpen = null;
+    }
+    if (skills === null || plan === null) return;
+    if (this.#skillsFirst === null) this.#skillsFirst = kept;
+    this.#skillsLast = { kept, points: skills.points, plan };
+    if (!unspent) return;
+    if (this.#unspentOpen !== null) {
+      this.#unspentOpen.toMs = atMs;
+      return;
+    }
+    this.#unspentOpen = {
+      fromMs: atMs,
+      toMs: atMs,
+      levels,
+      detail: `${describeSkillPlan(plan, kept.levels, kept.costMultiplier)}; the levels ${levelsText(kept.levels)}`,
+    };
+  }
+
+  #forecastInput(kept: Kept): BladeburnerForecastInput {
+    return {
       readings: kept.reading.actions,
       person: kept.person,
       stamina: kept.reading.stamina,
       maxStamina: kept.reading.maxStamina,
       rankMultiplier: kept.rankMultiplier,
       speed: bladeburnerSpeedOf(kept.reading.bonusSeconds),
-    });
+    };
+  }
+
+  #plan(kept: Kept): BladeburnerActionPlan {
+    return chooseBladeburnerAction({ ...this.#forecastInput(kept), skills: { read: kept.levels } });
+  }
+
+  /** The skills' lines (#379), its failures added to `failures`. */
+  #skillsSection(failures: string[]): string[] {
+    const first = this.#skillsFirst;
+    const last = this.#skillsLast;
+    if (first === null || last === null) return ["  the skills (#379): no reading with them (an older Agent's)"];
+    const perMinute = (perSecond: number) => `${(perSecond * 60).toFixed(3)} rank/min`;
+    const bought = Object.entries(last.kept.levels)
+      .filter(([name, level]) => (level ?? 0) > (first.levels[name as keyof BladeburnerSkillLevels] ?? 0))
+      .map(([name, level]) => `${name} ${first.levels[name as keyof BladeburnerSkillLevels] ?? 0} → ${level}`);
+    const withSkills = this.#plan(last.kept).rankPerSecond;
+    const without = chooseBladeburnerAction({
+      ...this.#forecastInput(last.kept),
+      skills: { read: last.kept.levels, planned: {} },
+    }).rankPerSecond;
+    const lines = [
+      `  the skills (#379): bought over the window: ${bought.length === 0 ? "none" : bought.join(", ")}; at the last ` +
+        `reading, ${formatIsoTime(last.kept.atMs)}: ${describeSkillPlan(last.plan, last.kept.levels, last.kept.costMultiplier)}`,
+      `    the rule's forecast there: ${perMinute(withSkills)} with the levels read (${levelsText(last.kept.levels)}); ` +
+        `${perMinute(without)} with none (B2's)`,
+    ];
+    lines.push(`  skill points unspent with a level to buy, past ${formatDuration(BLADEBURNER_SKILLS_WITHIN_MS)}:`);
+    const long = [...this.#unspent, ...(this.#unspentOpen === null ? [] : [this.#unspentOpen])].filter(
+      (each) => each.toMs - each.fromMs > BLADEBURNER_SKILLS_WITHIN_MS,
+    );
+    if (long.length === 0) lines.push("    none");
+    for (const each of long) {
+      const line =
+        `skill points unspent with a level to buy from ${formatIsoTime(each.fromMs)} to ${formatIsoTime(each.toMs)}, ` +
+        `for ${formatDuration(each.toMs - each.fromMs)} (${each.detail})`;
+      lines.push(`    ${line}`);
+      failures.push(line);
+    }
+    return lines;
   }
 
   /** The actions' lines, its failures added to `failures`; none without a reading. */
@@ -394,6 +609,7 @@ export class BladeburnerActionsFold {
     const margin = bernsteinMargin(this.#variance, this.#below, BLADEBURNER_RANK_ALPHA);
     // The last stretch's end, with the others' ends and the switches.
     const allowance = this.#allowance + (runningOf(last)?.cut ?? 0);
+    const lastCut = runningOf(last);
     const bound = this.#expected - margin - allowance;
     lines.push(
       `    rank from the actions run: ${this.#measured.toFixed(2)} measured against ${this.#expected.toFixed(2)} ` +
@@ -402,6 +618,20 @@ export class BladeburnerActionsFold {
         `${this.#switches} switch${this.#switches === 1 ? "" : "es"} and the stretches' ends; over ` +
         `${formatDuration(this.#gameSeconds * 1000)} of game time`,
     );
+    lines.push(
+      `    by action, each judged as the whole (#381's review; attempts from its count's fall, successes from its rank: ` +
+        "estimates):",
+    );
+    for (const [name, each] of [...this.#perAction].sort((a, b) => b[1].expected - a[1].expected)) {
+      const cuts = each.cuts + (lastCut?.action === name ? lastCut.cut : 0);
+      const own = each.expected - bernsteinMargin(each.variance, each.below, BLADEBURNER_RANK_ALPHA) - cuts;
+      lines.push(
+        `      ${name}: about ${Math.round(each.attempts)} attempts, ${Math.round(each.successes)} successes; ` +
+          `${each.measured.toFixed(2)} measured against ${each.expected.toFixed(2)} forecast (σ ` +
+          `${Math.sqrt(each.variance).toFixed(2)}, at most ${each.below.toFixed(2)} under an attempt's mean, cuts ` +
+          `${cuts.toFixed(2)}), its own bound ${own.toFixed(2)}`,
+      );
+    }
     const bills = this.#visits.reduce((total, each) => total + each.leastBill, 0);
     const maxHp = last.hp?.max;
     lines.push(
@@ -448,6 +678,7 @@ export class BladeburnerActionsFold {
       lines.push(`    ${line}`);
       failures.push(line);
     }
+    lines.push(...this.#skillsSection(failures));
     return lines;
   }
 }

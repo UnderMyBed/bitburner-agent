@@ -9,6 +9,7 @@
 import { AUGMENTATION_NAMES, NEUROFLUX_GOVERNOR } from "./augmentations.ts";
 import { isServerHostname } from "./backdoors.ts";
 import { BITNODE_COUNT, isBitNodeNumber } from "./bitnodes.ts";
+import { bladeburnerSkill } from "./bladeburner-skills.ts";
 import {
   CLOUD_SERVER_MAX_RAM,
   isCloudServerHostname,
@@ -63,7 +64,13 @@ export type IntentRequest =
    * Joins the Bladeburner division (#367), its combat stats at 100: irreversible for the BitNode (an install keeps it,
    * `Prestige.ts:155-158`), so it goes through the gate. Done once the game shows the player in it (`inBladeburner`).
    */
-  | { action: "joinBladeburnerDivision"; args: Record<string, never> };
+  | { action: "joinBladeburnerDivision"; args: Record<string, never> }
+  /**
+   * Raises the Bladeburner skill `skill` to `level` (#379), with the points it costs: not gated, as a skill can't be
+   * lost (an install keeps them, `Prestige.ts:155-158`). Done once the game shows the skill at `level` or over, so each
+   * level the brain buys is its own intent.
+   */
+  | { action: "upgradeBladeburnerSkill"; args: { skill: string; level: number } };
 
 /** Each action, once: a `Record` over `ActionName`, so the compiler refuses a new action left out. */
 const EVERY_ACTION: Record<ActionName, true> = {
@@ -82,6 +89,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   closeGame: true,
   createGang: true,
   joinBladeburnerDivision: true,
+  upgradeBladeburnerSkill: true,
 };
 /** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
 export const INTENT_ACTIONS = Object.keys(EVERY_ACTION) as ActionName[];
@@ -256,6 +264,20 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
       return { ok: true, message: { action, args: { faction: args.faction as string } } };
     case "joinBladeburnerDivision":
       return { ok: true, message: { action, args: {} } };
+    case "upgradeBladeburnerSkill": {
+      const skill = bladeburnerSkill(String(args.skill));
+      if (typeof args.skill !== "string" || skill === null) {
+        return { ok: false, reason: "upgradeBladeburnerSkill's skill isn't one of the game's" };
+      }
+      const level = args.level;
+      if (!Number.isInteger(level) || (level as number) < 1 || (level as number) > skill.maxLevel) {
+        return {
+          ok: false,
+          reason: "upgradeBladeburnerSkill's level isn't a whole number from 1 to the skill's max (Overclock's 90)",
+        };
+      }
+      return { ok: true, message: { action, args: { skill: skill.name, level: level as number } } };
+    }
     default:
       return null;
   }

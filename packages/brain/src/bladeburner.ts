@@ -20,7 +20,7 @@
 // - The reading: the desired state's `bladeburner`, done by the Agent's `bladeburner.js` every 10 s (the rank, and the
 //   faction joined once the rank is at 25: Bladeburners offers no work, so A5 never picks it, core's `FACTIONS`). Sent
 //   only once home's RAM beyond what it keeps for the Agent and its workers (`homeKeptGb`, share.ts's `homeKeptGbOf`)
-//   holds the worker's 42.6 GB since B2 (core's `bladeburnerWorkerFits`): #359's RAM decision. Until then the line says
+//   holds the worker's 50.6 GB since B3 (core's `bladeburnerWorkerFits`): #359's RAM decision. Until then the line says
 //   what home needs.
 // - Left out, and labelled: crime and Bladeburner's own Training in place of the gym (the planner's choice of focus,
 //   a later slice); the gym's cost against the brain's purchases (only core's class guard: 10 minutes of its cost);
@@ -39,26 +39,38 @@
 //   (`Bladeburner.ts:178-180`, `:1356`): A5 waits with it too. The owner's work on the dashboard wins: no action is sent
 //   (the game stops it anyway), and the line says so. The worker turns the game's auto-level off for each action it
 //   sets, and doesn't turn it back on.
+// - The skills (B3, #379), once the reading has the points and levels: core's `chooseBladeburnerSkills`, each step the
+//   levels of one skill that add the most rank a second a point to the actions' forecast (its cycle of work and rest,
+//   so Cyber's Edge is worth its duty cycle; Overclock to its max 90), until no level the points left cover gains. Sent
+//   at once as `upgradeBladeburnerSkill` intents, one a skill to the level planned, not gated (a skill can't be lost),
+//   so the points are spent within a reading of coming. Bought with the owner's work on the dashboard too: they stop no
+//   work. The forecast reads the levels too (core's: the time, the regain and the success skills in the range read).
 import {
   BLADEBURNER_BITNODES,
   BLADEBURNER_CONSTANTS,
   BLADEBURNER_FACTION,
   BLADEBURNER_FACTION_RANK,
   BLADEBURNER_JOIN_LEVEL,
+  BLADEBURNER_SKILL_NAMES,
   BLADEBURNER_WORKER_RAM_GB,
   type BladeburnerActionOrder,
   type BladeburnerActionPlan,
   type BladeburnerActionReading,
   type BladeburnerReading,
+  type BladeburnerSkillLevels,
+  type BladeburnerSkillPlan,
   type BladeburnerState,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
   bladeburnerResting,
+  bladeburnerSkillCostMultiplierOf,
   bladeburnerWorkerFits,
   type ClassChoice,
   COMBAT_STATS,
   type CombatTrainingPlan,
+  cheapestBladeburnerSkillLevel,
   chooseBladeburnerAction,
+  chooseBladeburnerSkills,
   classLabel,
   combatPersonOf,
   combatTrained,
@@ -83,6 +95,15 @@ export function travelIntent(city: string): Intent {
 
 /** Why A5's faction work waits while an action is sent (#375): any work stops it. */
 export const BLADEBURNER_ACTIONS_HOLD = "Bladeburner's actions, which any work would stop (#375)";
+
+/** A skill raised to a level, as the rule asks for it (#379). */
+export function upgradeBladeburnerSkillIntent(skill: string, level: number): Intent {
+  return {
+    action: "upgradeBladeburnerSkill",
+    args: { skill, level },
+    id: intentId("upgradeBladeburnerSkill", { skill, level }),
+  };
+}
 
 /** The division's join, as the rule asks for it. */
 export const JOIN_BLADEBURNER_INTENT: Intent = {
@@ -112,9 +133,16 @@ export interface BladeburnerActionId {
   name: string;
 }
 
+/** B3's reading (#379): the skill points unspent, and each skill's level. */
+export interface BladeburnerSkillsReading {
+  points: number;
+  levels: BladeburnerSkillLevels;
+}
+
 /**
  * B2's reading (#375), checked: the stamina and its max, the bonus time in seconds, the action the worker found under
- * way and the one after it acted (null idle), and every contract and operation read.
+ * way and the one after it acted (null idle), and every contract and operation read; and B3's skills (#379), null from
+ * a B2 Agent.
  */
 export interface BladeburnerActionsReading {
   stamina: number;
@@ -123,6 +151,21 @@ export interface BladeburnerActionsReading {
   found: BladeburnerActionId | null;
   current: BladeburnerActionId | null;
   actions: BladeburnerActionReading[];
+  skills: BladeburnerSkillsReading | null;
+}
+
+/** B3's skills of a reading (#379): null with none (a B2 Agent), undefined with one not a figure. */
+function skillsReadingOf(reading: Partial<BladeburnerReading>): BladeburnerSkillsReading | null | undefined {
+  const { skillPoints, skillLevels } = reading;
+  if (skillPoints === undefined && skillLevels === undefined) return null;
+  if (!isNumber(skillPoints) || typeof skillLevels !== "object" || skillLevels === null) return undefined;
+  const levels: BladeburnerSkillLevels = {};
+  for (const name of BLADEBURNER_SKILL_NAMES) {
+    const level = (skillLevels as Record<string, unknown>)[name];
+    if (!isNumber(level)) return undefined;
+    levels[name] = level;
+  }
+  return { points: skillPoints, levels };
 }
 
 const actionIdOf = (value: unknown): BladeburnerActionId | null | undefined => {
@@ -164,7 +207,9 @@ function actionsReadingOf(reading: Partial<BladeburnerReading>): BladeburnerActi
     }
     checked.push({ type, name, level, maxLevel, count, chance: [chance[0], chance[1]] as [number, number] });
   }
-  return { stamina, maxStamina, bonusSeconds, found: foundId, current: currentId, actions: checked };
+  const skills = skillsReadingOf(reading);
+  if (skills === undefined) return undefined;
+  return { stamina, maxStamina, bonusSeconds, found: foundId, current: currentId, actions: checked, skills };
 }
 
 /** The Bladeburner of `mediumData`, checked. */
@@ -189,7 +234,7 @@ export function bladeburnerSnapshotOf(mediumData: unknown): BladeburnerSnapshot 
   if (actions === undefined) {
     return {
       joined,
-      reading: { kind: "unread", problem: "the Bladeburner reading's stamina or actions aren't figures" },
+      reading: { kind: "unread", problem: "the Bladeburner reading's stamina, actions or skills aren't figures" },
     };
   }
   return { joined, reading: { kind: "read", rank, problems, actions } };
@@ -224,6 +269,8 @@ export interface BladeburnerDecision {
   work: GymWork | null;
   intent: Intent | null;
   state: BladeburnerState | null;
+  /** The skills' levels to buy (#379): one `upgradeBladeburnerSkill` intent a skill, none with nothing to buy. */
+  skillIntents: Intent[];
 }
 
 /** The dashboard's line, and where the rule stands. */
@@ -234,6 +281,8 @@ export interface BladeburnerView {
   training: CombatTrainingPlan | null;
   /** In the division (B2, #375): the actions' plan, the action sent, and whether it's resting; null, none sent. */
   actions?: { plan: BladeburnerActionPlan; order: BladeburnerActionOrder; resting: boolean } | null;
+  /** In the division with B3's reading (#379): the skills' plan; null without it. */
+  skills?: BladeburnerSkillPlan | null;
 }
 
 /** "1.23 rank/min". */
@@ -257,6 +306,22 @@ export function describeActionPlan(
   return (
     `${resting ? `resting with ${plan.rest.name} for ${working}` : `${working}, resting with ${plan.rest.name}`}; ` +
     `${staminaText}; worked ${(plan.duty * 100).toFixed(0)}% of a cycle, ${perMinute(plan.rankPerSecond)} over it`
+  );
+}
+
+/** The skills' plan in words (#379), for the dashboard, the log and the run report. */
+export function describeSkillPlan(plan: BladeburnerSkillPlan, levels: BladeburnerSkillLevels, costMultiplier: number) {
+  const points = `${plan.points} point${plan.points === 1 ? "" : "s"}`;
+  if (plan.buys.length === 0) {
+    return (
+      `skills: ${points} unspent, no level they cover gains (the cheapest ` +
+      `${cheapestBladeburnerSkillLevel(levels, costMultiplier)} points)`
+    );
+  }
+  const buys = plan.buys.map((buy) => `${buy.skill} ${buy.from} → ${buy.to}`).join(", ");
+  return (
+    `skills: buying ${buys} for ${plan.spent} of ${points}, ${perMinute(plan.rankPerSecond)} → ` +
+    `${perMinute(plan.rankPerSecondAfter)} over a cycle`
   );
 }
 
@@ -361,7 +426,7 @@ export class BladeburnerRule {
     homeKeptGb: number;
     ownersWork: boolean;
   }): BladeburnerDecision {
-    const none: BladeburnerDecision = { work: null, intent: null, state: null };
+    const none: BladeburnerDecision = { work: null, intent: null, state: null, skillIntents: [] };
     const bitNode = bitNodeOfSlow(slowData);
     if (bitNode === null) {
       return this.#decide(
@@ -416,6 +481,7 @@ export class BladeburnerRule {
     const rank = reading.kind === "read" ? reading.rank : null;
     const joinTheFaction = !inFaction && rank !== null && rank >= BLADEBURNER_FACTION_RANK;
     const actions = this.#actions(reading.kind === "read" ? reading.actions : null, mediumData, bitNode, ownersWork);
+    const skills = this.#skills(reading.kind === "read" ? reading.actions : null, mediumData, bitNode);
     const line =
       reading.kind === "absent"
         ? "Bladeburner: in the division; waiting for its worker's reading"
@@ -428,10 +494,46 @@ export class BladeburnerRule {
                 ? `joining ${BLADEBURNER_FACTION}`
                 : `${BLADEBURNER_FACTION} at rank ${BLADEBURNER_FACTION_RANK}`) +
             (actions.text === null ? "" : `; ${actions.text}`) +
+            (skills.text === null ? "" : `; ${skills.text}`) +
             (reading.problems.length > 0 ? `; ${reading.problems.join("; ")}` : "");
     const state: BladeburnerState =
       actions.sent === null ? { joinTheFaction } : { joinTheFaction, action: actions.sent.order };
-    return this.#decide({ stage: "joined", line, training: null, actions: actions.sent }, { ...none, state });
+    return this.#decide(
+      { stage: "joined", line, training: null, actions: actions.sent, skills: skills.plan },
+      { ...none, state, skillIntents: skills.intents },
+    );
+  }
+
+  /**
+   * The skills to buy in the division (#379), from the reading's B3 figures: whatever the owner's work (they stop no
+   * work); none without them (a B2 Agent, or the player's figures unread).
+   */
+  #skills(
+    reading: BladeburnerActionsReading | null,
+    mediumData: MediumSnapshotData,
+    bitNode: number,
+  ): { plan: BladeburnerSkillPlan | null; intents: Intent[]; text: string | null } {
+    if (reading === null || reading.skills === null) return { plan: null, intents: [], text: null };
+    const person = bladeburnerPersonOf(mediumData.player);
+    const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
+    const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode);
+    if (person === null || rankMultiplier === null || costMultiplier === null) {
+      return { plan: null, intents: [], text: null };
+    }
+    const { levels, points } = reading.skills;
+    const plan = chooseBladeburnerSkills(
+      {
+        readings: reading.actions,
+        person,
+        stamina: reading.stamina,
+        maxStamina: reading.maxStamina,
+        rankMultiplier,
+        speed: bladeburnerSpeedOf(reading.bonusSeconds),
+      },
+      { levels, points, costMultiplier },
+    );
+    const intents = plan.buys.map((buy) => upgradeBladeburnerSkillIntent(buy.skill, buy.to));
+    return { plan, intents, text: describeSkillPlan(plan, levels, costMultiplier) };
   }
 
   /**
@@ -460,6 +562,7 @@ export class BladeburnerRule {
       maxStamina,
       rankMultiplier,
       speed: bladeburnerSpeedOf(reading.bonusSeconds),
+      skills: { read: reading.skills?.levels ?? {} },
     });
     const resting = this.#resting || plan.work === null;
     const order: BladeburnerActionOrder =
@@ -474,12 +577,14 @@ export class BladeburnerRule {
     // Logged on a change of stage, gym or stat, not each figure; never "not managed", which is every other BitNode's.
     const training = view.training;
     const order = view.actions?.order;
+    // And each purchase of skills (#379).
+    const buys = (view.skills?.buys ?? []).map((buy) => `${buy.skill} ${buy.to}`).join(", ");
     const logged =
       view.stage === "training" && training !== null
         ? `training ${training.stat} at ${training.gym ?? `nothing (waiting for ${training.waitingFor})`}`
         : order != null
-          ? `in the division, ${order.name} ${order.level ?? ""}`
-          : view.line.replace(/rank [\d.]+/, "rank");
+          ? `in the division, ${order.name} ${order.level ?? ""}; ${buys}`
+          : `${view.line.replace(/rank [\d.]+/, "rank")}; ${buys}`;
     if (logged !== this.#lastLogged && view.stage !== "notManaged") {
       this.#log(`bladeburner: ${view.line.replace(/^Bladeburner: /, "")}`);
     }
