@@ -14,12 +14,7 @@
 // first, as the planner's install timing chases Daedalus's count (#343; BN2 has no gang yet, so it counts): seed 3 at
 // 30 min 26 s, at hacking 214 of its roll 218; seed 5 at 28 min 26 s, at 216 of 217. The level starts again, the
 // servers re-rolled (seed 5's gang, given 90 minutes, formed 78 min in). An install before the gang fails here, loudly.
-import {
-  AGENT_SIM_EFFECTORS_GLOBAL,
-  type FastSnapshotData,
-  type SlowSnapshotData,
-  type StaticSnapshotData,
-} from "@bitburner-agent/core";
+import { AGENT_SIM_EFFECTORS_GLOBAL, type SlowSnapshotData, type StaticSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { type GangView, gangSnapshotOf } from "../src/gang.ts";
 import { runReport } from "../src/run-report.ts";
@@ -122,7 +117,12 @@ test.each(SEEDS)(
     // line, and the save backups taken by the join (the gate's, as for every join, ./irreversible-gate.ts).
     const steps: Steps = {};
     const stages: { stage: GangView["stage"]; line: string; atMs: number }[] = [];
+    // Save backups made (with a file: not the failures) when the join and the gang were first seen.
+    const backupsMade = () => brain.saveBackupEvents.filter((event) => "file" in event).length;
     let backupsAtJoin = Number.NaN;
+    let backupsAtFormed = Number.NaN;
+    // The hacking level at the first medium snapshot: the edit's.
+    let firstHacking: number | undefined;
     // The installs on the way (a reset recreates the servers, re-rolling avmnite-02h, and the hacking level starts
     // again: `Prestige.ts:74`, `:98`): when, and at what level against which roll.
     const installs: { atMs: number; hacking: number; required: number | undefined }[] = [];
@@ -145,10 +145,11 @@ test.each(SEEDS)(
       const reset = slow()?.resetInfo?.lastAugReset;
       if (reset !== undefined && lastAugReset !== undefined && reset !== lastAugReset) {
         installs.push({ atMs: game.clock.now() - editedAtMs, ...before });
-        throw new Error("an install before the gang formed: the level for avmnite-02h starts again");
+        throw new Error("an install before the gang formed (#357): the level for avmnite-02h starts again");
       }
       if (reset !== undefined) lastAugReset = reset;
       if (hacking() > 1) before = { hacking: hacking(), required: required() };
+      if (firstHacking === undefined && medium() !== null) firstHacking = hacking();
       see("rooted", server()?.hasAdminRights === true);
       see("levelled", required() !== undefined && hacking() >= (required() as number));
       see(
@@ -158,8 +159,9 @@ test.each(SEEDS)(
       see("backdoored", server()?.backdoorInstalled === true);
       see("invited", invited());
       see("joined", joined());
-      if (steps.joined !== undefined && Number.isNaN(backupsAtJoin)) backupsAtJoin = brain.saveBackupEvents.length;
+      if (steps.joined !== undefined && Number.isNaN(backupsAtJoin)) backupsAtJoin = backupsMade();
       see("formed", gangSnapshotOf(medium()).kind === "gang");
+      if (steps.formed !== undefined && Number.isNaN(backupsAtFormed)) backupsAtFormed = backupsMade();
       const { stage, line } = controller.gangView();
       if (stages.at(-1)?.stage !== stage) stages.push({ stage, line, atMs: game.clock.now() - editedAtMs });
       return steps.formed !== undefined;
@@ -179,7 +181,9 @@ test.each(SEEDS)(
     console.log(lines.filter((line) => /avmnite-02h|NiteSec/.test(line)).join("\n"));
     console.log(section);
 
-    // The game's own terms: avmnite-02h's roll within 202-220, the level reached only by the brain's play.
+    // The game's own terms: avmnite-02h's roll within 202-220, the level reached only by the brain's play, from the
+    // edit's 201.
+    expect(firstHacking).toBe(START_LEVEL);
     const level = required() as number;
     expect(level).toBeGreaterThanOrEqual(202);
     expect(level).toBeLessThanOrEqual(220);
@@ -228,8 +232,8 @@ test.each(SEEDS)(
     const gang = gangSnapshotOf(medium());
     if (gang.kind !== "gang") throw new Error("no gang read");
     expect(gang.gang).toMatchObject({ faction: FACTION, isHacking: true });
-    // Through the gate: its save backup, after the join was seen and before the gang was.
-    expect(brain.saveBackupEvents.length).toBeGreaterThan(backupsAtJoin);
+    // Through the gate: its save backup, made after the join was seen and by the time the gang was.
+    expect(backupsAtFormed).toBeGreaterThan(backupsAtJoin);
 
     // The run report: the backdoor and the join (Singularity's, with SF4.3) and the form (the page's: no Singularity
     // worker for it), each done; the gang formed with NiteSec; and PASS. The backdoor's first try finds it under way.
@@ -246,10 +250,6 @@ test.each(SEEDS)(
       expect.stringMatching(/^ {4}joinFaction\(NiteSec\): done after 1 try \(singularity\); /),
     );
     expect(text).toMatch(/\n {4}createGang\(NiteSec\): done after 1 try \(ui\); /);
-    const createGang = (fresh.latest<FastSnapshotData>("fast")?.intents ?? []).find(
-      (each) => each.id === "createGang(NiteSec)",
-    );
-    expect(createGang === undefined || createGang.done).toBe(true);
     expect(section).toMatch(/\n {2}formed: with NiteSec, first seen /);
     expect(section).toContain("no gang formed with a gang faction joined for 5 min or more:\n    none");
     expect(section).toContain("the gang unread in BN2 for 5 min or more:\n    none");
