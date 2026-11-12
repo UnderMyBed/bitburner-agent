@@ -8,12 +8,15 @@
 // Then the brain's own rules: the hack loop roots avmnite-02h and levels to its roll; A3 backdoors it (#195); NiteSec
 // invites, asking nothing else (`Faction/FactionInfo.tsx:464-466`); A5 joins (#203); and in BN2, where no karma is
 // needed (`PersonObjects/Player/PlayerObjectGangMethods.ts:16-18`), the gang rule forms the gang with NiteSec through
-// the gate (`createGang`, ./src/gang.ts). CI runs seed 1; `GANG_START_SEEDS` (`1,2,3`, say) runs others.
+// the gate (`createGang`, ./src/gang.ts). CI runs seeds 1, 3 and 5; `GANG_START_SEEDS` (`1,2,3`, say) runs others.
 // Measured on 2026-11-11: the path holds once the level is there, seconds a step; the cost is the level. Seeds 1, 2, 4
-// and 6 formed the gang 18 min 41 s to 25 min 41 s after the edit (rolls 212, 219, 219, 220). Seeds 3 and 5 install
-// first, as the planner's install timing chases Daedalus's count (#343; BN2 has no gang yet, so it counts): seed 3 at
+// and 6 formed the gang 18 min 41 s to 25 min 41 s after the edit (rolls 212, 219, 219, 220). Before #357 seeds 3 and 5
+// installed first, as #343's install timing chased Daedalus's count (BN2 has no gang yet, so it counts): seed 3 at
 // 30 min 26 s, at hacking 214 of its roll 218; seed 5 at 28 min 26 s, at 216 of 217. The level starts again, the
-// servers re-rolled (seed 5's gang, given 90 minutes, formed 78 min in). An install before the gang fails here, loudly.
+// servers re-rolled (seed 5's gang, given 90 minutes, formed 78 min in). Since #357 the planner weighs waiting for the
+// gang against installing now before it, by the time to the gang formed (core's `gangFormingTiming`): the A/B below,
+// the rules (`bn2Route` "rules", as before) against the planner, on seeds 3 and 5. An install before the gang fails
+// the planner's runs here, loudly.
 import { AGENT_SIM_EFFECTORS_GLOBAL, type SlowSnapshotData, type StaticSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { type GangView, gangSnapshotOf } from "../src/gang.ts";
@@ -21,9 +24,9 @@ import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { type FreshGame, ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 
-/** `GANG_START_SEEDS`: seeds 1 or more, comma separated; unset, seed 1 alone (CI). Anything else fails loudly. */
+/** `GANG_START_SEEDS`: seeds 1 or more, comma separated; unset, seeds 1, 3 and 5 (CI). Anything else fails loudly. */
 function gangStartSeeds(text: string | undefined): number[] {
-  if (text === undefined) return [1];
+  if (text === undefined) return [...CI_SEEDS];
   const seeds = text.split(",").map((each) => each.trim());
   if (!seeds.every((each) => /^[1-9]\d*$/.test(each))) {
     throw new Error(`GANG_START_SEEDS is ${JSON.stringify(text)}: give seeds 1 or more, comma separated`);
@@ -31,6 +34,8 @@ function gangStartSeeds(text: string | undefined): number[] {
   return seeds.map(Number);
 }
 
+/** CI's seeds: 1 (#353), and 3 and 5, where the rules installed before the gang (#357's A/B). */
+const CI_SEEDS = [1, 3, 5] as const;
 const freshStartOf = useFreshStarts();
 const SEEDS = gangStartSeeds(process.env.GANG_START_SEEDS);
 const BN2 = { kind: "bitnode", n: 2, sourceFiles: { 1: 3, 4: 3 } } as const;
@@ -44,13 +49,24 @@ const START_LEVEL = 201;
 const expFor = (level: number) => Math.exp(((level + 0.5) / LEVEL_MULT + 200) / 32) - 534.6;
 /** A new game's money (`PersonObjects/Player/PlayerObject.ts:56`, no donations here): the edit's left none over. */
 const NEW_GAME_MONEY = 1_000;
-/** Virtual time from the edit to the gang formed, at most: levelling to the roll (up to 220), then seconds each. */
-const FORMED_WITHIN_MS = 40 * 60_000;
+/**
+ * Virtual time from the edit to the gang formed, at most, by seed: levelling to the roll (up to 220), then seconds each.
+ * Seed 1's 40 min (#353: 25 min 41 s measured). Seeds 3 and 5 (#357), measured on 2026-11-11 with the planner waiting
+ * for the gang: seed 3's formed 34 min 41 s after the edit (roll 218), so 45 min; seed 5's 28 min 41 s (roll 217), so
+ * 40 min, as seed 1's. Another seed: 40 min, as seed 1's.
+ */
+const FORMED_WITHIN_MS: Record<number, number> = { 1: 40 * 60_000, 3: 45 * 60_000, 5: 40 * 60_000 };
+const formedWithinMs = (seed: number) => FORMED_WITHIN_MS[seed] ?? 40 * 60_000;
+/**
+ * The rules' arm (#357's A/B): from the edit, 90 virtual minutes at most for the gang, the rules installing first (as
+ * before #357, seed 5's gang formed 78 min in, seed 3's not by 90 min).
+ */
+const RULES_WITHIN_MS = 90 * 60_000;
 /** A minute more: the gang's first readings, the report's checks on them. */
 const AFTER_MS = 60_000;
 
-test("GANG_START_SEEDS: seeds 1 or more, or unset for seed 1; an empty or odd entry fails loudly", () => {
-  expect(gangStartSeeds(undefined)).toEqual([1]);
+test("GANG_START_SEEDS: seeds 1 or more, or unset for CI's 1, 3 and 5; an empty or odd entry fails loudly", () => {
+  expect(gangStartSeeds(undefined)).toEqual([1, 3, 5]);
   expect(gangStartSeeds("1, 4")).toEqual([1, 4]);
   for (const odd of ["", "1,", "0", "2.5", "x"]) expect(() => gangStartSeeds(odd)).toThrow(/GANG_START_SEEDS/);
 });
@@ -123,8 +139,10 @@ test.each(SEEDS)(
     let backupsAtFormed = Number.NaN;
     // The hacking level at the first medium snapshot: the edit's.
     let firstHacking: number | undefined;
+    // avmnite-02h's roll when the backdoor was asked for (#357: an install after the gang re-rolls it, `Prestige.ts:98`).
+    let rollAsked: number | undefined;
     // The installs on the way (a reset recreates the servers, re-rolling avmnite-02h, and the hacking level starts
-    // again: `Prestige.ts:74`, `:98`): when, and at what level against which roll.
+    // again: `Prestige.ts:69`, `:74`, `:98`): when, and at what level against which roll.
     const installs: { atMs: number; hacking: number; required: number | undefined }[] = [];
     let lastAugReset: number | undefined;
     let before: { hacking: number; required: number | undefined } = { hacking: 0, required: undefined };
@@ -160,12 +178,13 @@ test.each(SEEDS)(
       see("invited", invited());
       see("joined", joined());
       if (steps.joined !== undefined && Number.isNaN(backupsAtJoin)) backupsAtJoin = backupsMade();
+      if (steps.asked !== undefined) rollAsked ??= required();
       see("formed", gangSnapshotOf(medium()).kind === "gang");
       if (steps.formed !== undefined && Number.isNaN(backupsAtFormed)) backupsAtFormed = backupsMade();
       const { stage, line } = controller.gangView();
       if (stages.at(-1)?.stage !== stage) stages.push({ stage, line, atMs: game.clock.now() - editedAtMs });
       return steps.formed !== undefined;
-    }, FORMED_WITHIN_MS);
+    }, formedWithinMs(seed));
     // Not formed in time: how far the path got, and the brain's word on the stalled step, in the failure.
     await formedBy.catch((error: unknown) => {
       const said = brain.logLines.filter((line) => /backdoor|NiteSec|gang|install/i.test(line)).slice(-12);
@@ -178,13 +197,16 @@ test.each(SEEDS)(
     const lines = text.split("\n");
     const section = text.slice(text.indexOf("7. The gang"), text.indexOf("Verdict"));
     console.log(progress());
+    console.log(
+      brain.logLines.filter((line) => /install chosen|planner's install timing|WAIT OVERDUE/.test(line)).join("\n"),
+    );
     console.log(lines.filter((line) => /avmnite-02h|NiteSec/.test(line)).join("\n"));
     console.log(section);
 
     // The game's own terms: avmnite-02h's roll within 202-220, the level reached only by the brain's play, from the
     // edit's 201.
     expect(firstHacking).toBe(START_LEVEL);
-    const level = required() as number;
+    const level = rollAsked as number;
     expect(level).toBeGreaterThanOrEqual(202);
     expect(level).toBeLessThanOrEqual(220);
     expect(fresh.latest<StaticSnapshotData>("static")?.servers.find((each) => each.hostname === SERVER)).toMatchObject({
@@ -192,9 +214,12 @@ test.each(SEEDS)(
     });
     // Each step in the path's order: rooted, levelled, asked, backdoored, joined, formed (the invitation, between
     // the backdoor and the join, may come and go between two slow snapshots). Measured on 2026-11-11 (seed 1, the roll
-    // 212): rooted at the first medium snapshot, 11 s after the edit; the level by the brain's play 24 min 31 s after
-    // it; asked at once; backdoored 10 s later; invited 20 s, joined 10 s and the gang formed 30 s after that:
-    // 25 min 41 s from the edit to the gang formed, 70 s of it after the level. No install on the way.
+    // 212), before #357: rooted at the first medium snapshot, 11 s after the edit; the level by the brain's play 24 min
+    // 31 s after it; asked at once; backdoored 10 s later; invited 20 s, joined 10 s and the gang formed 30 s after that:
+    // 25 min 41 s from the edit to the gang formed, 70 s of it after the level. Since #357 (the planner's wait for the
+    // gang holds no money back for #343's countables): the level at 21 min 11 s, backdoored 10 s later, invited 40 s,
+    // joined 10 s and formed 30 s after that, 22 min 41 s, 90 s after the level; seed 3 (roll 218) the level at 33 min
+    // 41 s and formed 34 min 41 s; seed 5 (roll 217) 27 min 41 s and 28 min 41 s, 60 s each. No install on the way.
     const order: (keyof Steps)[] = ["rooted", "levelled", "asked", "backdoored", "joined", "formed"];
     for (const step of order) expect(steps[step], step).toBeDefined();
     const times = order.map((step) => steps[step] as number);
@@ -255,5 +280,64 @@ test.each(SEEDS)(
     expect(section).toContain("the gang unread in BN2 for 5 min or more:\n    none");
     expect(failures).toEqual([]);
     expect(lines.at(-1)).toBe("Verdict: PASS");
+  },
+);
+
+/**
+ * #357's A/B, the rules' arm (`bn2Route` "rules": #343's install timing before the gang, as before #357): on seeds 3 and
+ * 5 the install comes before the gang, the level reset and the servers re-rolled (`Prestige.ts:69`, `:74`, `:98`). The
+ * planner's arm is the suite above, on the same seeds: no install, the gang at 34 min 41 s and 28 min 41 s.
+ */
+test.each([3, 5])(
+  "seed %i, the rules (#357's A/B baseline): an install before the gang, short of avmnite-02h's level; the gang later or never",
+  { timeout: 120_000 },
+  async (seed) => {
+    let editedAtMs = Number.NaN;
+    const fresh = await freshStartOf({
+      withDesiredState: true,
+      fixture: BN2,
+      seed,
+      bn2Route: "rules",
+      beforeAgent: async (game) => {
+        editedAtMs = await underNiteSec(game);
+      },
+    });
+    const { game } = fresh;
+    const medium = () => fresh.medium();
+    const hacking = () => (medium()?.player.skills as { hacking?: number } | undefined)?.hacking ?? 0;
+    const required = () =>
+      fresh.latest<StaticSnapshotData>("static")?.servers.find((each) => each.hostname === SERVER)
+        ?.requiredHackingSkill;
+    let lastAugReset: number | undefined;
+    let before = { hacking: 0, required: undefined as number | undefined };
+    let install: { atMs: number; hacking: number; required: number | undefined } | null = null;
+    let formedAtMs: number | null = null;
+    await game
+      .runUntil(() => {
+        const reset = fresh.latest<SlowSnapshotData>("slow")?.resetInfo?.lastAugReset;
+        if (install === null && reset !== undefined && lastAugReset !== undefined && reset !== lastAugReset) {
+          install = { atMs: game.clock.now() - editedAtMs, ...before };
+        }
+        if (reset !== undefined) lastAugReset = reset;
+        if (install === null && hacking() > 1) before = { hacking: hacking(), required: required() };
+        if (gangSnapshotOf(medium()).kind === "gang") formedAtMs = game.clock.now() - editedAtMs;
+        return formedAtMs !== null;
+      }, RULES_WITHIN_MS)
+      .catch(() => {});
+    const minutes = (ms: number | null) =>
+      ms === null ? "none" : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`;
+    const installed = install as { atMs: number; hacking: number; required: number | undefined } | null;
+    console.log(
+      `seed ${seed}, the rules: installed at ${minutes(installed?.atMs ?? null)}, hacking ${installed?.hacking} of ` +
+        `${installed?.required}; the gang formed at ${minutes(formedAtMs)} (90 min at most)`,
+    );
+    // The install, before the gang, short of the roll: what #357's planner doesn't do on these seeds.
+    expect(installed).not.toBeNull();
+    expect(installed?.hacking as number).toBeLessThan(installed?.required as number);
+    expect(formedAtMs === null || formedAtMs > (installed?.atMs as number)).toBe(true);
+    // Measured on 2026-11-11: seed 3 installed at 30 min 26 s, at 214 of 218, and had no gang by 90 min; seed 5 at
+    // 28 min 26 s, at 216 of 217, its gang at 78 min 6 s. Either way past the planner's bound for the seed (45 and 40
+    // min; its gang at 34 min 41 s and 28 min 41 s).
+    expect(formedAtMs === null || formedAtMs > formedWithinMs(seed)).toBe(true);
   },
 );

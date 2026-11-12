@@ -10,6 +10,7 @@ import {
   type DeployerEvent,
   type InGameBuild,
 } from "@bitburner-agent/bridge";
+import type { Bn2Route } from "@bitburner-agent/core";
 import type { InstallTimingPolicy } from "../../src/augmentations.ts";
 import { DesiredStateController } from "../../src/desired-state.ts";
 import { readPinnedDefinitions } from "../../src/in-game-build.ts";
@@ -82,6 +83,7 @@ export function startBrainInSimulation(
     data,
     withDesiredState = false,
     installTiming = "planner",
+    bn2Route = "planner",
   }: {
     build: InGameBuild;
     token?: string;
@@ -98,6 +100,8 @@ export function startBrainInSimulation(
     withDesiredState?: boolean;
     /** Who times installs short of Daedalus's count (#343): the planner, as main.ts has it; the count rule for an A/B. */
     installTiming?: InstallTimingPolicy;
+    /** BN2's route (#357): the planner's, as main.ts has it; the rules' for an A/B. */
+    bn2Route?: Bn2Route;
   },
 ): BrainInSimulation {
   const channel = data
@@ -124,6 +128,7 @@ export function startBrainInSimulation(
       saveBackups,
       log: (line) => logLines.push(line),
       installTiming,
+      bn2Route,
       // The destroy estimate's prior from the simulator's store (#360), as main.ts reads the brain's.
       environment: "E1",
     });
