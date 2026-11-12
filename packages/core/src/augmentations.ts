@@ -213,6 +213,8 @@ export interface AugmentationBitNodeMultipliers {
   FactionWorkRepGain: number;
   /** The favour that unlocks donations, over 150 (#225, `Faction/formulas/donation.ts:16-18`): 0.5 in BN3, 0 in BN8. */
   FavorToDonateToFaction: number;
+  /** w0r1d_d43m0n's hacking requirement over 3000 (`Server/ServerHelpers.ts:383-385`, #360): 3 in BN4, 1.5 in BN5. */
+  WorldDaemonDifficulty: number;
 }
 
 /** The price's growth with each augmentation queued: `MultipleAugMultiplier` (`Constants.ts:41`). */
@@ -437,6 +439,8 @@ export function augmentationBitNodeMultipliers(
     // BN12's `dec` (`BitNode/BitNode.tsx:926`, `:968`), and its `inc` on donations' favour (`:969`, #225).
     FactionWorkRepGain: 1 / growth,
     FavorToDonateToFaction: growth,
+    // And its `inc` on w0r1d_d43m0n (`:993`, #360).
+    WorldDaemonDifficulty: growth,
   };
 }
 

@@ -2188,7 +2188,7 @@ export const AUGMENTATIONS: Record<string, AugmentationData> = {
   },
 };
 
-/** Each BitNode's multipliers on augmentations and faction work, at level 1 (`getBitNodeMultipliers`): BN12's change with it. */
+/** Each BitNode's multipliers on augmentations, faction work and w0r1d_d43m0n, at level 1 (`getBitNodeMultipliers`): BN12's change with it. */
 export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNodeMultipliers> = {
   "1": {
     AugmentationMoneyCost: 1,
@@ -2196,6 +2196,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 1,
   },
   "2": {
     AugmentationMoneyCost: 1,
@@ -2203,6 +2204,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 0.5,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 5,
   },
   "3": {
     AugmentationMoneyCost: 3,
@@ -2210,6 +2212,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 0.5,
+    WorldDaemonDifficulty: 2,
   },
   "4": {
     AugmentationMoneyCost: 1,
@@ -2217,6 +2220,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 0.75,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 3,
   },
   "5": {
     AugmentationMoneyCost: 2,
@@ -2224,6 +2228,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 1.5,
   },
   "6": {
     AugmentationMoneyCost: 1,
@@ -2231,6 +2236,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 35,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 2,
   },
   "7": {
     AugmentationMoneyCost: 3,
@@ -2238,6 +2244,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 35,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 2,
   },
   "8": {
     AugmentationMoneyCost: 1,
@@ -2245,6 +2252,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 0,
+    WorldDaemonDifficulty: 1,
   },
   "9": {
     AugmentationMoneyCost: 1,
@@ -2252,6 +2260,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 2,
   },
   "10": {
     AugmentationMoneyCost: 5,
@@ -2259,6 +2268,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 2,
   },
   "11": {
     AugmentationMoneyCost: 2,
@@ -2266,6 +2276,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 1.5,
   },
   "12": {
     AugmentationMoneyCost: 1.02,
@@ -2273,6 +2284,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 31,
     FactionWorkRepGain: 0.9803921568627451,
     FavorToDonateToFaction: 1.02,
+    WorldDaemonDifficulty: 1.02,
   },
   "13": {
     AugmentationMoneyCost: 1,
@@ -2280,6 +2292,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 0.6,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 3,
   },
   "14": {
     AugmentationMoneyCost: 1.5,
@@ -2287,6 +2300,7 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 30,
     FactionWorkRepGain: 0.2,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 5,
   },
   "15": {
     AugmentationMoneyCost: 3,
@@ -2294,5 +2308,6 @@ export const AUGMENTATION_BITNODE_MULTIPLIERS: Record<number, AugmentationBitNod
     DaedalusAugsRequirement: 20,
     FactionWorkRepGain: 1,
     FavorToDonateToFaction: 1,
+    WorldDaemonDifficulty: 2,
   },
 };

@@ -27,9 +27,12 @@ import {
   type StaticSnapshotData,
   shortestLevellingCandidate,
   WORLD_DAEMON,
+  worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import { bitNodeHackingOf } from "./batcher.ts";
 import { BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND } from "./bitnode-end.ts";
+import { DESTROY_ESTIMATED_EVENT_KIND } from "./destroy-estimate.ts";
+import { destroyEstimateHealthLines, destroyEstimatePathLines } from "./destroy-estimate-report.ts";
 import { gangShopOf } from "./gang.ts";
 import { formatDuration } from "./gap-report.ts";
 import { CITY_GROUP_CHOSEN_EVENT_KIND } from "./invitations.ts";
@@ -65,6 +68,7 @@ export const WORLD_DAEMON_EVENT_KINDS = [
   BITNODE_DESTROY_SENT_EVENT_KIND,
   DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
   LEVELLING_CHOSEN_EVENT_KIND,
+  DESTROY_ESTIMATED_EVENT_KIND,
 ];
 
 const fieldsOf = (detail: unknown) =>
@@ -113,6 +117,8 @@ export class WorldDaemonFold {
   readonly #readiness = new Map<number, Readiness>();
   /** The last slow snapshot's game time (#334): the gang's faction's rate, since its install. */
   #slowGameTimeMs: number | null = null;
+  /** Each slow snapshot's BitNode and Source-Files, in order (#360): w0r1d_d43m0n's level by the multipliers. */
+  readonly #bitNodes: { atMs: number; currentNode: number; ownedSF: Record<string, number> }[] = [];
   /**
    * The medium snapshots' experience and level in the window's last BitNode and cycle (#336), for the measured rates:
    * another BitNode, or the experience falling (an install), starts them again.
@@ -122,9 +128,42 @@ export class WorldDaemonFold {
   /** Since when the hacking level has been all that's left (#336), unbroken to the last medium snapshot, or null. */
   #levelOnlySinceMs: number | null = null;
 
-  /** A slow snapshot's game time, in order (#334). */
-  addSlow(gameTimeMs: number): void {
+  /** A slow snapshot's game time, in order (#334); and its BitNode (#360), where it's given and says. */
+  addSlow(gameTimeMs: number, atMs?: number, data?: SlowSnapshotData): void {
     this.#slowGameTimeMs = gameTimeMs;
+    const info = data?.resetInfo as Partial<SlowSnapshotData["resetInfo"]> | undefined;
+    const ownedSF = info?.ownedSF;
+    if (atMs !== undefined && Number.isInteger(info?.currentNode) && typeof ownedSF === "object" && ownedSF !== null) {
+      this.#bitNodes.push({ atMs, currentNode: info?.currentNode as number, ownedSF });
+    }
+  }
+
+  /**
+   * Each static snapshot whose w0r1d_d43m0n level isn't the BitNode's by its multipliers (#360, core's
+   * `worldDaemonRequiredLevel`): the BitNode the first slow snapshot after it shows (a static snapshot comes as an
+   * Agent starts, before its first slow one), else the last before it. One line a level and BitNode.
+   */
+  #levelMismatches(formatTime: (ms: number) => string): string[] {
+    const seen = new Set<string>();
+    const lines: string[] = [];
+    for (const { atMs, level } of this.#requirements) {
+      const bitNode = this.#bitNodes.find((each) => each.atMs >= atMs) ?? this.#bitNodes.at(-1);
+      if (bitNode === undefined) continue;
+      let expected: number;
+      try {
+        expected = worldDaemonRequiredLevel(bitNode.currentNode, bitNode.ownedSF);
+      } catch {
+        continue;
+      }
+      const key = `${level} ${bitNode.currentNode} ${expected}`;
+      if (Math.abs(level - expected) < 1e-6 || seen.has(key)) continue;
+      seen.add(key);
+      lines.push(
+        `w0r1d_d43m0n's level ${level} in the static snapshot at ${formatTime(atMs)}, not BitNode ` +
+          `${bitNode.currentNode}'s ${expected} (3000 × its WorldDaemonDifficulty, core's worldDaemonRequiredLevel, #360)`,
+      );
+    }
+    return lines;
   }
 
   /** A static snapshot, in order, the one before the window's first. */
@@ -221,6 +260,8 @@ export class WorldDaemonFold {
     for (const { atMs, detail } of events.filter((event) => event.kind === DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND)) {
       lines.push(`    ${formatTime(atMs)}  ${String(fieldsOf(detail).detail)}`);
     }
+    // The brain's estimates of the time to the destroy (#360).
+    lines.push(...destroyEstimatePathLines(events, formatTime));
     return lines;
   }
 
@@ -313,6 +354,16 @@ export class WorldDaemonFold {
       failures.push(line);
     }
     if (stalls.length === 0) lines.push("    none");
+    // w0r1d_d43m0n's level against the BitNode's multipliers (#360), and the estimates of the time to the destroy.
+    const mismatches = this.#levelMismatches(formatTime);
+    if (mismatches.length > 0) {
+      lines.push("  w0r1d_d43m0n's level (#360: the static snapshot's against the BitNode's multipliers):");
+      for (const mismatch of mismatches) {
+        lines.push(`    ${mismatch}`);
+        failures.push(mismatch);
+      }
+    }
+    lines.push(...destroyEstimateHealthLines(events, { failures, warnings, formatTime, worldDaemonEnabled }));
     // The levelling choice (#336), only while the hacking level is all that's left.
     const levelling = snapshots === undefined ? null : this.#levelling(snapshots, events, formatTime);
     if (levelling === null) return lines;

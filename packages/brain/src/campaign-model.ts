@@ -4,7 +4,13 @@
 // `resetInfo` and a few kinds of event alone, never a medium or fast snapshot, so a store thinned (#283) gives the same
 // campaign. Where each BitNode and cycle starts is the run report's own detection (`ResetDetection`, #244); the time
 // online is the bars' clock's rule (`advanceOnlineClock`, #222), run over a whole BitNode.
-import type { SlowSnapshotData } from "@bitburner-agent/core";
+import {
+  type DestroyPrior,
+  daedalusAugmentationsRequired,
+  type SlowSnapshotData,
+  THE_RED_PILL,
+  worldDaemonRequiredLevel,
+} from "@bitburner-agent/core";
 import { fieldsOf, isFiniteNumber } from "./augmentation-report.ts";
 import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, advanceOnlineClock, type OnlineClock } from "./augmentations.ts";
 import { type BitNodeSpan, ResetDetection } from "./cycle-report.ts";
@@ -104,6 +110,14 @@ export interface CampaignCycle {
   endedBy: Install[];
   /** Each time a save loaded left it (the brain's clock: the first slow snapshot after), for another cycle (#285). */
   leftForSaveAtMs: number[];
+  /** Its BitNode's time online at its start (#360): the cycles before it, the install's step split at the install. */
+  startOnlineMs: number;
+  /**
+   * Daedalus's count at its first look (#360): `ownedAugs`' names, NeuroFlux Governor once (core's `daedalusCountOf`);
+   * null where that slow snapshot didn't record them. And whether The Red Pill was installed then.
+   */
+  count: number | null;
+  redPill: boolean;
 }
 
 /** A BitNode as the campaign keeps it. */
@@ -236,11 +250,13 @@ export class CampaignFold {
     // Where the step to this slow snapshot goes, and where an install's step is split.
     const stepFrom = { gameTimeMs: bitNode.lastGameTimeMs, cycle: bitNode.currentCycle };
     let installedAt: number | null = null;
+    // A cycle this slow snapshot shows first, if any (#360).
+    let entered: CampaignCycle | null = null;
     if (isNew) {
       bitNode.firstOwnedSF = sourceFilesOf(info);
       bitNode.firstOverrides = overridesOf(info);
       bitNode.cycles.add(cycle.lastAugReset);
-      this.#enter(
+      entered = this.#enter(
         bitNode,
         cycle.lastAugReset,
         bitNode.installedBeforeFirstLook ? "seen first" : "start",
@@ -267,7 +283,7 @@ export class CampaignFold {
       if (bitNode.augResets.has(cycle.lastAugReset) || cycle.lastAugReset < bitNode.lastGameTimeMs) {
         bitNode.savesLoadedAtMs.push(atMs);
         stepFrom.cycle?.leftForSaveAtMs.push(atMs);
-        this.#enter(bitNode, cycle.lastAugReset, "save", cycle.startMs);
+        entered = this.#enter(bitNode, cycle.lastAugReset, "save", cycle.startMs);
       } else {
         const install: Install = {
           fromMs: lastCycle?.startMs ?? bitNode.startMs,
@@ -280,7 +296,7 @@ export class CampaignFold {
         bitNode.cycles.add(cycle.lastAugReset);
         this.#shareOf(bitNode, bitNode.lastRelease).installs.push(install);
         stepFrom.cycle?.endedBy.push(install);
-        this.#enter(bitNode, cycle.lastAugReset, "install", cycle.startMs);
+        entered = this.#enter(bitNode, cycle.lastAugReset, "install", cycle.startMs);
         installedAt = cycle.lastAugReset;
       }
     }
@@ -294,6 +310,12 @@ export class CampaignFold {
         : Math.min(onlineMs, Math.max(0, installedAt - stepFrom.gameTimeMs));
     if (stepFrom.cycle !== null) stepFrom.cycle.onlineMs += beforeInstallMs;
     if (bitNode.currentCycle !== null) bitNode.currentCycle.onlineMs += onlineMs - beforeInstallMs;
+    // A cycle entered by this slow snapshot (#360): its start's time online, and the count it starts at.
+    if (entered !== null) {
+      entered.startOnlineMs = bitNode.clock.onlineMs - (onlineMs - beforeInstallMs);
+      entered.count = ownedAugs === null ? null : Object.keys(ownedAugs).length;
+      entered.redPill = ownedAugs !== null && Object.hasOwn(ownedAugs, THE_RED_PILL);
+    }
     const share = this.#shareOf(bitNode, release);
     if (bitNode.cycles.has(cycle.lastAugReset)) share.cycles.add(cycle.lastAugReset);
     share.firstAtMs = Math.min(share.firstAtMs, atMs);
@@ -305,14 +327,35 @@ export class CampaignFold {
     bitNode.ownedAugs = ownedAugs;
   }
 
-  /** Makes the cycle `lastAugReset` the BitNode's current one: the one listed already, or a new one of `kind`. */
-  #enter(bitNode: CampaignBitNode, lastAugReset: number, kind: CampaignCycle["kind"], startMs: number): void {
-    let entered = bitNode.cycleList.find((each) => each.lastAugReset === lastAugReset);
-    if (entered === undefined) {
-      entered = { lastAugReset, kind, startMs, onlineMs: 0, endedBy: [], leftForSaveAtMs: [] };
-      bitNode.cycleList.push(entered);
+  /**
+   * Makes the cycle `lastAugReset` the BitNode's current one: the one listed already, or a new one of `kind`, which it
+   * returns (null for one listed already).
+   */
+  #enter(
+    bitNode: CampaignBitNode,
+    lastAugReset: number,
+    kind: CampaignCycle["kind"],
+    startMs: number,
+  ): CampaignCycle | null {
+    const listed = bitNode.cycleList.find((each) => each.lastAugReset === lastAugReset);
+    if (listed !== undefined) {
+      bitNode.currentCycle = listed;
+      return null;
     }
+    const entered: CampaignCycle = {
+      lastAugReset,
+      kind,
+      startMs,
+      onlineMs: 0,
+      endedBy: [],
+      leftForSaveAtMs: [],
+      startOnlineMs: 0,
+      count: null,
+      redPill: false,
+    };
+    bitNode.cycleList.push(entered);
     bitNode.currentCycle = entered;
+    return entered;
   }
 
   /**
@@ -529,4 +572,81 @@ function endingOf(bitNode: CampaignBitNode, next: CampaignBitNode | undefined, i
     Object.keys(bitNode.lastOverrides).length === 0 && !Object.values(bitNode.lastOwnedSF).some((level) => level > 0);
   if (noSourceFile) return ended("a new game {at}", at);
   return ended(atCap ? "b1t_flum3, or a destroy not sent by the brain at the cap, {at}" : "b1t_flum3 {at}", at);
+}
+
+/**
+ * A BitNode's stretches on the way to its destroy (#360), its time online: start to the count met (A), the count met
+ * to The Red Pill installed (B + C), the cycle that ended with The Red Pill's install, and from that install to the
+ * destroy (D). Each null where the store didn't see it: A where it didn't see the start, D where it wasn't destroyed
+ * (the time so far is `soFarMs`).
+ */
+export interface DestroyStretches {
+  /** The time online at the count met (the start of the first cycle that starts at Daedalus's N), or null. */
+  countMetOnlineMs: number | null;
+  /** The time online at The Red Pill's install (the start of the first cycle with it), or null. */
+  redPillOnlineMs: number | null;
+  aMs: number | null;
+  bcMs: number | null;
+  redPillCycleMs: number | null;
+  dMs: number | null;
+  /** The BitNode's time online so far: to its destroy, or its last look. */
+  soFarMs: number;
+}
+
+/**
+ * The stretches (#360) from the fold's cycles: each cycle's time online, the count at its first look (`ownedAugs`'
+ * names, NeuroFlux Governor once), The Red Pill's first install, and the destroy. A save's cycle (#285) is left out:
+ * its count may go back. Its time online is still the BitNode's, as the campaign has it.
+ */
+export function destroyStretchesOf(view: BitNodeView): DestroyStretches {
+  const { bitNode } = view;
+  const required = daedalusAugmentationsRequired(bitNode.currentNode, bitNode.firstOwnedSF);
+  const cycles = bitNode.cycleList.filter((cycle) => cycle.kind !== "save");
+  const met = cycles.find((cycle) => cycle.redPill || (cycle.count !== null && cycle.count >= required));
+  const redPill = cycles.find((cycle) => cycle.redPill);
+  // The cycle its install ended: The Red Pill's own.
+  const ended =
+    redPill === undefined
+      ? undefined
+      : bitNode.cycleList.find((cycle) => cycle.endedBy.some((install) => install.installedAtMs === redPill.startMs));
+  const startSeen = view.startSeen && !bitNode.installedBeforeFirstLook;
+  const countMetOnlineMs = met?.startOnlineMs ?? null;
+  const redPillOnlineMs = redPill?.startOnlineMs ?? null;
+  return {
+    countMetOnlineMs,
+    redPillOnlineMs,
+    aMs: startSeen ? countMetOnlineMs : null,
+    bcMs:
+      countMetOnlineMs === null || redPillOnlineMs === null || met?.redPill === true
+        ? null
+        : redPillOnlineMs - countMetOnlineMs,
+    redPillCycleMs: ended?.onlineMs ?? null,
+    dMs:
+      view.ending.destroyedAtMs === null || redPillOnlineMs === null ? null : bitNode.clock.onlineMs - redPillOnlineMs,
+    soFarMs: bitNode.clock.onlineMs,
+  };
+}
+
+/**
+ * The prior for the BitNode `views[index]` (#360): the last destroyed before it, the same BitNode number first (by
+ * its `currentNode`), else the last destroyed of any; its stretches (`destroyStretchesOf`) and w0r1d_d43m0n's level
+ * there; null with none destroyed.
+ */
+export function destroyPriorOf(views: readonly BitNodeView[], index: number): DestroyPrior | null {
+  const current = views[index];
+  if (current === undefined) return null;
+  const destroyed = views.slice(0, index).filter((view) => view.ending.destroyedAtMs !== null);
+  const prior =
+    destroyed.findLast((view) => view.bitNode.currentNode === current.bitNode.currentNode) ?? destroyed.at(-1);
+  if (prior === undefined) return null;
+  const stretches = destroyStretchesOf(prior);
+  return {
+    bitNode: prior.name,
+    currentNode: prior.bitNode.currentNode,
+    aMs: stretches.aMs,
+    bcMs: stretches.bcMs,
+    redPillCycleMs: stretches.redPillCycleMs,
+    dMs: stretches.dMs,
+    requiredLevel: worldDaemonRequiredLevel(prior.bitNode.currentNode, prior.bitNode.firstOwnedSF),
+  };
 }

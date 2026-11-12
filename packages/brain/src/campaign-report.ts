@@ -2,20 +2,25 @@
 // store, every run and restart in it: the benchmark in place of community numbers. Read-only, and from the slow
 // snapshots' `resetInfo` and a few kinds of event alone: it never reads a medium or fast snapshot, so a store thinned
 // (#283) gives the same report. The campaign itself (where each BitNode and cycle starts, how each ended, the time
-// online) is `campaign-model.ts`'s, which the dashboard's timeline shows too (#285).
+// online) is `campaign-model.ts`'s, which the dashboard's timeline shows too (#285). Last, the time to the destroy
+// (#360, ./destroy-estimate-report.ts): each estimate, the brain's or hindcast, against the outcome.
 import { describeAugmentations, isFiniteNumber } from "./augmentation-report.ts";
 import { AUGMENTATION_SLOW_GAP_MS } from "./augmentations.ts";
 import {
   type BitNodeView,
   CAMPAIGN_EVENT_KINDS,
   type CampaignBitNode,
-  CampaignFold,
   campaignViews,
   describeEnding,
   installsOfLevel,
   type ReleaseShare,
   sum,
 } from "./campaign-model.ts";
+import {
+  DESTROY_ESTIMATE_REPORT_EVENT_KINDS,
+  destroyEstimateRows,
+  destroyEstimateSection,
+} from "./destroy-estimate-report.ts";
 import { formatDuration, formatIsoTime, plural } from "./gap-report.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 
@@ -63,16 +68,21 @@ function table(rows: string[][], indent = "  "): string[] {
  * has no slow snapshot showing a BitNode: there's nothing to report.
  */
 export function campaignReport(store: TelemetryStore, { environment }: { environment: Environment }): string {
-  const fold = new CampaignFold();
-  const events = store.readTransaction(() => {
-    // Each slow snapshot's `resetInfo` alone, taken out in the query (one a minute online, about 525,000 a year).
-    for (const snapshot of store.iterateSlowResetInfo({ environment })) fold.add(snapshot);
-    return store.eventsInWindow({
+  // The events first, so the time to the destroy's hindcast (#360) folds the slow snapshots once, with the campaign.
+  const { fold, estimates, events } = store.readTransaction(() => {
+    const read = store.eventsInWindow({
       environment,
       sinceMs: 0,
       untilMs: Number.MAX_SAFE_INTEGER,
-      kinds: CAMPAIGN_EVENT_KINDS,
+      kinds: DESTROY_ESTIMATE_REPORT_EVENT_KINDS,
     });
+    // Each slow snapshot's `resetInfo` alone, taken out in the query (one a minute online, about 525,000 a year).
+    const { fold, rows, unread } = destroyEstimateRows(store.iterateSlowResetInfo({ environment }), read);
+    return {
+      fold,
+      estimates: { rows, unread },
+      events: read.filter((event) => CAMPAIGN_EVENT_KINDS.includes(event.kind)),
+    };
   });
   const campaign = campaignViews(fold, events);
   if (campaign === null) {
@@ -86,7 +96,8 @@ export function campaignReport(store: TelemetryStore, { environment }: { environ
     `Campaign report (${environment}): every BitNode and release in the store, from ${formatIsoTime(firstMs)} to ` +
       `${formatIsoTime(lastMs)} (${formatDuration(lastMs - firstMs)})`,
     `  read: ${plural(fold.slowCount, "slow snapshot", "slow snapshots")} and the events of the brain's starts ` +
-      `(${brainStarts}), installs and destroys, never a medium or fast snapshot (so a store thinned, #283, gives the ` +
+      `(${brainStarts}), installs and destroys, the destroy's estimates and A5's choices (#360), never a medium or fast ` +
+      "snapshot (so a store thinned, #283, gives the " +
       "same report)" +
       (fold.unread > 0
         ? `; ${plural(fold.unread, "slow snapshot", "slow snapshots")} with no resetInfo to read, left out`
@@ -102,6 +113,8 @@ export function campaignReport(store: TelemetryStore, { environment }: { environ
     ...releaseSection(views, releases),
     "",
     ...comparedSection(views),
+    "",
+    ...destroyEstimateSection(estimates.rows, estimates.unread, formatIsoTime),
   ];
   return lines.join("\n");
 }

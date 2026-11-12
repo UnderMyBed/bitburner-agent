@@ -1,0 +1,711 @@
+// The time to the destroy (#360): the campaign fold's stretches, the prior, the hindcast (nothing after its moment
+// read), the campaign report's section over the four BitNodes rebuilt from the store's tables (#360's findings, by
+// cycle), the brain's rule at each moment (once across a restart, a missed install marked late), and the run report's
+// hopeless bar. Over synthetic stores built here, never the owner's .data/.
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { FactionWorkChoice, SlowSnapshotData } from "@bitburner-agent/core";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { CampaignFold, campaignViews, destroyPriorOf, destroyStretchesOf } from "../src/campaign-model.ts";
+import { campaignReport } from "../src/campaign-report.ts";
+import { STORE_FILE_NAME } from "../src/config.ts";
+import {
+  DESTROY_ESTIMATE_SETTING,
+  DESTROY_ESTIMATED_EVENT_KIND,
+  type DestroyEstimateEvent,
+  type DestroyEstimateRecord,
+  DestroyEstimateRule,
+  type DestroySeed,
+  readDestroySeed,
+} from "../src/destroy-estimate.ts";
+import {
+  DESTROY_ESTIMATE_REPORT_EVENT_KINDS,
+  destroyEstimateHealthLines,
+  destroyEstimateRows,
+  type JudgedRow,
+} from "../src/destroy-estimate-report.ts";
+import type { LevellingView } from "../src/levelling.ts";
+import { type SlowResetInfo, type StoredEvent, TelemetryStore } from "../src/telemetry-store.ts";
+import { WorldDaemonFold } from "../src/world-daemon-report.ts";
+
+const T0 = Date.parse("2026-11-01T00:00:00Z");
+const MINUTE = 60_000;
+const m = (minutes: number) => T0 + minutes * MINUTE;
+const RELEASE = "v1.0.0+aaaaaaaa";
+const RED_PILL = "The Red Pill";
+const NF = "NeuroFlux Governor";
+
+let directory: string;
+let store: TelemetryStore;
+beforeEach(() => {
+  directory = mkdtempSync(path.join(os.tmpdir(), "destroy-estimate-"));
+  store = TelemetryStore.open(path.join(directory, STORE_FILE_NAME));
+});
+afterEach(() => {
+  store.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+let sequenceNumber = 0;
+/** `count` installed by Daedalus's count: NeuroFlux Governor (at `nfLevel`) once, the rest one each; The Red Pill too. */
+function augs(count: number, { redPill = false, nfLevel = 5 } = {}): Record<string, number> {
+  if (count === 0) return {};
+  const owned: Record<string, number> = { [NF]: nfLevel };
+  for (let index = 1; index < count - (redPill ? 1 : 0); index++) owned[`Augmentation ${index}`] = 1;
+  if (redPill) owned[RED_PILL] = 1;
+  return owned;
+}
+const resetInfo = (node: number, aug: number, currentNode: number, ownedSF: Record<string, number>, owned = {}) => ({
+  lastNodeReset: m(node),
+  lastAugReset: m(aug),
+  currentNode,
+  ownedSF,
+  ownedAugs: owned,
+  bitNodeOptions: {},
+});
+/** A slow snapshot at `minute` (the game's clock the brain's: one machine). */
+function slow(minute: number, info: ReturnType<typeof resetInfo>, factions?: { name: string; favor: number }[]) {
+  const data: SlowSnapshotData = { resetInfo: info, purchasedServers: [] } as unknown as SlowSnapshotData;
+  if (factions !== undefined) {
+    (data as unknown as Record<string, unknown>).factions = {
+      backend: "sim",
+      state: {
+        joined: factions.map(({ name, favor }) => ({ name, reputation: 0, favor })),
+        invitations: [],
+        queuedAugmentations: [],
+      },
+      problem: null,
+    };
+  }
+  store.recordSnapshot(
+    { environment: "E0", release: RELEASE },
+    {
+      agentSessionId: "session-1",
+      tier: "slow",
+      sequenceNumber: ++sequenceNumber,
+      gameTimeMs: m(minute),
+      receivedAtMs: m(minute),
+      missedBefore: 0,
+      data,
+    },
+  );
+  return data;
+}
+function event(minute: number, kind: string, detail: unknown = {}) {
+  store.recordEvent({ environment: "E0", release: RELEASE }, { atMs: m(minute), kind, detail });
+}
+
+/**
+ * A BitNode played from minute `from` (its `lastNodeReset`, the last one's last look): each cycle `online[i]` minutes,
+ * a slow snapshot a minute, its install at its last minute (the next cycle's first slow snapshot a minute on), at the
+ * count `counts[i]`, The Red Pill installed from cycle `redPillCycle` on. Daedalus joined `joinedAt` minutes into
+ * cycle `holdCycle` (A5's choice for The Red Pill then, its ETA `etaMinutes`). Returns its last minute.
+ */
+function bitNode({
+  from,
+  currentNode,
+  ownedSF,
+  online,
+  counts,
+  redPillCycle,
+  hold,
+  destroySent = true,
+}: {
+  from: number;
+  currentNode: number;
+  ownedSF: Record<string, number>;
+  online: readonly number[];
+  counts: readonly number[];
+  redPillCycle?: number;
+  hold?: { cycle: number; joinedAt: number; etaMinutes: number };
+  destroySent?: boolean;
+}): number {
+  let start = from;
+  online.forEach((minutes, index) => {
+    const info = resetInfo(
+      from,
+      start,
+      currentNode,
+      ownedSF,
+      augs(counts[index] as number, {
+        redPill: redPillCycle !== undefined && index >= redPillCycle,
+      }),
+    );
+    for (let minute = start + 1; minute <= start + minutes; minute++) slow(minute, info);
+    if (hold !== undefined && hold.cycle === index) {
+      event(start + hold.joinedAt + 0.5, "factionWorkChosen", {
+        faction: "Daedalus",
+        augmentation: RED_PILL,
+        workType: "hacking",
+        etaSeconds: hold.etaMinutes * 60,
+      });
+    }
+    if (index < online.length - 1) event(start + minutes - 0.5, "augmentationInstallSent", { source: "brain" });
+    start += minutes;
+  });
+  if (destroySent) event(start - 0.5, "bitNodeDestroySent", { source: "brain", nextBitNode: 1 });
+  return start;
+}
+
+/**
+ * The four BitNodes, cycle by cycle, from install timing's tables (#343, #360's findings): each cycle's online
+ * minutes and Daedalus's count at its start; the Red Pill stretch's joins (seen + 1 min) at the ETAs `factionWork
+ * Chosen` gave then (157, 184, 35 and 165 min: the share left out). Then BN1 with SF4.1, a look, open.
+ */
+const BN1_2 = {
+  online: [39, 56, 75, 95, 123, 124, 31, 27, 81, 18, 2],
+  counts: [0, 3, 5, 10, 17, 21, 25, 29, 31, 32, 36],
+};
+const BN1_3 = {
+  online: [37, 50, 70, 141, 18, 93, 138, 85, 92, 22, 4],
+  counts: [0, 3, 5, 10, 14, 18, 23, 32, 37, 37, 41],
+};
+const BN1_4 = {
+  online: [34, 38, 32, 17, 18, 19, 18, 19, 47, 37, 31, 17, 22, 39, 8, 2],
+  counts: [0, 3, 14, 15, 15, 15, 16, 17, 17, 19, 22, 25, 27, 36, 37, 41],
+};
+const BN4_1 = {
+  online: [140, 121, 128, 136, 219, 125, 154, 36, 125, 20, 419],
+  counts: [0, 4, 5, 7, 11, 15, 23, 32, 36, 37, 41],
+};
+function fourBitNodes(): void {
+  store.writeTransaction(fourBitNodesWritten);
+}
+function fourBitNodesWritten(): void {
+  event(0, "brainStarted", { release: "v1.0.0" });
+  let end = bitNode({
+    from: 0,
+    currentNode: 1,
+    ownedSF: { 1: 1 },
+    ...BN1_2,
+    redPillCycle: 10,
+    hold: { cycle: 8, joinedAt: 16, etaMinutes: 157 },
+  });
+  end = bitNode({
+    from: end,
+    currentNode: 1,
+    ownedSF: { 1: 2 },
+    ...BN1_3,
+    redPillCycle: 10,
+    hold: { cycle: 8, joinedAt: 17, etaMinutes: 184 },
+  });
+  end = bitNode({
+    from: end,
+    currentNode: 1,
+    ownedSF: { 1: 3 },
+    ...BN1_4,
+    redPillCycle: 15,
+    hold: { cycle: 13, joinedAt: 7, etaMinutes: 35 },
+  });
+  end = bitNode({
+    from: end,
+    currentNode: 4,
+    ownedSF: { 1: 3 },
+    ...BN4_1,
+    redPillCycle: 10,
+    hold: { cycle: 8, joinedAt: 23, etaMinutes: 165 },
+  });
+  bitNode({ from: end, currentNode: 1, ownedSF: { 1: 3, 4: 1 }, online: [5], counts: [0], destroySent: false });
+}
+
+const readAll = () => ({
+  slows: [...store.iterateSlowResetInfo({ environment: "E0" })],
+  events: store.eventsInWindow({
+    environment: "E0",
+    sinceMs: 0,
+    untilMs: Number.MAX_SAFE_INTEGER,
+    kinds: DESTROY_ESTIMATE_REPORT_EVENT_KINDS,
+  }),
+});
+const minutes = (ms: number | null) => (ms === null ? null : Math.round(ms / MINUTE));
+
+describe("the campaign fold's stretches and the prior (#360)", () => {
+  test("A, B + C, The Red Pill's cycle and D from the cycles; NeuroFlux Governor counted once", () => {
+    fourBitNodes();
+    const { slows, events } = readAll();
+    const fold = new CampaignFold();
+    for (const snapshot of slows) fold.add(snapshot);
+    const views =
+      campaignViews(
+        fold,
+        events.filter((each) => each.kind !== "factionWorkChosen"),
+      )?.views ?? [];
+    expect(views.map((view) => view.name)).toEqual(["BN1.2", "BN1.3", "BN1.4", "BN4.1", "BN1.4 #2"]);
+    const stretches = views.map((view) => {
+      const each = destroyStretchesOf(view);
+      return [minutes(each.aMs), minutes(each.bcMs), minutes(each.redPillCycleMs), minutes(each.dMs)];
+    });
+    // NeuroFlux Governor at level 5 is one of the count: A ends where the count reaches 30, not at its levels.
+    expect(stretches).toEqual([
+      [570, 81 + 18, 18, 2],
+      [547, 85 + 92 + 22, 22, 4],
+      [349, 39 + 8, 8, 2],
+      [1023, 36 + 125 + 20, 20, 419],
+      [null, null, null, null],
+    ]);
+    // The prior: the same number first (BN1.3's is BN1.2), else the last destroyed (BN4.1's is BN1.4); levels apart.
+    expect(destroyPriorOf(views, 0)).toBeNull();
+    expect(destroyPriorOf(views, 1)).toMatchObject({ bitNode: "BN1.2", requiredLevel: 3000, aMs: 570 * MINUTE });
+    expect(destroyPriorOf(views, 3)).toMatchObject({ bitNode: "BN1.4", currentNode: 1, requiredLevel: 3000 });
+    expect(destroyPriorOf(views, 4)).toMatchObject({ bitNode: "BN1.4", currentNode: 1 });
+  });
+
+  test("a save loaded: its cycle left out of the count; an open BitNode's so far, D none", () => {
+    event(0, "brainStarted", { release: "v1.0.0" });
+    const ownedSF = { 1: 1 };
+    for (let minute = 1; minute <= 30; minute++) slow(minute, resetInfo(0, 0, 1, ownedSF, augs(0)));
+    for (let minute = 31; minute <= 60; minute++) slow(minute, resetInfo(0, 30, 1, ownedSF, augs(31)));
+    // A save from the first cycle loaded at 61: its count goes back; then the install at 30 again, seen.
+    for (let minute = 61; minute <= 70; minute++) slow(minute, resetInfo(0, 0, 1, ownedSF, augs(0)));
+    for (let minute = 71; minute <= 80; minute++)
+      slow(minute, resetInfo(0, 70, 1, ownedSF, augs(31, { redPill: true })));
+    const { slows, events } = readAll();
+    const fold = new CampaignFold();
+    for (const snapshot of slows) fold.add(snapshot);
+    const [view] = campaignViews(fold, events)?.views ?? [];
+    expect(view?.bitNode.savesLoadedAtMs).toEqual([m(61)]);
+    expect(view?.soFar).toBe(true);
+    const stretches = destroyStretchesOf(view as NonNullable<typeof view>);
+    expect([stretches.aMs, stretches.bcMs, stretches.dMs, stretches.soFarMs].map(minutes)).toEqual([30, 40, null, 80]);
+  });
+});
+
+/** The section's rows over the store. */
+function rowsOf(): JudgedRow[] {
+  const { slows, events } = readAll();
+  return destroyEstimateRows(slows, events).rows;
+}
+const summary = (row: JudgedRow) => [
+  row.name,
+  row.record.stage,
+  minutes(row.record.onlineMs),
+  minutes(row.record.remainingMs),
+  row.ratio === null ? null : Number(row.ratio.toFixed(2)),
+  row.record.atLeast,
+];
+
+describe("the hindcast and the campaign report's section (#360)", () => {
+  test("every start, install and join of the four BitNodes, hindcast, against the outcome", () => {
+    fourBitNodes();
+    const rows = rowsOf();
+    expect(rows.every((row) => row.hindcast)).toBe(true);
+    // One a start, one an install, one a join; none in the last (open) BitNode's ratio.
+    expect(rows.filter((row) => row.record.moment === "start").map((row) => row.name)).toEqual([
+      "BN1.2",
+      "BN1.3",
+      "BN1.4",
+      "BN4.1",
+      "BN1.4 #2",
+    ]);
+    expect(rows.filter((row) => row.record.moment === "install")).toHaveLength(10 + 10 + 15 + 10);
+    expect(rows.filter((row) => row.record.moment === "joined").map((row) => row.name)).toEqual([
+      "BN1.2",
+      "BN1.3",
+      "BN1.4",
+      "BN4.1",
+    ]);
+    const bn13 = rows.filter((row) => row.name === "BN1.3").map(summary);
+    // BN1.3's cycles start at 0, 37, 87, 157, 298, 316, 409, 547, 632, 724 and 746 online; it's destroyed at 750. Each
+    // install is estimated at its first slow snapshot, a minute on. Its start from BN1.2's 570 + 99 + 2, of 749.
+    expect(bn13[0]).toEqual(["BN1.3", "start", 1, 671, 0.9, false]);
+    // c3 by the mean (88 × 25/5 = 440) plus the prior's B + C and D: 541 of 662.
+    expect(bn13[2]).toEqual(["BN1.3", "install", 88, 541, 0.82, false]);
+    // The count met at c8 (547): B + C 99 less the minute since, and D 2: 100 of 202. Again at c9, not yet joined.
+    expect(bn13[7]).toEqual(["BN1.3", "count met", 548, 100, 0.5, false]);
+    expect(bn13[8]?.[1]).toBe("count met");
+    // Joined 17 min into c9: the ETA then (184 min, the share left out) plus BN1.2's Red Pill cycle and D, of 101.
+    expect(bn13.find((row) => row[1] === "joined")).toEqual(["BN1.3", "joined", 649, 184 + 18 + 2, 2.02, false]);
+    // The install after the join (the donations'): BN1.2's Red Pill cycle and D, of 25; then D alone, of 3.
+    expect(bn13.find((row) => row[1] === "donations install")).toEqual([
+      "BN1.3",
+      "donations install",
+      725,
+      18 + 2,
+      0.8,
+      false,
+    ]);
+    expect(bn13.find((row) => row[1] === "The Red Pill installed")).toEqual([
+      "BN1.3",
+      "The Red Pill installed",
+      747,
+      2,
+      0.67,
+      false,
+    ]);
+    // BN4.1 from BN1.4: no D at 9,000 (BN1's 3,000), so at least; the next BitNode, open: no ratio.
+    const bn41 = rows.filter((row) => row.name === "BN4.1").map(summary);
+    expect(bn41[0]).toEqual(["BN4.1", "start", 1, 349 + 47, 0.24, true]);
+    expect(rows.filter((row) => row.name === "BN1.4 #2").map((row) => row.ratio)).toEqual([null]);
+  });
+
+  test("the hindcast reads nothing after its moment: the store cut there, or changed after it, gives the same rows", () => {
+    fourBitNodes();
+    const whole = rowsOf();
+    const { slows, events } = readAll();
+    // Cut at BN1.4's c5 (the rows' estimates up to there, not their outcomes, which are the whole campaign's).
+    const cutMs = whole.filter((row) => row.name === "BN1.4")[4]?.atMs as number;
+    const upTo = (rows: readonly JudgedRow[]) =>
+      rows.filter((row) => row.atMs <= cutMs).map(({ record, atMs }) => ({ record, atMs }));
+    const cut = destroyEstimateRows(
+      slows.filter((snapshot) => snapshot.receivedAtMs <= cutMs),
+      events.filter((each) => each.atMs <= cutMs),
+    ).rows;
+    expect(upTo(cut)).toEqual(upTo(whole));
+    // After it, everything changed: other counts, a join an hour sooner, no destroy sent: the same rows to there.
+    const changed: SlowResetInfo[] = slows.map((snapshot) =>
+      snapshot.receivedAtMs <= cutMs
+        ? snapshot
+        : { ...snapshot, resetInfo: { ...snapshot.resetInfo, ownedAugs: augs(40, { redPill: true }) } },
+    );
+    const otherEvents: StoredEvent[] = [
+      ...events.filter((each) => each.atMs <= cutMs),
+      { atMs: cutMs + 60 * MINUTE, kind: "factionWorkChosen", detail: { faction: "Daedalus", augmentation: RED_PILL } },
+    ];
+    expect(upTo(destroyEstimateRows(changed, otherEvents).rows)).toEqual(upTo(whole));
+  });
+
+  test("the brain's own estimates are its rows from the first on; the hindcast's only before it", () => {
+    fourBitNodes();
+    const live = rowsOf().find((row) => row.name === "BN4.1" && row.record.moment === "joined");
+    const record = { ...(live?.record as DestroyEstimateRecord), remainingMs: 600 * MINUTE };
+    // The brain's own join estimate, just before the hindcast's would be.
+    event(((live?.atMs as number) - T0) / MINUTE - 0.1, DESTROY_ESTIMATED_EVENT_KIND, record);
+    const rows = rowsOf();
+    const bn41 = rows.filter((row) => row.name === "BN4.1");
+    expect(bn41.filter((row) => !row.hindcast).map((row) => row.record.stage)).toEqual(["joined"]);
+    // Nothing hindcast from the brain's first estimate on: its join, the donations and The Red Pill's installs.
+    expect(
+      bn41
+        .filter((row) => row.hindcast)
+        .map((row) => row.record.stage)
+        .at(-1),
+    ).toBe("count met");
+    // Against BN4.1's 1,623 minutes, joined at 1,082.
+    expect(bn41.find((row) => !row.hindcast)?.ratio).toBeCloseTo(600 / (1623 - 1082), 9);
+  });
+
+  test("the campaign report prints the section: a row each, each BitNode's median and worst, the ratios by moment", () => {
+    fourBitNodes();
+    const text = campaignReport(store, { environment: "E0" });
+    const lines = text.split("\n");
+    const start = lines.findIndex((line) => line.startsWith("Time to the destroy (#360)"));
+    expect(start).toBeGreaterThan(0);
+    const section = lines.slice(start);
+    expect(section[1]).toMatch(/^ {2}BitNode +at +moment +online +est\. remaining +est\. total +actual remaining/);
+    expect(section).toContainEqual(expect.stringMatching(/^ {2}BN4\.1 +\S+ +start \(hindcast\) +1 min +≥ 6 h 36 min /));
+    // The summaries: the estimates that aren't at least. BN1.2's have no prior (BN1.1 isn't in the store), BN4.1's no D
+    // at 9,000 (BN1.4's is at 3,000): bounds, left out.
+    expect(section.slice(section.indexOf("  each BitNode:"))).toEqual([
+      "  each BitNode:",
+      "    BN1.2: no ratio; 12 at least, left out",
+      "    BN1.3: 12 ratio(s), median 0.71, worst 0.17, 0.17-2.02",
+      "    BN1.4: 17 ratio(s), median 1.75, worst 4.21, 0.88-4.21",
+      "    BN4.1: no ratio; 12 at least, left out",
+      "    BN1.4 #2: no ratio",
+      "  by moment, over the campaign:",
+      "    start: 2 ratio(s), median 1.39, worst 1.89, 0.90-1.89; 2 at least, left out",
+      "    install: 18 ratio(s), median 1.25, worst 3.42, 0.62-3.42; 13 at least, left out",
+      "    count met: 3 ratio(s), median 0.50, worst 0.17, 0.17-4.21; 3 at least, left out",
+      "    joined: 2 ratio(s), median 1.74, worst 2.02, 1.45-2.02; 2 at least, left out",
+      "    donations install: 2 ratio(s), median 1.84, worst 2.89, 0.80-2.89; 2 at least, left out",
+      "    The Red Pill installed: 2 ratio(s), median 2.33, worst 4.00, 0.67-4.00; 2 at least, left out",
+      "  within ×1.25: 7 of 29; within ×1.5: 14; within ×2: 19 (Q9, #39; the estimates that aren't at least)",
+    ]);
+  });
+});
+
+/** Levelling's view, as the rule reads it: off unless `estimateSeconds` is given. */
+const levellingView = (estimateSeconds?: number): LevellingView =>
+  estimateSeconds === undefined
+    ? { applies: false, mode: "money", estimates: null, target: null, fit: null, lines: [] }
+    : {
+        applies: true,
+        mode: "money",
+        estimates: { money: estimateSeconds, level: null, install: null },
+        target: null,
+        fit: null,
+        lines: [],
+      };
+const choice = (etaMinutes: number): FactionWorkChoice => ({
+  faction: "Daedalus",
+  workType: "hacking",
+  augmentation: RED_PILL,
+  reputation: 0,
+  reputationNeeded: 462_491,
+  reputationPerSecond: 1,
+  etaSeconds: etaMinutes * 60,
+});
+
+describe("the brain's rule (#360)", () => {
+  const PRIOR = { bitNode: "BN1.2", currentNode: 1, requiredLevel: 3000 };
+  const seed: DestroySeed = {
+    prior: {
+      ...PRIOR,
+      aMs: 570 * MINUTE,
+      bcMs: 100 * MINUTE,
+      redPillCycleMs: 18 * MINUTE,
+      dMs: 3 * MINUTE,
+    },
+    onlineMs: 0,
+    countMetOnlineMs: null,
+  };
+  /** A rule over the store, its events kept, its log too. */
+  const ruleOf = () => {
+    const events: DestroyEstimateEvent[] = [];
+    const log: string[] = [];
+    const rule = new DestroyEstimateRule({
+      store,
+      log: (line) => log.push(line),
+      emit: (e) => events.push(e),
+      seedOf: () => seed,
+    });
+    return { rule, events, log };
+  };
+  /** One update at `minute` of BN1.3 (from minute 0), the cycle from `aug` with `count`; Daedalus's favour if joined. */
+  const update = (
+    rule: DestroyEstimateRule,
+    minute: number,
+    aug: number,
+    count: number,
+    {
+      daedalus,
+      eta,
+      redPill = false,
+      levelling,
+    }: { daedalus?: number; eta?: number; redPill?: boolean; levelling?: number } = {},
+  ) =>
+    rule.update({
+      slowData: slow(
+        minute,
+        resetInfo(0, aug, 1, { 1: 2 }, augs(count, { redPill })),
+        daedalus === undefined ? [] : [{ name: "Daedalus", favor: daedalus }],
+      ),
+      slowGameTimeMs: m(minute),
+      slowAtMs: m(minute),
+      factionChoice: eta === undefined ? null : choice(eta),
+      levelling: levellingView(levelling),
+      nowMs: m(minute),
+    });
+
+  test("an estimate at the start, each install, Daedalus joined and levelling's first choice: each moment once", () => {
+    const { rule, events, log } = ruleOf();
+    for (let minute = 1; minute <= 3; minute++) update(rule, minute, 0, 0);
+    for (let minute = 4; minute <= 6; minute++) update(rule, minute, 3, 10);
+    // The count met at 7; Daedalus joined at 9 (favour 0), A5's ETA 100 min; then the donations install (favour 152).
+    for (let minute = 7; minute <= 8; minute++) update(rule, minute, 6, 31);
+    for (let minute = 9; minute <= 10; minute++) update(rule, minute, 6, 31, { daedalus: 0, eta: 100 });
+    update(rule, 11, 10, 35);
+    update(rule, 12, 10, 35, { daedalus: 152 });
+    // The Red Pill installed at 13; levelling's first estimate (20 min) at 14.
+    update(rule, 13, 12, 36, { redPill: true });
+    for (let minute = 14; minute <= 15; minute++) update(rule, minute, 12, 36, { redPill: true, levelling: 1200 });
+    expect(events.map((each) => [each.moment, each.stage, minutes(each.onlineMs), minutes(each.remainingMs)])).toEqual([
+      ["start", "start", 0, 570 + 100 + 3],
+      ["install", "install", 3, (3 * 20) / 10 + 100 + 3],
+      ["install", "count met", 6, 100 + 3],
+      ["joined", "joined", 8, 100 + 18 + 3],
+      ["install", "donations install", 10, 18 + 3],
+      ["install", "The Red Pill installed", 12, 3],
+      ["levelling", "levelling", 13, 20],
+    ]);
+    expect(events.every((each) => each.type === DESTROY_ESTIMATED_EVENT_KIND && !each.late)).toBe(true);
+    expect(events[3]?.terms[1]).toMatchObject({ term: "BC", label: "cautious", never: false });
+    expect(log.filter((line) => line.startsWith("destroy estimate: the destroy (#360), at "))).toHaveLength(7);
+    // The dashboard's World Daemon line: the latest.
+    expect(rule.lines()).toEqual([
+      expect.stringMatching(/^time to the destroy \(#360\), at levelling's first choice /),
+    ]);
+  });
+
+  test("once across a restart: the note carries the moments, the clock and the last estimate", () => {
+    const first = ruleOf();
+    for (let minute = 1; minute <= 5; minute++) update(first.rule, minute, 0, 0);
+    expect(first.events.map((each) => each.moment)).toEqual(["start"]);
+    expect(JSON.parse(store.getSetting(DESTROY_ESTIMATE_SETTING) as string)).toMatchObject({
+      lastNodeReset: m(0),
+      lastAugReset: m(0),
+      clock: { onlineMs: 4 * MINUTE },
+    });
+    // A restart in the same cycle: no estimate again, the line kept; the clock goes on.
+    const second = ruleOf();
+    expect(second.rule.lines()).toEqual(first.rule.lines());
+    for (let minute = 6; minute <= 7; minute++) update(second.rule, minute, 0, 0);
+    expect(second.events).toEqual([]);
+    update(second.rule, 8, 7, 5);
+    expect(second.events.map((each) => [each.moment, minutes(each.onlineMs), each.late])).toEqual([
+      ["install", 7, false],
+    ]);
+  });
+
+  test("an install while the brain was down: estimated at the first slow snapshot after it, marked late", () => {
+    const first = ruleOf();
+    for (let minute = 1; minute <= 5; minute++) update(first.rule, minute, 0, 0);
+    // Down from 5 to 40; the install at 20: seen at 40, 20 minutes after.
+    const second = ruleOf();
+    update(second.rule, 40, 20, 5);
+    expect(second.events.map((each) => [each.moment, each.late, minutes(each.onlineMs)])).toEqual([
+      ["install", true, 4],
+    ]);
+    expect(second.events[0]?.stage).toBe("install");
+  });
+
+  test("a term never (levelling at no rate) is stored as never, with no time", () => {
+    const { rule, events } = ruleOf();
+    update(rule, 1, 0, 36, { redPill: true });
+    update(rule, 2, 0, 36, { redPill: true, levelling: Number.POSITIVE_INFINITY });
+    expect(events.at(-1)).toMatchObject({ moment: "levelling", never: true, remainingMs: null });
+    expect(events.at(-1)?.terms[2]).toMatchObject({ term: "D", never: true, ms: null });
+    // As JSON (the store's): the same.
+    expect(JSON.parse(JSON.stringify(events.at(-1)))).toMatchObject({ never: true, remainingMs: null });
+  });
+
+  test("outside Daedalus's route (BN2): none, said once in the log", () => {
+    const { rule, events, log } = ruleOf();
+    for (let minute = 1; minute <= 3; minute++) {
+      rule.update({
+        slowData: slow(minute, resetInfo(0, 0, 2, { 1: 3 }, {})),
+        slowGameTimeMs: m(minute),
+        slowAtMs: m(minute),
+        factionChoice: null,
+        levelling: levellingView(),
+        nowMs: m(minute),
+      });
+    }
+    expect(events).toEqual([]);
+    expect(log).toEqual([expect.stringMatching(/^destroy estimate: none in BitNode 2: its route isn't Daedalus's/)]);
+  });
+
+  test("the store's seed: the prior from the BitNodes before, the time online so far, the BitNode not stored yet", () => {
+    fourBitNodes();
+    // BN1.4 #2, open: its seed at its last slow snapshot, stored already.
+    const { slows } = readAll();
+    const last = slows.at(-1) as SlowResetInfo;
+    const seedNow = readDestroySeed(store, "E0", { ...last, resetInfo: last.resetInfo as Record<string, unknown> });
+    expect(seedNow.prior).toMatchObject({ bitNode: "BN1.4", currentNode: 1 });
+    expect(minutes(seedNow.onlineMs)).toBe(5);
+    // A new BitNode, the next slow snapshot not stored: BN1.4 #2 ended by it.
+    const next = {
+      receivedAtMs: last.receivedAtMs + MINUTE,
+      gameTimeMs: last.gameTimeMs + MINUTE,
+      resetInfo: resetInfo(last.receivedAtMs / MINUTE - T0 / MINUTE, last.receivedAtMs / MINUTE - T0 / MINUTE, 5, {
+        1: 3,
+        4: 1,
+      }),
+    };
+    // Its first step, from its `lastNodeReset` (the campaign's clock): a minute.
+    expect(readDestroySeed(store, "E0", next)).toMatchObject({ onlineMs: MINUTE, countMetOnlineMs: null });
+    // BN5's prior: none of BN5, so the last destroyed (BN4.1); BN1.4 #2 had no destroy sent at the cap, so isn't.
+    expect(readDestroySeed(store, "E0", next).prior).toMatchObject({ bitNode: "BN4.1", currentNode: 4 });
+  });
+});
+
+describe("the run report's check (#360)", () => {
+  const record = (fields: Partial<DestroyEstimateRecord>): StoredEvent => ({
+    atMs: m(100),
+    kind: DESTROY_ESTIMATED_EVENT_KIND,
+    detail: {
+      moment: "install",
+      stage: "count met",
+      late: false,
+      bitNode: "BN1.3",
+      currentNode: 1,
+      lastNodeReset: m(0),
+      lastAugReset: m(90),
+      onlineMs: 100 * MINUTE,
+      remainingMs: 100 * MINUTE,
+      totalMs: 200 * MINUTE,
+      atLeast: false,
+      never: false,
+      count: 31,
+      required: 30,
+      requiredLevel: 3000,
+      prior: "BN1.2",
+      terms: [
+        { term: "A", ms: 0, never: false, atLeast: false, source: "the count met", label: "done" },
+        { term: "BC", ms: 97 * MINUTE, never: false, atLeast: false, source: "the prior's", label: "either way" },
+        { term: "D", ms: 3 * MINUTE, never: false, atLeast: false, source: "the prior's", label: "either way" },
+      ],
+      ...fields,
+    },
+  });
+  const judge = (events: StoredEvent[], worldDaemonEnabled = true) => {
+    const failures: string[] = [];
+    const warnings: string[] = [];
+    const lines = destroyEstimateHealthLines(events, {
+      failures,
+      warnings,
+      formatTime: (ms) => `${(ms - T0) / MINUTE}m`,
+      worldDaemonEnabled,
+    });
+    return { failures, warnings, lines };
+  };
+
+  test("from the count met on, a remaining time past the online so far fails; at it, or before the count, passes", () => {
+    expect(judge([record({})]).failures).toEqual([]);
+    expect(judge([record({ remainingMs: 101 * MINUTE })]).failures).toEqual([
+      "destroy estimate hopeless at 100m (BN1.3, count met): 1 h 41 min to go, past the 1 h 40 min the BitNode has " +
+        "taken online so far",
+    ]);
+    // Before the count is met, A by the mean is above that bar by its form: never judged.
+    const short = record({
+      stage: "install",
+      remainingMs: 900 * MINUTE,
+      terms: [{ term: "A", ms: 800 * MINUTE, never: false, atLeast: false, source: "the mean", label: "either way" }],
+    });
+    expect(judge([short]).failures).toEqual([]);
+    expect(judge([record({})]).lines).toEqual([expect.stringMatching(/^ {2}the time to the destroy/), "    none"]);
+  });
+
+  test("a term never fails at once; with the World Daemon's switch off, both are warnings", () => {
+    const never = record({
+      never: true,
+      remainingMs: null,
+      totalMs: null,
+      stage: "levelling",
+      terms: [
+        {
+          term: "D",
+          ms: null,
+          never: true,
+          atLeast: false,
+          source: "levelling's chosen candidate",
+          label: "either way",
+        },
+      ],
+    });
+    expect(judge([never]).failures).toEqual([
+      "destroy estimate never at 100m (BN1.3, levelling): D: levelling's chosen candidate",
+    ]);
+    const off = judge([never, record({ remainingMs: 101 * MINUTE })], false);
+    expect(off.failures).toEqual([]);
+    expect(off.warnings).toHaveLength(2);
+    expect(off.warnings.every((each) => each.endsWith("so a warning)"))).toBe(true);
+    // One the brain didn't write: a failure, not left out silently.
+    expect(judge([{ atMs: m(1), kind: DESTROY_ESTIMATED_EVENT_KIND, detail: { moment: "x" } }]).failures).toEqual([
+      "destroy estimate: 1 destroyEstimated event(s) not read (not the brain's form)",
+    ]);
+  });
+
+  test("w0r1d_d43m0n's level in the static snapshot against the BitNode's multipliers: a failure where it differs", () => {
+    const failuresOf = (level: number, currentNode: number) => {
+      const fold = new WorldDaemonFold();
+      fold.addStatic(m(10), { servers: [{ hostname: "w0r1d_d43m0n", requiredHackingSkill: level }] } as never);
+      fold.addSlow(m(11), m(11), { resetInfo: { currentNode, ownedSF: { 1: 3 } } } as never);
+      const failures: string[] = [];
+      fold.healthLines([], {
+        failures,
+        warnings: [],
+        formatTime: (ms) => `${(ms - T0) / MINUTE}m`,
+        bitNodeAt: () => 0,
+      });
+      return failures;
+    };
+    expect(failuresOf(9000, 4)).toEqual([]);
+    expect(failuresOf(4500, 5)).toEqual([]);
+    expect(failuresOf(3000, 4)).toEqual([
+      "w0r1d_d43m0n's level 3000 in the static snapshot at 10m, not BitNode 4's 9000 (3000 × its WorldDaemonDifficulty, " +
+        "core's worldDaemonRequiredLevel, #360)",
+    ]);
+  });
+});

@@ -24,6 +24,7 @@ import {
 import type { Simulation } from "@bitburner-agent/sim";
 import { expect, test } from "vitest";
 import { AUGMENTATION_BOUGHT_EVENT_KIND, AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND } from "../src/augmentations.ts";
+import { DESTROY_ESTIMATED_EVENT_KIND, type DestroyEstimateRecord } from "../src/destroy-estimate.ts";
 import { runReport } from "../src/run-report.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -180,6 +181,25 @@ test("an install at BN5's prices: CyberSec's five, home's RAM and NeuroFlux Gove
   expect(controller.augmentationsView()).toMatchObject({ committed: false, notQueued: [] });
   expect(controller.installAwaitingRestart()).toBeNull();
 
+  // The time to the destroy (#360): estimated at the start and at the install, at BN5's level (3000 × 1.5), with no
+  // BitNode destroyed in the store for a prior (so at least), A at the install by the BitNode's mean.
+  const estimates = fresh.data.store
+    .eventsInWindow({ environment: "E1", sinceMs: 0, untilMs: game.clock.now() })
+    .filter((event) => event.kind === DESTROY_ESTIMATED_EVENT_KIND)
+    .map((event) => event.detail as DestroyEstimateRecord);
+  expect(
+    estimates.map((each) => [each.moment, each.bitNode, each.count, each.requiredLevel, each.prior, each.atLeast]),
+  ).toEqual([
+    ["start", "BN5.1", 0, 4_500, null, true],
+    ["install", "BN5.1", set.length, 4_500, null, true],
+  ]);
+  const [, install] = estimates;
+  expect(install?.terms[0]).toMatchObject({ term: "A", label: "either way" });
+  expect(install?.terms[0]?.ms).toBeCloseTo(((install?.onlineMs ?? 0) * (30 - set.length)) / set.length, 6);
+  expect(controller.worldDaemonView().lines).toContainEqual(
+    expect.stringMatching(/^time to the destroy \(#360\), at install /),
+  );
+
   // The run report: each purchase at its BN5 price, through Singularity; the install done; and no failure.
   const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
   const { text, failures } = runReport(fresh.data.store, window, { verbose: true });
@@ -333,6 +353,25 @@ test("the destroy at BN5's World Daemon: held short of 4,500, then the brain's o
     /^ {2}BitNodes: BN5\.1 from \S+, destroyed after [^,]+, into BN2\.1; BN2\.1 from \S+, not destroyed, /,
   );
   expect(lines).toContain("    Source-Files: SF1.3, SF4.3, SF5.1 (unchanged)");
+  // The time to the destroy (#360): at the first cycle the brain sees, The Red Pill's (the harness installed it before the
+  // Agent, so an install): A and B + C done, D none (no BitNode destroyed in the store for a prior), at 4,500. None in
+  // BN2 (the gang's route, #357), said once.
+  const estimates = stored(DESTROY_ESTIMATED_EVENT_KIND) as DestroyEstimateRecord[];
+  expect(estimates[0]).toMatchObject({
+    moment: "install",
+    stage: "The Red Pill installed",
+    bitNode: "BN5.1",
+    requiredLevel: 4_500,
+    atLeast: true,
+  });
+  expect(estimates[0]?.terms.map((term) => [term.term, term.ms, term.label])).toEqual([
+    ["A", 0, "done"],
+    ["BC", 0, "done"],
+    ["D", null, "optimistic"],
+  ]);
+  expect(estimates.every((each) => each.bitNode === "BN5.1")).toBe(true);
+  expect(brain.logLines.filter((line) => line.startsWith("destroy estimate: none in BitNode 2"))).toHaveLength(1);
+  console.log(`destroy estimates in BN5.1: ${estimates.map((each) => each.moment).join(", ")}`);
   expect(lines).toContainEqual(expect.stringMatching(/^ {4}\S+ {2}destroy sent \(the brain's\), into BitNode 2$/));
   // Its worker dies in the reset before it reports; the slow snapshot after shows it done (#286).
   expect(lines).toContainEqual(
