@@ -64,22 +64,25 @@ export const COMBAT_GYM_TYPES: Record<CombatStat, string> = {
 export const JOIN_BLADEBURNER_WORKER_NAME = "join-bladeburner.js";
 /** Home worker: joins the faction when the brain asks, and reads the rank (the desired state's `bladeburner`). */
 export const BLADEBURNER_WORKER_NAME = "bladeburner.js";
+/** Home worker: raises a skill to a level (`upgradeBladeburnerSkill`'s intent, #379). */
+export const BLADEBURNER_SKILL_WORKER_NAME = "bladeburner-skill.js";
 
 /** The Bladeburner workers, for core's home worker lists. */
 export function bladeburnerWorkerFileNames(): string[] {
-  return [JOIN_BLADEBURNER_WORKER_NAME, BLADEBURNER_WORKER_NAME];
+  return [JOIN_BLADEBURNER_WORKER_NAME, BLADEBURNER_WORKER_NAME, BLADEBURNER_SKILL_WORKER_NAME];
 }
 
 /**
  * `bladeburner.js`'s RAM by the game's calculator (ram-budget.json, which a test keeps in step;
  * `Netscript/RamCostGenerator.ts:334-376`): 1.6 GB for a script; 4 GB each for `getRank`, `joinBladeburnerFaction`
- * (B1), and B2's (#375) `getStamina`, `getActionEstimatedSuccessChance`, `getActionCountRemaining`,
- * `getActionMaxLevel`, `getActionCurrentLevel`, `startAction`, `setActionLevel` and `setActionAutolevel`; 1 GB for
- * `getCurrentAction`; nothing for `getBonusTime` and `inBladeburner`. The brain asks for it only once home's RAM beyond
- * what it keeps for the Agent and its workers holds it (#359's RAM decision): at SF4.3 that's still a 128 GB home
- * (65.9 + 42.6 GB), as B1's 9.6 GB was; without SF4 the least home moves from B1's 41.6 GB to 74.6.
+ * (B1), B2's (#375) `getStamina`, `getActionEstimatedSuccessChance`, `getActionCountRemaining`, `getActionMaxLevel`,
+ * `getActionCurrentLevel`, `startAction`, `setActionLevel` and `setActionAutolevel`, and B3's (#379) `getSkillPoints`
+ * and `getSkillLevel`; 1 GB for `getCurrentAction`; nothing for `getBonusTime` and `inBladeburner`. The brain asks for
+ * it only once home's RAM beyond what it keeps for the Agent and its workers holds it (#359's RAM decision): at SF4.3
+ * that's still a 128 GB home (65.9 + 50.6 GB), as B1's 9.6 GB and B2's 42.6 were; without SF4 the least home moves
+ * from B2's 74.6 GB to 82.6, still a 128 GB home.
  */
-export const BLADEBURNER_WORKER_RAM_GB = 42.6;
+export const BLADEBURNER_WORKER_RAM_GB = 50.6;
 
 /** An action the brain asks `bladeburner.js` to run (#375): its type and name as the NS API has them, and its level. */
 export interface BladeburnerActionOrder {
@@ -103,7 +106,8 @@ export interface BladeburnerState {
  * worker's problems (a faction join or an action the game refused). In the division, B2's (#375) too (absent from a
  * B1 Agent): the stamina and its max (`getStamina`), the bonus time in seconds, the action the worker found under way
  * and the one under way after it acted (`getCurrentAction`: type and name, or null idle), and every contract and
- * operation, in core's order.
+ * operation, in core's order; and B3's (#379, absent from a B2 Agent): the skill points unspent (`getSkillPoints`) and
+ * each skill's level (`getSkillLevel`), by core's `BLADEBURNER_SKILL_NAMES`.
  */
 export interface BladeburnerReading {
   rank: number | null;
@@ -114,6 +118,8 @@ export interface BladeburnerReading {
   found?: { type: string; name: string } | null;
   current?: { type: string; name: string } | null;
   actions?: BladeburnerActionReading[];
+  skillPoints?: number;
+  skillLevels?: Record<string, number>;
 }
 
 const ORDER_TYPES = ["Contracts", "Operations", "General"];

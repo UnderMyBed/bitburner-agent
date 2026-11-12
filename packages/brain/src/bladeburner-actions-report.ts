@@ -35,6 +35,12 @@
 //   all it gains then; the time and that rank are shown, the trade the planner's.
 // - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings): its cycle's rank a
 //   second, shown beside the rank measured over the readings; not judged, as a window cuts the cycle anywhere.
+// - **The skills** (B3, #379): the levels read are in the game's range read, and core's time and regain take them, so
+//   the forecast is the game's with them. Shown: the levels bought over the window, the points unspent and the rule's
+//   plan at the last reading, and its forecast there beside B2's at no skills. **Points unspent:** the rule's plan
+//   (core's `chooseBladeburnerSkills` on each reading) with levels to buy, and the levels not moving, for longer than
+//   `BLADEBURNER_SKILLS_WITHIN_MS`, is a failure: the brain sends the intents at the reading that shows the points, so
+//   the next reading shows them spent. A gap in the readings or an install ends the stretch, as stuck resting's.
 // - Left out, and labelled: the counts' growth (random, `:1388-1393`); a stretch's readings more than
 //   `BLADEBURNER_GAP_MS` apart split it (the snapshots missing: what ran meanwhile isn't known).
 import {
@@ -47,18 +53,31 @@ import {
   BLADEBURNER_READING_SECONDS,
   BLADEBURNER_REST_SECONDS,
   type BladeburnerActionPlan,
+  type BladeburnerForecastInput,
   type BladeburnerPerson,
+  type BladeburnerSkillLevels,
+  type BladeburnerSkillMults,
+  type BladeburnerSkillPlan,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
+  bladeburnerSkillCostMultiplierOf,
+  bladeburnerSkillMultsOf,
   chooseBladeburnerAction,
+  chooseBladeburnerSkills,
   FIELD_ANALYSIS,
   fieldAnalysisRank,
+  INTENT_RETRY_ROUNDS,
   type MediumSnapshotData,
   REGENERATION_CHAMBER,
   staminaGainPerSecond,
 } from "@bitburner-agent/core";
-import { type BladeburnerActionId, type BladeburnerActionsReading, bladeburnerSpeedOf } from "./bladeburner.ts";
+import {
+  type BladeburnerActionId,
+  type BladeburnerActionsReading,
+  bladeburnerSpeedOf,
+  describeSkillPlan,
+} from "./bladeburner.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 
 /**
@@ -71,6 +90,14 @@ export const BLADEBURNER_RANK_ALPHA = 0.001;
 export const BLADEBURNER_GAP_MS = 3 * BLADEBURNER_READING_SECONDS * 1000;
 /** Stuck resting's slack beyond twice the rule's time to the max: 10 minutes, as #343's waits. */
 export const BLADEBURNER_REST_SLACK_MS = 10 * 60_000;
+/**
+ * How long the skills' plan may have levels to buy with none bought (#379): 52 s, from the reading cadence. The brain
+ * sends the intents at the medium snapshot that shows the points; the Agent runs them in its next round (2 s), its
+ * Bladeburner worker reads within 10 s (`BLADEBURNER_READING_SECONDS`), and the medium snapshot after carries that
+ * within 10 s more: two readings and a round. A try that fails goes again 30 s later (`INTENT_RETRY_ROUNDS`).
+ */
+export const BLADEBURNER_SKILLS_WITHIN_MS =
+  2 * BLADEBURNER_READING_SECONDS * 1000 + 2_000 + INTENT_RETRY_ROUNDS * 2_000;
 /** The hospital's bill an HP (`Constants.ts`: `HospitalCostPerHp: 100e3`). */
 const HOSPITAL_COST_PER_HP = 100e3;
 
@@ -96,6 +123,11 @@ interface Kept {
   reading: BladeburnerActionsReading;
   person: BladeburnerPerson;
   rankMultiplier: number;
+  /** The BitNode's `BladeburnerSkillCost` (#379). */
+  costMultiplier: number;
+  /** The skill levels read (#379), and their multipliers: none from a B2 Agent. */
+  levels: BladeburnerSkillLevels;
+  mults: BladeburnerSkillMults;
   money: number | null;
   hp: { current: number; max: number } | null;
   /** The cycle's install (the slow snapshot's `lastAugReset`), or null. */
@@ -147,7 +179,7 @@ function runningOf(kept: Kept): Running | null {
   const read = kept.reading.actions.find((each) => each.type === current.type && each.name === current.name);
   if (action === null || read === undefined)
     return { name: current.name, resting: false, rate: 0, cut: 0, attempt: null };
-  const seconds = actionSeconds(action, read.level, kept.person);
+  const seconds = actionSeconds(action, read.level, kept.person, kept.mults);
   const chance = read.chance[0];
   const gain = actionRankGain(action, read.level, kept.rankMultiplier);
   const loss = actionRankLoss(action, read.level);
@@ -177,6 +209,21 @@ interface Resting {
   detail: string;
 }
 
+/** A stretch of readings with the skills' plan buying and the levels as at its start (#379). */
+interface Unspent {
+  fromMs: number;
+  toMs: number;
+  levels: string;
+  detail: string;
+}
+
+/** "Overclock 3, Cyber's Edge 1": the levels over 0, or "none". */
+const levelsText = (levels: BladeburnerSkillLevels) =>
+  Object.entries(levels)
+    .filter(([, level]) => (level ?? 0) > 0)
+    .map(([name, level]) => `${name} ${level}`)
+    .join(", ") || "none";
+
 /** The actions over a window, folded from the medium snapshots in the division, in order. */
 export class BladeburnerActionsFold {
   #first: Kept | null = null;
@@ -201,6 +248,11 @@ export class BladeburnerActionsFold {
   readonly #resting: Resting[] = [];
   #restingOpen: Resting | null = null;
   #firstPlan: BladeburnerActionPlan | null = null;
+  /** The skills (#379): the first and last readings with them, the last plan, and the stretches with points unspent. */
+  #skillsFirst: Kept | null = null;
+  #skillsLast: { kept: Kept; points: number; plan: BladeburnerSkillPlan } | null = null;
+  readonly #unspent: Unspent[] = [];
+  #unspentOpen: Unspent | null = null;
 
   /** A medium snapshot in the division with B2's reading (`reading`), in BN6 or BN7 (`bitNode`). */
   add(
@@ -213,15 +265,20 @@ export class BladeburnerActionsFold {
   ): void {
     const person = bladeburnerPersonOf(data.player);
     const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
-    if (person === null || rankMultiplier === null) return;
+    const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode);
+    if (person === null || rankMultiplier === null || costMultiplier === null) return;
     const player = data.player as { money?: unknown; hp?: { current?: unknown; max?: unknown } } | undefined;
     const hp = player?.hp;
+    const levels = reading.skills?.levels ?? {};
     const kept: Kept = {
       atMs,
       rank,
       reading,
       person,
       rankMultiplier,
+      costMultiplier,
+      levels,
+      mults: bladeburnerSkillMultsOf(levels),
       money: isNumber(player?.money) ? player.money : null,
       hp: isNumber(hp?.current) && isNumber(hp?.max) ? { current: hp.current, max: hp.max } : null,
       lastAugReset,
@@ -243,6 +300,7 @@ export class BladeburnerActionsFold {
     const broken =
       previous === null || atMs - previous.atMs > BLADEBURNER_GAP_MS || previous.lastAugReset !== lastAugReset;
     this.#watchResting(atMs, kept, plan, running, broken);
+    this.#watchSkills(atMs, kept, broken);
     if (broken) {
       // A stretch begins: the last one's end cut (the window's last, in `section`), and none to place yet here.
       if (previous !== null) this.#allowance += runningOf(previous)?.cut ?? 0;
@@ -285,7 +343,8 @@ export class BladeburnerActionsFold {
       // The stamina an attempt could leave and still have stopped it: its cost, and the regain since (at most the
       // interval's game seconds of it).
       const cost = before?.attempt?.stamina ?? 0;
-      const regained = staminaGainPerSecond(previous.person, previous.reading.maxStamina) * Math.max(0, seconds);
+      const regained =
+        staminaGainPerSecond(previous.person, previous.reading.maxStamina, previous.mults) * Math.max(0, seconds);
       const cause =
         before?.attempt != null && reading.stamina < cost + regained
           ? "stamina"
@@ -338,15 +397,91 @@ export class BladeburnerActionsFold {
     };
   }
 
-  #plan(kept: Kept): BladeburnerActionPlan {
-    return chooseBladeburnerAction({
+  /**
+   * The skills (#379): the plan on each reading with them; points unspent while it buys and the levels stay as at the
+   * stretch's start, which a gap or an install ends.
+   */
+  #watchSkills(atMs: number, kept: Kept, broken: boolean): void {
+    const skills = kept.reading.skills;
+    const plan =
+      skills === null
+        ? null
+        : chooseBladeburnerSkills(this.#forecastInput(kept), {
+            levels: kept.levels,
+            points: skills.points,
+            costMultiplier: kept.costMultiplier,
+          });
+    const levels = JSON.stringify(kept.levels);
+    const unspent = plan !== null && plan.buys.length > 0;
+    const open = this.#unspentOpen;
+    if (open !== null && (!unspent || broken || open.levels !== levels)) {
+      this.#unspent.push(open);
+      this.#unspentOpen = null;
+    }
+    if (skills === null || plan === null) return;
+    if (this.#skillsFirst === null) this.#skillsFirst = kept;
+    this.#skillsLast = { kept, points: skills.points, plan };
+    if (!unspent) return;
+    if (this.#unspentOpen !== null) {
+      this.#unspentOpen.toMs = atMs;
+      return;
+    }
+    this.#unspentOpen = {
+      fromMs: atMs,
+      toMs: atMs,
+      levels,
+      detail: `${describeSkillPlan(plan, kept.levels, kept.costMultiplier)}; the levels ${levelsText(kept.levels)}`,
+    };
+  }
+
+  #forecastInput(kept: Kept): BladeburnerForecastInput {
+    return {
       readings: kept.reading.actions,
       person: kept.person,
       stamina: kept.reading.stamina,
       maxStamina: kept.reading.maxStamina,
       rankMultiplier: kept.rankMultiplier,
       speed: bladeburnerSpeedOf(kept.reading.bonusSeconds),
-    });
+    };
+  }
+
+  #plan(kept: Kept): BladeburnerActionPlan {
+    return chooseBladeburnerAction({ ...this.#forecastInput(kept), skills: { read: kept.levels } });
+  }
+
+  /** The skills' lines (#379), its failures added to `failures`. */
+  #skillsSection(failures: string[]): string[] {
+    const first = this.#skillsFirst;
+    const last = this.#skillsLast;
+    if (first === null || last === null) return ["  the skills (#379): no reading with them (an older Agent's)"];
+    const perMinute = (perSecond: number) => `${(perSecond * 60).toFixed(3)} rank/min`;
+    const bought = Object.entries(last.kept.levels)
+      .filter(([name, level]) => (level ?? 0) > (first.levels[name as keyof BladeburnerSkillLevels] ?? 0))
+      .map(([name, level]) => `${name} ${first.levels[name as keyof BladeburnerSkillLevels] ?? 0} → ${level}`);
+    const withSkills = this.#plan(last.kept).rankPerSecond;
+    const without = chooseBladeburnerAction({
+      ...this.#forecastInput(last.kept),
+      skills: { read: last.kept.levels, planned: {} },
+    }).rankPerSecond;
+    const lines = [
+      `  the skills (#379): bought over the window: ${bought.length === 0 ? "none" : bought.join(", ")}; at the last ` +
+        `reading, ${formatIsoTime(last.kept.atMs)}: ${describeSkillPlan(last.plan, last.kept.levels, last.kept.costMultiplier)}`,
+      `    the rule's forecast there: ${perMinute(withSkills)} with the levels read (${levelsText(last.kept.levels)}); ` +
+        `${perMinute(without)} with none (B2's)`,
+    ];
+    lines.push(`  skill points unspent with a level to buy, past ${formatDuration(BLADEBURNER_SKILLS_WITHIN_MS)}:`);
+    const long = [...this.#unspent, ...(this.#unspentOpen === null ? [] : [this.#unspentOpen])].filter(
+      (each) => each.toMs - each.fromMs > BLADEBURNER_SKILLS_WITHIN_MS,
+    );
+    if (long.length === 0) lines.push("    none");
+    for (const each of long) {
+      const line =
+        `skill points unspent with a level to buy from ${formatIsoTime(each.fromMs)} to ${formatIsoTime(each.toMs)}, ` +
+        `for ${formatDuration(each.toMs - each.fromMs)} (${each.detail})`;
+      lines.push(`    ${line}`);
+      failures.push(line);
+    }
+    return lines;
   }
 
   /** The actions' lines, its failures added to `failures`; none without a reading. */
@@ -448,6 +583,7 @@ export class BladeburnerActionsFold {
       lines.push(`    ${line}`);
       failures.push(line);
     }
+    lines.push(...this.#skillsSection(failures));
     return lines;
   }
 }

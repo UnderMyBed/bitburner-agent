@@ -10,6 +10,7 @@ import {
   BATCH_WEAKEN_SCRIPT_NAME,
   BATCHER_RAM_BUDGET_GB,
   BATCHER_SCRIPT_NAME,
+  BLADEBURNER_SKILL_WORKER_NAME,
   BLADEBURNER_WORKER_NAME,
   BLADEBURNER_WORKER_RAM_GB,
   bladeburnerWorkerFileNames,
@@ -102,14 +103,22 @@ test("the Agent's budget plus the division's join fits BN6's home as the campaig
   // Bladeburner's workers run only in BN6 and BN7 for now, which the campaign comes to with SF1.3 (a 32 GB home,
   // `Prestige.ts:246-251`), SF2.3, SF4.3 and SF5.1 (docs/synthesis.md §3). The join's worker runs whenever the gate
   // sends it, so it fits that home. The brain runs the reading worker only once home's RAM beyond what it keeps holds
-  // core's figure for it (B2's 42.6 GB, #375: over BN6's 32 GB home), so that figure is the worker's.
+  // core's figure for it (B3's 50.6 GB, #379: over BN6's 32 GB home), so that figure is the worker's.
   const inBitNode6 = await start({
     ...NEW_GAME,
     fixture: { kind: "bitnode", n: 6, sourceFiles: { 1: 3, 2: 3, 4: 3, 5: 1 } },
   });
   const homeGb = (await inBitNode6.summary()).homeRamMax;
-  expect(bladeburnerWorkerFileNames()).toEqual([JOIN_BLADEBURNER_WORKER_NAME, BLADEBURNER_WORKER_NAME]);
+  expect(bladeburnerWorkerFileNames()).toEqual([
+    JOIN_BLADEBURNER_WORKER_NAME,
+    BLADEBURNER_WORKER_NAME,
+    BLADEBURNER_SKILL_WORKER_NAME,
+  ]);
   expect((budgets["agent.js"] as number) + (budgets[JOIN_BLADEBURNER_WORKER_NAME] as number)).toBeLessThanOrEqual(
+    homeGb,
+  );
+  // The skills' worker (#379) runs only once the reading does; it fits beside the Agent in BN6's home too.
+  expect((budgets["agent.js"] as number) + (budgets[BLADEBURNER_SKILL_WORKER_NAME] as number)).toBeLessThanOrEqual(
     homeGb,
   );
   expect(homeGb).toBe(32);

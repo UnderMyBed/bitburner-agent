@@ -437,9 +437,13 @@ export class DesiredStateController {
   readonly #gang: GangRule;
   #gangIntent: Intent | null = null;
   #gangState: GangState | null = null;
-  /** Bladeburner (#367): the rule, its join, the worker's state, and the training it sends as the brain's work. */
+  /**
+   * Bladeburner (#367): the rule, its join, the worker's state, the training it sends as the brain's work, and (#379)
+   * the skills it buys.
+   */
   readonly #bladeburner: BladeburnerRule;
   #bladeburnerIntent: Intent | null = null;
+  #bladeburnerSkillIntents: Intent[] = [];
   #bladeburnerState: BladeburnerState | null = null;
   #bladeburnerWork: OwnersWork | null = null;
   #backdoor: Intent | null = null;
@@ -989,6 +993,7 @@ export class DesiredStateController {
       ...fromRule(this.#travel).map((intent) => ({ intent, source: "travel" as const })),
       ...fromRule(this.#gangIntent).map((intent) => ({ intent, source: "gang" as const })),
       ...fromRule(this.#bladeburnerIntent).map((intent) => ({ intent, source: "bladeburner" as const })),
+      ...this.#bladeburnerSkillIntents.flatMap(fromRule).map((intent) => ({ intent, source: "bladeburner" as const })),
     ].map(({ intent, source }, index) => ({
       id: intent.id,
       source,
@@ -1036,7 +1041,7 @@ export class DesiredStateController {
   /**
    * The rules' intents, in order, each only if the owner hasn't queued the same: the purchase, the augmentation purchase
    * (#210), the backdoor (#195), the join (#203) and the one beside it (#269 review), the travel for an invitation
-   * (#228), the gang's forming (#325), and the Bladeburner division's join (#367).
+   * (#228), the gang's forming (#325), the Bladeburner division's join (#367) and its skills (#379).
    */
   #ruleIntents(): Intent[] {
     const manual = readManualIntents(this.#store);
@@ -1049,6 +1054,7 @@ export class DesiredStateController {
       this.#travel,
       this.#gangIntent,
       this.#bladeburnerIntent,
+      ...this.#bladeburnerSkillIntents,
     ];
     return rules.filter((intent): intent is Intent => intent !== null && !manual.some((each) => each.id === intent.id));
   }
@@ -1819,6 +1825,7 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
     });
     this.#bladeburnerIntent = bladeburner.intent;
+    this.#bladeburnerSkillIntents = bladeburner.skillIntents;
     this.#bladeburnerState = bladeburner.state;
     this.#bladeburnerWork = bladeburner.work;
     // The gang's faction's shop (#334), apart: A6 buys there, and A8's The Red Pill is sold there in BN2.

@@ -257,7 +257,7 @@ describe("the controller", () => {
     expect(agent.lastSent()?.batcher?.config.hosts).toContain("home");
   });
 
-  test("beside Bladeburner's reading worker (#377's review): its 42.6 GB kept too while the rule asks for it", () => {
+  test("beside Bladeburner's reading worker (#377's review): its 50.6 GB kept too while the rule asks for it", () => {
     const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
     channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
     new DesiredStateController({ channel, store });

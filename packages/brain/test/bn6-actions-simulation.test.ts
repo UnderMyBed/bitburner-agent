@@ -4,7 +4,7 @@
 // under a minute of CI. Harness edits stand in for B1's half hour (bn6-start-simulation.test.ts):
 // - the four combat stats to 100 (5,417 experience each at SF1.3's ×1.28), and the division joined by the owner's own
 //   script (`joinBladeburnerDivision`, as B1's worker does);
-// - home at 128 GB, B1's hours of home RAM purchases: the reading worker's 42.6 GB beyond the 65.9 GB home keeps;
+// - home at 128 GB, B1's hours of home RAM purchases: the reading worker's 50.6 GB beyond the 65.9 GB home keeps;
 // - CyberSec joined (#377's review), so A5 has faction work to hold for the actions.
 // Then: the plan's work and rest by the worker, A5's faction work held for them; home's batches leaving the worker's
 // RAM (#377's review); the stamina under ½ max rested back to

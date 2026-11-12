@@ -5,13 +5,14 @@
 //   no page. They're on the page's global object there, and absent in a browser.
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
 // - `ui`: a home worker that does it without Singularity: through the game's page, or with NS calls alone where the
-//   API has them (`buyServer`, #159; `upgradeServer`, #194; `createGang`, #325; `joinBladeburnerDivision`, #367). Such an
-//   action has no Singularity worker: the `ui` one does it in any game.
+//   API has them (`buyServer`, #159; `upgradeServer`, #194; `createGang`, #325; `joinBladeburnerDivision`, #367;
+//   `upgradeBladeburnerSkill`, #379). Such an action has no Singularity worker: the `ui` one does it in any game.
 // The brain never knows which backend does an intent or the work. The simulator's effectors aren't named like NS
 // functions: the game charges RAM for such names in in-game code.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
   BACKDOOR_WORKER_NAME,
+  BLADEBURNER_SKILL_WORKER_NAME,
   BOOT_SCRIPT,
   BUY_AUGMENTATION_WORKER_NAME,
   BUY_PROGRAM_WORKER_NAME,
@@ -77,6 +78,7 @@ export interface SimEffectors {
   readFactionState(): FactionStateReport;
   createGangWith(faction: string): EffectorReport;
   enlistInBladeburner(): EffectorReport;
+  raiseBladeburnerSkill(skill: string, level: number): EffectorReport;
 }
 
 /** A home worker and its arguments, before the deadline it's given. */
@@ -230,6 +232,16 @@ export function effectorFor(intent: Intent): Effector {
         singularity: null,
         sim: (effectors) => effectors.enlistInBladeburner(),
       };
+    // A Bladeburner skill to a level (#379), with the NS API alone (`NetscriptFunctions/Bladeburner.ts:236-259`).
+    case "upgradeBladeburnerSkill": {
+      const { skill, level } = intent.args;
+      return {
+        description: `raise the Bladeburner skill ${skill} to level ${level}`,
+        ui: { workerName: BLADEBURNER_SKILL_WORKER_NAME, workerArguments: [skill, level] },
+        singularity: null,
+        sim: (effectors) => effectors.raiseBladeburnerSkill(skill, level),
+      };
+    }
   }
 }
 

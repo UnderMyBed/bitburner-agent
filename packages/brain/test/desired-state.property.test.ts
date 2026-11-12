@@ -97,6 +97,8 @@ const OWNER_INTENTS: Intent[] = [
   intentOf({ action: "createGang", args: { faction: "NiteSec" } }),
   // Joining the Bladeburner division (#367): irreversible, its guard the four combat stats at 100.
   intentOf({ action: "joinBladeburnerDivision", args: {} }),
+  // A Bladeburner skill to a level (#379): reversible, not gated.
+  intentOf({ action: "upgradeBladeburnerSkill", args: { skill: "Overclock", level: 3 } }),
 ];
 const OWNER_INTENTS_BY_ID = new Map(OWNER_INTENTS.map((each) => [each.id, each]));
 /** Whether `id` is an install's or a destroy's: the brain's own resets, when not the owner's (#210, #215). */

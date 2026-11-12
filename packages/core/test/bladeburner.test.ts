@@ -82,13 +82,14 @@ describe("the game's facts", () => {
     );
   });
 
-  test("RAM: inBladeburner and getBonusTime free, getCurrentAction 1 GB, the rest 4, so the worker is 1.6 + 10 × 4 + 1", () => {
+  test("RAM: inBladeburner and getBonusTime free, getCurrentAction 1 GB, the rest 4, so the worker is 1.6 + 12 × 4 + 1; the skills' worker 1.6 + 2 × 4", () => {
     const ram = gameSource("Netscript/RamCostGenerator.ts");
     const bladeburner = ram.slice(ram.indexOf("const bladeburner = {"), ram.indexOf("const infiltration = {"));
     expect(bladeburner).toContain("  inBladeburner: 0,");
     expect(bladeburner).toContain("  getBonusTime: 0,");
     expect(bladeburner).toContain("  getCurrentAction: RamCostConstants.BladeburnerApiBase / 4,");
-    // B1's (#367) and B2's (#375): the worker's ten at 4 GB, and the division's join (its own worker).
+    // B1's (#367), B2's (#375) and B3's (#379): the worker's twelve at 4 GB; the division's join (its own worker), and
+    // the skills' raise (`upgradeSkill` and `getSkillLevel`, its own worker).
     const worker = [
       "getRank",
       "joinBladeburnerFaction",
@@ -100,8 +101,10 @@ describe("the game's facts", () => {
       "startAction",
       "setActionLevel",
       "setActionAutolevel",
+      "getSkillPoints",
+      "getSkillLevel",
     ];
-    for (const name of [...worker, "joinBladeburnerDivision"]) {
+    for (const name of [...worker, "joinBladeburnerDivision", "upgradeSkill"]) {
       expect(bladeburner).toContain(`  ${name}: RamCostConstants.BladeburnerApiBase,`);
     }
     expect(ram).toContain("BladeburnerApiBase: 4,");
@@ -405,15 +408,17 @@ describe("the worker", () => {
     expect(parseBladeburnerState("x")).toMatchObject({ ok: false });
   });
 
-  test("it fits home beyond what home keeps: 42.6 GB of room (B2, #375), not less", () => {
-    expect(BLADEBURNER_WORKER_RAM_GB).toBe(42.6);
-    // At SF4.3 home keeps 65.9 GB: 128 GB holds it, as B1's 9.6 GB worker; 64 GB doesn't.
+  test("it fits home beyond what home keeps: 50.6 GB of room (B3, #379), not less", () => {
+    expect(BLADEBURNER_WORKER_RAM_GB).toBe(50.6);
+    // At SF4.3 home keeps 65.9 GB: 128 GB holds it (116.5 GB), as B1's 9.6 GB and B2's 42.6 did; 64 GB doesn't.
     expect(bladeburnerWorkerFits({ homeMaxRamGb: 128, homeKeptGb: 65.9 })).toBe(true);
-    expect(bladeburnerWorkerFits({ homeMaxRamGb: 108.4, homeKeptGb: 65.9 })).toBe(false);
+    expect(bladeburnerWorkerFits({ homeMaxRamGb: 116.4, homeKeptGb: 65.9 })).toBe(false);
     expect(bladeburnerWorkerFits({ homeMaxRamGb: 64, homeKeptGb: 65.9 })).toBe(false);
+    // Without SF4 home keeps 32 GB: 82.6 GB needed, still a 128 GB home.
     expect(bladeburnerWorkerFits({ homeMaxRamGb: 64, homeKeptGb: 32 })).toBe(false);
-    // Exactly its 42.6 GB beyond the reserve holds it.
-    expect(bladeburnerWorkerFits({ homeMaxRamGb: 43, homeKeptGb: 0.4 })).toBe(true);
-    expect(bladeburnerWorkerFits({ homeMaxRamGb: 43, homeKeptGb: 0.5 })).toBe(false);
+    expect(bladeburnerWorkerFits({ homeMaxRamGb: 128, homeKeptGb: 32 })).toBe(true);
+    // Exactly its 50.6 GB beyond the reserve holds it.
+    expect(bladeburnerWorkerFits({ homeMaxRamGb: 51, homeKeptGb: 0.4 })).toBe(true);
+    expect(bladeburnerWorkerFits({ homeMaxRamGb: 51, homeKeptGb: 0.5 })).toBe(false);
   });
 });
