@@ -782,4 +782,6 @@ test("the objective at 12 (#357's (2)) A/B, 20 virtual minutes an arm: the plann
   expect(planner.section).toContain(
     "  the objective at 12 differing from core's (from the snapshots) for 1 min or more:\n    none\n",
   );
-}, 120_000);
+  // Two 20-minute arms in one test: CI took 94.8 s (#368's run) and 79.3 s (main at ffa7850), and went past 120 s on
+  // #369's run. 300 s keeps CI's variance off the result, as #351 did for the checkpoints (#370).
+}, 300_000);
