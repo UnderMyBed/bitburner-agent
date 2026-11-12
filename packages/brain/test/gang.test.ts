@@ -752,6 +752,9 @@ describe("the run report's section", () => {
       const after: string[] = [];
       gang.section(after, 30_000, [install(10_000, { reason: "count reached" })]);
       expect(after.filter((line) => line.includes("with the gang before The Red Pill"))).toEqual([]);
+      expect(gang.section([], 30_000, [install(10_000, { reason: "count reached" })]).join("\n")).toContain(
+        "    1970-01-01T00:00:10.000Z: count reached; The Red Pill's own, or after it: no cost there",
+      );
     });
 
     test("(1) an install chosen in BN2 before the gang, avmnite-02h's level read, without the route's estimates fails", () => {

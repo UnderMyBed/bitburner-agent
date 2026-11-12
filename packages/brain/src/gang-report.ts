@@ -910,9 +910,10 @@ export class GangFold {
       const fields = (detail ?? {}) as { reason?: unknown; timing?: unknown; gangCost?: unknown };
       const reason = String(fields.reason);
       const cost = fields.gangCost as GangInstallCost | undefined;
+      const redPillInstalled = Object.hasOwn(this.#slowAt(atMs)?.resetInfo?.ownedAugs ?? {}, THE_RED_PILL);
       const words =
         cost === undefined
-          ? reason === THE_RED_PILL || reason === "the hacking level"
+          ? reason === THE_RED_PILL || reason === "the hacking level" || redPillInstalled
             ? "The Red Pill's own, or after it: no cost there"
             : "its cost not recorded"
           : describeGangInstallCost(cost);
@@ -925,7 +926,6 @@ export class GangFold {
       const estimated =
         (timing?.route === GANG_FORMED_ROUTE && finite(timing.gangInstall?.installNow)) ||
         (timing?.route === GANG_FORMING_ROUTE && finite(timing.gang?.installNowMs));
-      const redPillInstalled = Object.hasOwn(this.#slowAt(atMs)?.resetInfo?.ownedAugs ?? {}, THE_RED_PILL);
       // The gang earning nothing there then (p unknown, members training): the rules' install, as A6 has it.
       const earningNothing = cost !== undefined && cost.rateKept === null;
       if (earningNothing) lines.push("      (the gang earning no respect then: the rules' install, as before #357)");
