@@ -3930,8 +3930,8 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
     expect(planner.controller.gangView().stage).toBe("managed");
     expect(planner.controller.augmentationsView().progress?.timing?.route).toBe("gang forming");
     expect(planner.sent()).toEqual([]);
-    // The slow snapshot shows NiteSec, the gang's faction: never short of Daedalus's count, so not #343's nor (1); the
-    // planner's with the gang (#357's (3)), The Red Pill short there.
+    // The slow snapshot shows NiteSec, the gang's faction: never short of Daedalus's count, so not #343's nor (1). With
+    // no members the gang earns no respect, so not (3) either (#357's second slice): the rules', as before.
     const state = bn2Slow.factions.state;
     const shown = {
       ...bn2Slow,
@@ -3944,6 +3944,6 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
     channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
     const after = bn2Brain("planner", { gang: NITESEC_GANG, slow: shown });
     after.run(2);
-    expect(after.controller.augmentationsView().progress?.timing?.route).toBe("gang formed");
+    expect(after.controller.augmentationsView().progress?.timing ?? null).toBeNull();
   });
 });

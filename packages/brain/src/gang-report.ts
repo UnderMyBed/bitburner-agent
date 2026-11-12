@@ -926,7 +926,16 @@ export class GangFold {
         (timing?.route === GANG_FORMED_ROUTE && finite(timing.gangInstall?.installNow)) ||
         (timing?.route === GANG_FORMING_ROUTE && finite(timing.gang?.installNowMs));
       const redPillInstalled = Object.hasOwn(this.#slowAt(atMs)?.resetInfo?.ownedAugs ?? {}, THE_RED_PILL);
-      if (reason !== THE_RED_PILL && reason !== "the hacking level" && !redPillInstalled && !estimated) {
+      // The gang earning nothing there then (p unknown, members training): the rules' install, as A6 has it.
+      const earningNothing = cost !== undefined && cost.rateKept === null;
+      if (earningNothing) lines.push("      (the gang earning no respect then: the rules' install, as before #357)");
+      if (
+        reason !== THE_RED_PILL &&
+        reason !== "the hacking level" &&
+        !redPillInstalled &&
+        !estimated &&
+        !earningNothing
+      ) {
         fail(
           `install chosen in BN2 with the gang before The Red Pill without the planner's estimates: at ` +
             `${formatIsoTime(atMs)}, its reason ${reason}`,

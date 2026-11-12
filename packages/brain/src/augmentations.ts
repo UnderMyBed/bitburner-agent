@@ -78,7 +78,9 @@
 //   banking are waits as #343's (no countdown, no money held; the World Daemon's stall watches the reputation rise);
 //   installing now is chosen at once (`reason` "the gang's favour"), through the controller's gate. Every install in
 //   BN2 with the gang carries its cost (`gangCost`: the reputation lost, the favour gained, The Red Pill's estimate),
-//   the rules' too. The A/B's baseline (`bn2Route` "rules") keeps the count rule and G5's hold.
+//   the rules' too. With the gang earning no respect now (p null: members training), the rules decide there as
+//   before: nothing banked is growing, and a hold would only stall. The A/B's baseline (`bn2Route` "rules") keeps the
+//   count rule and G5's hold.
 //   Once the count is met (Daedalus inviting or joined), or never short (The Red Pill elsewhere), the count rule times
 //   installs as before (amended #343: until the planner's next slice, the Daedalus/Red Pill stretch), with The Red
 //   Pill's way, Daedalus donations and levelling. The count rule short of the count stays only as the A/B's baseline
@@ -316,6 +318,8 @@ export interface GangInstallCost {
   needed: number;
   redPillMs: number | null;
   keepMs: number | null;
+  /** p then (the gang rule's), or null: the gang earning no respect there, so the rules' install, as before #357. */
+  rateKept: number | null;
 }
 
 /** The install of the queued augmentations (#164), as the rule asks for it: the owner's has the same id. */
@@ -613,7 +617,8 @@ export interface AugmentationInputs {
   gangForming?: { required: number; unread?: boolean } | null;
   /**
    * BN2 with the gang (#357's (3)): what the gang rule's managed decision reads (its `installFigures`: p and the plan's
-   * respect a cycle), or null (no gang managed, or unread): p unknown, so no install there.
+   * respect a cycle), or null (no gang managed, or unread): p unknown, so no install there. Read with p null (no
+   * respect earned now, members training), the rules decide there, as before #357 (G5's hold, the count rule).
    */
   gangInstall?: GangInstallFigures | null;
 }
@@ -1228,6 +1233,7 @@ export function gangInstallCostOf(gang: GangInstallTiming, faction: string): Gan
     needed: gang.needed,
     redPillMs: time(installNowMs),
     keepMs: time(gang.keepMs),
+    rateKept: gang.rateKept,
   };
 }
 
@@ -2090,6 +2096,7 @@ export class AugmentationRule {
         // The game's time since the last install (#334): the gang's faction's rate.
         sinceResetMs: slowGameTimeMs === null ? null : Math.max(0, slowGameTimeMs - resetInfo.lastAugReset),
         onlineMs: this.#onlineClock?.lastAugReset === resetInfo.lastAugReset ? this.#onlineClock.onlineMs : 0,
+        gangEarning: gangInstall === null || gangInstall.rateKept !== null,
       });
       // The Red Pill's donation first (#225 review): the counts are budgeted without its money.
       const redPillAmount = endgame0.kind === "redPill" ? (endgame0.donation?.amount ?? 0) : 0;
@@ -2908,6 +2915,7 @@ export class AugmentationRule {
     destroyWanted,
     sinceResetMs,
     onlineMs,
+    gangEarning,
   }: {
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
     player: NonNullable<ReturnType<typeof playerOf>>;
@@ -2920,6 +2928,11 @@ export class AugmentationRule {
     sinceResetMs: number | null;
     /** The game's time online this cycle (the bars' clock): the hold's window at the gang's faction, from its start. */
     onlineMs: number;
+    /**
+     * The gang earns its faction no respect now (#357's (3): p unknown, the gang rule's `installFigures` read, its
+     * plan's respect 0, members training): false; else true (earning, or the gang unread, whose reputation still rises).
+     */
+    gangEarning: boolean;
   }): Endgame {
     const { currentNode, ownedAugs, ownedSF, lastAugReset } = resetInfo;
     // The hold at the gang's faction (#335's review): from its first start in the cycle, at most its window, never
@@ -2941,8 +2954,10 @@ export class AugmentationRule {
       destroyWanted,
       sinceResetMs,
       gangHoldOver: heldSince !== null && onlineMs >= heldSince + GANG_RED_PILL_HOLD_MS,
-      // The planner times installs there (#357's (3)), in place of G5's hold; the rules (the A/B's baseline) hold.
-      gangPlanned: this.#bn2Route === "planner",
+      // The planner times installs there (#357's (3)), in place of G5's hold; the rules (the A/B's baseline) hold. With
+      // the gang earning nothing there now (members training), the rules as before: (3) has no rate after an install,
+      // and an install loses only what's banked, which isn't growing (held, the World Daemon's stall would fire).
+      gangPlanned: this.#bn2Route === "planner" && gangEarning,
     });
     const atGang = endgame.kind === "hold" && "seller" in endgame && endgame.seller.faction === shops.gangFaction;
     this.#redPillHeldAtGang = atGang;

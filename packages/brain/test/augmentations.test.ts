@@ -3746,6 +3746,7 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
       needed: 2.5e6,
       redPillMs: gang?.installNowMs,
       keepMs: gang?.keepMs,
+      rateKept: 0.979,
     });
     expect(lines).toContainEqual(
       expect.stringMatching(
@@ -3790,7 +3791,7 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     expect(chosen()[0]?.timing?.gangInstall).toMatchObject({ choice: "install", bankAt: null });
   });
 
-  test("p unknown (the gang unread, or no respect earned now): no install, the hold said", () => {
+  test("p unknown: the gang unread, no install, the hold said; earning no respect now, the rules as before", () => {
     rule = newRule("planner");
     at(5e5, withGang(5e5, 0, null));
     expect(timing()?.gangInstall).toMatchObject({ choice: "keep", heldForRate: true, installNow: null, keepMs: null });
@@ -3798,13 +3799,20 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
       "install now (held: the rate after it not known: no respect earned now, or the gang unread)",
     );
     expect(chosen()).toEqual([]);
-    at(5e5, withGang(5e5, 0, { rateKept: null, respectPerCycle: 0 }));
-    expect(timing()?.gangInstall).toMatchObject({
-      choice: "keep",
-      heldForRate: true,
-      keepMs: Number.POSITIVE_INFINITY,
-    });
-    expect(chosen()).toEqual([]);
+    expect(rule.redPillHeldAtGang()).toBe(true);
+    // Members training, no respect earned there now (#357's G3 suite): (3) has no rate after an install, and what's
+    // banked isn't growing, so the rules decide, as before #357: no planner's route, the count rule's countdown (G5's
+    // hold not within its window at 500k), its install carrying its cost with p unknown.
+    const training = withGang(5e5, 0, { rateKept: null, respectPerCycle: 0 });
+    at(5e5, training);
+    expect(timing()?.route).toBeUndefined();
+    expect(rule.view().progress?.countdown).not.toBeNull();
+    expect(rule.redPillHeldAtGang()).toBe(false);
+    gameTimeMs += 90_000;
+    at(5e5, training);
+    expect(chosen()).toHaveLength(1);
+    expect(chosen()[0]?.reason).not.toBe("the gang's favour");
+    expect(chosen()[0]?.gangCost).toMatchObject({ reputation: 5e5, rateKept: null });
   });
 
   test("favour multiplies the rate (`Gang.ts:152-155`): at favour 100 keeping's minutes are half favour 0's", () => {

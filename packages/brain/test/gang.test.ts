@@ -717,7 +717,14 @@ describe("the run report's section", () => {
           reason: "count reached",
           timing: { route: "gang formed", gangInstall: { installNow: null } },
         }),
+        // The gang earning no respect then (p unknown): the rules' install, A6's, no failure.
+        install(55_000, { reason: "count reached", gangCost: { ...cost, rateKept: null } }),
       ]);
+      expect(text).toContain(
+        "    1970-01-01T00:00:55.000Z: count reached; NiteSec's about 242,310 reputation lost, favour 0.0 → 119.7, The " +
+          "Red Pill then in ~54 min (keeping's 1.6 h)\n" +
+          "      (the gang earning no respect then: the rules' install, as before #357)",
+      );
       expect(text).toContain(
         "  installs chosen in BN2 with the gang (#357's (3)), each one's cost:\n" +
           "    1970-01-01T00:00:10.000Z: the gang's favour; NiteSec's about 242,310 reputation lost, favour 0.0 → 119.7, " +
