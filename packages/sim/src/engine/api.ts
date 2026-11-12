@@ -76,6 +76,8 @@ export interface EngineApi {
   gainCharismaExp(exp: number): void;
   /** Gives the player each combat stat's experience, through the game's own gains. A harness edit, for tests (#367). */
   gainCombatExp(exp: number): void;
+  /** Gives the player intelligence experience, through the game's own gain (SF5 or BN5). A harness edit (#377). */
+  gainIntelligenceExp(exp: number): void;
   /** Sets a gang member's experience and ascension points, its levels from them. A harness edit, for tests (#330). */
   setGangMemberFigures(name: string, figures: Record<string, number>): void;
   /** Sets the player's gang's respect. A harness edit, for tests (#330). */
@@ -174,6 +176,7 @@ const API_FUNCTIONS = {
   gainHackingExp: true,
   gainCharismaExp: true,
   gainCombatExp: true,
+  gainIntelligenceExp: true,
   setGangMemberFigures: true,
   setGangRespect: true,
   setBladeburnerRank: true,

@@ -77,7 +77,7 @@ export function bladeburnerWorkerFileNames(): string[] {
  * `getActionMaxLevel`, `getActionCurrentLevel`, `startAction`, `setActionLevel` and `setActionAutolevel`; 1 GB for
  * `getCurrentAction`; nothing for `getBonusTime` and `inBladeburner`. The brain asks for it only once home's RAM beyond
  * what it keeps for the Agent and its workers holds it (#359's RAM decision): at SF4.3 that's still a 128 GB home
- * (65.9 + 42.6 GB), as B1's 9.6 GB was.
+ * (65.9 + 42.6 GB), as B1's 9.6 GB was; without SF4 the least home moves from B1's 41.6 GB to 74.6.
  */
 export const BLADEBURNER_WORKER_RAM_GB = 42.6;
 

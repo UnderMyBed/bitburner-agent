@@ -6,10 +6,10 @@
  *   stats of weight × level^decay (a combat stat's level times its skill multiplier, `Bladeburner.ts:759-774`), times
  *   the intelligence bonus 1 + 0.75·int^0.8/600 (`PersonObjects/formulas/intelligence.ts`), the stamina penalty
  *   min(1, stamina / (½ max)) (`Bladeburner.ts:167-169`), an operation's team bonus (teamCount + 1)^0.05
- *   (`Actions/Operation.ts:447-449`), the population's (pop / 1e9)^0.7 (`Action.ts:88-92`), the skills' and the
+ *   (`Actions/Operation.ts:96-98`), the population's (pop / 1e9)^0.7 (`Action.ts:88-92`), the skills' and the
  *   augmentations' `bladeburner_success_chance`. Difficulty is base × fac^(level − 1) (`Actions/LevelableAction.ts:
- *   255-261`), times √(1 + chaos − 50) over 50 chaos (`Action.ts:94-103`). Raid is 0 with no communities
- *   (`Actions/Operation.ts:414-419`).
+ *   58-64`), times √(1 + chaos − 50) over 50 chaos (`Action.ts:94-103`). Raid is 0 with no communities
+ *   (`Actions/Operation.ts:63-68`).
  * - **The estimate** (`Action.ts:144-167`): the game's range is the chance at the true population (`real`) and at its
  *   estimate (`est`), real ± |real − est|, the low end times pop/popEst below 1, the high end above; each clamped to
  *   [0, 1]. The NS API's `getActionEstimatedSuccessChance` is this range (`NetscriptFunctions/Bladeburner.ts:138-143`).
@@ -17,7 +17,7 @@
  *   ½(agi^0.04 + dex^0.035 + agi/10,000 + dex/10,000) on the effective levels; the general actions' are fixed
  *   (`data/GeneralActions.ts`): Training and Field Analysis 30 s, Diplomacy, the Regeneration Chamber and Incite
  *   Violence 60 s.
- * - **Rank** (`Formulas.ts:9-40`): a success gains rankGain × rewardFac^(level − 1) × the BitNode's
+ * - **Rank** (`Formulas.ts:9-44`): a success gains rankGain × rewardFac^(level − 1) × the BitNode's
  *   `BladeburnerRank`, a failure loses rankLoss × rewardFac^(level − 1), not BitNode-scaled; each ±10%, uniform
  *   (`Bladeburner.ts:951`, `:980`, `utils/helpers/addOffset.ts`). Field Analysis gains 0.1 × `BladeburnerRank`, no
  *   offset (`:1136-1140`). The rank never goes below 0 (`:1271-1274`).
@@ -32,9 +32,9 @@
  *   the money (`Hospital/Hospital.ts:4-10`, `PersonObjects/Player/PlayerObjectGeneralMethods.ts:266-290`).
  * - **Counts:** each contract and operation grows by its growth (a random tenth over its range) / 480 a second
  *   (`:1387-1393`), and each attempt uses one (`:933`, `:976`). Under 1 it can't start, and one under way stops
- *   (`Actions/LevelableAction.ts:241-244`, `:1299-1301`).
+ *   (`Actions/LevelableAction.ts:44-47`, `:1299-1301`).
  * - **Levels:** level M + 1 opens after ⌈½·M·(2b + M − 1)⌉ successes, b 3 for contracts and 2.5 for operations
- *   (`Actions/LevelableAction.ts:246-253`, `data/Constants.ts`). An action set to auto-level goes to its max after
+ *   (`Actions/LevelableAction.ts:49-56`, `data/Constants.ts`). An action set to auto-level goes to its max after
  *   each attempt (`:1006-1008`), so the rule turns that off for the level it sets.
  * - **Training's experience** is 30 × `mults.<stat>_exp` a stat (`:1096-1099`), which `gainStats` multiplies by the
  *   same multiplier again (`PersonObjects/Person.ts:192-198`): an upstream quirk, × mult², which core keeps.
@@ -331,7 +331,7 @@ export function bladeburnerPersonOf(player: unknown): BladeburnerPerson | null {
   return needed.every(isNumber) ? (person as unknown as BladeburnerPerson) : null;
 }
 
-/** An action's difficulty at `level`: base × fac^(level − 1) (`Actions/LevelableAction.ts:255-261`). */
+/** An action's difficulty at `level`: base × fac^(level − 1) (`Actions/LevelableAction.ts:58-64`). */
 export function actionDifficulty(action: BladeburnerLevelledAction, level: number): number {
   return action.baseDifficulty * action.difficultyFac ** (level - 1);
 }
@@ -362,7 +362,7 @@ export interface BladeburnerCityFigures {
 /**
  * The chance of `action` at `level` (`Actions/Action.ts:169-196`), at a city's population (the true one for the real
  * chance, the estimate for the estimated), with the stamina penalty. The skills at 0 and no team: their multipliers 1
- * (B3's, and labelled). Raid is 0 with no communities (`Actions/Operation.ts:414-419`).
+ * (B3's, and labelled). Raid is 0 with no communities (`Actions/Operation.ts:63-68`).
  */
 export function actionSuccessChance(
   action: BladeburnerLevelledAction,
@@ -421,12 +421,12 @@ export function actionSeconds(action: BladeburnerLevelledAction, level: number, 
   return Math.ceil(Math.max(1, baseTime / actionStatFactor(person)));
 }
 
-/** A success's rank: rankGain × rewardFac^(level − 1) × `BladeburnerRank`, ±10% (`Formulas.ts:9-24`). */
+/** A success's rank: rankGain × rewardFac^(level − 1) × `BladeburnerRank`, ±10% (`Formulas.ts:9-28`). */
 export function actionRankGain(action: BladeburnerLevelledAction, level: number, rankMultiplier: number): number {
   return action.rankGain * action.rewardFac ** (level - 1) * rankMultiplier;
 }
 
-/** A failure's rank lost: rankLoss × rewardFac^(level − 1), not BitNode-scaled, ±10% (`Formulas.ts:26-40`). */
+/** A failure's rank lost: rankLoss × rewardFac^(level − 1), not BitNode-scaled, ±10% (`Formulas.ts:30-44`). */
 export function actionRankLoss(action: BladeburnerLevelledAction, level: number): number {
   return action.rankLoss * action.rewardFac ** (level - 1);
 }
@@ -469,7 +469,7 @@ export function staminaGainPerSecond(person: BladeburnerPerson, maxStamina: numb
   return Math.max(0, gain * person.mults.bladeburner_stamina_gain);
 }
 
-/** The successes level `maxLevel` + 1 opens after: ⌈½·M·(2b + M − 1)⌉ (`Actions/LevelableAction.ts:251-253`). */
+/** The successes level `maxLevel` + 1 opens after: ⌈½·M·(2b + M − 1)⌉ (`Actions/LevelableAction.ts:54-56`). */
 export function successesForNextLevel(action: BladeburnerLevelledAction, maxLevel: number): number {
   const b =
     action.type === "Contracts"
@@ -491,7 +491,7 @@ export function trainingExpPerAttempt(expMult: number): number {
   return 30 * expMult * expMult;
 }
 
-/** Field Analysis's rank: 0.1 × `BladeburnerRank`, no offset (`Formulas.ts:10-13`, `Bladeburner.ts:1136-1140`). */
+/** Field Analysis's rank: 0.1 × `BladeburnerRank`, no offset (`Formulas.ts:11-13`, `Bladeburner.ts:1136-1140`). */
 export function fieldAnalysisRank(rankMultiplier: number): number {
   return 0.1 * rankMultiplier;
 }
@@ -515,7 +515,10 @@ export interface BladeburnerActionReading {
  * `penalty` then (#375): the low end over the penalty, times fac^(read level − level), at most 1. The range scales as
  * 1/difficulty, so this is the game's own while neither the real nor the estimated chance is clamped at 1 (the
  * population and chaos factors cancel); read at 1, it's a bound from below that the next reading, at the level the rule
- * sets, replaces. Null with no penalty to divide by (stamina at 0).
+ * sets, replaces. With the high end read at 1 (#377's review), a clamp: the estimate may be over the real chance and
+ * clamped (`Actions/Action.ts:144-167`: est 1.2 and real 0.9 read low as 0.53, the true 0.40 at pop/popEst 0.66), so
+ * the low end is taken down, to lower levels, and up one level only, a level a reading. Null there, and with no penalty
+ * to divide by (stamina at 0).
  */
 export function chanceLowAt(
   action: BladeburnerLevelledAction,
@@ -524,6 +527,7 @@ export function chanceLowAt(
   penalty: number,
 ): number | null {
   if (!(penalty > 0)) return null;
+  if (read.chance[1] >= 1 && level > read.level + 1) return null;
   const atRead = Math.min(1, read.chance[0] / penalty);
   return Math.min(1, atRead * action.difficultyFac ** (read.level - level));
 }
@@ -610,15 +614,18 @@ export interface BladeburnerActionPlan {
  * - **The chance:** the estimate's low end (`chanceLowAt`), from the game's range as last read.
  * - **The rank:** an attempt's mean, a success's gain against a failure's loss (`attemptRankMoments`), over its time.
  * - **The counts:** an action needs its next attempt and those until the next reading: 1 + 10 s × the bonus time's
- *   speed over its time. Under 1 the game stops it (`Actions/LevelableAction.ts:241-244`), idle until the rule's next turn.
+ *   speed over its time. Under 1 the game stops it (`Actions/LevelableAction.ts:44-47`), idle until the rule's next turn.
  * - **The stamina:** worked from ½ max, the penalty's edge, and rested below. Over a cycle the time worked is the
  *   rest's gain over the work's net drain (its stamina an attempt over its time, less the regain) plus that gain. A work that
  *   drains nothing is worked all the time.
  * - **The rest:** the best of the three with that work, by the cycle's rank a second; and resting alone (Field
  *   Analysis's rank) when no work beats it.
  * - **Ties:** the first in the game's order (contracts, then operations, each level from 1).
- * Left out, and labelled: a failure's HP, which costs money at the hospital, not rank (its mean is `hpLoss`, the
- * money's trade the planner's); money (contracts pay as a by-product); the skills, teams and chaos (B3, B4).
+ * Left out, and labelled: a failure's HP (#377's review), which costs money at the hospital, not rank (its mean is
+ * `hpLoss`; the run report shows the visits and their money): so the choice is optimistic for the actions that lose
+ * the most HP (Raid about 386 a failure, Stealth Retirement 85, Assassination 50, Bounty Hunter 5, against 20 HP at
+ * defense 100), the money traded for rank the planner's (decision 67); money (contracts pay as a by-product); the
+ * skills, teams and chaos (B3, B4).
  */
 export function chooseBladeburnerAction({
   readings,

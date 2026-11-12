@@ -262,6 +262,11 @@ async function start(options: HostOptions): Promise<Host> {
       if (!Number.isFinite(exp) || exp < 0) throw new RangeError(`exp must be finite and 0 or more, not ${exp}`);
       engine.gainCharismaExp(exp);
     },
+    "diagnostics.gainIntelligenceExp": ({ exp }) => {
+      booted();
+      if (!Number.isFinite(exp) || exp < 0) throw new RangeError(`exp must be finite and 0 or more, not ${exp}`);
+      engine.gainIntelligenceExp(exp);
+    },
     "diagnostics.gainCombatExp": ({ exp }) => {
       booted();
       if (!Number.isFinite(exp) || exp < 0) throw new RangeError(`exp must be finite and 0 or more, not ${exp}`);

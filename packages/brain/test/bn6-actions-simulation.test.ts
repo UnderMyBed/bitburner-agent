@@ -4,12 +4,15 @@
 // under a minute of CI. Harness edits stand in for B1's half hour (bn6-start-simulation.test.ts):
 // - the four combat stats to 100 (5,417 experience each at SF1.3's ×1.28), and the division joined by the owner's own
 //   script (`joinBladeburnerDivision`, as B1's worker does);
-// - home at 128 GB, B1's hours of home RAM purchases: the reading worker's 42.6 GB beyond the 65.9 GB home keeps.
-// Then: the plan's work and rest by the worker, A5's faction work held for them; the stamina under ½ max rested back to
+// - home at 128 GB, B1's hours of home RAM purchases: the reading worker's 42.6 GB beyond the 65.9 GB home keeps;
+// - CyberSec joined (#377's review), so A5 has faction work to hold for the actions.
+// Then: the plan's work and rest by the worker, A5's faction work held for them; home's batches leaving the worker's
+// RAM (#377's review); the stamina under ½ max rested back to
 // the max; no stop at stamina 0; the rank within the bound of the forecast of the actions run (section 8's own check);
 // and the whole report passing.
 import { type MediumSnapshotData, skillExpFor } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
+import { BLADEBURNER_ACTIONS_HOLD } from "../src/bladeburner.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
@@ -25,6 +28,7 @@ test("BN6.1, an hour from a harness join: work and rest by stamina, no stop at 0
     fixture: { kind: "bitnode", n: 6, sourceFiles: SOURCE_FILES },
     beforeAgent: async (game) => {
       await game.simulation.diagnostics.setHomeRam(128);
+      await game.simulation.diagnostics.joinFactionWithReputation("CyberSec", 0);
       await game.simulation.diagnostics.gainCombatExp(skillExpFor(100, 1.28) + 1);
       await ownerRunsOnHome(
         game,
@@ -40,12 +44,17 @@ test("BN6.1, an hour from a harness join: work and rest by stamina, no stop at 0
   const first = fresh.controller().bladeburnerView();
   console.log(first.line);
   expect(first.actions?.order).toMatchObject({ type: "Contracts" });
-  // No brain's work, which would stop the action (A5's is held for it, bladeburner-actions.test.ts).
+  // No brain's work, which would stop the action: A5's, with a faction to work for, held for it.
   expect(fresh.controller().workView().desired).toBeNull();
+  const factions = fresh.controller().factionsView();
+  expect(factions.choice).not.toBeNull();
+  expect(factions).toMatchObject({ sent: false, waitingFor: BLADEBURNER_ACTIONS_HOLD });
   // The hour: the action under way each minute, and the stamina's lowest.
   const seen = new Set<string>();
   let lowest = 1;
   let rested = false;
+  const batcherRuns = new Set<string>();
+  let lastReading = "";
   for (let minute = 0; minute < 60; minute++) {
     await fresh.game.run(MINUTE);
     const reading = medium()?.bladeburner;
@@ -55,7 +64,14 @@ test("BN6.1, an hour from a harness join: work and rest by stamina, no stop at 0
     }
     if (fresh.controller().bladeburnerView().actions?.resting) rested = true;
     expect(fresh.controller().workView().desired, `the brain's work at minute ${minute}`).toBeNull();
+    // Beside home's batches (#377's review): the worker reads afresh each minute (its counts grow every second).
+    const sent = fresh.controller().batcherView().sent;
+    if (sent !== null) batcherRuns.add(`${sent.runOn}, ${sent.hosts} hosts`);
+    const now = JSON.stringify(reading);
+    expect(now, `the reading at minute ${minute}`).not.toBe(lastReading);
+    lastReading = now;
   }
+  console.log(`the batcher: ${[...batcherRuns].join("; ") || "not sent"}`);
   console.log(fresh.controller().bladeburnerView().line);
   console.log(`under way: ${[...seen].join(", ")}; the stamina's lowest ${(100 * lowest).toFixed(0)}% of the max`);
   // Worked to under ½ max, then rested: both a contract or operation and a rest seen.

@@ -307,7 +307,7 @@ export function setBladeburnerRank(rank: number) {
 /**
  * Sets Bladeburner's figures (#375): its current city's population, estimate, communities and chaos
  * (`Bladeburner/City.ts:8-28`), the stamina (`Bladeburner.ts:121-122`), and contracts' and operations' max levels by
- * name (`Actions/LevelableAction.ts:225`), each as given, the rest left: a harness edit for core's parity tests, not
+ * name (`Actions/LevelableAction.ts:28`), each as given, the rest left: a harness edit for core's parity tests, not
  * something a player can do. Not in the division, or an action of neither kind, throws.
  */
 export function setBladeburnerFigures(figures: {
@@ -349,6 +349,15 @@ export function setGangRespect(respect: number) {
  * own gains (`PersonObjects/Person.ts:66-140`), which set each skill from it: a harness edit for test scenarios (#367,
  * the gym's hours), not something a player can do.
  */
+/**
+ * Gives the player `exp` intelligence experience through the game's own `gainIntelligenceExp`
+ * (`PersonObjects/Person.ts:176-190`: only with SF5 or in BN5), which sets the skill from it: a harness edit for core's
+ * parity tests (#377's review), not something a player can do.
+ */
+export function gainIntelligenceExp(exp: number) {
+  Player.gainIntelligenceExp(exp);
+}
+
 export function gainCombatExp(exp: number) {
   Player.gainStrengthExp(exp);
   Player.gainDefenseExp(exp);

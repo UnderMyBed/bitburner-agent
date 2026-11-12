@@ -277,6 +277,8 @@ export class Simulation {
     gainCharismaExp: (exp: number) => this.rpc.call("diagnostics.gainCharismaExp", { exp }),
     /** Gives the player each combat stat's experience, through the game's own gains. A harness edit, for tests (#367). */
     gainCombatExp: (exp: number) => this.rpc.call("diagnostics.gainCombatExp", { exp }),
+    /** Gives the player intelligence experience, through the game's own gain (SF5 or BN5). A harness edit (#377). */
+    gainIntelligenceExp: (exp: number) => this.rpc.call("diagnostics.gainIntelligenceExp", { exp }),
     /** Queues an augmentation, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
     queueAugmentation: (augmentation: string) => this.rpc.call("diagnostics.queueAugmentation", { augmentation }),
     /** The game's own `getBitNodeMultipliers(n, level)`, for comparison. */

@@ -14,6 +14,7 @@ import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BitNodeHackingMultipliers,
+  BLADEBURNER_WORKER_RAM_GB,
   type BladeburnerState,
   type Bn2Route,
   bitNodeAssumptions,
@@ -1608,6 +1609,15 @@ export class DesiredStateController {
     return result;
   }
 
+  /**
+   * What home keeps beside `homeKeptGbOf` for the batches, the share and levelling mode (#375's review): Bladeburner's
+   * reading worker's `BLADEBURNER_WORKER_RAM_GB` while the rule asks for it (in the division, the RAM gate open: the
+   * gate counts home's RAM beyond `homeKeptGbOf` alone, so this doesn't close it), else nothing.
+   */
+  #homeAlsoKeptGb(): number {
+    return this.#bladeburnerState === null ? 0 : BLADEBURNER_WORKER_RAM_GB;
+  }
+
   #chooseMode(
     hackLoop: DesiredState["hackLoop"],
     factionWorking: boolean,
@@ -1643,7 +1653,9 @@ export class DesiredStateController {
     const batching = health?.state === "batching" || health?.state === "recovering" ? health.target : null;
     // Home among the hosts (#340), for its RAM beyond what it keeps for the Agent and its workers: the one reserve
     // the share and levelling mode keep (`homeKeptGbOf`), with Singularity its largest worker's too.
-    const homeKeptGb = readBatcherOnHome(this.#store) ? homeKeptGbOf(singularityRamMultiplierOf(this.#slowData)) : null;
+    const homeKeptGb = readBatcherOnHome(this.#store)
+      ? homeKeptGbOf(singularityRamMultiplierOf(this.#slowData)) + this.#homeAlsoKeptGb()
+      : null;
     const chooseOn = (kept: number | null) =>
       chooseBatcher(
         this.#staticData as StaticSnapshotData,
@@ -1700,6 +1712,7 @@ export class DesiredStateController {
           this.#mediumData,
           this.#hackingMultipliers(),
           singularityRamMultiplierOf(this.#slowData),
+          this.#homeAlsoKeptGb(),
         )
       : null;
     const sharing = readShareEnabled(this.#store) ? sharingConfig : null;
@@ -1890,6 +1903,7 @@ export class DesiredStateController {
       batcherTarget: batcherConfig === null ? null : { hostname: batcherConfig.target, figures: batcherConfig.figures },
       levelLoop: this.#levelLoopRunning(),
       nowMs: this.#lastEventAtMs,
+      homeAlsoKeptGb: this.#homeAlsoKeptGb(),
     });
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({

@@ -1,7 +1,7 @@
 // Bladeburner B2 (#375): the brain's rule on the worker's readings in the division (the work or the rest at ½ stamina,
 // the plan's action and level, the owner's work holding it, the bonus time, BN7's rank), the controller sending it as
-// the worker's action with A5's work held for it and nothing outside BN6 and BN7, and the run report's actions with
-// both of their failures. The rule against the real engine is bn6-actions-simulation.test.ts's; core's formulas
+// the worker's action with A5's work held for it and nothing outside BN6 and BN7, home's RAM kept for the worker beside
+// the batches (#377's review), and the run report's actions with each of their failures. The rule against the real engine is bn6-actions-simulation.test.ts's; core's formulas
 // against the engine's are bladeburner-parity.test.ts's.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -30,9 +30,15 @@ import {
   bladeburnerSnapshotOf,
   bladeburnerSpeedOf,
 } from "../src/bladeburner.ts";
-import { BLADEBURNER_GAP_MS, BLADEBURNER_RANK_SIGMAS } from "../src/bladeburner-actions-report.ts";
+import {
+  BLADEBURNER_GAP_MS,
+  BLADEBURNER_RANK_ALPHA,
+  BLADEBURNER_REST_SLACK_MS,
+  bernsteinMargin,
+} from "../src/bladeburner-actions-report.ts";
 import { BladeburnerFold } from "../src/bladeburner-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
+import { formatDuration } from "../src/gap-report.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
@@ -77,7 +83,10 @@ function reading({
 }
 
 /** A medium snapshot in the division with `reading`, home 128 GB, the player's figures as `getPlayer()` has them. */
-function medium(bladeburner: unknown, { factions = ["CyberSec"] as string[], inBladeburner = true } = {}) {
+function medium(
+  bladeburner: unknown,
+  { factions = ["CyberSec"] as string[], inBladeburner = true, hp = { current: 20, max: 20 } } = {},
+) {
   return {
     player: {
       skills: PERSON.skills,
@@ -101,6 +110,7 @@ function medium(bladeburner: unknown, { factions = ["CyberSec"] as string[], inB
       money: 1e6,
       city: "Sector-12",
       factions,
+      hp,
     },
     hasTorRouter: false,
     programs: [],
@@ -363,15 +373,33 @@ describe("the run report's actions (#375)", () => {
     return { text, failures };
   }
   // By hand: 10 s of Tracking is 10/11 of an attempt of mean 0.5 × 0.3 and variance 0.5 × 0.09 × (1 + 0.01/3) less
-  // 0.15²; each end's allowance a success's 110% and 10 s at its rate.
+  // 0.15²; an attempt at most its mean under it (no loss). Bernstein's margin at α 0.001: L·b/3 + √((L·b/3)² + 2·L·V),
+  // L = ln 1000; the window's end an attempt's mean, 0.5 × 0.3.
   const N = 60;
   const expected = (N - 1) * (10 / 11) * 0.15;
-  const sigma = Math.sqrt((N - 1) * (10 / 11) * (0.5 * 0.09 * (1 + 0.01 / 3) - 0.15 ** 2));
-  const ends = 2 * (1.1 * 0.3 + (0.15 / 11) * 10);
-  const bound = expected - BLADEBURNER_RANK_SIGMAS * sigma - ends;
+  const variance = (N - 1) * (10 / 11) * (0.5 * 0.09 * (1 + 0.01 / 3) - 0.15 ** 2);
+  const sigma = Math.sqrt(variance);
+  const logs = Math.log(1000);
+  const margin = (logs * 0.15) / 3 + Math.sqrt(((logs * 0.15) / 3) ** 2 + 2 * logs * variance);
+  const ends = 0.5 * 0.3;
+  const bound = expected - margin - ends;
+
+  test("Bernstein's margin: solved for α; at 0 variance and 0 below, none; the bound's own figures", () => {
+    expect(BLADEBURNER_RANK_ALPHA).toBe(0.001);
+    expect(bernsteinMargin(0, 0, 0.001)).toBe(0);
+    // Its tail at the margin is α: exp(−t² / (2(V + b·t/3))).
+    for (const [v, b] of [
+      [2.46, 0.19],
+      [10, 1],
+      [0.5, 3],
+    ] as const) {
+      const t = bernsteinMargin(v, b, 0.001);
+      expect(Math.exp(-(t * t) / (2 * (v + (b * t) / 3)))).toBeCloseTo(0.001, 12);
+    }
+    expect(bernsteinMargin(variance, 0.15, BLADEBURNER_RANK_ALPHA)).toBeCloseTo(margin, 12);
+  });
 
   test("Tracking for 10 min at its forecast: the lines, and no failure", () => {
-    expect(BLADEBURNER_RANK_SIGMAS).toBe(3);
     const ranks = Array.from({ length: N }, (_, index) => (index * expected) / (N - 1));
     const { text, failures } = fold(run(ranks));
     expect(failures).toEqual([]);
@@ -381,11 +409,15 @@ describe("the run report's actions (#375)", () => {
     );
     expect(text).toContain(
       `    rank from the actions run: ${expected.toFixed(2)} measured against ${expected.toFixed(2)} forecast (σ ` +
-        `${sigma.toFixed(2)}), its bound ${bound.toFixed(2)}: the forecast less 3σ and ${ends.toFixed(2)} for 0 ` +
-        "switches and the stretches' ends; over 9 min 50 s of game time\n",
+        `${sigma.toFixed(2)}), its bound ${bound.toFixed(2)}: the forecast less Bernstein's ${margin.toFixed(2)} at α ` +
+        `0.001 and ${ends.toFixed(2)} for 0 switches and the stretches' ends; over 9 min 50 s of game time\n`,
     );
     expect(text).toContain("  an action stopped at stamina 0 at any reading:\n    none\n");
     expect(text).toContain("  the rank from the actions run below its forecast's bound:\n    none");
+    expect(text).toContain(
+      "    the hospital (HP isn't in the rule's choice: money against rank is the planner's): 0 visits seen, at least " +
+        "$0; the failures' HP ",
+    );
   });
 
   test("the rank below the bound fails; at it, it passes", () => {
@@ -394,7 +426,7 @@ describe("the run report's actions (#375)", () => {
     const { failures } = fold(run(ranksTo(bound - 0.01)));
     expect(failures).toEqual([
       `the rank from the actions run below its forecast's bound: ${(bound - 0.01).toFixed(2)} against ` +
-        `${bound.toFixed(2)} (forecast ${expected.toFixed(2)}, σ ${sigma.toFixed(2)}), from ` +
+        `${bound.toFixed(2)} (forecast ${expected.toFixed(2)}, Bernstein's margin ${margin.toFixed(2)}), from ` +
         `${new Date(T0).toISOString()} to ${new Date(T0 + 590 * SECOND).toISOString()}`,
     ]);
   });
@@ -408,7 +440,9 @@ describe("the run report's actions (#375)", () => {
   });
 
   test("a stop at stamina 0 fails; one for the counts or other work is listed, no failure", () => {
-    const cost = 0.285 * (125 ** 0.28 + 125 / 650);
+    // Under an attempt's cost and the regain over the interval's 10 s (#377's review: bonus time's is more).
+    const regained = (0.0085 + MAX_STAMINA / 70_000) * 100 ** 0.17 * 10;
+    const cost = 0.285 * (125 ** 0.28 + 125 / 650) + regained;
     const stopped = (stamina: number, count = 100) =>
       fold(
         run([0, 0.3, 0.3], (index) =>
@@ -420,7 +454,8 @@ describe("the run report's actions (#375)", () => {
     expect(atZero.text).toContain(" for 1 switch and the stretches' ends");
     expect(atZero.failures).toEqual([
       `an action stopped at stamina 0: Tracking, found idle ${new Date(T0 + 20 * SECOND).toISOString()} (stamina ` +
-        `${(cost - 0.01).toFixed(2)} / ${MAX_STAMINA.toFixed(1)}, under an attempt's ${cost.toFixed(2)})`,
+        `${(cost - 0.01).toFixed(2)} / ${MAX_STAMINA.toFixed(1)}, under an attempt's ${(cost - regained).toFixed(2)} ` +
+        `and ${regained.toFixed(2)} regained since)`,
     ]);
     expect(stopped(cost).failures).toEqual([]);
     const counts = stopped(cost, 0.5);
@@ -442,6 +477,11 @@ describe("the run report's actions (#375)", () => {
     expect(text).toContain(`measured against ${forecast.toFixed(2)} forecast`);
     expect(text).toContain(" for 1 switch and the stretches' ends");
     expect(text).toContain("time under way: Field Analysis 30 s, Tracking level 1 10 s\n");
+    // The focus: A5 waited all 40 s, 30 of them resting, for Field Analysis's 0.1.
+    expect(text).toContain(
+      "    the focus: A5's faction work waited 40 s for the actions, 30 s of it resting, for 0.10 rank (Field " +
+        "Analysis's): the planner's trade\n",
+    );
     const gap = fold([
       ...run([0, 0.1]),
       ...run([0.2, 0.3]).map(
@@ -450,6 +490,60 @@ describe("the run report's actions (#375)", () => {
     ]);
     expect(gap.text).toContain("4 readings from ");
     expect(gap.text).toContain(", 2 stretches\n");
+  });
+
+  test("the hospital: the HP back at its max from under it, its bill at least min(10% of the money, max × $100k)", () => {
+    const at = (hp: number, current = TRACKING) => ({ hp, current });
+    const mediums = [
+      at(20),
+      at(5),
+      at(20),
+      at(18, { type: "General", name: "Hyperbolic Regeneration Chamber" }),
+      at(20),
+    ].map(
+      ({ hp, current }, index) =>
+        [
+          T0 + index * 10 * SECOND,
+          medium(reading({ found: current, current, actions: tracking() }), {
+            factions: [],
+            hp: { current: hp, max: 20 },
+          }),
+        ] as [number, MediumSnapshotData],
+    );
+    const { text, failures } = fold(mediums);
+    // One visit (5 → 20 under Tracking), $100,000 at least (10% of $1m, under 20 × $100k); the Chamber's +2 none.
+    expect(text).toContain(": 1 visit seen, at least $100,000; the failures' HP ");
+    expect(failures).toEqual([]);
+  });
+
+  test("stuck resting: the plan's work waiting past twice the rule's time to the max and 10 min fails; at it passes", () => {
+    // Field Analysis under way at 0.5 under the max: 0.5 over the regain to the max, twice that, and 10 min.
+    const regain = (0.0085 + MAX_STAMINA / 70_000) * 100 ** 0.17;
+    const boundMs = Math.ceil(2 * (0.5 / regain) * 1000) + BLADEBURNER_REST_SLACK_MS;
+    const field = { type: "General", name: "Field Analysis" };
+    const resting = (count: number, offsets: number[]) =>
+      fold(
+        offsets.map(
+          (offsetMs) =>
+            [
+              T0 + offsetMs,
+              medium(reading({ stamina: MAX_STAMINA - 0.5, found: field, current: field, actions: tracking(count) }), {
+                factions: [],
+              }),
+            ] as [number, MediumSnapshotData],
+        ),
+      );
+    expect(resting(100, [0, boundMs]).failures).toEqual([]);
+    const late = resting(100, [0, boundMs + 1]);
+    expect(late.failures).toEqual([
+      `resting with the plan's work waiting from ${new Date(T0).toISOString()} to ` +
+        `${new Date(T0 + boundMs + 1).toISOString()}, for ${formatDuration(boundMs + 1)}, past its bound ` +
+        `${formatDuration(boundMs)} (stamina ${(MAX_STAMINA - 0.5).toFixed(1)} / ${MAX_STAMINA.toFixed(1)} at its start, ` +
+        `the rule's time to the max ${formatDuration((0.5 / regain) * 1000)} with Field Analysis; the plan's work ` +
+        "Tracking level 1)",
+    ]);
+    // No work in the plan (the counts out): resting is the plan, however long.
+    expect(resting(0.5, [0, 10 * boundMs]).failures).toEqual([]);
   });
 
   test("in the division with no B2 reading: said; not in it: no actions' lines", () => {

@@ -33,8 +33,12 @@
 //   Worked while the stamina is at least ½ max; below, rested, back to work at the max (core's
 //   `bladeburnerResting`). Sent as the worker's `action`. The focus is held for it: A5's faction work waits
 //   (./factions.ts's `heldFor`), as any work stops the action (`Bladeburner/Bladeburner.ts:178-180`, `:1356-1368`).
-//   The player's one focus across systems is the planner's: until that slice, this is a rule's, labelled. The owner's
-//   work on the dashboard wins: no action is sent (the game stops it anyway), and the line says so.
+//   The player's one focus across systems is the planner's: until that slice, this is a rule's, labelled; A5 waits
+//   through the rests too (#377's review: the stamina regains whatever runs), Field Analysis's rank all it gains then.
+//   Left out, and labelled: The Blade's Simulacrum, which lets work and the actions run together
+//   (`Bladeburner.ts:178-180`, `:1356`): A5 waits with it too. The owner's work on the dashboard wins: no action is sent
+//   (the game stops it anyway), and the line says so. The worker turns the game's auto-level off for each action it
+//   sets, and doesn't turn it back on.
 import {
   BLADEBURNER_BITNODES,
   BLADEBURNER_CONSTANTS,

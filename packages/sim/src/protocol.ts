@@ -548,6 +548,11 @@ export interface HostMethods {
    */
   "diagnostics.gainCombatExp"(params: { exp: number }): void;
   /**
+   * Gives the player intelligence experience (finite, 0 or more) through the game's own `gainIntelligenceExp`, which
+   * sets the skill from it, only with SF5 or in BN5, for core's parity tests (#377's review). A harness edit.
+   */
+  "diagnostics.gainIntelligenceExp"(params: { exp: number }): void;
+  /**
    * Queues an augmentation (one of the game's names, not owned already but for NeuroFlux Governor), unpaid and not yet
    * installed, for test scenarios (#164). A harness edit, not something a player can do.
    */

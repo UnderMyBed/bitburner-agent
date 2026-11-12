@@ -336,6 +336,12 @@ describe("the formulas, worked by hand", () => {
     expect(chanceLowAt(TRACKING, { ...read, chance: [1, 1] }, 4, 1)).toBeCloseTo(1 / 1.02, 15);
     expect(chanceLowAt(TRACKING, { ...read, chance: [1, 1] }, 1, 1)).toBe(1);
     expect(chanceLowAt(TRACKING, read, 3, 0)).toBeNull();
+    // The high end read at 1 (#377's review): a clamp, so down, and up one level only.
+    const clamped = { ...read, chance: [0.53, 1] as [number, number] };
+    expect(chanceLowAt(TRACKING, clamped, 1, 1)).toBeCloseTo(0.53 * 1.02 ** 2, 15);
+    expect(chanceLowAt(TRACKING, clamped, 4, 1)).toBeCloseTo(0.53 / 1.02, 15);
+    expect(chanceLowAt(TRACKING, clamped, 5, 1)).toBeNull();
+    expect(chanceLowAt(TRACKING, read, 5, 1)).not.toBeNull();
   });
 
   test("the rests: Field Analysis's rank, the Chamber's 1% a minute, Training's 0.1425 each 30 s spent", () => {
@@ -420,6 +426,18 @@ describe("the rule's choice (#375): the most rank a second over a cycle of work 
       actionSuccessChance(TRACKING, 1, who, { city: CITY, penalty: 1 }) / 1.02 ** 2,
       12,
     );
+    // The high end read at 1 (#377's review): a level up a reading only, 2 of the 3 open.
+    const clamped = chooseBladeburnerAction({
+      readings: readingsFor(who, { maxLevel: 3 })
+        .filter((each) => each.name === "Tracking")
+        .map((each) => ({ ...each, chance: [each.chance[0], 1] as [number, number] })),
+      person: who,
+      stamina: max,
+      maxStamina: max,
+      rankMultiplier: 1,
+      speed: 1,
+    });
+    expect(clamped.work).toMatchObject({ name: "Tracking", level: 2 });
   });
 
   test("the counts: an action needs 1 + 10 s of attempts (× 5 with bonus time); none left, rest alone", () => {
