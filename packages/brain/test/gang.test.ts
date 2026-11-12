@@ -1560,10 +1560,15 @@ describe("the controller (#325)", () => {
 
   test("equipment (G3): bought from the money above the brain's holds, this round's purchase held on top", () => {
     const { controller, send, last } = connected();
-    send("slow", niteSecSlow(2));
+    // The Red Pill installed (#357): money at 12 is the planner's own choice, so member-01 works Money Laundering.
+    const slow = niteSecSlow(2);
+    send("slow", { ...slow, resetInfo: { ...slow.resetInfo, ownedAugs: { "The Red Pill": 1 } } });
     const data = niteSecMedium(formed(twelveWith(grownHacker("member-01")), GROWN_GANG));
     data.player = { ...data.player, money: 1e11 };
     send("medium", data);
+    expect(controller.gangView().line).toContain(
+      "; objective at 12: money, The Red Pill bought, queued or installed; ",
+    );
     expect(last()?.gang?.buy).toEqual([{ name: "member-01", equipment: "Neuralstimulator", pointsBefore: 4.5e13 }]);
     // The holds: the travel for an invitation's (a city faction's money requirement, #228) and, on top, the TOR
     // router going out this round, $200,000.
