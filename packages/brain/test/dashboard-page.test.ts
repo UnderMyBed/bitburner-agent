@@ -171,6 +171,7 @@ const BUSY_STATUS: DashboardStatus = {
   values: {
     money: 1234567,
     hackingLevel: 42,
+    intelligence: 7,
     homeRamUsed: 4.7,
     homeMaxRam: 8,
     homeScripts: 2,
@@ -451,6 +452,8 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   expect(textOf(document, "#values")).toContain("4.7 of 8 GB");
   expect(textOf(document, "#values")).toContain("250 MB");
   expect(textOf(document, "#values")).toContain("Degraded tiersstatic");
+  // Intelligence beside the hacking level (#349).
+  expect(textOf(document, "#values")).toContain("Hacking level42Intelligence7");
   // The hacking ceiling and income (#196).
   // As text, never as HTML.
   expect(textOf(document, "#values")).toContain("Hacking ceiling$40,000/s for a batcher on joesguns <b>(</b>$51,235/s");
@@ -626,6 +629,8 @@ test("a healthy brain, from the real builder: no alerts, no gaps", async () => {
   );
   // From a builder given no gang's view (#325): a dash.
   expect(textOf(document, "#values")).toContain("Gang—");
+  // No medium snapshot: no intelligence either (#349).
+  expect(textOf(document, "#values")).toContain("Hacking level—Intelligence—");
 });
 
 test("gave up, from the real builder: the Agent gone, a relaunch listed, and the switch offers Resume", async () => {

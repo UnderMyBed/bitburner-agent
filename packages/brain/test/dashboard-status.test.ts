@@ -170,7 +170,8 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
   for (let second = 2; second <= 20; second += 2)
     recordSnapshot("fast", STARTED_AT_MS + second * 1000, fastData(second));
   recordSnapshot("medium", STARTED_AT_MS + 10_000, {
-    player: { skills: { hacking: 42 } },
+    // Intelligence 0 before BN5 (#349): a value, not null.
+    player: { skills: { hacking: 42, intelligence: 0 } },
     hasTorRouter: false,
     programs: [],
     servers: [],
@@ -207,6 +208,7 @@ test("a healthy skeleton: the Agent connected, every tier's last snapshot and it
     values: {
       money: 20,
       hackingLevel: 42,
+      intelligence: 0,
       homeRamUsed: 4.7,
       homeMaxRam: 8,
       homeScripts: 2,
@@ -382,6 +384,7 @@ test("nothing yet: the Agent not connected, no snapshots, the silent alert after
   expect(built.values).toEqual({
     money: null,
     hackingLevel: null,
+    intelligence: null,
     homeRamUsed: null,
     homeMaxRam: null,
     homeScripts: null,
