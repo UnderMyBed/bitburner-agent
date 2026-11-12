@@ -20,6 +20,7 @@ import {
   gangJusticeReleaseMs,
   gangTimeToEarningMs,
   gangTrainingTimeMs,
+  gangWarfareExitMs,
 } from "../src/gang-earning.ts";
 import {
   GANG_ASCENSION_HORIZON_CAP_MS,
@@ -235,7 +236,30 @@ describe("the plan: the least of its members', or two ascensions at once (#374)"
     expect(gangTimeToEarningMs(inputs, { ...plan, recruit: [] }).ms).toBeGreaterThan(7 * 60 * MINUTE);
   });
 
-  test("a member working: 0; Territory Warfare: a day, its crew having no exit of its own; nobody: Infinity", () => {
+  test("Territory Warfare: G4's exit, the territory left at the clashes' gain an update × 20 s, at most a day", () => {
+    const members = [atHacking("member-01", 300, "Territory Warfare")];
+    const inputs = inputsOf(members);
+    const crew = (territoryPerUpdate: number): GangPlan => ({
+      ...planOf([["member-01", "territory", "Territory Warfare"]]),
+      warfare: { crew: ["member-01"], engage: true, measure: { territoryPerUpdate } as never, deaths: 0 },
+    });
+    // From 1/7, 0.001 an update: (6/7) / 0.001 = 857.14 updates × 20 s = 17,142,857 ms, 4 h 45 min 43 s.
+    expect(gangWarfareExitMs(inputs, crew(0.001))).toBeCloseTo(17_142_857.14, 1);
+    const estimate = gangTimeToEarningMs(inputs, crew(0.001));
+    expect(estimate.members[0]).toMatchObject({ role: "territory" });
+    expect(estimate.ms).toBeCloseTo(17_142_857.14, 1);
+    // Both sides of the day's cap: 0.0001 an update is 47.6 h, the day; at 1/7, a gain of 857.14 / 4,320 updates, the
+    // day exactly, 0.000198413; and none gained (losing, or no measure): the day.
+    expect(gangWarfareExitMs(inputs, crew(0.0001))).toBe(GANG_WARFARE_HORIZON_MS);
+    expect(gangWarfareExitMs(inputs, crew(0.0002))).toBeLessThan(GANG_WARFARE_HORIZON_MS);
+    expect(gangWarfareExitMs(inputs, crew(0.00019))).toBe(GANG_WARFARE_HORIZON_MS);
+    expect(gangWarfareExitMs(inputs, crew(-0.0003))).toBe(GANG_WARFARE_HORIZON_MS);
+    expect(gangWarfareExitMs(inputs, { warfare: null })).toBe(GANG_WARFARE_HORIZON_MS);
+    // At all the territory: none left, 0.
+    expect(gangWarfareExitMs(inputsOf(members, { ...START, territory: 1 }), crew(0.001))).toBe(0);
+  });
+
+  test("a member working: 0; Territory Warfare with no measure (none gained): a day; nobody: Infinity", () => {
     const members = [atHacking("member-01", 300, "Train Hacking"), ...fresh(2).slice(1)];
     const inputs = inputsOf(members);
     const roles: [string, GangRole, string][] = [

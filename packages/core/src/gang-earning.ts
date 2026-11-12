@@ -13,8 +13,11 @@
  * - **justice:** the time for the wanted level, at the plan's tasks, to fall to where the rule lets its justice members
  *   go (`GANG_JUSTICE_RELEASE`, half the bound), by the game's process (`Gang.ts:157-167`), then its training's time
  *   as above; a day in all at most, never released at the plan's tasks included;
- * - **territory warfare:** the crew has no exit of its own: it's weighed over a day each plan (`gangWarfareCrew`,
- *   `GANG_WARFARE_HORIZON_MS`), so a day, labelled;
+ * - **territory warfare:** G4's own exit (#376's review): the crew empties at all the territory, where a step more is
+ *   worth nothing (`gangWarfareBasis`'s step 0), so (1 − territory) / the territory the clashes gain an update (the
+ *   plan's measure, `gangTerritoryPerUpdate`, `Gang.ts:184-269`) × an update's 20 s (`GANG_TERRITORY_UPDATE_MS`,
+ *   `Constants.ts:12`), at most the day it's weighed over (`GANG_WARFARE_HORIZON_MS`); the day with none gained. At
+ *   the measure now: the others' growth and the gang's power gain as it goes are left out, either way;
  * - **working:** 0.
  * The plan's estimate is the least of its members' and its recruits' (fresh, set to train at once), or the time two
  * members' ascensions pay at once: the rule makes one a plan (`gangAscensionToMake`) and has the other, its horizon 0,
@@ -40,6 +43,7 @@ import {
 import {
   GANG_ASCENSION_HORIZON_CAP_MS,
   GANG_JUSTICE_RELEASE,
+  GANG_TERRITORY_UPDATE_MS,
   GANG_TRAINING_STEP_MS,
   GANG_WARFARE_HORIZON_MS,
   type GangObjective,
@@ -175,6 +179,20 @@ export function gangJusticeReleaseMs(inputs: GangRuleInputs, plan: Pick<GangPlan
   return processes * GANG_CYCLES_PER_PROCESS * GANG_CYCLE_MS;
 }
 
+/**
+ * The time until the plan's crew leaves Territory Warfare (G4's exit, #376's review, the module's comment): the
+ * territory left at the territory its measure gains an update, an update every 20 s; at most a day, the day with none.
+ */
+export function gangWarfareExitMs(
+  inputs: Pick<GangRuleInputs, "gang">,
+  plan: { warfare: { measure: { territoryPerUpdate: number } } | null },
+): number {
+  const perUpdate = plan.warfare?.measure.territoryPerUpdate ?? 0;
+  if (!(perUpdate > 0)) return GANG_WARFARE_HORIZON_MS;
+  const updates = Math.max(0, 1 - inputs.gang.territory) / perUpdate;
+  return Math.min(GANG_WARFARE_HORIZON_MS, updates * GANG_TERRITORY_UPDATE_MS);
+}
+
 /** A member's time until it earns respect under the plan (#374). */
 export interface GangMemberEarning {
   name: string;
@@ -221,7 +239,7 @@ export function gangTimeToEarningMs(given: GangRuleInputs, plan: GangPlan): Gang
     const member = byName.get(name);
     if (member === undefined || name === "" || name.length > MAX_GANG_MEMBER_NAME_LENGTH) continue;
     if (role === "working") members.push({ name, role, ms: 0 });
-    else if (role === "territory") members.push({ name, role, ms: GANG_WARFARE_HORIZON_MS });
+    else if (role === "territory") members.push({ name, role, ms: gangWarfareExitMs(inputs, plan) });
     else {
       const training = gangTrainingTimeMs(inputs, member, plan.objective);
       const releaseMs = role === "justice" ? release : 0;

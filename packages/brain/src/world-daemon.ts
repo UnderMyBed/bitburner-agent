@@ -664,7 +664,9 @@ export class WorldDaemonRule {
   #reputation: { value: number; risenAtMs: number } | null = null;
   /**
    * The gang's plan earning no respect (#374), as first handed over, kept while it lasts: the gang rule's own stretch
-   * starts again after a gap in its readings (#364's review), which would move the bound on at each.
+   * starts again after a gap in its readings (#364's review), which would move the bound on at each. Within one brain
+   * process only: a restart starts both it and the reputation's clock again; while the Agent is away (no snapshots)
+   * the reputation's clock starts again, and this is kept.
    */
   #gangPause: { fromMs: number; withinMs: number; estimateMs: number } | null = null;
   /** Daedalus's count as last seen (#228), and the install since its `lastAugReset`; A6's commit's facts (#238). */
@@ -894,8 +896,14 @@ export class WorldDaemonRule {
     gangPause: WorldDaemonInputs["gangPause"] = null,
   ): void {
     const steps = new Map<StallStep, { detail: string; sinceMs?: number; withinMs?: number }>();
-    if (gangPause === null || gangPause.withinMs === undefined) this.#gangPause = null;
-    else {
+    if (gangPause === null || gangPause.withinMs === undefined) {
+      // The pause over (#376's review): the members just put to work, the reputation rises only from the next process
+      // on, so its 10 minutes count from now, not from its last rise before the pause, which would fail every pause.
+      if (this.#gangPause !== null && this.#reputation !== null) {
+        this.#reputation = { ...this.#reputation, risenAtMs: Math.max(this.#reputation.risenAtMs, nowMs) };
+      }
+      this.#gangPause = null;
+    } else {
       this.#gangPause ??= {
         fromMs: gangPause.fromMs,
         withinMs: gangPause.withinMs,

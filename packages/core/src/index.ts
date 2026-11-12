@@ -557,6 +557,7 @@ export {
   gangJusticeReleaseMs,
   gangTimeToEarningMs,
   gangTrainingTimeMs,
+  gangWarfareExitMs,
 } from "./gang-earning.ts";
 export {
   type Bn2Route,

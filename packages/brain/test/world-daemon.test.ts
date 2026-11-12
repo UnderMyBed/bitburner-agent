@@ -592,12 +592,51 @@ describe("The Red Pill at the gang's faction (#334, G5)", () => {
     expect(rule.stall()).toBeNull();
     at(5 * MINUTE + RED_PILL_REPUTATION_STALLED_AFTER_MS, short);
     expect(rule.stall()).toMatchObject({ step: "redPillReputation", sinceMs: 5 * MINUTE });
-    // The plan earning again (null): the 10 minutes from the reputation's last rise, the pause forgotten.
+    // The plan earning again (null) at 1 min: the pause forgotten, the 10 minutes from its end (#376's review), not
+    // from the reputation's last rise before it: flat to 11 min, the stall; not at 11 min less a millisecond.
     rule = new WorldDaemonRule({ log: () => {}, emit: (event) => events.push(event) });
     at(0, pause);
     at(MINUTE, null);
-    at(RED_PILL_REPUTATION_STALLED_AFTER_MS, null);
-    expect(rule.stall()?.step).toBe("redPillReputation");
+    at(MINUTE + RED_PILL_REPUTATION_STALLED_AFTER_MS - 1, null);
+    expect(rule.stall()).toBeNull();
+    at(MINUTE + RED_PILL_REPUTATION_STALLED_AFTER_MS, null);
+    expect(rule.stall()).toMatchObject({ step: "redPillReputation", sinceMs: MINUTE });
+  });
+
+  test("a normal pause ending (#376's review): no stall as it ends; the reputation rising after it, none; flat 10 min, the stall", () => {
+    type Pause = { fromMs: number; withinMs: number; estimateMs: number } | null;
+    const at = (nowMs: number, gangPause: Pause, reputation: number) =>
+      update({
+        mediumData: medium({ hacking: 500 }),
+        slowData: bn2(),
+        gangShop: NITESEC(reputation),
+        slowGameTimeMs: HOUR,
+        redPillHeldAtGang: true,
+        gangPause,
+        nowMs,
+      });
+    // Risen to minute 3; the plan training from 4 to 12 (its estimate 9, bound 28); working from 13, the reputation
+    // not yet risen at that first reading (the members just put to work).
+    const pause = { fromMs: 4 * MINUTE, withinMs: 28 * MINUTE, estimateMs: 9 * MINUTE };
+    const play = (rising: boolean) => {
+      rule = new WorldDaemonRule({ log: () => {}, emit: (event) => events.push(event) });
+      let reputation = 2e6;
+      for (let minute = 0; minute <= 3; minute += 1) {
+        reputation += 1_000;
+        at(minute * MINUTE, null, reputation);
+      }
+      for (let minute = 4; minute <= 12; minute += 1) at(minute * MINUTE, pause, reputation);
+      at(13 * MINUTE, null, reputation);
+      expect(rule.stall()).toBeNull();
+      for (let minute = 14; minute <= 23; minute += 1) {
+        if (rising) reputation += 1_000;
+        at(minute * MINUTE, null, reputation);
+      }
+    };
+    play(true);
+    expect(rule.stall()).toBeNull();
+    play(false);
+    expect(rule.stall()).toMatchObject({ step: "redPillReputation", sinceMs: 13 * MINUTE });
   });
 });
 test("the run report's path (#334): the gang's faction from the window's last slow snapshot, at its game time's rate", () => {
