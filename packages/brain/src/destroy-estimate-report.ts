@@ -8,7 +8,9 @@
 // Daemon's switch off). Every other estimate is reported, not judged: its ratio is the measure. No bar on the whole
 // estimate against the time online so far (#360 amended): a short history (harness-made, a save loaded) or the prior's
 // B + C (4.21× at BN1.4's count met) would break it. #336's bar stays on levelling's own estimate, D's.
-import { DAEDALUS, DESTROY_ESTIMATE_BITNODES, destroyEstimate, THE_RED_PILL } from "@bitburner-agent/core";
+// BN2's gang route (#357's slice 3) isn't hindcast: the store keeps no τ_g or (3)'s estimates from before #357, and
+// BN2.1 is the campaign's first BN2, so its rows are the brain's own from its start.
+import { DAEDALUS, destroyEstimate, destroyRouteOf, THE_RED_PILL } from "@bitburner-agent/core";
 import { fieldsOf, isFiniteNumber } from "./augmentation-report.ts";
 import { AUGMENTATION_SLOW_GAP_MS } from "./augmentations.ts";
 import {
@@ -140,7 +142,8 @@ export class DestroyHindcast {
     const bitNode = this.fold.bitNodes.at(-1);
     const cycle = bitNode?.currentCycle;
     if (atMs >= this.#untilMs || bitNode === undefined || cycle === null || cycle === undefined) return;
-    if (!DESTROY_ESTIMATE_BITNODES.includes(bitNode.currentNode) || bitNode.ownedAugs === null) return;
+    // Daedalus's route alone: BN2's gang (#357) has no stored figures to hindcast from.
+    if (destroyRouteOf(bitNode.currentNode) !== "daedalus" || bitNode.ownedAugs === null) return;
     const views = campaignViews(this.fold, this.#events.slice(0, this.#seen).filter(isCampaignEvent))?.views ?? [];
     const index = views.length - 1;
     const view = views[index] as BitNodeView;
@@ -276,6 +279,7 @@ const STAGES: readonly DestroyStage[] = [
   "install",
   "count met",
   "joined",
+  "gang formed",
   "donations install",
   "The Red Pill installed",
   "levelling",
@@ -295,7 +299,10 @@ export function destroyEstimateSection(rows: readonly JudgedRow[], unread: numbe
   ];
   if (unread > 0) lines.push(`  ${unread} destroyEstimated event(s) the report can't read, left out`);
   if (rows.length === 0) {
-    lines.push("  none: no BitNode of Daedalus's route (BN1, BN4, BN5) with its start seen");
+    lines.push(
+      "  none: none of the brain's own, and no BitNode of Daedalus's route (BN1, BN4, BN5: the hindcast's) with its " +
+        "start seen",
+    );
     return lines;
   }
   const header = [

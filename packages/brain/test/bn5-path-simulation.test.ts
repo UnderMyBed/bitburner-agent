@@ -24,7 +24,7 @@ import {
 import type { Simulation } from "@bitburner-agent/sim";
 import { expect, test } from "vitest";
 import { AUGMENTATION_BOUGHT_EVENT_KIND, AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND } from "../src/augmentations.ts";
-import { DESTROY_ESTIMATED_EVENT_KIND, type DestroyEstimateRecord } from "../src/destroy-estimate.ts";
+import { DESTROY_ESTIMATED_EVENT_KIND, type DestroyEstimateRecord, describeTerms } from "../src/destroy-estimate.ts";
 import { runReport } from "../src/run-report.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -360,7 +360,7 @@ test("the destroy at BN5's World Daemon: held short of 4,500, then the brain's o
   expect(lines).toContain("    Source-Files: SF1.3, SF4.3, SF5.1 (unchanged)");
   // The time to the destroy (#360): at the first cycle the brain sees, The Red Pill's (the harness installed it before the
   // Agent, so a first look at a cycle not the BitNode's first): A and B + C done, D none (no BitNode destroyed in the
-  // store for a prior), at 4,500. None in BN2 (the gang's route, #357), said once.
+  // store for a prior), at 4,500.
   const estimates = stored(DESTROY_ESTIMATED_EVENT_KIND) as DestroyEstimateRecord[];
   expect(estimates[0]).toMatchObject({
     moment: "first seen",
@@ -374,9 +374,23 @@ test("the destroy at BN5's World Daemon: held short of 4,500, then the brain's o
     ["BC", 0, "done"],
     ["D", null, "optimistic"],
   ]);
-  expect(estimates.every((each) => each.bitNode === "BN5.1")).toBe(true);
-  expect(brain.logLines.filter((line) => line.startsWith("destroy estimate: none in BitNode 2"))).toHaveLength(1);
-  console.log(`destroy estimates in BN5.1: ${estimates.map((each) => each.moment).join(", ")}`);
+  // BN2.1, the gang's route since #357's slice 3: its start waits for τ_g (the experience rate's first minute, none
+  // measured yet in the suite's minute there), said once.
+  expect(estimates.map((each) => each.bitNode)).toEqual(["BN5.1"]);
+  expect(brain.logLines.filter((line) => line.startsWith("destroy estimate: the start in BN2 waits"))).toEqual([
+    "destroy estimate: the start in BN2 waits for τ_g (#357), 5 min online at most",
+  ]);
+  console.log(
+    estimates
+      .map((each) => `${each.bitNode} ${each.moment} at ${each.onlineMs} ms online: ${describeTerms(each.terms)}`)
+      .join("\n"),
+  );
+  console.log(
+    `destroy estimates in BN5.1: ${estimates
+      .filter((each) => each.bitNode === "BN5.1")
+      .map((each) => each.moment)
+      .join(", ")}`,
+  );
   expect(lines).toContainEqual(expect.stringMatching(/^ {4}\S+ {2}destroy sent \(the brain's\), into BitNode 2$/));
   // Its worker dies in the reset before it reports; the slow snapshot after shows it done (#286).
   expect(lines).toContainEqual(

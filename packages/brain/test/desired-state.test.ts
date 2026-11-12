@@ -34,7 +34,7 @@ import { type InstallTimingPolicy, readInstallWait } from "../src/augmentations.
 import { HACKING_MULTIPLIERS_UNREAD } from "../src/batcher.ts";
 import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
-import { DESTROY_ESTIMATED_EVENT_KIND } from "../src/destroy-estimate.ts";
+import { DESTROY_ESTIMATED_EVENT_KIND, type DestroyEstimateEvent } from "../src/destroy-estimate.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
 import { readHomeRamEnabled } from "../src/home-ram.ts";
 import { readManualIntents, readResetSentNote, writeResetSentNote } from "../src/manual-intents.ts";
@@ -3947,5 +3947,105 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
     const after = bn2Brain("planner", { gang: NITESEC_GANG, slow: shown });
     after.run(2);
     expect(after.controller.augmentationsView().progress?.timing ?? null).toBeNull();
+  });
+
+  test("the time to the destroy (#357's slice 3), each moment once across restarts: the start at τ_g, the gang formed, The Red Pill's install", () => {
+    const START = 10 * 3_600_000;
+    let gameTimeMs = START;
+    const estimates: DestroyEstimateEvent[] = [];
+    /** BN2 from `START`, the cycle from `lastAugReset` with `ownedAugs`: CyberSec joined, as `bn2Slow`. */
+    const slowAt = (lastAugReset = START, ownedAugs: Record<string, number> = {}) => ({
+      ...bn2Slow,
+      resetInfo: { ...bn2Slow.resetInfo, lastNodeReset: START, lastAugReset, ownedAugs },
+    });
+    /** A brain (a restart each), its estimates kept; then `minutes` of snapshots, the experience at the rate on. */
+    const brainOf = () => {
+      store.setSetting("hackLoop.enabled", "false");
+      channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+      channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+      const controller = new DesiredStateController({ channel, store, installTiming: "planner", bn2Route: "planner" });
+      controller.subscribe((event) => {
+        if (event.type === DESTROY_ESTIMATED_EVENT_KIND) estimates.push(event as DestroyEstimateEvent);
+      });
+      const connection = connectAgent();
+      send(connection, "static", bn2Network);
+      const run = (minutes: number, slow: unknown, gang: unknown = NO_GANG) => {
+        for (let second = 0; second < minutes * 60; second += 10) {
+          gameTimeMs += 10_000;
+          const tiers: [SnapshotTier, unknown][] = [
+            ...(second % 60 === 0 ? ([["slow", slow]] as [SnapshotTier, unknown][]) : []),
+            ["medium", bn2Medium((gameTimeMs - START) / 1000, gang)],
+          ];
+          for (const [tier, data] of tiers) {
+            connection.receive(
+              encodeControlMessage({
+                protocolVersion: CONTROL_PROTOCOL_VERSION,
+                type: "snapshot",
+                agentSessionId: "session-1",
+                tier,
+                sequenceNumber: ++sequenceNumber,
+                gameTimeMs,
+                data,
+              }),
+            );
+          }
+        }
+      };
+      return { controller, run };
+    };
+    const moments = () => estimates.map((each) => each.moment);
+    const termsOf = (event: DestroyEstimateEvent | undefined) =>
+      event?.terms.map((term) => [term.term, term.ms === null ? null : Math.round(term.ms / 1000), term.label]);
+
+    // The start: it waits for τ_g, the experience rate's first minute; then A is A6's τ_g, BC and D none, at least.
+    const first = brainOf();
+    first.run(3, slowAt());
+    expect(moments()).toEqual(["start"]);
+    const waitMs = first.controller.augmentationsView().progress?.timing?.gang?.waitMs as number;
+    expect(waitMs).toBeGreaterThan(70_000);
+    expect(estimates[0]).toMatchObject({ stage: "start", late: false, bitNode: "BN2.1", requiredLevel: 15_000 });
+    expect(estimates[0]?.onlineMs).toBe(60_000);
+    expect(termsOf(estimates[0])).toEqual([
+      ["A", expect.any(Number), "either way"],
+      ["BC", null, "optimistic"],
+      ["D", null, "optimistic"],
+    ]);
+    // A6's τ_g then: the rate the same, the level short by the same less a minute's experience.
+    expect(Math.abs((estimates[0]?.terms[0]?.ms as number) - waitMs)).toBeLessThanOrEqual(3 * 60_000);
+    expect(estimates[0]?.atLeast).toBe(true);
+
+    // A restart: no second start.
+    const second = brainOf();
+    second.run(2, slowAt());
+    expect(moments()).toEqual(["start"]);
+
+    // The gang formed (its faction in no slow snapshot yet): at once, A done.
+    second.run(2, slowAt(), NITESEC_GANG);
+    expect(second.controller.gangView().stage).toBe("managed");
+    expect(moments()).toEqual(["start", "gang formed"]);
+    expect(termsOf(estimates[1])).toEqual([
+      ["A", 0, "done"],
+      ["BC", null, "optimistic"],
+      ["D", null, "optimistic"],
+    ]);
+
+    // A restart: the gang read formed again, no second moment.
+    const third = brainOf();
+    third.run(2, slowAt(), NITESEC_GANG);
+    expect(moments()).toEqual(["start", "gang formed"]);
+
+    // The Red Pill installed (its install made): at once, A and BC done, D none at 15,000 (no BN2 prior): at least.
+    const installedAt = gameTimeMs;
+    third.run(2, slowAt(installedAt, { "The Red Pill": 1 }), NITESEC_GANG);
+    expect(moments()).toEqual(["start", "gang formed", "install"]);
+    expect(estimates[2]).toMatchObject({ stage: "The Red Pill installed", atLeast: true, lastAugReset: installedAt });
+    expect(termsOf(estimates[2])).toEqual([
+      ["A", 0, "done"],
+      ["BC", 0, "done"],
+      ["D", null, "optimistic"],
+    ]);
+    const fourth = brainOf();
+    fourth.run(2, slowAt(installedAt, { "The Red Pill": 1 }), NITESEC_GANG);
+    expect(moments()).toEqual(["start", "gang formed", "install"]);
   });
 });

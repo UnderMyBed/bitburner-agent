@@ -1,12 +1,13 @@
 // The time to the destroy (#360): the campaign fold's stretches, the prior, the hindcast (nothing after its moment
 // read), the campaign report's section over the four BitNodes rebuilt from the store's tables (#360's findings, by
 // cycle), the brain's rule at each moment (once across a restart, a missed install marked late), and the run report's
-// check (a term never). Over synthetic stores built here, never the owner's .data/.
+// check (a term never); BN2's gang route (#357's slice 3). Over synthetic stores built here, never the owner's .data/.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { FactionWorkChoice, SlowSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import type { InstallTimingView } from "../src/augmentations.ts";
 import {
   type BitNodeView,
   CampaignFold,
@@ -24,7 +25,9 @@ import {
   type DestroyEstimateEvent,
   type DestroyEstimateRecord,
   DestroyEstimateRule,
+  type DestroyGangFacts,
   type DestroySeed,
+  destroyGangInputsOf,
   readDestroySeed,
 } from "../src/destroy-estimate.ts";
 import {
@@ -34,6 +37,7 @@ import {
   destroyEstimateSection,
   type JudgedRow,
 } from "../src/destroy-estimate-report.ts";
+import type { GangStallStretch } from "../src/gang-stalls.ts";
 import type { LevellingView } from "../src/levelling.ts";
 import { type SlowResetInfo, type StoredEvent, TelemetryStore } from "../src/telemetry-store.ts";
 import { WorldDaemonFold } from "../src/world-daemon-report.ts";
@@ -753,11 +757,11 @@ describe("the brain's rule (#360)", () => {
     expect(JSON.parse(JSON.stringify(events.at(-1)))).toMatchObject({ never: true, remainingMs: null });
   });
 
-  test("outside Daedalus's route (BN2): none, said once in the log", () => {
+  test("outside the routes modelled (BN3: neither Daedalus's nor BN2's gang): none, said once in the log", () => {
     const { rule, events, log } = ruleOf();
     for (let minute = 1; minute <= 3; minute++) {
       rule.update({
-        slowData: slow(minute, resetInfo(0, 0, 2, { 1: 3 }, {})),
+        slowData: slow(minute, resetInfo(0, 0, 3, { 1: 3 }, {})),
         slowGameTimeMs: m(minute),
         slowAtMs: m(minute),
         factionChoice: null,
@@ -766,7 +770,7 @@ describe("the brain's rule (#360)", () => {
       });
     }
     expect(events).toEqual([]);
-    expect(log).toEqual([expect.stringMatching(/^destroy estimate: none in BitNode 2: its route isn't Daedalus's/)]);
+    expect(log).toEqual([expect.stringMatching(/^destroy estimate: none in BitNode 3: its route isn't modelled/)]);
   });
 
   test("the store's seed: the prior from the BitNodes before, the time online so far, the BitNode not stored yet", () => {
@@ -905,5 +909,279 @@ describe("the run report's check (#360)", () => {
       "w0r1d_d43m0n's level 3000 in the static snapshot at 10m, not BitNode 4's 9000 (3000 × its WorldDaemonDifficulty, " +
         "core's worldDaemonRequiredLevel, #360)",
     ]);
+  });
+});
+
+describe("BN2's route, the gang's (#357's slice 3)", () => {
+  /** A rule over the store with no prior (none destroyed at 15,000): its events and log kept. */
+  const ruleOf = () => {
+    const events: DestroyEstimateEvent[] = [];
+    const log: string[] = [];
+    const rule = new DestroyEstimateRule({
+      store,
+      log: (line) => log.push(line),
+      emit: (e) => events.push(e),
+      seedOf: () => ({ prior: null, onlineMs: 0, countMetOnlineMs: null, seenBefore: false }),
+    });
+    return { rule, events, log };
+  };
+  /** A6's timing before the gang, τ_g `waitMinutes` (null: not measured). */
+  const forming = (waitMinutes: number | null) =>
+    ({
+      route: "gang forming",
+      gang: { waitMs: waitMinutes === null ? null : waitMinutes * MINUTE },
+    }) as unknown as InstallTimingView;
+  /** A6's timing with the gang, (3) choosing `choice` at `minutes` (keep's, install now's or banking's). */
+  const formedTiming = (choice: "keep" | "install" | "bank", minutes: number) =>
+    ({
+      route: "gang formed",
+      gangInstall: {
+        choice,
+        keepMs: (choice === "keep" ? minutes : 999) * MINUTE,
+        installNowMs: (choice === "install" ? minutes : 999) * MINUTE,
+        bankMs: (choice === "bank" ? minutes : 999) * MINUTE,
+      },
+    }) as unknown as InstallTimingView;
+  /** The gang rule's pause (#374): its estimate `estimate` minutes, `sofar` of them gone. */
+  const pause = (estimate: number, sofar = 0): GangStallStretch => ({
+    kind: "earning",
+    fromMs: m(0),
+    toMs: m(sofar),
+    detail: "",
+    estimateMs: estimate * MINUTE,
+    withinMs: (2 * estimate + 10) * MINUTE,
+  });
+  /** One update at `minute` of BN2 (from minute `node`), the cycle from `aug`, `owned` installed; the gang's facts. */
+  const update = (
+    rule: DestroyEstimateRule,
+    minute: number,
+    aug: number,
+    gang: Partial<DestroyGangFacts> = {},
+    { owned = {}, levelling, node = 0 }: { owned?: Record<string, number>; levelling?: number; node?: number } = {},
+  ) =>
+    rule.update({
+      slowData: slow(minute, resetInfo(node, aug, 2, { 1: 3, 4: 3, 5: 1 }, owned)),
+      slowGameTimeMs: m(minute),
+      slowAtMs: m(minute),
+      factionChoice: null,
+      levelling: levellingView(levelling),
+      nowMs: m(minute),
+      gang: { formed: false, timing: null, pause: null, ...gang },
+    });
+  /** The same, a minute at a time from `from` to `to` (the online clock counts gaps of 3 min at most). */
+  const run = (
+    rule: DestroyEstimateRule,
+    from: number,
+    to: number,
+    aug: number,
+    gang: Partial<DestroyGangFacts> = {},
+    options: { owned?: Record<string, number>; levelling?: number; node?: number } = {},
+  ) => {
+    for (let minute = from; minute <= to; minute++) update(rule, minute, aug, gang, options);
+  };
+  const termsOf = (event: DestroyEstimateEvent | undefined) =>
+    event?.terms.map((term) => [term.term, term.never ? "never" : minutes(term.ms), term.label]);
+  /** Up to the gang formed at minute 20: the start at once (τ_g 13 min), then 18 minutes. */
+  const toTheGang = (rule: DestroyEstimateRule) => {
+    run(rule, 1, 19, 0, { timing: forming(13) });
+    update(rule, 20, 0, { formed: true, timing: forming(1), pause: pause(9, 1) });
+  };
+  const BITWIRE = { owned: { BitWire: 1 } };
+
+  test("the start waits for τ_g (the rate's first minute), said once; then A τ_g, BC and D none, at least, at 15,000", () => {
+    const { rule, events, log } = ruleOf();
+    update(rule, 1, 0);
+    update(rule, 2, 0, { timing: forming(null) });
+    expect(events).toEqual([]);
+    expect(log).toEqual(["destroy estimate: the start in BN2 waits for τ_g (#357), 5 min online at most"]);
+    run(rule, 3, 4, 0, { timing: forming(13) });
+    expect(events.map((each) => [each.moment, each.stage, each.late, minutes(each.onlineMs)])).toEqual([
+      ["start", "start", false, 2],
+    ]);
+    expect(termsOf(events[0])).toEqual([
+      ["A", 13, "either way"],
+      ["BC", null, "optimistic"],
+      ["D", null, "optimistic"],
+    ]);
+    expect(events[0]).toMatchObject({
+      bitNode: "BN2.1",
+      requiredLevel: 15_000,
+      atLeast: true,
+      remainingMs: 13 * MINUTE,
+    });
+    expect(rule.lines()).toEqual([
+      expect.stringMatching(/^time to the destroy \(#360\), at start with 2 min online: at least 13 min to go/),
+    ]);
+  });
+
+  test("τ_g never measured: the estimate goes at its bound (5 min online), A none", () => {
+    const { rule, events } = ruleOf();
+    run(rule, 1, 5, 0, { timing: forming(null) });
+    expect(events).toEqual([]);
+    update(rule, 6, 0, { timing: forming(null) });
+    expect(events.map((each) => [each.moment, minutes(each.onlineMs)])).toEqual([["start", 5]]);
+    expect(events[0]?.terms[0]).toMatchObject({
+      ms: null,
+      source: expect.stringMatching(/^before the gang: τ_g not measured/),
+    });
+  });
+
+  test("the gang formed: at once, A done, BC none with the plan's time to earning; once a BitNode", () => {
+    const { rule, events } = ruleOf();
+    toTheGang(rule);
+    expect(events.map((each) => [each.moment, each.stage, minutes(each.onlineMs)])).toEqual([
+      ["start", "start", 0],
+      ["gang formed", "gang formed", 19],
+    ]);
+    expect(termsOf(events[1])).toEqual([
+      ["A", 0, "done"],
+      ["BC", null, "optimistic"],
+      ["D", null, "optimistic"],
+    ]);
+    expect(events[1]?.terms[1]?.source).toContain("about 8 min more by the gang rule's estimate (#374)");
+    expect(rule.lines()).toEqual([
+      expect.stringMatching(/^time to the destroy \(#360\), at the gang formed with 19 min online: /),
+    ]);
+    // Unread a while (an install's restart), then read again: no second.
+    update(rule, 21, 0, { formed: false });
+    update(rule, 22, 0, { formed: true });
+    expect(events).toHaveLength(2);
+  });
+
+  test("an install with the gang waits for (3) (the gang read again): BC its chosen estimate and the commit", () => {
+    const { rule, events, log } = ruleOf();
+    toTheGang(rule);
+    run(rule, 21, 30, 0, { formed: true });
+    update(rule, 31, 30, { formed: false }, BITWIRE);
+    update(rule, 32, 30, { formed: true, timing: forming(1) }, BITWIRE);
+    expect(events.map((each) => each.moment)).toEqual(["start", "gang formed"]);
+    expect(log).toContain("destroy estimate: the install in BN2 waits for (3)'s estimate (#357), 5 min online at most");
+    update(rule, 33, 30, { formed: true, timing: formedTiming("bank", 600) }, BITWIRE);
+    expect(events.map((each) => [each.moment, each.stage, each.late, minutes(each.onlineMs)]).at(-1)).toEqual([
+      "install",
+      "install",
+      false,
+      32,
+    ]);
+    expect(termsOf(events.at(-1))).toEqual([
+      ["A", 0, "done"],
+      ["BC", 602, "either way"],
+      ["D", null, "optimistic"],
+    ]);
+    expect(events.at(-1)?.terms[1]?.source).toMatch(/^\(3\)'s choice, bank: /);
+  });
+
+  test("The Red Pill installed: at once, A and BC done, D none at 15,000 (at least); levelling's first choice gives D", () => {
+    const { rule, events } = ruleOf();
+    toTheGang(rule);
+    run(rule, 21, 40, 0, { formed: true });
+    update(rule, 41, 40, { formed: false }, { owned: { [RED_PILL]: 1 } });
+    expect(events.at(-1)).toMatchObject({ moment: "install", stage: "The Red Pill installed", atLeast: true });
+    expect(termsOf(events.at(-1))).toEqual([
+      ["A", 0, "done"],
+      ["BC", 0, "done"],
+      ["D", null, "optimistic"],
+    ]);
+    update(rule, 42, 40, { formed: true }, { owned: { [RED_PILL]: 1 }, levelling: 300 * 60 });
+    expect(events.at(-1)).toMatchObject({ moment: "levelling", atLeast: false, remainingMs: 300 * MINUTE });
+    expect(events.map((each) => each.moment)).toEqual(["start", "gang formed", "install", "levelling"]);
+  });
+
+  test("across restarts: a waiting estimate kept (its late from its first slow snapshot), the gang formed kept", () => {
+    const first = ruleOf();
+    toTheGang(first.rule);
+    // The install while the brain was down: seen 10 minutes after it, late; waiting for (3).
+    const second = ruleOf();
+    update(second.rule, 40, 30, { formed: false }, BITWIRE);
+    expect(second.events).toEqual([]);
+    expect(JSON.parse(store.getSetting(DESTROY_ESTIMATE_SETTING) as string)).toMatchObject({
+      gangFormed: true,
+      pending: { moment: "install", late: true },
+    });
+    // Restarted again: the gang read, formed (no second moment); (3) in: the install's estimate, late, once.
+    const third = ruleOf();
+    update(third.rule, 41, 30, { formed: true, timing: formedTiming("keep", 60) }, BITWIRE);
+    update(third.rule, 42, 30, { formed: true, timing: formedTiming("keep", 59) }, BITWIRE);
+    expect(third.events.map((each) => [each.moment, each.late, termsOf(each)?.[1]])).toEqual([
+      ["install", true, ["BC", 62, "either way"]],
+    ]);
+    const fourth = ruleOf();
+    update(fourth.rule, 43, 30, { formed: true, timing: formedTiming("keep", 58) }, BITWIRE);
+    expect(fourth.events).toEqual([]);
+  });
+
+  test("the gang formed with the cycle's estimate still waiting: that goes first, as it stood before the gang", () => {
+    const { rule, events } = ruleOf();
+    update(rule, 1, 0, { timing: forming(null) });
+    update(rule, 2, 0, { formed: true, timing: forming(null) });
+    expect(events.map((each) => [each.moment, termsOf(each)?.[0]])).toEqual([
+      ["start", ["A", null, "optimistic"]],
+      ["gang formed", ["A", 0, "done"]],
+    ]);
+  });
+
+  test("a first look with the gang formed: no moment for it; the first seen waits for (3)", () => {
+    const { rule, events } = ruleOf();
+    update(rule, 50, 30, { formed: true }, BITWIRE);
+    expect(events).toEqual([]);
+    update(rule, 51, 30, { formed: true, timing: formedTiming("keep", 120) }, BITWIRE);
+    expect(events.map((each) => [each.moment, termsOf(each)?.[0], termsOf(each)?.[1]])).toEqual([
+      ["first seen", ["A", 0, "done"], ["BC", 122, "either way"]],
+    ]);
+  });
+
+  test("never: τ_g with no experience coming past the wait's bound, or (3) at no rate outside a pause; a pause's none", () => {
+    const { rule, events } = ruleOf();
+    // No experience in the rate's first minutes (the gang-start suite's first minute): not yet never; at the bound, never.
+    run(rule, 1, 5, 0, { timing: forming(Number.POSITIVE_INFINITY) });
+    expect(events).toEqual([]);
+    update(rule, 6, 0, { timing: forming(Number.POSITIVE_INFINITY) });
+    expect(events.at(-1)).toMatchObject({ never: true, remainingMs: null });
+    expect(events.at(-1)?.terms[0]).toMatchObject({ term: "A", never: true, ms: null });
+    // Two BitNodes on (each a first look): at no rate in a pause, none; outside one, never.
+    const keepNever = { formed: true, timing: formedTiming("keep", Number.POSITIVE_INFINITY) };
+    update(rule, 101, 100, { ...keepNever, pause: pause(9) }, { node: 100 });
+    expect(events.at(-1)).toMatchObject({ lastNodeReset: m(100), never: false, atLeast: true });
+    update(rule, 201, 200, keepNever, { node: 200 });
+    expect(events.at(-1)).toMatchObject({ lastNodeReset: m(200), never: true });
+    expect(events.at(-1)?.terms[1]).toMatchObject({ term: "BC", never: true });
+  });
+
+  test("the campaign report: BN2 isn't hindcast (no stored τ_g or (3)), its rows the brain's own; the gang formed by moment", () => {
+    // A BN2 played before the brain's estimates (its slow snapshots alone): no hindcast row, where Daedalus's route has one.
+    bitNode({ from: 0, currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1 }, online: [10, 10], counts: [0, 1] });
+    expect(rowsOf()).toEqual([]);
+    // Then a BN2 the brain estimates: its rows, each by moment, the gang formed among them.
+    const { rule, events } = ruleOf();
+    run(rule, 30, 49, 30, { timing: forming(13) }, { node: 30 });
+    update(rule, 50, 30, { formed: true }, { node: 30 });
+    for (const each of events) event(each.atMs / MINUTE - T0 / MINUTE + 0.5, DESTROY_ESTIMATED_EVENT_KIND, each);
+    const rows = rowsOf();
+    expect(rows.map((row) => [row.record.bitNode, row.record.stage, row.hindcast])).toEqual([
+      ["BN2.1", "start", false],
+      ["BN2.1", "gang formed", false],
+    ]);
+    const section = destroyEstimateSection(rows, 0, (ms) => new Date(ms).toISOString());
+    expect(section).toContain("    gang formed: no ratio");
+  });
+
+  test("core's inputs from the controller's facts: τ_g on its route, (3)'s chosen candidate's, the pause's time left", () => {
+    expect(destroyGangInputsOf(null, false)).toEqual({ formed: false, waitMs: null, redPill: null, earningInMs: null });
+    expect(destroyGangInputsOf({ formed: false, timing: forming(13), pause: null }, false)).toMatchObject({
+      waitMs: 13 * MINUTE,
+      redPill: null,
+    });
+    for (const choice of ["keep", "install", "bank"] as const) {
+      expect(destroyGangInputsOf({ formed: true, timing: formedTiming(choice, 30), pause: null }, true)).toMatchObject({
+        waitMs: null,
+        redPill: { choice, ms: 30 * MINUTE },
+      });
+    }
+    expect(destroyGangInputsOf({ formed: true, timing: null, pause: pause(9, 4) }, true).earningInMs).toBe(5 * MINUTE);
+    expect(destroyGangInputsOf({ formed: true, timing: null, pause: pause(9, 12) }, true).earningInMs).toBe(0);
+    // #343's timing (Daedalus's count, no route): neither.
+    expect(
+      destroyGangInputsOf({ formed: false, timing: { choice: 1 } as unknown as InstallTimingView, pause: null }, false),
+    ).toMatchObject({ waitMs: null, redPill: null });
   });
 });

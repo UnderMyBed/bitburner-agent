@@ -1941,7 +1941,8 @@ export class DesiredStateController {
     this.#join = factions.join;
     this.#joinAlongside = factions.joinAlongside;
     this.#factionWork = factions.work;
-    // The time to the destroy (#360), after A5's choice (the hold's ETA) and levelling's (the level's).
+    // The time to the destroy (#360), after A5's choice (the hold's ETA) and levelling's (the level's); in BN2 (#357's
+    // slice 3) after the gang rule's and A6's: the gang formed, the planner's τ_g or (3)'s estimate, the plan's pause.
     const factionsView = this.#factions.view();
     this.#destroyEstimate.update({
       slowData: this.#slowData,
@@ -1950,6 +1951,11 @@ export class DesiredStateController {
       factionChoice: factionsView.sent ? factionsView.choice : null,
       levelling: this.#levelling.view(),
       nowMs: this.#lastEventAtMs,
+      gang: {
+        formed: this.#gang.view().stage === "managed",
+        timing: this.#augmentations.view().progress?.timing ?? null,
+        pause: this.#gang.earningPause(),
+      },
     });
     // The owner's queue and the brain's resets first, then the rules' intents (`#ruleIntents`, in its order). The
     // purchases before the backdoor: a `buy` never waits for its terminal action.
