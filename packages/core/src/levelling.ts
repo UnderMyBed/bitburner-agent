@@ -7,8 +7,8 @@
  * - **level:** levelling mode, grow or weaken loops on the server and with the operation that earn the most experience
  *   per thread-second at its minimum security, on the RAM the batcher would batch with (`levellingExpPerThreadSecond`,
  *   the formula's prediction, times the factor fitted from the measured rate in that mode);
- * - **install:** NeuroFlux Governor's levels the money buys and, with a gang (#355), the set A6 would buy that the
- *   gang's faction's shop sells, an install, w0r1d_d43m0n rooted again (`LEVELLING_REROOT_MS`), then levelling mode from
+ * - **install:** NeuroFlux Governor's levels the money buys and (#355) the set A6 would buy that adds to levelling
+ *   (the gang's shop's in BN2, which sells no NeuroFlux Governor), an install, w0r1d_d43m0n rooted again (`LEVELLING_REROOT_MS`), then levelling mode from
  *   zero experience at the new multipliers, on home's RAM alone (the cloud servers are lost, `Prestige.ts`, and bought
  *   back later: left out, cautious), after the install's own time (`LEVELLING_INSTALL_MS`).
  * Every rate scales with the level as `level + 50`: an operation's time is `5 × (2.5 × required × security + 500) /
@@ -266,7 +266,7 @@ export interface LevellingInputs {
   levelling: { predicted: LevellingRate; factor: number | null } | null;
   /**
    * (c) NeuroFlux Governor's levels the money buys (A6's count, donations included: decision 53), and (#355)
-   * `augmentations`, the set A6 would buy first that the gang's faction sells (absent, none); home's level loop
+   * `augmentations`, the set A6 would buy first (absent, none); home's level loop
    * threads (home's RAM is kept through an install, `Prestige.ts`), and one thread's predicted rate on the levelling
    * target after it (before the levels and the set): the grow's, after the target's preparation (`preparationMs`,
    * `levellingPreparationMs`), as the install leaves every server at its starting security and money (the servers
@@ -289,11 +289,10 @@ export type LevellingEstimates = Record<LevellingCandidate, number | null>;
  * The candidates' estimates (#336): (a) at its measured rate; (b) at the formula's prediction times its fitted factor;
  * (c) the install's own time, w0r1d_d43m0n's root again (`LEVELLING_REROOT_MS`, one live BN4 measurement) and the
  * target's preparation for the grow (`preparationMs`: its experience left out, cautious), then from 0 experience at the
- * multipliers the levels and the gang's shop's set give (`levelMult`, `hacking_exp` and `hacking_speed` × theirs,
+ * multipliers the levels and the set give (`levelMult`, `hacking_exp` and `hacking_speed` × theirs,
  * `levellingInstallMultipliers`), at (b)'s factor, on home's threads alone. On offer with a level to buy or a set that
  * adds to levelling (`addsToLevelling`, #355), and home's threads. Left out of (c): the cloud servers bought back, the
- * experience while w0r1d_d43m0n is rooted again, and the set's augmentations the gang's faction doesn't sell (all
- * cautious).
+ * experience while w0r1d_d43m0n is rooted again (both cautious).
  */
 export function levellingEstimates(inputs: LevellingInputs): LevellingEstimates {
   const { exp, required, levelMult } = inputs;

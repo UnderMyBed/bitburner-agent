@@ -47,7 +47,8 @@
 //   RAM; the progress, the dashboard and the log say so, and when it's over.
 // - The planner's levelling install (#336, ./levelling.ts): The Red Pill installed and every install held for the
 //   destroy, A6 offers the NeuroFlux Governor levels the money buys (`neuroFluxOffer`) and (#355) the set's
-//   augmentations the gang's faction sells that add to levelling (`installAugmentationsOffer`); once the planner
+//   augmentations that add to levelling (`installAugmentationsOffer`; in BN2 the gang's shop's, which sells no
+//   NeuroFlux Governor); once the planner
 //   chooses them, the install is chosen at once (`reason` "the hacking level"), the destroy's hold set aside for it,
 //   with a level to buy or that set alone.
 // - The planner times installs short of Daedalus's count (#343, owner decision 67; core's install-timing.ts), in place
@@ -1118,7 +1119,7 @@ export class AugmentationRule {
    * every install for the destroy, or null: the planner's install candidate.
    */
   #neuroFluxOffer: number | null = null;
-  /** The set's augmentations the gang's faction sells that add to levelling (#355), as the last destroy hold had it. */
+  /** The set's augmentations that add to levelling (#355), as the last destroy hold had it. */
   #installAugmentationsOffer: string[] = [];
   /** The install held for Daedalus's count (#243), as last decided, or null: logged as it starts and ends. */
   #countHeld: CountHoldView | null = null;
@@ -1265,9 +1266,9 @@ export class AugmentationRule {
   }
 
   /**
-   * The set's augmentations (core's `chooseAugmentationsToBuy`, bought before the levels) that the gang's faction sells
-   * and that add to levelling (core's `addsToLevelling`), while every install is held for the destroy (#355): the
-   * planner's install candidate counts their multipliers. None without a gang, or otherwise.
+   * The set's augmentations (core's `chooseAugmentationsToBuy`, bought before the levels) that add to levelling
+   * (core's `addsToLevelling`), while every install is held for the destroy (#355): the planner's install candidate
+   * counts their multipliers, whichever shop sells them. None otherwise.
    */
   installAugmentationsOffer(): string[] {
     return [...this.#installAugmentationsOffer];
@@ -1931,17 +1932,16 @@ export class AugmentationRule {
             "install, but nothing is queued or affordable",
         };
       }
-      // The destroy's hold (#336): what the money buys of NeuroFlux Governor, and (#355) the set's augmentations the
-      // gang's faction sells that add to levelling, are the planner's install candidate; that install, once the planner
+      // The destroy's hold (#336): what the money buys of NeuroFlux Governor, and (#355) the set's augmentations that
+      // add to levelling, are the planner's install candidate; that install, once the planner
       // chooses it, goes at once in the hold's place ("the hacking level"), if the money buys a level or such a set (an
       // install of nothing new to levelling would only lose the experience).
       const destroyHold = endgame.kind === "hold" && endgame.why === "destroy";
       if (destroyHold) {
         this.#neuroFluxOffer = counts.neuroFluxLevels;
-        const gangSells = shopsView.gangFaction === null ? [] : (shops.get(shopsView.gangFaction) ?? []);
         this.#installAugmentationsOffer = set.purchases
           .map((purchase) => purchase.name)
-          .filter((name) => gangSells.includes(name) && addsToLevelling([name]));
+          .filter((name) => addsToLevelling([name]));
       }
       const forLevel =
         destroyHold && levellingInstall && (counts.neuroFluxLevels > 0 || this.#installAugmentationsOffer.length > 0);

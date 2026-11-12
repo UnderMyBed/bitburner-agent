@@ -2,8 +2,8 @@
 // the rule's choice and hysteresis, and, through the desired state's controller and a real ControlChannel, every
 // branch that changes the hack loop, holds money or installs: levelling mode sent in the batcher's place, back to
 // money once the level isn't all that's left, A6's NeuroFlux Governor levels and install for the hacking level, none
-// without an offer, and money again after the install; in BN2 (#355), the install with the gang's shop's set alone, and
-// without a gang, as before.
+// without an offer, and money again after the install; the install with A6's set alone (#355), in BN2 with the gang's
+// shop's, and in BN4 with a plain faction's.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -255,7 +255,7 @@ describe("levelling mode's figures (#336)", () => {
     expect(expected).toBeGreaterThan(0);
   });
 
-  test("(c) with the gang's shop's set (#355): offered with no level, at the set's multipliers, prepared at its level and speed", () => {
+  test("(c) with A6's set (#355): offered with no level, at the set's multipliers, prepared at its level and speed", () => {
     const figures = levellingFiguresOf(STATIC, medium(), slow(), BN1_HACKING) as NonNullable<
       ReturnType<typeof levellingFiguresOf>
     >;
@@ -561,7 +561,7 @@ describe("the levelling rule (#336)", () => {
     expect(after.mode).toBe("money");
   });
 
-  test("the install with the gang's shop's set alone (#355): no level on offer; held while A6 commits; the set said", () => {
+  test("the install with A6's set alone (#355): no level on offer; held while A6 commits; the set said", () => {
     const levelling = rule();
     const set = ["QLink", "BitRunners Neurolink"];
     const { plan, switchedAtMs } = measureMoney(levelling, 10, { neuroFluxLevels: 0, installAugmentations: set });
@@ -573,7 +573,7 @@ describe("the levelling rule (#336)", () => {
       installAugmentations: set,
     });
     expect(levelling.view().lines[2]).toBe(
-      "  the install's augmentations: NeuroFlux Governor ×0; the gang's shop's QLink, BitRunners Neurolink",
+      "  the install's augmentations: NeuroFlux Governor ×0; the set's QLink, BitRunners Neurolink",
     );
     const at = (offsetMs: number) => switchedAtMs + offsetMs;
     // Held while a set is on offer, even one now worth less than levelling mode (Synaptic Enhancement Implant's speed
@@ -863,13 +863,31 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     expect(controller.levellingView().mode).toBe("install");
   });
 
-  test("without a gang (BN1), as before #355: the same reputation, no level to buy, no install; levelling mode", () => {
-    // NiteSec joined as a faction, its reputation reaching its own augmentations, but no level of NeuroFlux Governor.
-    const { controller, levelling, installs } = niteSecAt1m(1, undefined);
-    expect(levelling.at(-1)).toMatchObject({ mode: "level", neuroFluxLevels: 0, installAugmentations: [] });
-    expect(controller.levellingView().estimates?.install).toBeNull();
-    expect(installs).toEqual([]);
-    expect(controller.augmentationsView().committed).toBe(false);
+  test("BN4, no gang (#355): the set of a plain faction's shop counts too; the install for the level with it alone", () => {
+    // NiteSec joined as a faction, its reputation reaching its own hacking augmentations, but no level of NeuroFlux
+    // Governor: the set alone is on offer, as Daedalus's or any shop's would be, valued as the gang's is.
+    const { controller, connection, levelling, installs } = niteSecAt1m(4, undefined);
+    const chosen = levelling.at(-1) as unknown as {
+      mode: string;
+      neuroFluxLevels: number;
+      installAugmentations: string[];
+    };
+    expect(chosen).toMatchObject({ mode: "install", neuroFluxLevels: 0 });
+    const own = augmentationsSoldBy("NiteSec", 4, null);
+    expect(chosen.installAugmentations.length).toBeGreaterThan(1);
+    for (const name of chosen.installAugmentations) {
+      expect(own, name).toContain(name);
+      expect(addsToLevelling([name]), name).toBe(true);
+    }
+    expect(installs).toEqual([expect.objectContaining({ reason: "the hacking level" })]);
+    expect(lastDesired(connection)?.intents).toContainEqual(
+      expect.objectContaining({
+        action: "purchaseAugmentation",
+        args: expect.objectContaining({ faction: "NiteSec" }),
+      }),
+    );
+    expect(readAugmentationCycle(store)).toMatchObject({ reason: "the hacking level", neuroFluxTarget: 0 });
+    expect(controller.levellingView().mode).toBe("install");
   });
 
   test("no install without A6's offer: the switch off, or no faction's reputation reaching a level", () => {

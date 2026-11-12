@@ -282,7 +282,7 @@ describe("the candidates and the choice (#336), on BN4.1's last snapshot", () =>
     expect(cut).toBeCloseTo(0.78, 2);
   });
 
-  test("(c) with the gang's shop's set (#355): the set's multipliers times NeuroFlux Governor's levels; the set alone on offer", () => {
+  test("(c) with A6's set (#355): the set's multipliers times NeuroFlux Governor's levels; the set alone on offer", () => {
     // QLink's level ×1.75 and speed ×2 alone; then with BitRunners Neurolink's ×1.15, ×1.2 and ×1.05
     // (`Augmentation/Augmentations.ts`): each of the three a product, as the game merges them.
     expect(levellingInstallMultipliers(0, ["QLink"])).toEqual({ hacking: 1.75, hackingExp: 1, hackingSpeed: 2 });

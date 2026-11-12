@@ -3,7 +3,7 @@
 // planner chooses among the rules' three candidates by their estimated time to the level (core's levelling.ts): (a)
 // batching for money as now, (b) levelling mode, grow or weaken loops on the server, and with the operation, earning the
 // most experience a thread-second (the hack loop's hosts and home's RAM beyond what it keeps), (c) NeuroFlux Governor's
-// levels the money buys (A6's count) and, with a gang (#355), A6's set that the gang's faction sells, an install,
+// levels the money buys (A6's count) and (#355) A6's set that adds to levelling, an install,
 // w0r1d_d43m0n rooted again, then levelling mode. The least wins, with hysteresis (core's `chooseLevelling`).
 // - The rates are fitted online (decision 67's "adapt on the fly"): (a) is the experience a second measured while
 //   batching; (b) the formula's prediction for the RAM sent times the factor fitted from the rate measured in
@@ -66,7 +66,7 @@ export type LevellingEvent = {
   factor: number | null;
   /** (c)'s NeuroFlux Governor levels, A6's count, or null with none offered. */
   neuroFluxLevels: number | null;
-  /** (c)'s set from the gang's shop (#355), A6's, or none: absent from a brain before #355. */
+  /** (c)'s set (#355), A6's, or none: absent from a brain before #355. */
   installAugmentations?: string[];
   detail: string;
 };
@@ -213,8 +213,8 @@ export function levellingFiguresOf(
 
 /**
  * The candidates' inputs (core's `LevellingInputs`) from levelling mode's figures, w0r1d_d43m0n's requirement, (a)'s
- * measured rate, (b)'s fitted factor, and (c)'s levels (A6's count, null with none offered) and (#355) its set from the
- * gang's shop (A6's, none absent). (c) is offered with a level, or a set that adds to levelling (core's
+ * measured rate, (b)'s fitted factor, and (c)'s levels (A6's count, null with none offered) and (#355) its set
+ * (A6's, none absent). (c) is offered with a level, or a set that adds to levelling (core's
  * `addsToLevelling`).
  */
 export function levellingInputsOf(
@@ -352,8 +352,8 @@ export interface LevellingRuleInputs {
   /** A6's offer (#336): NeuroFlux Governor's levels the money buys, donations included; null with none. */
   neuroFluxLevels: number | null;
   /**
-   * A6's offer's set from the gang's shop (#355): what it would buy first that the gang's faction sells and adds to
-   * levelling, while every install is held for the destroy. Absent, none.
+   * A6's offer's set (#355): what it would buy first that adds to levelling, while every install is held for the
+   * destroy. Absent, none.
    */
   installAugmentations?: readonly string[];
   /** A6 committed to an install (the levelling one, once chosen). */
@@ -491,7 +491,7 @@ export class LevellingRule {
       ),
     );
     // The install chosen stays chosen while A6 commits it; a choice that A6 can no longer commit (no levels to buy, no
-    // set from the gang's shop that adds to levelling, and not committed) is chosen afresh.
+    // set that adds to levelling, and not committed) is chosen afresh.
     const onOffer =
       (inputs.neuroFluxLevels ?? 0) > 0 || (inputs.neuroFluxLevels !== null && addsToLevelling(augmentations));
     const installHeld = this.#mode === "install" && (inputs.installCommitted || onOffer);
@@ -554,7 +554,7 @@ export class LevellingRule {
         ? []
         : [
             `  the install's augmentations: NeuroFlux Governor ×${inputs.neuroFluxLevels ?? 0}` +
-              (augmentations.length === 0 ? "" : `; the gang's shop's ${augmentations.join(", ")}`),
+              (augmentations.length === 0 ? "" : `; the set's ${augmentations.join(", ")}`),
           ]),
     ];
   }

@@ -384,7 +384,7 @@ export class WorldDaemonFold {
         ? fields.factor
         : null;
     const levels = typeof fields.neuroFluxLevels === "number" ? fields.neuroFluxLevels : null;
-    // (c)'s set from the gang's shop (#355), as the brain last offered it: the game's names only (none before #355).
+    // (c)'s set (#355), as the brain last offered it: the game's names only (none before #355).
     const augmentations = Array.isArray(fields.installAugmentations)
       ? fields.installAugmentations.filter(
           (name): name is string => typeof name === "string" && Object.hasOwn(AUGMENTATIONS, name),

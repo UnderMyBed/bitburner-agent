@@ -3553,7 +3553,7 @@ describe("the levelling choice (#336)", () => {
     expect(text).not.toContain("levellingChosen:");
   });
 
-  test("the install with the gang's shop's set alone (#355): scored with the set the brain offered, so it's the shortest", () => {
+  test("the install with A6's set alone (#355): scored with the set the brain offered, so it's the shortest", () => {
     bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6);
     const chosen = (installAugmentations: unknown) =>
       event(MINUTE, "levellingChosen", {
