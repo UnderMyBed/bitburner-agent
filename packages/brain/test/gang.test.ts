@@ -1157,6 +1157,19 @@ describe("the plan earning no respect past its own estimate (#374)", () => {
     expect(text).toContain(`  ${GANG_EARNING_STALL_WHAT} (twice it and 10 min):\n    ${failures[0]}`);
   });
 
+  test("the live watch (the dashboard's `gangStalled`): its pause, and the stall at its own bound, not the 10 minutes", () => {
+    const rule = new GangRule();
+    const frozen = trainedFor(0);
+    const read = (atMs: number) => rule.update({ mediumData: { ...frozen }, slowData: slowData(2), mediumAtMs: atMs });
+    for (let atMs = 0; atMs < 28 * MINUTE; atMs += 10_000) read(atMs);
+    expect(rule.earningPause()).toMatchObject({ kind: "earning", fromMs: 0, estimateMs: 9 * MINUTE });
+    expect(rule.stalls()).toEqual([]);
+    read(28 * MINUTE);
+    expect(rule.stalls()).toEqual([
+      expect.objectContaining({ kind: "earning", fromMs: 0, toMs: 28 * MINUTE, withinMs: 28 * MINUTE }),
+    ]);
+  });
+
   test("stuck on justice (frozen, the three on Ethical Hacking at wanted 6, respect 4): past its bound fails, not before", () => {
     // Over the bound (5/10 against 1/3): all three kept on justice, released at 1/6, W_r = (4/6 + 1) / (5/6) = 2. At
     // level 1 they add no wanted, so the decay alone, × 0.997 a process: ln(6/2) / −ln(0.997) = 365.6, 366 processes,

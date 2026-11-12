@@ -180,6 +180,23 @@ describe("training: the rule's own threshold, from the game's experience a cycle
   });
 });
 
+describe("training: an ascension the rule may not make", () => {
+  test("its ascension paying but not allowed (the penalty's share past the bound after it): the rule has it work then", () => {
+    // The lone grown member, its earned respect 99 of the gang's 100 at wanted 20: after an ascension the share above
+    // the floor would be 19/21, past the bound with its two free recruits (1/3), so `gangAscensionAllowed` refuses it,
+    // and with its ascension's horizon 0 the rule has it work (`gangTrains`), not ascend.
+    const [grownMember] = grown(1) as [GangMemberFigures];
+    const member = { ...grownMember, earnedRespect: 99 };
+    const inputs = inputsOf([member], { respect: 100, wantedLevel: 20, territory: 1 / 7 });
+    const time = gangTrainingTimeMs(inputs, member, "respect");
+    expect(time.ascensions).toBe(0);
+    expect(time.firstAscensionMs).toBeNull();
+    const played = playedMinutes(inputs) * MINUTE;
+    expect(time.ms).toBeGreaterThanOrEqual(played);
+    expect(time.ms).toBeLessThanOrEqual(played + MINUTE);
+  });
+});
+
 describe("the plan: the least of its members', or two ascensions at once (#374)", () => {
   test("against the rule played forward: three fresh (9 min), twelve at respect 2m (9), the G3 grown three (44)", () => {
     for (const [inputs, minutes] of [
@@ -248,7 +265,11 @@ describe("the plan: the least of its members', or two ascensions at once (#374)"
     const mine = gangTimeToEarningMs(inputs, { ...plan, recruit: [] }).members[0];
     // Ascended now: its training from its ascended self, the ascension already made.
     const ascended = { ...gangMemberAscended(ready), task: "Train Hacking" };
-    expect(mine?.ms).toBe(gangTrainingTimeMs(inputsOf([ascended]), ascended, "respect").ms);
+    const own = gangTrainingTimeMs(inputsOf([ascended]), ascended, "respect");
+    expect(mine?.ms).toBe(own.ms);
+    // Not ascended again at 0 (the plan's own ascension counted twice), which would read as two at once with another.
+    expect(mine).toMatchObject({ ascensions: own.ascensions, firstAscensionMs: own.firstAscensionMs });
+    expect(mine?.firstAscensionMs).not.toBe(0);
   });
 });
 

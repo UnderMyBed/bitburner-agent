@@ -100,7 +100,8 @@ export function gangTrainingTimeMs(
     if (horizonMs === 0 && gangAscensionAllowed(inputs, trained)) return "ascends";
     return gangTrains(inputs, trained, objective, horizonMs) ? null : "works";
   };
-  while (total < GANG_ASCENSION_HORIZON_CAP_MS) {
+  // An ascension leaves no experience to convert, so the next takes a minute or more; the count's bound is a guard.
+  while (total < GANG_ASCENSION_HORIZON_CAP_MS && ascensions <= GANG_ASCENSION_HORIZON_CAP_MS / GANG_TRAINING_STEP_MS) {
     const left = GANG_ASCENSION_HORIZON_CAP_MS - total;
     let found = exit(0);
     let high = 0;

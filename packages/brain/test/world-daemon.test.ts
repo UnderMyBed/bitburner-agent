@@ -580,15 +580,16 @@ describe("The Red Pill at the gang's faction (#334, G5)", () => {
         /; the gang's plan earning no respect since 1970-01-01T00:01:00\.000Z, its bound 28 min \(twice the gang rule's estimate of 9 min, and 10 min\)$/,
       ),
     });
-    // A bound that ends before the 10 minutes: the 10 minutes still (a pause's estimate of 0, from a minute: 11 min).
+    // A bound that ends before the 10 minutes from the last rise: the 10 minutes still. The pause from 0, its estimate
+    // 0 and bound 10 min, to 10; the reputation last risen at 5 min: the stall at 15, not 10.
     rule = new WorldDaemonRule({ log: () => {}, emit: (event) => events.push(event) });
-    const short = { fromMs: MINUTE, withinMs: 10 * MINUTE, estimateMs: 0 };
-    at(0, null);
-    at(MINUTE, short);
-    at(RED_PILL_REPUTATION_STALLED_AFTER_MS + MINUTE - 1, short);
+    const short = { fromMs: 0, withinMs: 10 * MINUTE, estimateMs: 0 };
+    at(0, short, 2.3e6);
+    at(5 * MINUTE, short);
+    at(5 * MINUTE + RED_PILL_REPUTATION_STALLED_AFTER_MS - 1, short);
     expect(rule.stall()).toBeNull();
-    at(RED_PILL_REPUTATION_STALLED_AFTER_MS + MINUTE, short);
-    expect(rule.stall()?.step).toBe("redPillReputation");
+    at(5 * MINUTE + RED_PILL_REPUTATION_STALLED_AFTER_MS, short);
+    expect(rule.stall()).toMatchObject({ step: "redPillReputation", sinceMs: 5 * MINUTE });
     // The plan earning again (null): the 10 minutes from the reputation's last rise, the pause forgotten.
     rule = new WorldDaemonRule({ log: () => {}, emit: (event) => events.push(event) });
     at(0, pause);
