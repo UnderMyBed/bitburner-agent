@@ -1,7 +1,8 @@
 // Gangs G1 (#325), G2 (#328) and G3 (#330): the brain from a BN2 start with SF1.3 and SF4.3, as the campaign enters BN2
 // (after BN4 ×3 and BN5), its rules as on Steam (all on), the simulator's own effectors taken away so the Agent uses
 // its workers as in a browser. NiteSec is joined by a harness edit, as A3's backdoor on avmnite-02h would have it
-// (hacking 202-220, which an hour from a fresh start doesn't reach). One seed each: a thin slice, no sweep.
+// (hacking 202-220, which an hour from a fresh start doesn't reach; gang-start-simulation runs that path, #353). One
+// seed each: a thin slice, no sweep.
 // - A bounded hour: the gang forms through the gate, recruits, trains, works, ascends (G2) and keeps growing, and the
 //   run report's gang section passes.
 // - Wanted control, end to end: a gang the owner left with its wanted level far over the bound (three members on DDoS
