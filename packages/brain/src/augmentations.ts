@@ -144,6 +144,7 @@ import {
   type MediumSnapshotData,
   NEUROFLUX_GOVERNOR,
   type NextCountable,
+  neuroFluxLadder,
   nextCountables,
   purchaseSequenceCost,
   QUICK_INSTALL_COUNTDOWN_MS,
@@ -1372,6 +1373,8 @@ export class AugmentationRule {
   #neuroFluxOffer: number | null = null;
   /** The set's augmentations that add to levelling (#355), as the last destroy hold had it. */
   #installAugmentationsOffer: string[] = [];
+  /** (d)'s ladder and set (#380), as the last destroy hold had them, or null. */
+  #batchOffer: { ladder: number[]; augmentations: string[] } | null = null;
   /** The install held for Daedalus's count (#243), as last decided, or null: logged as it starts and ends. */
   #countHeld: CountHoldView | null = null;
   /** This update logged the hold's end (#243 review): `update` logs one on any other path. */
@@ -1535,6 +1538,18 @@ export class AugmentationRule {
     return [...this.#installAugmentationsOffer];
   }
 
+  /**
+   * Levelling's (d) (#380), while every install is held for the destroy, or null: the set A6 would buy at any money
+   * (`chooseAugmentationsToBuy`, only what adds to levelling) and the money it and each count of NeuroFlux Governor
+   * levels after it cost (core's `neuroFluxLadder`: ×1.14 a level, ×1.9 a purchase, reputation by donation where a
+   * seller takes them), so a commit with entry k's money buys the set and k levels.
+   */
+  batchOffer(): { ladder: number[]; augmentations: string[] } | null {
+    return this.#batchOffer === null
+      ? null
+      : { ladder: [...this.#batchOffer.ladder], augmentations: [...this.#batchOffer.augmentations] };
+  }
+
   /** An install reported done that the next slow snapshot didn't show reset, until a reset (#213 re-review). */
   installNotReset(): { atMs: number; queued: string[] } | null {
     return this.#installNotReset === null ? null : { ...this.#installNotReset };
@@ -1593,6 +1608,7 @@ export class AugmentationRule {
     this.#redPillHeldAtGang = false;
     this.#neuroFluxOffer = null;
     this.#installAugmentationsOffer = [];
+    this.#batchOffer = null;
     this.#redPillHold = 0;
     this.#enabled = enabled;
     const atMs = nowMs ?? 0;
@@ -2092,22 +2108,25 @@ export class AugmentationRule {
     });
     const short = count.short;
     const cycle = readAugmentationCycle(this.#store);
+    // The destroy's hold (#355's review): The Red Pill installed and the destroy wanted, every install is for the
+    // level, so the set is only what adds to levelling (core's `addsToLevelling`), NeuroFlux Governor's levels after
+    // it. Any other would raise each later price 1.9 times (`AugmentationHelpers.ts:29-31`) for nothing. So (#380) for
+    // those bought by a donation too: the set at any money is then (d)'s, which the commit at its M buys.
+    const forLevelOnly = destroyWanted && Object.hasOwn(ownedAugs, THE_RED_PILL);
+    const toBuy = forLevelOnly ? reached.filter((name) => addsToLevelling([name])) : reached;
     // Donations (#225): planned only before the commit; committed, the note's go first, and the set is what's reached.
     const terms =
       cycle === null
         ? donationTermsOf(
             joined,
             shops,
-            sold.filter((name) => !owned(name) && sellerOf(name) === null),
+            sold.filter(
+              (name) => !owned(name) && sellerOf(name) === null && (!forLevelOnly || addsToLevelling([name])),
+            ),
             player.person.mults.faction_rep,
             multipliers,
           )
         : undefined;
-    // The destroy's hold (#355's review): The Red Pill installed and the destroy wanted, every install is for the
-    // level, so the set is only what adds to levelling (core's `addsToLevelling`), NeuroFlux Governor's levels after
-    // it. Any other would raise each later price 1.9 times (`AugmentationHelpers.ts:29-31`) for nothing.
-    const forLevelOnly = destroyWanted && Object.hasOwn(ownedAugs, THE_RED_PILL);
-    const toBuy = forLevelOnly ? reached.filter((name) => addsToLevelling([name])) : reached;
     let set = chooseAugmentationsToBuy(toBuy, purchaseState, money, hackingLevel, terms, short);
     let setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
 
@@ -2246,6 +2265,18 @@ export class AugmentationRule {
         this.#installAugmentationsOffer = set.purchases
           .map((purchase) => purchase.name)
           .filter((name) => addsToLevelling([name]));
+        // (d) (#380): the set at any money (the most finite, so a donation past what can be named is left out) and
+        // each count of NeuroFlux Governor levels after it, priced as the commit buys them (core's `neuroFluxLadder`).
+        const whole = chooseAugmentationsToBuy(toBuy, purchaseState, Number.MAX_VALUE, hackingLevel, terms, short);
+        this.#batchOffer = {
+          ladder: neuroFluxLadder({
+            state: purchaseState,
+            set: whole,
+            neuroFluxReputation: shopsView.neuroFluxReputation,
+            ...(terms === undefined ? {} : { donations: terms }),
+          }),
+          augmentations: whole.purchases.map((purchase) => purchase.name).filter((name) => addsToLevelling([name])),
+        };
       }
       const forLevel =
         destroyHold && levellingInstall && (counts.neuroFluxLevels > 0 || this.#installAugmentationsOffer.length > 0);

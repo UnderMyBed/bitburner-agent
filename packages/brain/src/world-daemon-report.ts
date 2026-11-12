@@ -42,6 +42,7 @@ import {
   describeEstimates,
   LEVELLING_CANDIDATE_WORDS,
   LEVELLING_CHOSEN_EVENT_KIND,
+  type LevellingBatchFigures,
   LevellingRateWindow,
   levellingFiguresOf,
   levellingInputsOf,
@@ -87,7 +88,25 @@ export const LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS = HACKING_EXP_WINDOW_MS;
 export function levellingModeAt(events: readonly StoredEvent[], atMs: number): LevellingCandidate {
   const last = events.findLast((event) => event.kind === LEVELLING_CHOSEN_EVENT_KIND && event.atMs <= atMs);
   const mode = fieldsOf(last?.detail).mode;
-  return mode === "level" || mode === "install" ? mode : "money";
+  return mode === "level" || mode === "install" || mode === "batch" ? mode : "money";
+}
+
+/**
+ * (d)'s figures from a `levellingChosen` event's `batch` (#380), or null (a brain before #380, or none offered): its
+ * ladder (numbers only), its set (the game's names only), and `measured`, the income the report measured while
+ * batching, or (undefined) the event's.
+ */
+export function batchFiguresOf(value: unknown, measured?: number | null): LevellingBatchFigures | null {
+  const batch = value as { incomePerSecond?: unknown; ladder?: unknown; augmentations?: unknown } | null | undefined;
+  if (typeof batch !== "object" || batch === null || !Array.isArray(batch.ladder)) return null;
+  const ladder = batch.ladder.filter((each): each is number => typeof each === "number");
+  const augmentations = Array.isArray(batch.augmentations)
+    ? batch.augmentations.filter(
+        (name): name is string => typeof name === "string" && Object.hasOwn(AUGMENTATIONS, name),
+      )
+    : [];
+  const stored = typeof batch.incomePerSecond === "number" ? batch.incomePerSecond : null;
+  return { incomePerSecond: measured === undefined ? stored : (measured ?? stored), ladder, augmentations };
 }
 
 /** The snapshots the levelling's judgement reads (#336): the window's last of each tier. */
@@ -125,7 +144,7 @@ export class WorldDaemonFold {
    * The medium snapshots' experience and level in the window's last BitNode and cycle (#336), for the measured rates:
    * another BitNode, or the experience falling (an install), starts them again.
    */
-  #samples: { atMs: number; exp: number; level: number }[] = [];
+  #samples: { atMs: number; exp: number; level: number; money: number | null }[] = [];
   #samplesBitNode: number | null = null;
   /** Since when the hacking level has been all that's left (#336), unbroken to the last medium snapshot, or null. */
   #levelOnlySinceMs: number | null = null;
@@ -185,7 +204,9 @@ export class WorldDaemonFold {
 
   /** A medium snapshot, in order, in the BitNode the run report puts it in (`bitNode`, its index). */
   addMedium(atMs: number, data: MediumSnapshotData, bitNode: number): void {
-    const player = data.player as { exp?: { hacking?: unknown }; skills?: { hacking?: unknown } } | undefined;
+    const player = data.player as
+      | { exp?: { hacking?: unknown }; skills?: { hacking?: unknown }; money?: unknown }
+      | undefined;
     const exp = player?.exp?.hacking;
     if (typeof exp === "number" && Number.isFinite(exp)) this.#exp.add(atMs, exp);
     const required = this.#requirements.findLast((requirement) => requirement.atMs <= atMs)?.level;
@@ -196,7 +217,13 @@ export class WorldDaemonFold {
       const last = this.#samples.at(-1);
       if (this.#samplesBitNode !== bitNode || (last !== undefined && exp < last.exp)) this.#samples = [];
       this.#samplesBitNode = bitNode;
-      this.#samples.push({ atMs, exp, level });
+      const money = player?.money;
+      this.#samples.push({
+        atMs,
+        exp,
+        level,
+        money: typeof money === "number" && Number.isFinite(money) ? money : null,
+      });
     }
     const daemonRooted = data.servers?.find((server) => server.hostname === WORLD_DAEMON)?.hasAdminRights === true;
     const levelOnly = required !== undefined && typeof level === "number" && level < required && daemonRooted;
@@ -435,9 +462,13 @@ export class WorldDaemonFold {
     const modeSinceMs = Math.max(sinceMs, chosen?.atMs ?? sinceMs);
     const target = figures.target;
     // The mode's rate, measured once it settled, over the window's last 10 minutes at most.
-    const settledMs = modeSinceMs + (mode === "money" ? 0 : settleMsOf(mediumLast, hacking, target ? [target] : []));
+    // Money and (d) both batch (#380): their rate and income measured alike.
+    const batching = mode === "money" || mode === "batch";
+    const settledMs = modeSinceMs + (batching ? 0 : settleMsOf(mediumLast, hacking, target ? [target] : []));
     const window = new LevellingRateWindow();
-    for (const sample of this.#samples) if (sample.atMs >= settledMs) window.add(sample.atMs, sample.exp, sample.level);
+    for (const sample of this.#samples) {
+      if (sample.atMs >= settledMs) window.add(sample.atMs, sample.exp, sample.level, sample.money);
+    }
     const measured = window.measured();
     const rateOf = (value: unknown): LevellingRate | null => {
       const rate = value as Partial<LevellingRate> | null | undefined;
@@ -445,7 +476,7 @@ export class WorldDaemonFold {
         ? { expPerSecond: rate.expPerSecond, atLevel: rate.atLevel }
         : null;
     };
-    const money = mode === "money" ? measured : rateOf(fields.money);
+    const money = batching ? measured : rateOf(fields.money);
     const predicted =
       target === null || measured === null
         ? null
@@ -463,7 +494,19 @@ export class WorldDaemonFold {
           (name): name is string => typeof name === "string" && Object.hasOwn(AUGMENTATIONS, name),
         )
       : [];
-    const estimates = levellingEstimates(levellingInputsOf(figures, required, money, factor, levels, augmentations));
+    // (d) (#380): the ladder and set the brain last weighed, at the income measured while batching, else the brain's.
+    const resetAt = slowLast?.resetInfo?.lastNodeReset;
+    const soFarMs =
+      typeof resetAt === "number" && this.#slowGameTimeMs !== null ? Math.max(0, this.#slowGameTimeMs - resetAt) : null;
+    const batchFigures = batchFiguresOf(fields.batch, batching ? window.income() : undefined);
+    // Bounded by the hopeless bar below (#382's review), as the brain bounds it.
+    const batch =
+      batchFigures === null
+        ? null
+        : { ...batchFigures, batchingBoundSeconds: soFarMs === null ? null : soFarMs / 1000 };
+    const estimates = levellingEstimates(
+      levellingInputsOf(figures, required, money, factor, levels, augmentations, batch),
+    );
     const best = shortestLevellingCandidate(estimates);
     const words = LEVELLING_CANDIDATE_WORDS;
     const lines = [
@@ -498,9 +541,6 @@ export class WorldDaemonFold {
           `takes, and ${words[best]} (${describeEstimate(shortest)}) is shorter by more than 1.25 times at its end`,
       );
     }
-    const resetAt = slowLast?.resetInfo?.lastNodeReset;
-    const soFarMs =
-      typeof resetAt === "number" && this.#slowGameTimeMs !== null ? Math.max(0, this.#slowGameTimeMs - resetAt) : null;
     if (
       ours !== null &&
       soFarMs !== null &&

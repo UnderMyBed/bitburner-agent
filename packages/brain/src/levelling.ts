@@ -4,15 +4,20 @@
 // batching for money as now, (b) levelling mode, grow or weaken loops on the server, and with the operation, earning the
 // most experience a thread-second (the hack loop's hosts and home's RAM beyond what it keeps), (c) NeuroFlux Governor's
 // levels the money buys (A6's count) and (#355) A6's set that adds to levelling, an install,
-// w0r1d_d43m0n rooted again, then levelling mode. The least wins, with hysteresis (core's `chooseLevelling`).
+// w0r1d_d43m0n rooted again, then levelling mode, and (#380) (d) batching for the money A6's ladder prices the set and
+// more levels at (core's `neuroFluxLadder`), then (c) with them. The least wins, with hysteresis (core's
+// `chooseLevelling`).
 // - The rates are fitted online (decision 67's "adapt on the fly"): (a) is the experience a second measured while
 //   batching; (b) the formula's prediction for the RAM sent times the factor fitted from the rate measured in
 //   levelling mode while its loop runs, 1 until measured (optimistic); (c) at (b)'s factor. Each measurement starts once
 //   a mode has settled (the brain's first update too): the operations of the one before landed, and the first weaken
-//   at the target's security. An install resets them all.
+//   at the target's security. An install resets them all. (d)'s income (#380) is measured with (a)'s rate, over the
+//   same window while the batcher runs (money or (d)): the money's rises in the medium snapshots (as the hack loop's
+//   income, `HackLoopIncome`, ./cloud-servers.ts), kept through levelling mode, which earns none.
 // - The choice goes to the controller (./desired-state.ts): money, the hack loop and the batcher as before; levelling,
 //   the hack loop's `levelling` on the batcher's hosts, no batcher; the install, levelling meanwhile, and A6 commits the
-//   install ("the hacking level", ./augmentations.ts), its irreversible gate as always. After the install the choice
+//   install ("the hacking level", ./augmentations.ts), its irreversible gate as always; (d), the batcher as money's, and
+//   once (c) is no longer than (d), the money in hand reaches M: the install. After the install the choice
 //   starts again from money: w0r1d_d43m0n needs rooting again, so the money comes first, and the next install must pay
 //   by the same score.
 // - Each choice is a `levellingChosen` event and a log line, with the candidates' estimates: the run report's path
@@ -21,6 +26,7 @@
 import {
   addsToLevelling,
   type BitNodeHackingMultipliers,
+  batchThenInstallPlan,
   chooseLevelling,
   chooseLevellingTarget,
   type HackingPlayer,
@@ -28,6 +34,7 @@ import {
   hackingLevelOfExp,
   LEVEL_LOOP_RAM_GB,
   LEVELLING_CANDIDATES,
+  type LevellingBatchPlan,
   type LevellingCandidate,
   type LevellingEstimates,
   type LevellingInputs,
@@ -68,6 +75,17 @@ export type LevellingEvent = {
   neuroFluxLevels: number | null;
   /** (c)'s set (#355), A6's, or none: absent from a brain before #355. */
   installAugmentations?: string[];
+  /**
+   * (d) (#380): the measured income and A6's ladder and set, for the report to score it as the brain did, and its best
+   * plan then (the levels after the set and M), null with none. Absent from a brain before #380, or with no offer.
+   */
+  batch?: {
+    incomePerSecond: number | null;
+    ladder: number[];
+    augmentations: string[];
+    levels: number | null;
+    money: number | null;
+  };
   detail: string;
 };
 
@@ -77,11 +95,21 @@ export type LevellingEvent = {
  */
 export const LEVELLING_SETTLE_MS = 60_000;
 
+/**
+ * How long money waits for (d)'s income once batching's rate is measured, while A6's ladder is on offer and the
+ * income measured is none (#382's review): 5 minutes. After an install the batcher may still be preparing its target,
+ * earning nothing for minutes (BN4.2's moves left it idle 0.4 to 7.5 min), and a choice made then would leave (d) out
+ * for good, as levelling mode earns nothing to measure. Bounded so the wait, with the settle and money's minute, stays
+ * inside the 10 minutes the run report allows off the shortest (`LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS`).
+ */
+export const LEVELLING_INCOME_WAIT_MS = 5 * 60_000;
+
 /** The candidates in the dashboard's and the report's words. */
 export const LEVELLING_CANDIDATE_WORDS: Record<LevellingCandidate, string> = {
   money: "batching for money",
   level: "levelling mode",
   install: "augmentations, then an install",
+  batch: "batching for the money, then an install",
 };
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -130,6 +158,8 @@ export interface LevellingFigures {
   level: number;
   exp: number;
   levelMult: number;
+  /** The money now (#380, (d)'s start), or null unread. */
+  money: number | null;
 }
 
 /**
@@ -150,6 +180,7 @@ export function levellingFiguresOf(
   const player = hackingPlayerOf(mediumData.player, hacking);
   const mults = batcherMultsOf(mediumData.player, hacking);
   const exp = (mediumData.player as { exp?: { hacking?: unknown } } | undefined)?.exp?.hacking;
+  const money = (mediumData.player as { money?: unknown } | undefined)?.money;
   const levelMult = mults?.hacking;
   const hackingExp = mults?.hacking_exp;
   if (player === null || !isFiniteNumber(levelMult) || !isFiniteNumber(hackingExp) || !isFiniteNumber(exp)) return null;
@@ -209,6 +240,7 @@ export function levellingFiguresOf(
     level: player.skills.hacking,
     exp,
     levelMult,
+    money: isFiniteNumber(money) ? money : null,
   };
 }
 
@@ -216,7 +248,7 @@ export function levellingFiguresOf(
  * The candidates' inputs (core's `LevellingInputs`) from levelling mode's figures, w0r1d_d43m0n's requirement, (a)'s
  * measured rate, (b)'s fitted factor, and (c)'s levels (A6's count, null with none offered) and (#355) its set
  * (A6's, none absent). (c) is offered with a level, or a set that adds to levelling (core's
- * `addsToLevelling`).
+ * `addsToLevelling`). (d) (#380) with `batch`, A6's ladder and its set, and the measured income; absent or null, none.
  */
 export function levellingInputsOf(
   figures: LevellingFigures,
@@ -225,6 +257,7 @@ export function levellingInputsOf(
   factor: number | null,
   neuroFluxLevels: number | null,
   augmentations: readonly string[] = [],
+  batch: LevellingBatchFigures | null = null,
 ): LevellingInputs {
   const { target, level } = figures;
   const perThread = target === null ? null : { expPerSecond: target.expPerThreadSecond, atLevel: level };
@@ -232,9 +265,9 @@ export function levellingInputsOf(
   const afterInstall = after === null ? null : { expPerSecond: after.expPerThreadSecond, atLevel: level };
   // The preparation at the level and speed the levels and the set give from 0 experience (core's
   // `levellingPreparationMs`).
-  const preparationMs = (levels: number) => {
+  const preparationMs = (levels: number, set: readonly string[] = augmentations) => {
     if (after === null) return 0;
-    const gain = levellingInstallMultipliers(levels, augmentations);
+    const gain = levellingInstallMultipliers(levels, set);
     const player = figures.player;
     const afterPlayer = {
       skills: { ...player.skills, hacking: hackingLevelOfExp(0, figures.levelMult * gain.hacking) },
@@ -264,7 +297,32 @@ export function levellingInputsOf(
             perThread: afterInstall,
             preparationMs: preparationMs(levels),
           },
+    batch:
+      afterInstall === null || batch === null || figures.money === null
+        ? null
+        : {
+            money: figures.money,
+            incomePerSecond: batch.incomePerSecond,
+            ladder: batch.ladder,
+            ...(batch.augmentations.length === 0 ? {} : { augmentations: batch.augmentations }),
+            homeThreads: figures.homeThreads,
+            perThread: afterInstall,
+            // At the set alone's level and speed: more levels only shorten it (core's `LevellingBatchOffer`).
+            preparationMs: preparationMs(0, batch.augmentations),
+            batchingBoundSeconds: batch.batchingBoundSeconds ?? null,
+          },
   };
+}
+
+/**
+ * (d)'s figures (#380): A6's ladder and its set (`batchOffer`), the measured income, $/s, or null unmeasured, and
+ * (#382's review) the BitNode's time so far, seconds, the batching's bound (core's `batchingBoundSeconds`), or null.
+ */
+export interface LevellingBatchFigures {
+  incomePerSecond: number | null;
+  ladder: readonly number[];
+  augmentations: readonly string[];
+  batchingBoundSeconds?: number | null;
 }
 
 /** "about 2,873.4 h", "about 41 min", "about 1.28e+193 h" (3 figures past a million hours), "none". */
@@ -275,6 +333,25 @@ export function describeEstimate(seconds: number | null): string {
   return `about ${describeEta(seconds)}`;
 }
 
+/**
+ * (d)'s plan in words (#380): "(d)'s plan: batch to $4.74e+14 at $1.83e+12/s (about 4 min), then NeuroFlux Governor
+ * ×14 and an install (about 40 min in all)".
+ */
+export function describeBatchPlan(
+  plan: LevellingBatchPlan,
+  incomePerSecond: number | null,
+  augmentations: readonly string[],
+): string {
+  const dollars = (amount: number) => `$${amount.toExponential(2)}`;
+  return (
+    `(d)'s plan: batch to ${dollars(plan.money)} at ` +
+    `${incomePerSecond === null ? "an unmeasured income" : `${dollars(incomePerSecond)}/s`} ` +
+    `(${describeEstimate(plan.batchingSeconds)}), then NeuroFlux Governor ×${plan.levels}` +
+    (augmentations.length === 0 ? "" : ` and the set's ${augmentations.join(", ")}`) +
+    ` and an install (${describeEstimate(plan.seconds)} in all)`
+  );
+}
+
 /** "batching for money about 2,500.0 h, levelling mode about 1.2 h, augmentations, then an install none". */
 export function describeEstimates(estimates: LevellingEstimates): string {
   return LEVELLING_CANDIDATES.map(
@@ -282,16 +359,22 @@ export function describeEstimates(estimates: LevellingEstimates): string {
   ).join(", ");
 }
 
+/** The BitNode's game time so far, seconds (from the slow snapshot's `lastNodeReset`), or null unread. */
+export function soFarSeconds(slowData: SlowSnapshotData | null, gameTimeMs: number | null): number | null {
+  const reset = slowData?.resetInfo?.lastNodeReset;
+  return isFiniteNumber(reset) && isFiniteNumber(gameTimeMs) ? Math.max(0, gameTimeMs - reset) / 1000 : null;
+}
+
 /** Medium snapshots' experience and level, for a measured rate: a gap, an install or the clock set back restart it. */
 export class LevellingRateWindow {
-  #samples: { atMs: number; exp: number; level: number }[] = [];
+  #samples: { atMs: number; exp: number; level: number; money: number | null }[] = [];
 
-  add(atMs: number, exp: number, level: number): void {
+  add(atMs: number, exp: number, level: number, money: number | null = null): void {
     const last = this.#samples.at(-1);
     if (last !== undefined && (atMs <= last.atMs || atMs - last.atMs > HACKING_EXP_GAP_MS || exp < last.exp)) {
       this.#samples = [];
     }
-    this.#samples.push({ atMs, exp, level });
+    this.#samples.push({ atMs, exp, level, money });
     const old = this.#samples.findLastIndex((sample) => atMs - sample.atMs >= HACKING_EXP_WINDOW_MS);
     if (old > 0) this.#samples = this.#samples.slice(old);
   }
@@ -318,6 +401,25 @@ export class LevellingRateWindow {
       expPerSecond: ((last.exp - first.exp) / (last.atMs - first.atMs)) * 1000,
       atLevel: weighted / (last.atMs - first.atMs),
     };
+  }
+
+  /**
+   * (d)'s income over the same samples (#380), $/s: the money's rises added up over the span, as the hack loop's
+   * income (`HackLoopIncome`, ./cloud-servers.ts): a purchase lowers the money, which isn't income, so its interval
+   * counts only what it rose (cautious). Null before the samples span a minute, or with a sample's money unread.
+   */
+  income(): number | null {
+    const first = this.#samples[0];
+    const last = this.#samples.at(-1);
+    if (first === undefined || last === undefined || last.atMs - first.atMs < 60_000) return null;
+    let earned = 0;
+    for (let index = 1; index < this.#samples.length; index++) {
+      const before = (this.#samples[index - 1] as { money: number | null }).money;
+      const after = (this.#samples[index] as { money: number | null }).money;
+      if (before === null || after === null) return null;
+      earned += Math.max(0, after - before);
+    }
+    return (earned / (last.atMs - first.atMs)) * 1000;
   }
 }
 
@@ -371,6 +473,11 @@ export interface LevellingRuleInputs {
   nowMs: number | null;
   /** More home keeps beside the Agent's reservation (#375: Bladeburner's reading worker while it runs), GB; absent, 0. */
   homeAlsoKeptGb?: number;
+  /**
+   * A6's ladder and its set (#380, `batchOffer`) while every install is held for the destroy, for (d); absent or null,
+   * none (A6 off, or (d) off for a test's A/B).
+   */
+  batchOffer?: { ladder: readonly number[]; augmentations: readonly string[] } | null;
 }
 
 /** The rule's plan: the mode, and levelling mode's target and home's kept RAM while it levels. */
@@ -389,6 +496,14 @@ export interface LevellingView {
   fit: { measured: number; predicted: number; factor: number } | null;
   /** The view in words, for the dashboard. */
   lines: string[];
+  /**
+   * Money waiting for (d)'s income (#382's review, `LEVELLING_INCOME_WAIT_MS`), and the candidate the choice would
+   * take meanwhile with (d) left out (core's `chooseLevelling` from money): the time to the destroy (#360) takes its
+   * estimate, as levelling's first choice, since (d), once measured, can only shorten the one chosen. Absent, not
+   * waiting.
+   */
+  waitingForIncome?: boolean;
+  meanwhile?: LevellingCandidate;
 }
 
 /** The levelling rule (#336), as the controller runs it. */
@@ -401,6 +516,16 @@ export class LevellingRule {
   #settledAtGameMs: number | null = null;
   /** (a)'s last measured rate, and (b)'s last fit. */
   #money: LevellingRate | null = null;
+  /** (d)'s income (#380): measured with (a)'s rate while the batcher runs, kept while it doesn't; null at 0 or less. */
+  #income: number | null = null;
+  /** The game's time money began waiting for (d)'s income (#382's review), or null. */
+  #incomeAwaitedSinceGameMs: number | null = null;
+  /**
+   * The game's time a batching mode began after one that doesn't batch (#382's re-review), or null: for
+   * `LEVELLING_INCOME_WAIT_MS` from it the window is fresh, and an income of 0 or less reads as unread, the income
+   * carried in kept (the batcher may be preparing its target, earning nothing yet).
+   */
+  #batchingSinceGameMs: number | null = null;
   #fit: { measured: number; predicted: number; factor: number } | null = null;
   #lastAugReset: number | null = null;
   /** The first update with a medium snapshot is past (it settles too: a restarted brain's loops still land). */
@@ -436,6 +561,8 @@ export class LevellingRule {
         if (this.#mode !== "money") this.#switch("money", inputs, null, figures, "an install reset the game");
         this.#money = null;
         this.#fit = null;
+        this.#income = null;
+        this.#incomeAwaitedSinceGameMs = null;
         this.#window.clear();
         this.#settledAtGameMs = null;
       }
@@ -449,19 +576,20 @@ export class LevellingRule {
     // Levelling's rate only while the level loop runs (#336's review): no sample otherwise, and its start settles again.
     const levelLoopRuns =
       inputs.levelLoop.sent && (figures === null || figures.homeThreads === 0 || inputs.levelLoop.homeThreads > 0);
-    if (this.#mode !== "money" && levelLoopRuns && !this.#levelLoopRan && isFiniteNumber(mediumGameTimeMs)) {
+    const batching = this.#mode === "money" || this.#mode === "batch";
+    if (!batching && levelLoopRuns && !this.#levelLoopRan && isFiniteNumber(mediumGameTimeMs)) {
       this.#window.clear();
       this.#settledAtGameMs = mediumGameTimeMs + this.#settleMs(inputs, figures);
     }
     this.#levelLoopRan = levelLoopRuns;
-    const measuring = this.#mode === "money" || levelLoopRuns;
+    const measuring = batching || levelLoopRuns;
     if (
       measuring &&
       figures !== null &&
       isFiniteNumber(mediumGameTimeMs) &&
       mediumGameTimeMs >= (this.#settledAtGameMs ?? 0)
     ) {
-      this.#window.add(mediumGameTimeMs, figures.exp, figures.level);
+      this.#window.add(mediumGameTimeMs, figures.exp, figures.level, figures.money);
     }
     const applies = inputs.enabled && levelAllThatsLeft(inputs.path);
     const required = inputs.path?.daemon?.requiredHackingLevel ?? null;
@@ -475,7 +603,23 @@ export class LevellingRule {
     // The rate measured in the mode, fitted: (a)'s, or (b)'s against the formula's for the RAM sent.
     const measured = this.#window.measured();
     const target = figures.target;
-    if (measured !== null && this.#mode === "money") this.#money = measured;
+    if (measured !== null && batching) {
+      this.#money = measured;
+      // None or less is unmeasured (#382's review): the batcher earning nothing yet, or no longer (then (d) is weighed
+      // no more, its M out of reach). Unread, the last measured.
+      const income = this.#window.income();
+      // In a fresh window after a mode that doesn't batch (#382's re-review), none or less is unread, for
+      // `LEVELLING_INCOME_WAIT_MS` at most: levelling mode measures no income, so one lost now is lost to the install.
+      const since = this.#batchingSinceGameMs;
+      if (since !== null && isFiniteNumber(mediumGameTimeMs) && mediumGameTimeMs < since) {
+        this.#batchingSinceGameMs = mediumGameTimeMs;
+      }
+      const fresh =
+        this.#batchingSinceGameMs !== null &&
+        isFiniteNumber(mediumGameTimeMs) &&
+        mediumGameTimeMs - this.#batchingSinceGameMs < LEVELLING_INCOME_WAIT_MS;
+      if (income !== null && (income > 0 || !fresh)) this.#income = income > 0 ? income : null;
+    }
     if (measured !== null && this.#mode === "level" && target !== null) {
       // For the threads running (#339's re-review): the hosts' as sent, home's as the fast snapshot shows them.
       const running = figures.threads - figures.homeThreads + inputs.levelLoop.homeThreads;
@@ -484,35 +628,65 @@ export class LevellingRule {
         this.#fit = { measured: measured.expPerSecond, predicted, factor: measured.expPerSecond / predicted };
     }
     const augmentations = inputs.installAugmentations ?? [];
-    const estimates = levellingEstimates(
-      levellingInputsOf(
-        figures,
-        required,
-        this.#money,
-        this.#fit?.factor ?? null,
-        inputs.neuroFluxLevels,
-        augmentations,
-      ),
+    const batchOffer = inputs.batchOffer ?? null;
+    const batch =
+      batchOffer === null
+        ? null
+        : {
+            incomePerSecond: this.#income,
+            ladder: batchOffer.ladder,
+            augmentations: batchOffer.augmentations,
+            // The BitNode's game time so far (#382's review): the run report's hopeless bar (#336), from the same reset.
+            batchingBoundSeconds: soFarSeconds(slowData, mediumGameTimeMs),
+          };
+    const levellingInputs = levellingInputsOf(
+      figures,
+      required,
+      this.#money,
+      this.#fit?.factor ?? null,
+      inputs.neuroFluxLevels,
+      augmentations,
+      batch,
     );
+    const estimates = levellingEstimates(levellingInputs);
+    const plan = batchThenInstallPlan(levellingInputs);
     // The install chosen stays chosen while A6 commits it; a choice that A6 can no longer commit (no levels to buy, no
     // set that adds to levelling, and not committed) is chosen afresh.
     const onOffer =
       (inputs.neuroFluxLevels ?? 0) > 0 || (inputs.neuroFluxLevels !== null && addsToLevelling(augmentations));
     const installHeld = this.#mode === "install" && (inputs.installCommitted || onOffer);
-    const choice = installHeld ? "install" : chooseLevelling(estimates, this.#mode);
-    if (choice !== this.#mode) this.#switch(choice, inputs, estimates, figures, null);
+    // Money waits for (d)'s income (#382's review), `LEVELLING_INCOME_WAIT_MS` at most from batching's rate measured.
+    const gameMs = isFiniteNumber(mediumGameTimeMs) ? mediumGameTimeMs : null;
+    const awaiting = this.#mode === "money" && batchOffer !== null && this.#money !== null && this.#income === null;
+    if (!awaiting) this.#incomeAwaitedSinceGameMs = null;
+    else if (gameMs !== null) {
+      // The game's clock set back (#382's re-review): the wait starts again from it, so it can't stretch.
+      if (this.#incomeAwaitedSinceGameMs === null || gameMs < this.#incomeAwaitedSinceGameMs) {
+        this.#incomeAwaitedSinceGameMs = gameMs;
+      }
+    }
+    const waitsForIncome =
+      awaiting && gameMs !== null && gameMs - (this.#incomeAwaitedSinceGameMs ?? gameMs) < LEVELLING_INCOME_WAIT_MS;
+    const choice = installHeld ? "install" : waitsForIncome ? "money" : chooseLevelling(estimates, this.#mode);
+    if (choice !== this.#mode) this.#switch(choice, inputs, estimates, figures, null, plan, batch);
     this.#view = {
       applies: true,
       mode: this.#mode,
       estimates,
       target: target?.hostname ?? null,
       fit: this.#fit,
-      lines: this.#lines(estimates, target?.hostname ?? null, figures, inputs),
+      lines: [
+        ...this.#lines(estimates, target?.hostname ?? null, figures, inputs, plan),
+        ...(waitsForIncome ? ["  money waits for (d)'s income: none measured yet (5 min at most, #382)"] : []),
+      ],
+      ...(waitsForIncome
+        ? { waitingForIncome: true, meanwhile: chooseLevelling({ ...estimates, batch: null }, "money") }
+        : {}),
     };
     return {
       mode: this.#mode,
       levelling:
-        this.#mode === "money" || target === null
+        this.#mode === "money" || this.#mode === "batch" || target === null
           ? null
           : {
               target: target.hostname,
@@ -538,13 +712,14 @@ export class LevellingRule {
     target: string | null,
     figures: LevellingFigures,
     inputs: LevellingRuleInputs,
+    plan: LevellingBatchPlan | null,
   ): string[] {
     const fit = this.#fit;
     const augmentations = inputs.installAugmentations ?? [];
     return [
       `levelling (the hacking level all that's left, #336): ${describeEstimates(estimates)}`,
       `  chosen: ${LEVELLING_CANDIDATE_WORDS[this.#mode]}` +
-        (this.#mode === "money" || target === null
+        (this.#mode === "money" || this.#mode === "batch" || target === null
           ? ""
           : ` on ${target}, ${figures.target?.operation === "grow" ? "growing" : "weakening"} it (the operation sent) ` +
             `(${Math.floor(figures.threads).toLocaleString("en-US")} threads, home's beyond ` +
@@ -560,6 +735,7 @@ export class LevellingRule {
             `  the install's augmentations: NeuroFlux Governor ×${inputs.neuroFluxLevels ?? 0}` +
               (augmentations.length === 0 ? "" : `; the set's ${augmentations.join(", ")}`),
           ]),
+      ...(plan === null ? [] : [`  ${describeBatchPlan(plan, this.#income, inputs.batchOffer?.augmentations ?? [])}`]),
     ];
   }
 
@@ -569,14 +745,21 @@ export class LevellingRule {
     estimates: LevellingEstimates | null,
     figures: LevellingFigures | null,
     why: string | null,
+    plan: LevellingBatchPlan | null = null,
+    batch: LevellingBatchFigures | null = null,
   ): void {
     const from = this.#mode;
     this.#mode = mode;
-    this.#window.clear();
-    const { mediumGameTimeMs } = inputs;
-    this.#settledAtGameMs = !isFiniteNumber(mediumGameTimeMs)
-      ? null
-      : mediumGameTimeMs + this.#settleMs(inputs, figures);
+    const batchingMode = (each: LevellingCandidate) => each === "money" || each === "batch";
+    // Money and (d) both batch (#380): between them the batcher goes on, its rate and income measured as before.
+    if (!(batchingMode(from) && batchingMode(mode))) {
+      this.#window.clear();
+      const { mediumGameTimeMs } = inputs;
+      this.#settledAtGameMs = !isFiniteNumber(mediumGameTimeMs)
+        ? null
+        : mediumGameTimeMs + this.#settleMs(inputs, figures);
+      this.#batchingSinceGameMs = batchingMode(mode) && isFiniteNumber(mediumGameTimeMs) ? mediumGameTimeMs : null;
+    }
     const detail =
       `${LEVELLING_CANDIDATE_WORDS[from]} to ${LEVELLING_CANDIDATE_WORDS[mode]}` +
       (why !== null ? `: ${why}` : estimates === null ? "" : `: ${describeEstimates(estimates)}`);
@@ -586,12 +769,23 @@ export class LevellingRule {
       atMs: inputs.nowMs ?? 0,
       mode,
       from,
-      estimates: estimates ?? { money: null, level: null, install: null },
+      estimates: estimates ?? { money: null, level: null, install: null, batch: null },
       target: figures?.target?.hostname ?? null,
       money: this.#money,
       factor: this.#fit?.factor ?? null,
       neuroFluxLevels: inputs.neuroFluxLevels,
       installAugmentations: [...(inputs.installAugmentations ?? [])],
+      ...(batch === null
+        ? {}
+        : {
+            batch: {
+              incomePerSecond: batch.incomePerSecond,
+              ladder: [...batch.ladder],
+              augmentations: [...batch.augmentations],
+              levels: plan?.levels ?? null,
+              money: plan?.money ?? null,
+            },
+          }),
       detail,
     });
   }
