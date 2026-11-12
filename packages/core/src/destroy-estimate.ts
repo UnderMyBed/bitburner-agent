@@ -8,7 +8,8 @@
  *   factions bring more (BN4.1's c3-c7: 1.7-2.7): either way.
  * - BC, the invitation and The Red Pill: 0 once installed; after the donations install, the prior's Red Pill cycle;
  *   once Daedalus is joined, A5's ETA for the hold (its first choice there, to the favour target: with the share if it
- *   runs at the choice, else about 1.6× cautious, BN1.2's and BN1.3's 157 and 184 min against 98 and 114 with it) plus
+ *   runs at the choice; cautious either way, the store's 1.2-2.6× the hold they timed: BN1.2's and BN1.3's 157 and 184
+ *   min against 62 and 72, BN1.4's 35 against 30) plus
  *   that cycle, cautious (the level's rise left out); before, the prior's B + C less the time since the count was met, never less than the
  *   prior's Red Pill cycle (BN1's vary 2-4×: either way).
  * - D, w0r1d_d43m0n's level (3000 × `WorldDaemonDifficulty`, `worldDaemonRequiredLevel`): once The Red Pill is
@@ -169,7 +170,7 @@ function redPillTerm(inputs: DestroyEstimateInputs): DestroyTerm {
       ms: hold + (cycle ?? 0),
       atLeast: cycle === null,
       source:
-        "joined: A5's ETA for the hold (with the share if it runs at the choice; ×~1.6 cautious otherwise)" +
+        "joined: A5's ETA for the hold (with the share if it runs at the choice; cautious, the store's 1.2-2.6× the hold)" +
         (cycle === null
           ? ", no prior's Red Pill cycle (at least)"
           : `, plus the prior's Red Pill cycle (${prior?.bitNode})`),
@@ -213,7 +214,7 @@ function levelTerm(inputs: DestroyEstimateInputs, requiredLevel: number): Destro
       term: "D",
       ms: prior.dMs,
       atLeast: false,
-      source: `the prior's (${prior.bitNode}), pre-#336 (no levelling choice before its destroy): cautious${waiting}`,
+      source: `the prior's (${prior.bitNode}), pre-#336 (levelling chosen late, or not, after its Red Pill): cautious${waiting}`,
       label: "cautious",
     };
   }

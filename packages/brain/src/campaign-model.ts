@@ -12,7 +12,12 @@ import {
   worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import { fieldsOf, isFiniteNumber } from "./augmentation-report.ts";
-import { AUGMENTATION_INSTALL_SENT_EVENT_KIND, advanceOnlineClock, type OnlineClock } from "./augmentations.ts";
+import {
+  AUGMENTATION_INSTALL_SENT_EVENT_KIND,
+  AUGMENTATION_SLOW_GAP_MS,
+  advanceOnlineClock,
+  type OnlineClock,
+} from "./augmentations.ts";
 import { type BitNodeSpan, ResetDetection } from "./cycle-report.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
 import type { SlowResetInfo, StoredEvent } from "./telemetry-store.ts";
@@ -585,6 +590,8 @@ export interface DestroyStretches {
   countMetOnlineMs: number | null;
   /** The time online at The Red Pill's install (the start of the first cycle with it), or null. */
   redPillOnlineMs: number | null;
+  /** The first slow snapshot after The Red Pill's install (the brain's clock), or null. */
+  redPillSeenAtMs: number | null;
   aMs: number | null;
   bcMs: number | null;
   redPillCycleMs: number | null;
@@ -615,6 +622,10 @@ export function destroyStretchesOf(view: BitNodeView): DestroyStretches {
   return {
     countMetOnlineMs,
     redPillOnlineMs,
+    redPillSeenAtMs:
+      redPill === undefined
+        ? null
+        : (bitNode.installs.find((install) => install.installedAtMs === redPill.startMs)?.atMs ?? redPill.startMs),
     aMs: startSeen ? countMetOnlineMs : null,
     bcMs:
       countMetOnlineMs === null || redPillOnlineMs === null || met?.redPill === true
@@ -630,8 +641,10 @@ export function destroyStretchesOf(view: BitNodeView): DestroyStretches {
 /**
  * The prior for the BitNode `views[index]` (#360): the last destroyed before it, the same BitNode number first (by
  * its `currentNode`), else the last destroyed of any; its stretches (`destroyStretchesOf`) and w0r1d_d43m0n's level
- * there; null with none destroyed. Its D is from before levelling (#336) where no levelling choice
- * (`levellingChosenAtMs`, the brain's clock) came between its start and its destroy: the money pace's, cautious.
+ * there; null with none destroyed. Its D is from before levelling (#336) where its first levelling choice
+ * (`levellingChosenAtMs`, the brain's clock) came later than the first slow snapshot after The Red Pill's install and
+ * a slow gap (`AUGMENTATION_SLOW_GAP_MS`), or none came before its destroy: D, or most of it, at the money pace (BN4.1's
+ * 419 min: #336's brain chose 4 min before the destroy, after 409 at the money pace), cautious.
  */
 export function destroyPriorOf(
   views: readonly BitNodeView[],
@@ -653,10 +666,16 @@ export function destroyPriorOf(
     redPillCycleMs: stretches.redPillCycleMs,
     dMs: stretches.dMs,
     requiredLevel: worldDaemonRequiredLevel(prior.bitNode.currentNode, prior.bitNode.firstOwnedSF),
-    dBeforeLevelling:
-      stretches.dMs !== null &&
-      !levellingChosenAtMs.some(
-        (atMs) => atMs >= prior.bitNode.startMs && atMs <= (prior.ending.destroyedAtMs ?? Number.POSITIVE_INFINITY),
-      ),
+    dBeforeLevelling: stretches.dMs !== null && dBeforeLevelling(prior, stretches, levellingChosenAtMs),
   };
+}
+
+/** Whether a destroyed BitNode's D came before levelling (`destroyPriorOf`): its first choice late, or none. */
+function dBeforeLevelling(view: BitNodeView, stretches: DestroyStretches, levellingChosenAtMs: readonly number[]) {
+  const seenAtMs = stretches.redPillSeenAtMs;
+  if (seenAtMs === null) return false;
+  const first = levellingChosenAtMs
+    .filter((atMs) => atMs >= seenAtMs && atMs <= (view.ending.destroyedAtMs ?? Number.POSITIVE_INFINITY))
+    .reduce((least, atMs) => Math.min(least, atMs), Number.POSITIVE_INFINITY);
+  return first > seenAtMs + AUGMENTATION_SLOW_GAP_MS;
 }

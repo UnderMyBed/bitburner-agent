@@ -140,7 +140,7 @@ describe("each term's cases (#360)", () => {
     ).toMatchObject({
       ms: 419 * MINUTE,
       label: "cautious",
-      source: "the prior's (BN4.1), pre-#336 (no levelling choice before its destroy): cautious",
+      source: "the prior's (BN4.1), pre-#336 (levelling chosen late, or not, after its Red Pill): cautious",
     });
     // BN4 (9,000) from BN1's prior (3,000): none, and the total at least.
     const bn4 = destroyEstimate(inputs(0, 0, { currentNode: 4, ownedSF: { 1: 3 }, prior: BN1_4 }));

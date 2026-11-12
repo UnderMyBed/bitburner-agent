@@ -6,13 +6,14 @@
 // - The inputs: the BitNode's time online, the campaign's clock (`advanceOnlineClock` keyed by its `lastNodeReset`,
 //   kept in the store so a restart carries it on); Daedalus's count (core's `daedalusCountOf`); A5's ETA for The Red
 //   Pill's hold (its first `factionWorkChosen` choice at Daedalus, the join's moment waiting for it: with the share if
-//   it runs then, else about 1.6× cautious); levelling's chosen candidate's estimate (#336); and
+//   it runs then; cautious, the store's 1.2-2.6× the hold); levelling's chosen candidate's estimate (#336); and
 //   the prior, the last destroyed BitNode's stretches, the same number first (./campaign-model.ts), read from the store
 //   once a BitNode and kept with the rest.
 // - Restarts: the setting `destroyEstimate.last` (the BitNode's and the cycle's resets, the moments made, the clock and
 //   the last estimate) keeps a restart from repeating one. An install made while the brain was down is estimated at
 //   the first slow snapshot after it, and marked late (that snapshot more than a slow gap after the install).
-//   A brain with no note for the BitNode sees a later cycle "first seen" (the hindcast has its install); a save loaded,
+//   A brain with no note for the BitNode records its first look "first seen" unless it's the store's first slow snapshot
+//   of the BitNode (the hindcast has that start or install); a save loaded,
 //   an earlier `lastAugReset`, isn't estimated again.
 // - Daedalus's route alone (BN1, BN4, BN5: core's `DESTROY_ESTIMATE_BITNODES`): in another BitNode, no estimate, said
 //   once in the log. BN2's gang (#357) and Black Ops (#359) are later slices.
@@ -233,6 +234,8 @@ export interface DestroySeed {
   prior: DestroyPrior | null;
   onlineMs: number;
   countMetOnlineMs: number | null;
+  /** The store had a slow snapshot of the BitNode before this one: its start, if seen, is the hindcast's already. */
+  seenBefore: boolean;
 }
 
 /** A slow snapshot as the rule seeds from it: the store's row's fields. */
@@ -270,11 +273,12 @@ export function readDestroySeed(store: TelemetryStore, environment: Environment,
     )?.views ?? [];
   const index = views.findLastIndex((view) => view.bitNode.lastNodeReset === live.resetInfo.lastNodeReset);
   const view = views[index];
-  if (view === undefined) return { prior: null, onlineMs: 0, countMetOnlineMs: null };
+  if (view === undefined) return { prior: null, onlineMs: 0, countMetOnlineMs: null, seenBefore: false };
   return {
     prior: destroyPriorOf(views, index, levellingChosenAtMs),
     onlineMs: view.bitNode.clock.onlineMs,
     countMetOnlineMs: destroyStretchesOf(view).countMetOnlineMs,
+    seenBefore: view.bitNode.firstSlowAtMs < live.receivedAtMs,
   };
 }
 
@@ -380,7 +384,7 @@ export class DestroyEstimateRule {
     store,
     log = () => {},
     emit = () => {},
-    seedOf = () => ({ prior: null, onlineMs: 0, countMetOnlineMs: null }),
+    seedOf = () => ({ prior: null, onlineMs: 0, countMetOnlineMs: null, seenBefore: false }),
   }: {
     store: TelemetryStore;
     log?: (line: string) => void;
@@ -414,6 +418,8 @@ export class DestroyEstimateRule {
     let changed = false;
     // Another BitNode (or none noted): its seed from the store, once.
     const firstLook = note === null || note.lastNodeReset !== facts.lastNodeReset;
+    // A first look that isn't the store's first slow snapshot of the BitNode: its start is the hindcast's already.
+    let seenBefore = false;
     this.#seenThisRun = true;
     if (note === null || note.lastNodeReset !== facts.lastNodeReset) {
       const seed = this.#seedOf({
@@ -431,6 +437,7 @@ export class DestroyEstimateRule {
         prior: seed.prior,
         last: null,
       };
+      seenBefore = seed.seenBefore;
       this.#sampledGameTimeMs = slowGameTimeMs;
       changed = true;
     } else if (slowGameTimeMs !== this.#sampledGameTimeMs) {
@@ -470,7 +477,8 @@ export class DestroyEstimateRule {
     // A new cycle: the start, an install, or a first look at a later one. One earlier than the noted (a save loaded) isn't
     // estimated again: its install, when it comes, is later than the noted.
     if (note.lastAugReset === null || facts.lastAugReset > note.lastAugReset) {
-      moments.push(facts.lastAugReset === facts.lastNodeReset ? "start" : firstLook ? "first seen" : "install");
+      const start = facts.lastAugReset === facts.lastNodeReset;
+      moments.push(firstLook && (seenBefore || !start) ? "first seen" : start ? "start" : "install");
       note = { ...note, lastAugReset: facts.lastAugReset };
       changed = true;
     }

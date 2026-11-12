@@ -7,7 +7,14 @@ import os from "node:os";
 import path from "node:path";
 import type { FactionWorkChoice, SlowSnapshotData } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { CampaignFold, campaignViews, destroyPriorOf, destroyStretchesOf } from "../src/campaign-model.ts";
+import {
+  type BitNodeView,
+  CampaignFold,
+  campaignViews,
+  destroyPriorOf,
+  destroyStretchesOf,
+  sum,
+} from "../src/campaign-model.ts";
 import { campaignReport } from "../src/campaign-report.ts";
 import { STORE_FILE_NAME } from "../src/config.ts";
 import {
@@ -23,6 +30,7 @@ import {
   DESTROY_ESTIMATE_REPORT_EVENT_KINDS,
   destroyEstimateHealthLines,
   destroyEstimateRows,
+  destroyEstimateSection,
   type JudgedRow,
 } from "../src/destroy-estimate-report.ts";
 import type { LevellingView } from "../src/levelling.ts";
@@ -111,6 +119,7 @@ function bitNode({
   redPillCycle,
   hold,
   destroySent = true,
+  total,
 }: {
   from: number;
   currentNode: number;
@@ -120,7 +129,13 @@ function bitNode({
   redPillCycle?: number;
   hold?: { cycle: number; joinedAt: number; etaMinutes: number };
   destroySent?: boolean;
+  /**
+   * Its time online in all, the findings' (#343's tables): the cycles' minutes are rounded and leave each install's step
+   * out, so the difference goes evenly to the installs, each a fraction of a minute after its cycle's last slow snapshot.
+   */
+  total?: number;
 }): number {
+  const gap = total === undefined || online.length < 2 ? 0 : (total - sum(online)) / (online.length - 1);
   let start = from;
   online.forEach((minutes, index) => {
     const info = resetInfo(
@@ -141,8 +156,10 @@ function bitNode({
         etaSeconds: hold.etaMinutes * 60,
       });
     }
-    if (index < online.length - 1) event(start + minutes - 0.5, "augmentationInstallSent", { source: "brain" });
-    start += minutes;
+    if (index < online.length - 1) {
+      event(start + minutes - 0.5, "augmentationInstallSent", { source: "brain" });
+      start += minutes + gap;
+    } else start += minutes;
   });
   if (destroySent) event(start - 0.5, "bitNodeDestroySent", { source: "brain", nextBitNode: 1 });
   return start;
@@ -179,6 +196,7 @@ function fourBitNodesWritten(): void {
     currentNode: 1,
     ownedSF: { 1: 1 },
     ...BN1_2,
+    total: 677,
     redPillCycle: 10,
     hold: { cycle: 8, joinedAt: 16, etaMinutes: 157 },
   });
@@ -187,6 +205,7 @@ function fourBitNodesWritten(): void {
     currentNode: 1,
     ownedSF: { 1: 2 },
     ...BN1_3,
+    total: 756,
     redPillCycle: 10,
     hold: { cycle: 8, joinedAt: 17, etaMinutes: 184 },
   });
@@ -195,6 +214,7 @@ function fourBitNodesWritten(): void {
     currentNode: 1,
     ownedSF: { 1: 3 },
     ...BN1_4,
+    total: 406,
     redPillCycle: 15,
     hold: { cycle: 13, joinedAt: 7, etaMinutes: 35 },
   });
@@ -203,6 +223,7 @@ function fourBitNodesWritten(): void {
     currentNode: 4,
     ownedSF: { 1: 3 },
     ...BN4_1,
+    total: 1624,
     redPillCycle: 10,
     hold: { cycle: 8, joinedAt: 23, etaMinutes: 165 },
   });
@@ -236,22 +257,26 @@ describe("the campaign fold's stretches and the prior (#360)", () => {
       const each = destroyStretchesOf(view);
       return [minutes(each.aMs), minutes(each.bcMs), minutes(each.redPillCycleMs), minutes(each.dMs)];
     });
-    // NeuroFlux Governor at level 5 is one of the count: A ends where the count reaches 30, not at its levels.
+    // NeuroFlux Governor at level 5 is one of the count: A ends where the count reaches 30, not at its levels. Each
+    // install's step (the findings' totals less the cycles' rounded minutes, a share each) is in the cycle it ends.
     expect(stretches).toEqual([
-      [570, 81 + 18, 18, 2],
-      [547, 85 + 92 + 22, 22, 4],
-      [349, 39 + 8, 8, 2],
-      [1023, 36 + 125 + 20, 20, 419],
+      [575, 100, 19, 2],
+      [551, 201, 23, 4],
+      [356, 48, 9, 2],
+      [1024, 181, 20, 419],
       [null, null, null, null],
     ]);
     // The prior: the same number first (BN1.3's is BN1.2), else the last destroyed (BN4.1's is BN1.4); levels apart.
     expect(destroyPriorOf(views, 0, [])).toBeNull();
-    expect(destroyPriorOf(views, 1, [])).toMatchObject({ bitNode: "BN1.2", requiredLevel: 3000, aMs: 570 * MINUTE });
+    expect(destroyPriorOf(views, 1, [])).toMatchObject({ bitNode: "BN1.2", requiredLevel: 3000 });
     expect(destroyPriorOf(views, 3, [])).toMatchObject({ bitNode: "BN1.4", currentNode: 1, requiredLevel: 3000 });
     expect(destroyPriorOf(views, 4, [])).toMatchObject({ bitNode: "BN1.4", currentNode: 1 });
-    // Its D from before levelling (#336) with no levelling choice between its start and its destroy; after one, not.
+    // Its D from before levelling (#336): no levelling choice, or its first more than a slow gap after the first slow
+    // snapshot after The Red Pill's install; within it, not. A choice in another BitNode doesn't count.
+    const seenAt = destroyStretchesOf(views[0] as BitNodeView).redPillSeenAtMs as number;
     expect(destroyPriorOf(views, 1, [])?.dBeforeLevelling).toBe(true);
-    expect(destroyPriorOf(views, 1, [m(669)])?.dBeforeLevelling).toBe(false);
+    expect(destroyPriorOf(views, 1, [seenAt + MINUTE])?.dBeforeLevelling).toBe(false);
+    expect(destroyPriorOf(views, 1, [seenAt + 3.5 * MINUTE])?.dBeforeLevelling).toBe(true);
     expect(destroyPriorOf(views, 1, [m(700)])?.dBeforeLevelling).toBe(true);
   });
 
@@ -325,36 +350,36 @@ describe("the hindcast and the campaign report's section (#360)", () => {
       "BN4.1",
     ]);
     const bn13 = rows.filter((row) => row.name === "BN1.3").map(summary);
-    // BN1.3's cycles start at 0, 37, 87, 157, 298, 316, 409, 547, 632, 724 and 746 online; it's destroyed at 750. Each
-    // install is estimated at its first slow snapshot, a minute on. Its start from BN1.2's 570 + 99 + 2, of 749.
-    expect(bn13[0]).toEqual(["BN1.3", "start", 1, 671, 0.9, false]);
-    // c3 by the mean (88 × 25/5 = 440) plus the prior's B + C and D: 541 of 662.
-    expect(bn13[2]).toEqual(["BN1.3", "install", 88, 541, 0.82, false]);
-    // The count met at c8 (547): B + C 99 less the minute since, and D 2: 100 of 202. Again at c9, not yet joined.
-    expect(bn13[7]).toEqual(["BN1.3", "count met", 548, 100, 0.5, false]);
+    // BN1.3's cycles start a minute's fraction later each (its installs' steps, 0.6 min: 756 in all); each install is
+    // estimated at its first slow snapshot, a minute on. Its start from BN1.2's 575 + 100 + 2, of 755.
+    expect(bn13[0]).toEqual(["BN1.3", "start", 1, 677, 0.9, false]);
+    // c3 at 89.2 online, by the mean (89.2 × 25/5 = 446) plus the prior's B + C and D: 548 of 667.
+    expect(bn13[2]).toEqual(["BN1.3", "install", 89, 548, 0.82, false]);
+    // The count met at c8 (551.2): B + C 100 less the minute since, and D 2: 101 of 203. Again at c9, not yet joined.
+    expect(bn13[7]).toEqual(["BN1.3", "count met", 552, 101, 0.5, false]);
     expect(bn13[8]?.[1]).toBe("count met");
-    // Joined 17 min into c9: the ETA then (184 min, the share left out) plus BN1.2's Red Pill cycle and D, of 101.
-    expect(bn13.find((row) => row[1] === "joined")).toEqual(["BN1.3", "joined", 649, 184 + 18 + 2, 2.02, false]);
-    // The install after the join (the donations'): BN1.2's Red Pill cycle and D, of 25; then D alone, of 3.
+    // Joined 17 min into c9: the ETA then (184 min, the share left out) plus BN1.2's Red Pill cycle (18.6) and D, of 102.
+    expect(bn13.find((row) => row[1] === "joined")).toEqual(["BN1.3", "joined", 654, 205, 2, false]);
+    // The install after the join (the donations'): BN1.2's Red Pill cycle and D, of 25.6; then D alone, of 3.
     expect(bn13.find((row) => row[1] === "donations install")).toEqual([
       "BN1.3",
       "donations install",
-      725,
-      18 + 2,
+      730,
+      21,
       0.8,
       false,
     ]);
     expect(bn13.find((row) => row[1] === "The Red Pill installed")).toEqual([
       "BN1.3",
       "The Red Pill installed",
-      747,
+      753,
       2,
       0.67,
       false,
     ]);
     // BN4.1 from BN1.4: no D at 9,000 (BN1's 3,000), so at least; the next BitNode, open: no ratio.
     const bn41 = rows.filter((row) => row.name === "BN4.1").map(summary);
-    expect(bn41[0]).toEqual(["BN4.1", "start", 1, 349 + 47, 0.24, true]);
+    expect(bn41[0]).toEqual(["BN4.1", "start", 1, 356 + 48, 0.25, true]);
     expect(rows.filter((row) => row.name === "BN1.4 #2").map((row) => row.ratio)).toEqual([null]);
   });
 
@@ -400,8 +425,57 @@ describe("the hindcast and the campaign report's section (#360)", () => {
         .map((row) => row.record.stage)
         .at(-1),
     ).toBe("count met");
-    // Against BN4.1's 1,623 minutes, joined at 1,082.
-    expect(bn41.find((row) => !row.hindcast)?.ratio).toBeCloseTo(600 / (1623 - 1082), 9);
+    // Against BN4.1's time online at its destroy, less its time online at the join.
+    const own = bn41.find((row) => !row.hindcast) as JudgedRow;
+    expect(own.ratio).toBeCloseTo((600 * MINUTE) / ((own.actualTotalMs as number) - own.record.onlineMs), 9);
+    expect(minutes(own.actualTotalMs)).toBe(1624);
+  });
+
+  test("a stored first look (a brain with no note) is listed and left out of the summaries, as the hindcast has it", () => {
+    fourBitNodes();
+    const bn14 = rowsOf().find((row) => row.name === "BN1.4" && row.record.stage === "install") as JudgedRow;
+    // Stored after the hindcast's last moment (BN1.4 #2's start), so none of the hindcast's rows is cut.
+    const { slows } = readAll();
+    const afterAll = ((slows.at(-1) as SlowResetInfo).receivedAtMs - T0) / MINUTE + 0.5;
+    event(afterAll, DESTROY_ESTIMATED_EVENT_KIND, { ...bn14.record, moment: "first seen", stage: "first seen" });
+    const rows = rowsOf();
+    const firstSeen = rows.filter((row) => row.record.stage === "first seen");
+    expect(firstSeen).toHaveLength(1);
+    expect(firstSeen[0]?.ratio).toBeCloseTo(bn14.ratio as number, 9);
+    const section = destroyEstimateSection(rows, 0, (ms) => String(ms));
+    expect(section).toContainEqual(expect.stringMatching(/^ {4}BN1.4: .*; left out: .*1 first seen$/));
+    expect(section.filter((line) => line.startsWith("    first seen:"))).toEqual([]);
+  });
+
+  test("a prior's D is pre-#336 when its first levelling choice came late after The Red Pill's install, or not at all", () => {
+    fourBitNodes();
+    const fold = new CampaignFold();
+    const { slows, events } = readAll();
+    for (const snapshot of slows) fold.add(snapshot);
+    const views =
+      campaignViews(
+        fold,
+        events.filter((each) => each.kind !== "factionWorkChosen"),
+      )?.views ?? [];
+    const seenAt = (name: string) =>
+      destroyStretchesOf(views.find((view) => view.name === name) as BitNodeView).redPillSeenAtMs as number;
+    const minuteOf = (atMs: number) => (atMs - T0) / MINUTE;
+    // BN4.1 chose levelling 409 min after its Red Pill's first slow snapshot (as #336's brain did, after a restart).
+    event(minuteOf(seenAt("BN4.1")) + 409, "levellingChosen", { mode: "level" });
+    const last = slows.at(-1) as SlowResetInfo;
+    const bn5 = {
+      receivedAtMs: last.receivedAtMs + MINUTE,
+      gameTimeMs: last.gameTimeMs + MINUTE,
+      resetInfo: resetInfo(minuteOf(last.receivedAtMs), minuteOf(last.receivedAtMs), 5, { 1: 3, 4: 1 }),
+    };
+    expect(readDestroySeed(store, "E0", bn5).prior).toMatchObject({ bitNode: "BN4.1", dBeforeLevelling: true });
+    // Within a slow gap of it: not. And the hindcast reads them too: BN1.4 #2's prior, BN1.4, chose a minute after.
+    event(minuteOf(seenAt("BN4.1")) + 2, "levellingChosen", { mode: "level" });
+    expect(readDestroySeed(store, "E0", bn5).prior).toMatchObject({ bitNode: "BN4.1", dBeforeLevelling: false });
+    const startOf = () => rowsOf().find((row) => row.name === "BN1.4 #2")?.record.terms[2];
+    expect(startOf()).toMatchObject({ label: "cautious" });
+    event(minuteOf(seenAt("BN1.4")) + 1, "levellingChosen", { mode: "level" });
+    expect(startOf()).toMatchObject({ label: "either way", source: "the prior's (BN1.4)" });
   });
 
   test("the campaign report prints the section: a row each, each BitNode's median and worst, the ratios by moment", () => {
@@ -412,7 +486,7 @@ describe("the hindcast and the campaign report's section (#360)", () => {
     expect(start).toBeGreaterThan(0);
     const section = lines.slice(start);
     expect(section[1]).toMatch(/^ {2}BitNode +at +moment +online +est\. remaining +est\. total +actual remaining/);
-    expect(section).toContainEqual(expect.stringMatching(/^ {2}BN4\.1 +\S+ +start \(hindcast\) +1 min +≥ 6 h 36 min /));
+    expect(section).toContainEqual(expect.stringMatching(/^ {2}BN4\.1 +\S+ +start \(hindcast\) +1 min +≥ 6 h 44 min /));
     // BN1.3's Red Pill row: 2 min against 3, flagged.
     expect(section).toContainEqual(
       expect.stringMatching(/^ {2}BN1\.3 .* The Red Pill installed \(hindcast\) .* 0\.67 \(under 10 min left\) /),
@@ -422,15 +496,15 @@ describe("the hindcast and the campaign report's section (#360)", () => {
     expect(section.slice(section.indexOf("  each BitNode:"))).toEqual([
       "  each BitNode:",
       "    BN1.2: no ratio; left out: 12 at least",
-      "    BN1.3: 11 ratio(s), median 0.72, worst 0.17, 0.17-2.02; left out: 1 under 10 min left",
-      "    BN1.4: 15 ratio(s), median 1.53, worst 4.21, 0.88-4.21; left out: 2 under 10 min left",
+      "    BN1.3: 11 ratio(s), median 0.72, worst 0.17, 0.17-2.00; left out: 1 under 10 min left",
+      "    BN1.4: 15 ratio(s), median 1.52, worst 4.15, 0.87-4.15; left out: 2 under 10 min left",
       "    BN4.1: no ratio; left out: 12 at least",
       "    BN1.4 #2: no ratio",
       "  by moment, over the campaign:",
-      "    start: 2 ratio(s), median 1.39, worst 1.89, 0.90-1.89; left out: 2 at least",
-      "    install: 18 ratio(s), median 1.25, worst 3.42, 0.62-3.42; left out: 13 at least",
-      "    count met: 3 ratio(s), median 0.50, worst 0.17, 0.17-4.21; left out: 3 at least",
-      "    joined: 2 ratio(s), median 1.74, worst 2.02, 1.45-2.02; left out: 2 at least",
+      "    start: 2 ratio(s), median 1.38, worst 1.87, 0.90-1.87; left out: 2 at least",
+      "    install: 18 ratio(s), median 1.24, worst 3.38, 0.63-3.38; left out: 13 at least",
+      "    count met: 3 ratio(s), median 0.50, worst 0.17, 0.17-4.15; left out: 3 at least",
+      "    joined: 2 ratio(s), median 1.72, worst 2.00, 1.43-2.00; left out: 2 at least",
       "    donations install: 1 ratio(s), median 0.80, worst 0.80, 0.80-0.80; left out: 2 at least, 1 under 10 min left",
       "    The Red Pill installed: no ratio; left out: 2 at least, 2 under 10 min left",
       "  within ×1.25: 7 (27%) of 26; within ×1.5: 13 (50%); within ×2: 18 (69%) (Q9, #39; the measured rows: not " +
@@ -473,16 +547,17 @@ describe("the brain's rule (#360)", () => {
     },
     onlineMs: 0,
     countMetOnlineMs: null,
+    seenBefore: false,
   };
   /** A rule over the store, its events kept, its log too. */
-  const ruleOf = () => {
+  const ruleOf = (seenBefore = false) => {
     const events: DestroyEstimateEvent[] = [];
     const log: string[] = [];
     const rule = new DestroyEstimateRule({
       store,
       log: (line) => log.push(line),
       emit: (e) => events.push(e),
-      seedOf: () => seed,
+      seedOf: () => ({ ...seed, seenBefore }),
     });
     return { rule, events, log };
   };
@@ -650,6 +725,18 @@ describe("the brain's rule (#360)", () => {
     expect(minutes(events.at(-1)?.terms[1]?.ms ?? null)).toBe(100 + 18);
   });
 
+  test("a first look at a BitNode's first cycle: its start if it's the store's first slow snapshot of it, else first seen", () => {
+    const fresh = ruleOf(false);
+    update(fresh.rule, 1, 0, 0);
+    expect(fresh.events.map((each) => each.moment)).toEqual(["start"]);
+  });
+
+  test("a first look at a BitNode's first cycle the store saw before (its start the hindcast's): first seen", () => {
+    const late = ruleOf(true);
+    update(late.rule, 30, 0, 0);
+    expect(late.events.map((each) => [each.moment, each.stage])).toEqual([["first seen", "first seen"]]);
+  });
+
   test("a term never (levelling at no rate) is stored as never, with no time", () => {
     const { rule, events } = ruleOf();
     update(rule, 1, 0, 36, { redPill: true });
@@ -684,6 +771,8 @@ describe("the brain's rule (#360)", () => {
     const seedNow = readDestroySeed(store, "E0", { ...last, resetInfo: last.resetInfo as Record<string, unknown> });
     expect(seedNow.prior).toMatchObject({ bitNode: "BN1.4", currentNode: 1 });
     expect(minutes(seedNow.onlineMs)).toBe(5);
+    // Its earlier slow snapshots stored: seen before (a first look now would be "first seen", its start the hindcast's).
+    expect(seedNow.seenBefore).toBe(true);
     // A new BitNode, the next slow snapshot not stored: BN1.4 #2 ended by it.
     const next = {
       receivedAtMs: last.receivedAtMs + MINUTE,
@@ -694,7 +783,11 @@ describe("the brain's rule (#360)", () => {
       }),
     };
     // Its first step, from its `lastNodeReset` (the campaign's clock): a minute.
-    expect(readDestroySeed(store, "E0", next)).toMatchObject({ onlineMs: MINUTE, countMetOnlineMs: null });
+    expect(readDestroySeed(store, "E0", next)).toMatchObject({
+      onlineMs: MINUTE,
+      countMetOnlineMs: null,
+      seenBefore: false,
+    });
     // BN5's prior: none of BN5, so the last destroyed (BN4.1); BN1.4 #2 had no destroy sent at the cap, so isn't.
     expect(readDestroySeed(store, "E0", next).prior).toMatchObject({ bitNode: "BN4.1", currentNode: 4 });
   });
