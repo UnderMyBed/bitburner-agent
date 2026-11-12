@@ -281,8 +281,8 @@ test.each(SEEDS)(
     expect(section).toContain("the gang unread in BN2 for 5 min or more:\n    none");
 
     // The time to the destroy by the gang's route (#357's slice 3), at 15,000: the start, made once the planner's τ_g
-    // is measured (the rate's first minutes; A τ_g, BC and D none: at least), and the gang formed (A done, BC none while
-    // the fresh gang trains first, D none).
+    // is measured (over the rate's whole window, #378's review; A τ_g, BC and D none: at least), and the gang formed
+    // (A done, BC none while the fresh gang trains first, D none).
     const estimates = fresh.data.store
       .eventsInWindow(window)
       .filter((event) => event.kind === DESTROY_ESTIMATED_EVENT_KIND)
@@ -297,7 +297,7 @@ test.each(SEEDS)(
       ["BN2.1", "gang formed", 15_000, true, false],
     ]);
     expect(estimates[0]?.terms.map((term) => [term.term, term.ms !== null && term.ms > 0, term.label])).toEqual([
-      ["A", true, "either way"],
+      ["A", true, "cautious"],
       ["BC", false, "optimistic"],
       ["D", false, "optimistic"],
     ]);

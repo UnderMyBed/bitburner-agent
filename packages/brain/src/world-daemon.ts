@@ -578,6 +578,16 @@ export class HackingExpRate {
     if (first === undefined || last === undefined || last.atMs - first.atMs < 60_000) return null;
     return ((last.exp - first.exp) / (last.atMs - first.atMs)) * 1000;
   }
+
+  /**
+   * The samples span the whole window (`HACKING_EXP_WINDOW_MS`): the rate isn't its first minutes' only, which after a
+   * reset (the hack loop starting) can be none or a sliver (#378's review: τ_g from it 258 h against 26 min).
+   */
+  windowFull(): boolean {
+    const first = this.#samples[0];
+    const last = this.#samples.at(-1);
+    return first !== undefined && last !== undefined && last.atMs - first.atMs >= HACKING_EXP_WINDOW_MS;
+  }
 }
 
 /** What the dashboard shows (#215). */

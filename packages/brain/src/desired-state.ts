@@ -1953,7 +1953,10 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       gang: {
         formed: this.#gang.view().stage === "managed",
+        unread: this.#gang.gangUnread(),
+        // Its cycle too: A6 keeps the last cycle's view on its early returns (#378's review).
         timing: this.#augmentations.view().progress?.timing ?? null,
+        timingLastAugReset: this.#augmentations.view().progress?.lastAugReset ?? null,
         pause: this.#gang.earningPause(),
       },
     });

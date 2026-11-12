@@ -993,13 +993,13 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
     update(rule, 1, 0);
     update(rule, 2, 0, { timing: forming(null) });
     expect(events).toEqual([]);
-    expect(log).toEqual(["destroy estimate: the start in BN2 waits for τ_g (#357), 5 min online at most"]);
+    expect(log).toEqual(["destroy estimate: the start in BN2 waits for τ_g (#357), 13 min online at most"]);
     run(rule, 3, 4, 0, { timing: forming(13) });
     expect(events.map((each) => [each.moment, each.stage, each.late, minutes(each.onlineMs)])).toEqual([
       ["start", "start", false, 2],
     ]);
     expect(termsOf(events[0])).toEqual([
-      ["A", 13, "either way"],
+      ["A", 13, "cautious"],
       ["BC", null, "optimistic"],
       ["D", null, "optimistic"],
     ]);
@@ -1014,12 +1014,12 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
     ]);
   });
 
-  test("τ_g never measured: the estimate goes at its bound (5 min online), A none", () => {
+  test("τ_g never measured: the estimate goes at its bound (the rate's window and a slow gap, 13 min online), A none", () => {
     const { rule, events } = ruleOf();
-    run(rule, 1, 5, 0, { timing: forming(null) });
+    run(rule, 1, 13, 0, { timing: forming(null) });
     expect(events).toEqual([]);
-    update(rule, 6, 0, { timing: forming(null) });
-    expect(events.map((each) => [each.moment, minutes(each.onlineMs)])).toEqual([["start", 5]]);
+    update(rule, 14, 0, { timing: forming(null) });
+    expect(events.map((each) => [each.moment, minutes(each.onlineMs)])).toEqual([["start", 13]]);
     expect(events[0]?.terms[0]).toMatchObject({
       ms: null,
       source: expect.stringMatching(/^before the gang: τ_g not measured/),
@@ -1055,7 +1055,9 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
     update(rule, 31, 30, { formed: false }, BITWIRE);
     update(rule, 32, 30, { formed: true, timing: forming(1) }, BITWIRE);
     expect(events.map((each) => each.moment)).toEqual(["start", "gang formed"]);
-    expect(log).toContain("destroy estimate: the install in BN2 waits for (3)'s estimate (#357), 5 min online at most");
+    expect(log).toContain(
+      "destroy estimate: the install in BN2 waits for (3)'s estimate (#357), 13 min online at most",
+    );
     update(rule, 33, 30, { formed: true, timing: formedTiming("bank", 600) }, BITWIRE);
     expect(events.map((each) => [each.moment, each.stage, each.late, minutes(each.onlineMs)]).at(-1)).toEqual([
       "install",
@@ -1132,10 +1134,10 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
 
   test("never: τ_g with no experience coming past the wait's bound, or (3) at no rate outside a pause; a pause's none", () => {
     const { rule, events } = ruleOf();
-    // No experience in the rate's first minutes (the gang-start suite's first minute): not yet never; at the bound, never.
-    run(rule, 1, 5, 0, { timing: forming(Number.POSITIVE_INFINITY) });
+    // No experience over the rate's window: not yet never; at the bound, never.
+    run(rule, 1, 13, 0, { timing: forming(Number.POSITIVE_INFINITY) });
     expect(events).toEqual([]);
-    update(rule, 6, 0, { timing: forming(Number.POSITIVE_INFINITY) });
+    update(rule, 14, 0, { timing: forming(Number.POSITIVE_INFINITY) });
     expect(events.at(-1)).toMatchObject({ never: true, remainingMs: null });
     expect(events.at(-1)?.terms[0]).toMatchObject({ term: "A", never: true, ms: null });
     // Two BitNodes on (each a first look): at no rate in a pause, none; outside one, never.
@@ -1148,7 +1150,7 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
   });
 
   test("the campaign report: BN2 isn't hindcast (no stored τ_g or (3)), its rows the brain's own; the gang formed by moment", () => {
-    // A BN2 played before the brain's estimates (its slow snapshots alone): no hindcast row, where Daedalus's route has one.
+    // A BN2 played before the brain's estimates (its slow snapshots alone): no hindcast row, as Daedalus's would have.
     bitNode({ from: 0, currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1 }, online: [10, 10], counts: [0, 1] });
     expect(rowsOf()).toEqual([]);
     // Then a BN2 the brain estimates: its rows, each by moment, the gang formed among them.
@@ -1165,8 +1167,65 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
     expect(section).toContain("    gang formed: no ratio");
   });
 
+  test("A6's timing of another cycle (its stale view after an install, #378's review) isn't taken: the install waits", () => {
+    const { rule, events } = ruleOf();
+    toTheGang(rule);
+    run(rule, 21, 30, 0, { formed: true, timing: formedTiming("keep", 60), timingLastAugReset: m(0) });
+    // The install at 30: A6's view still the last cycle's (keep at no rate would be never): left out, the install waits.
+    const stale = { formed: true, timing: formedTiming("keep", Number.POSITIVE_INFINITY), timingLastAugReset: m(0) };
+    update(rule, 31, 30, stale, BITWIRE);
+    update(rule, 32, 30, stale, BITWIRE);
+    expect(events.map((each) => each.moment)).toEqual(["start", "gang formed"]);
+    // This cycle's: taken.
+    update(rule, 33, 30, { formed: true, timing: formedTiming("keep", 60), timingLastAugReset: m(30) }, BITWIRE);
+    expect(events.map((each) => [each.moment, each.never, termsOf(each)?.[1]]).at(-1)).toEqual([
+      "install",
+      false,
+      ["BC", 62, "either way"],
+    ]);
+  });
+
+  test("a first look with the gang unread (#378's review): formed or not unknown, no moment for it; the reading says", () => {
+    const formedThen = ruleOf();
+    update(formedThen.rule, 50, 30, { unread: true }, BITWIRE);
+    update(formedThen.rule, 51, 30, { unread: true, timing: forming(13) }, BITWIRE);
+    expect(formedThen.events).toEqual([]);
+    // The reading: a gang, formed before: no "gang formed"; the first seen waits for (3), then goes with A done.
+    update(formedThen.rule, 52, 30, { formed: true }, BITWIRE);
+    expect(formedThen.events).toEqual([]);
+    update(formedThen.rule, 53, 30, { formed: true, timing: formedTiming("keep", 120) }, BITWIRE);
+    expect(formedThen.events.map((each) => [each.moment, termsOf(each)?.[0]])).toEqual([
+      ["first seen", ["A", 0, "done"]],
+    ]);
+    // Another BitNode, unread, then read with none: the first seen takes τ_g, and the gang formed later is a moment.
+    const none = ruleOf();
+    update(none.rule, 101, 130, { unread: true }, { ...BITWIRE, node: 100 });
+    update(none.rule, 102, 130, { timing: forming(13) }, { ...BITWIRE, node: 100 });
+    update(none.rule, 103, 130, { formed: true }, { ...BITWIRE, node: 100 });
+    expect(none.events.map((each) => [each.moment, termsOf(each)?.[0]])).toEqual([
+      ["first seen", ["A", 13, "cautious"]],
+      ["gang formed", ["A", 0, "done"]],
+    ]);
+  });
+
+  test("a new cycle with an estimate still waiting drops it, said in the log", () => {
+    const { rule, events, log } = ruleOf();
+    update(rule, 1, 0);
+    update(rule, 2, 1, {}, BITWIRE);
+    expect(log).toContain(
+      "destroy estimate: the start in BN2 dropped, still waiting for its figure at the next cycle (#357)",
+    );
+    update(rule, 3, 1, { timing: forming(13) }, BITWIRE);
+    expect(events.map((each) => each.moment)).toEqual(["install"]);
+  });
+
   test("core's inputs from the controller's facts: τ_g on its route, (3)'s chosen candidate's, the pause's time left", () => {
     expect(destroyGangInputsOf(null, false)).toEqual({ formed: false, waitMs: null, redPill: null, earningInMs: null });
+    // A timing of another cycle than the slow snapshot's: none; of its own, or with no cycle given, taken.
+    const staleTiming = { formed: false, timing: forming(13), timingLastAugReset: m(0), pause: null };
+    expect(destroyGangInputsOf(staleTiming, false, m(30)).waitMs).toBeNull();
+    expect(destroyGangInputsOf(staleTiming, false, m(0)).waitMs).toBe(13 * MINUTE);
+    expect(destroyGangInputsOf({ ...staleTiming, timingLastAugReset: null }, false, m(30)).waitMs).toBe(13 * MINUTE);
     expect(destroyGangInputsOf({ formed: false, timing: forming(13), pause: null }, false)).toMatchObject({
       waitMs: 13 * MINUTE,
       redPill: null,

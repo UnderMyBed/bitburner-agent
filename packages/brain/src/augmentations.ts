@@ -68,7 +68,8 @@
 //   static snapshot (`gangForming`), the planned branch's candidates are wait for the gang (τ_g: avmnite-02h's level at
 //   the measured experience rate, `#expRate`, and 70 s for the backdoor, the join and the forming) or install now (the
 //   commit and the level again from 0 at the install's multipliers), by the time to the gang formed, a tie to waiting,
-//   installing now held with no rate measured. Waiting is a wait as #343's: no countdown, no money held, kept in the
+//   installing now held with no rate measured (over the rate's whole 10-minute window, `HACKING_EXP_WINDOW_MS`: its first
+//   minutes overstate τ_g, #378's review). Waiting is a wait as #343's: no countdown, no money held, kept in the
 //   store (`route` "gang forming"), overdue at twice τ_g and 10 minutes. The A/B's baseline (`bn2Route` "rules", tests
 //   alone) takes #343's candidates there, as before.
 // - BN2 with the gang (#357's second slice, core's `gangInstallTiming`): The Red Pill short at the gang's faction, the
@@ -2373,7 +2374,9 @@ export class AugmentationRule {
           const gang = gangFormingTiming({
             ...hackingFiguresOf(mediumData, currentNode),
             required: gangRoute.required,
-            expPerSecond: this.#expRate.perSecond(),
+            // Measured only over the rate's whole window (#378's review): its first minutes, the hack loop starting
+            // after the reset, overstate τ_g (gang-start's seed 5: 258 h against 26 min), and the overdue bound with it.
+            expPerSecond: this.#expRate.windowFull() ? this.#expRate.perSecond() : null,
             gain: levellingInstallMultipliers(neuroFluxLevels, others),
             installable: adding > 0,
             tauScale,

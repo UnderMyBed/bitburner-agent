@@ -20,11 +20,15 @@
 // - BN2, the gang's route: A is the planner's τ_g (A6's timing, route "gang forming") until the gang forms, kept formed
 //   in the note (an install keeps the gang); BC is (3)'s chosen estimate (route "gang formed") and The Red Pill's
 //   install. A cycle's estimate (its start, an install, a first look) waits for its route's figure, τ_g before the gang
-//   (the experience rate's first minute after the reset) or (3)'s with it (the gang read again after an install's
-//   restart), as the join waits for A5's choice: `DESTROY_ROUTE_WAIT_MS` online at most, kept in the note, its `late`
-//   from its first slow snapshot. The gang formed is a moment of its own, made at once (a fresh gang trains first, so
-//   (3)'s comes minutes on: BC none, the plan's time to earning said); a cycle's estimate still waiting then goes first,
-//   as it stood before the gang.
+//   (the experience rate's whole window after the reset: A6 measures none before it, #378's review) or (3)'s with it
+//   (the gang read again after an install's restart), as the join waits for A5's choice: `DESTROY_ROUTE_WAIT_MS` online
+//   at most, kept in the note, its `late` from its first slow snapshot; a new cycle with one still waiting drops it,
+//   said in the log. A6's timing is taken only for the cycle the slow snapshot shows (its progress's `lastAugReset`:
+//   A6 keeps the last cycle's view on its early returns, #378's review). The gang formed is a moment of its own, made at
+//   once (a fresh gang trains first, so (3)'s comes minutes on: BC none, the plan's time to earning said); a cycle's
+//   estimate still waiting then goes first, as it stood before the gang. At a first look with the gang unread (no
+//   reading yet says whether there's one), whether it's formed is unknown: no moment for it, and the cycle's estimate
+//   waits, until a reading says (#378's review).
 import {
   augmentationBitNodeMultipliers,
   DAEDALUS,
@@ -63,17 +67,21 @@ import type { GangStallStretch } from "./gang-stalls.ts";
 import { formatDuration } from "./gap-report.ts";
 import { LEVELLING_CHOSEN_EVENT_KIND, type LevellingView } from "./levelling.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
+import { HACKING_EXP_WINDOW_MS } from "./world-daemon.ts";
 
 /** Stored at each estimate (#360), for the campaign report and the run report. */
 export const DESTROY_ESTIMATED_EVENT_KIND = "destroyEstimated";
 /** The rule's note (#360), kept in the store so a restarted brain neither repeats an estimate nor loses its clock. */
 export const DESTROY_ESTIMATE_SETTING = "destroyEstimate.last";
 /**
- * In BN2, the longest a cycle's estimate waits for its route's figure (#357's slice 3), online: τ_g needs the experience
- * rate's minute of medium snapshots after the reset, (3)'s the gang read and earning again after an install's restart;
- * five minutes leaves a slow snapshot's gap or two. Past it, it's made with the term none, said so.
+ * In BN2, the longest a cycle's estimate waits for its route's figure (#357's slice 3), online: the experience rate's own
+ * window (`HACKING_EXP_WINDOW_MS`, 10 min), over which A6 measures τ_g (#378's review: its first minutes overstate it),
+ * and a slow gap (`AUGMENTATION_SLOW_GAP_MS`, 3 min): the wait starts at the cycle's first slow snapshot, the window at
+ * its first medium one, which can come later, and without the gap the bound's slow snapshot lands before the window's
+ * last medium one (the controller test's case). (3)'s needs the gang read and earning again after an install's restart.
+ * Past it, made with the term none, said so.
  */
-export const DESTROY_ROUTE_WAIT_MS = 5 * 60_000;
+export const DESTROY_ROUTE_WAIT_MS = HACKING_EXP_WINDOW_MS + AUGMENTATION_SLOW_GAP_MS;
 
 /**
  * Where an estimate is made: the BitNode's start, an install, Daedalus joined, BN2's gang formed (#357), levelling's
@@ -334,8 +342,11 @@ interface DestroyNote {
   levelled: boolean;
   prior: DestroyPrior | null;
   last: DestroyEstimateRecord | null;
-  /** BN2 (#357): the gang formed in the BitNode (an install keeps it). Absent in an earlier note: not. */
-  gangFormed: boolean;
+  /**
+   * BN2 (#357): the gang formed in the BitNode (an install keeps it); null unknown, a first look with the gang unread
+   * (#378's review). Absent in an earlier note: not.
+   */
+  gangFormed: boolean | null;
   /** BN2 (#357): the cycle's estimate waiting for its route's figure, or null. Absent in an earlier note: none. */
   pending: PendingMoment | null;
 }
@@ -374,7 +385,7 @@ function readNote(store: TelemetryStore): DestroyNote | null {
     !isFiniteNumber(clock.onlineMs) ||
     !isFiniteNumber(clock.lastGameTimeMs) ||
     typeof note.levelled !== "boolean" ||
-    !(note.gangFormed === undefined || typeof note.gangFormed === "boolean") ||
+    !(note.gangFormed === undefined || note.gangFormed === null || typeof note.gangFormed === "boolean") ||
     !(note.pending === undefined || note.pending === null || isPending(note.pending))
   ) {
     throw new Error(`the store's ${DESTROY_ESTIMATE_SETTING} isn't a note the brain wrote`);
@@ -388,7 +399,7 @@ function readNote(store: TelemetryStore): DestroyNote | null {
     levelled: note.levelled,
     prior: note.prior ?? null,
     last: note.last === undefined || note.last === null ? null : parseDestroyEstimate(note.last),
-    gangFormed: note.gangFormed === true,
+    gangFormed: note.gangFormed === undefined ? false : note.gangFormed,
     pending: note.pending ?? null,
   };
 }
@@ -397,8 +408,12 @@ function readNote(store: TelemetryStore): DestroyNote | null {
 export interface DestroyGangFacts {
   /** The gang rule manages a gang: formed. */
   formed: boolean;
+  /** In BN2 with no reading yet that says whether there's a gang (the gang rule's `gangUnread`): formed or not unknown. */
+  unread?: boolean;
   /** A6's planner's install timing this update (its progress's), or null: τ_g's and (3)'s. */
   timing: InstallTimingView | null;
+  /** The cycle A6's progress is of (its `lastAugReset`): a timing of another cycle is left out. Absent: this one's. */
+  timingLastAugReset?: number | null;
   /** The gang's plan earning no respect (#374): its stretch, with the rule's estimate; or null. */
   pause: GangStallStretch | null;
 }
@@ -406,10 +421,16 @@ export interface DestroyGangFacts {
 /**
  * Core's gang inputs from the controller's facts (#357's slice 3), `formed` as the note has it: τ_g from A6's timing on
  * the route "gang forming", (3)'s chosen candidate's estimate on "gang formed", and the pause's estimate less its time
- * so far.
+ * so far. A timing of a cycle other than `lastAugReset` (A6's stale view, #378's review) is none.
  */
-export function destroyGangInputsOf(facts: DestroyGangFacts | null, formed: boolean): DestroyGangInputs {
-  const timing = facts?.timing ?? null;
+export function destroyGangInputsOf(
+  facts: DestroyGangFacts | null,
+  formed: boolean,
+  lastAugReset?: number,
+): DestroyGangInputs {
+  const stale =
+    lastAugReset !== undefined && facts?.timingLastAugReset != null && facts.timingLastAugReset !== lastAugReset;
+  const timing = stale ? null : (facts?.timing ?? null);
   const waitMs = timing?.route === GANG_FORMING_ROUTE ? (timing.gang?.waitMs ?? null) : null;
   const install = timing?.route === GANG_FORMED_ROUTE ? (timing.gangInstall ?? null) : null;
   const ms =
@@ -538,8 +559,9 @@ export class DestroyEstimateRule {
         levelled: false,
         prior: seed.prior,
         last: null,
-        // A gang read formed at a first look formed before it, when isn't known: no moment of its own.
-        gangFormed: inputs.gang?.formed === true,
+        // A gang read formed at a first look formed before it, when isn't known: no moment of its own. Unread, whether
+        // there's one isn't known yet (#378's review): null until a reading says.
+        gangFormed: inputs.gang?.unread === true ? null : inputs.gang?.formed === true,
         pending: null,
       };
       seenBefore = seed.seenBefore;
@@ -582,9 +604,16 @@ export class DestroyEstimateRule {
     // Each estimate to make: its moment, `late` (an install the brain saw late: down at it, its first slow snapshot
     // more than a slow gap after it), and in BN2 whether the gang had formed for it.
     const moments: { moment: DestroyMoment; late: boolean; formed: boolean }[] = [];
-    // BN2 (#357): the gang formed, the note's (an install keeps it) or the gang rule's now.
-    const formedBefore = note.gangFormed;
+    // BN2 (#357): the gang formed, the note's (an install keeps it) or the gang rule's now. Unknown since a first look
+    // with the gang unread: the first reading says, with no moment of its own (it may have formed long before).
     const formedNow = route === "gang" && inputs.gang?.formed === true;
+    if (note.gangFormed === null && inputs.gang?.unread !== true) {
+      note = { ...note, gangFormed: formedNow };
+      changed = true;
+    }
+    const unknown = note.gangFormed === null;
+    const formedBefore = note.gangFormed === true;
+    // Unknown only while the gang is unread, when the gang rule manages none (`formedNow` false): no moment then.
     const formedNew = formedNow && !formedBefore;
     let waiting: PendingMoment | null = null;
     // A new cycle: the start, an install, or a first look at a later one. One earlier than the noted (a save loaded) isn't
@@ -594,6 +623,12 @@ export class DestroyEstimateRule {
       const moment: DestroyMoment = firstLook && (seenBefore || !start) ? "first seen" : start ? "start" : "install";
       const late =
         (moment === "start" || moment === "install") && slowGameTimeMs - facts.lastAugReset > AUGMENTATION_SLOW_GAP_MS;
+      // A cycle's estimate still waiting is dropped, said (decision 45): its cycle is over.
+      if (note.pending !== null) {
+        this.#log(
+          `destroy estimate: the ${note.pending.moment} in BN2 dropped, still waiting for its figure at the next cycle (#357)`,
+        );
+      }
       note = { ...note, lastAugReset: facts.lastAugReset, pending: null };
       changed = true;
       // BN2 short of The Red Pill: it waits for its route's figure, kept in the note (a restart keeps it).
@@ -607,17 +642,18 @@ export class DestroyEstimateRule {
     const pending = note.pending;
     if (route === "gang" && pending !== null) {
       const formed = formedBefore || formedNow;
-      const figures = destroyGangInputsOf(inputs.gang ?? null, formed);
-      // τ_g finite: the rate's first minute can measure none yet (the gang-start suite's 0 at 48 s online); still none at
-      // the bound, it's never, loudly.
-      const ready = formed ? figures.redPill !== null : figures.waitMs !== null && Number.isFinite(figures.waitMs);
+      const figures = destroyGangInputsOf(inputs.gang ?? null, formed, facts.lastAugReset);
+      // τ_g finite (A6 measures it over the rate's whole window; none still at the bound is never, loudly); the gang's
+      // reading in, if unknown.
+      const ready =
+        !unknown && (formed ? figures.redPill !== null : figures.waitMs !== null && Number.isFinite(figures.waitMs));
       if (formedNew || ready || redPillInstalled || onlineMs - pending.sinceOnlineMs >= DESTROY_ROUTE_WAIT_MS) {
         moments.push({ moment: pending.moment, late: pending.late, formed: formedNew ? formedBefore : formed });
         note = { ...note, pending: null };
         changed = true;
       } else if (waiting !== null) {
         this.#log(
-          `destroy estimate: the ${waiting.moment} in BN2 waits for ${formed ? "(3)'s estimate" : "τ_g"} (#357), ` +
+          `destroy estimate: the ${waiting.moment} in BN2 waits for ${unknown ? "the gang's reading" : formed ? "(3)'s estimate" : "τ_g"} (#357), ` +
             `${formatDuration(DESTROY_ROUTE_WAIT_MS)} online at most`,
         );
       }
@@ -675,7 +711,7 @@ export class DestroyEstimateRule {
         holdEtaMs,
         levellingMs: redPillInstalled ? levellingMs : null,
         prior: note.prior,
-        gang: route === "gang" ? destroyGangInputsOf(inputs.gang ?? null, formed) : null,
+        gang: route === "gang" ? destroyGangInputsOf(inputs.gang ?? null, formed, facts.lastAugReset) : null,
       });
       const record = destroyEstimateRecord(estimate, {
         moment,

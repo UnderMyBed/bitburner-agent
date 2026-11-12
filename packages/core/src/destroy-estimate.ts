@@ -28,14 +28,18 @@
  * FactionHelpers.tsx:172-202`), so Daedalus's count never counts, and A and BC are the planner's BN2 route's:
  * - A, the gang formed: 0 once formed (an install keeps the gang, `Prestige.ts:133-146`), or The Red Pill installed;
  *   before, τ_g, the planner's wait for the gang (#357's (1), core's `gangFormingTiming`'s `waitMs`: avmnite-02h's level
- *   at the measured experience rate and `GANG_FORMING_STEPS_MS`), either way (the port openers' money left out,
- *   optimistic; the rate's rise with the level left out, cautious); none while it isn't measured.
+ *   at the experience rate measured over its whole window, 10 min, #378's review, and `GANG_FORMING_STEPS_MS`),
+ *   cautious (the rate's rise with the level and the hack loop's growth left out: gang-start's three starts ×2.0, ×2.1
+ *   and ×2.9 of the time left to the gang; the port openers' money left out, optimistic, is bought there); none while
+ *   it isn't measured.
  * - BC, The Red Pill: 0 once installed; with the gang, (3)'s chosen candidate's estimate (`gangInstallTiming`: keep,
  *   install now, or bank R* then install) to its reputation at the gang's faction, plus its install, the commit
  *   (`GANG_ROUTE_COMMIT_MS`, #343's 2 min), either way (#357's (3)'s labels: more than one more install left out,
  *   cautious; the money reset and the ×0.95 compounding, optimistic; the members' growth, either way); none before the
  *   gang, or with (3) not made (the gang unread, or earning no respect in the cycle), or at no rate in a pause to train
- *   (the gang rule's estimate of its end, #374, said); never at no rate outside a pause.
+ *   (the gang rule's estimate of its end, #374, said); never at no rate outside a pause, which is also every working
+ *   member earning 0 respect (a money task with respect and wanted both 0: the brain's gang-stalls.ts, `gangPlanEarnsNone`,
+ *   leaves that corner to the respect stall), said in its source.
  * - D as Daedalus's route has it: none before The Red Pill with no prior at 15,000 (BN2.1's), so "at least"; D before
  *   The Red Pill by the formulas is a later slice.
  */
@@ -285,9 +289,10 @@ function gangFormedTerm(inputs: DestroyEstimateInputs, gang: DestroyGangInputs):
     atLeast: false,
     source:
       "τ_g, the planner's wait for the gang (#357's (1)): avmnite-02h's level at the measured experience rate, and 70 s " +
-      "for the backdoor, invitation, join and forming (the port openers' money left out: optimistic; the rate's rise " +
-      "with the level: cautious)",
-    label: "either way",
+      "for the backdoor, invitation, join and forming, over the rate's whole window (the rate's rise with the level and " +
+      "the hack loop's growth left out: cautious, gang-start's starts ×2.0, ×2.1 and ×2.9; the port openers' money left " +
+      "out: optimistic, bought there)",
+    label: "cautious",
   };
 }
 
@@ -317,7 +322,11 @@ function gangRedPillTerm(inputs: DestroyEstimateInputs, gang: DestroyGangInputs)
     atLeast: false,
     source:
       `(3)'s choice, ${redPill.choice}: its estimate to The Red Pill's reputation at the gang's faction (#357), then ` +
-      "its install, the commit (2 min, #343)",
+      "its install, the commit (2 min, #343)" +
+      // At no rate outside a pause: every working member earning 0 respect (gang-stalls.ts's `gangPlanEarnsNone`).
+      (redPill.ms === Number.POSITIVE_INFINITY
+        ? "; at no rate with no pause: every working member earning 0 respect (a money task with respect and wanted 0)"
+        : ""),
     label: "either way",
   };
 }

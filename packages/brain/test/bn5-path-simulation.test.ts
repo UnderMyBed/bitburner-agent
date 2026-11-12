@@ -374,11 +374,11 @@ test("the destroy at BN5's World Daemon: held short of 4,500, then the brain's o
     ["BC", 0, "done"],
     ["D", null, "optimistic"],
   ]);
-  // BN2.1, the gang's route since #357's slice 3: its start waits for τ_g (the experience rate's first minute, none
-  // measured yet in the suite's minute there), said once.
+  // BN2.1, the gang's route since #357's slice 3: its start, a first look by the next Agent's brain with the gang unread
+  // (whether there's one unknown, #378's review), waits for the gang's reading, said once.
   expect(estimates.map((each) => each.bitNode)).toEqual(["BN5.1"]);
   expect(brain.logLines.filter((line) => line.startsWith("destroy estimate: the start in BN2 waits"))).toEqual([
-    "destroy estimate: the start in BN2 waits for τ_g (#357), 5 min online at most",
+    "destroy estimate: the start in BN2 waits for the gang's reading (#357), 13 min online at most",
   ]);
   console.log(
     estimates

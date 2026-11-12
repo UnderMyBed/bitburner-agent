@@ -332,7 +332,7 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
     ]);
   });
 
-  test("A: τ_g before the gang (seed 3's 214 of 218: 13.0 min), either way; none unmeasured; never; 0 once formed", () => {
+  test("A: τ_g before the gang (seed 3's 214 of 218: 13.0 min), cautious; none unmeasured; never; 0 once formed", () => {
     // Slice 1's golden, through core's own (1): the figure A6's timing carries.
     const { waitMs } = gangFormingTiming({
       exp: bn2Exp(214),
@@ -345,9 +345,11 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
     });
     const estimate = destroyEstimate(bn2(30, { waitMs }));
     expect(min(estimate.terms[0]?.ms ?? null)).toBeCloseTo(13.0, 1);
-    expect(estimate.terms[0]).toMatchObject({ term: "A", label: "either way", atLeast: false });
+    expect(estimate.terms[0]).toMatchObject({ term: "A", label: "cautious", atLeast: false });
     expect(estimate.terms[0]?.source).toMatch(/^τ_g, the planner's wait for the gang \(#357's \(1\)\): avmnite-02h's/);
-    expect(estimate.terms[0]?.source).toContain("the port openers' money left out: optimistic");
+    expect(estimate.terms[0]?.source).toContain(
+      "over the rate's whole window (the rate's rise with the level and the hack loop's growth left out: cautious",
+    );
     expect(destroyEstimate(bn2(30)).terms[0]).toMatchObject({ ms: null, atLeast: true, label: "optimistic" });
     expect(destroyEstimate(bn2(30)).terms[0]?.source).toMatch(/^before the gang: τ_g not measured/);
     expect(destroyEstimate(bn2(30, { waitMs: Number.POSITIVE_INFINITY }))).toMatchObject({ never: true });
@@ -429,6 +431,16 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
     expect(
       destroyEstimate(bn2(40, { formed: true, redPill: { choice: "keep", ms: Number.POSITIVE_INFINITY } })),
     ).toMatchObject({ never: true, remainingMs: Number.POSITIVE_INFINITY });
+    // Its source says when that is: every working member earning 0 respect (gang-stalls.ts's `gangPlanEarnsNone`).
+    expect(
+      destroyEstimate(bn2(40, { formed: true, redPill: { choice: "keep", ms: Number.POSITIVE_INFINITY } })).terms[1]
+        ?.source,
+    ).toMatch(
+      /; at no rate with no pause: every working member earning 0 respect \(a money task with respect and wanted 0\)$/,
+    );
+    expect(
+      destroyEstimate(bn2(40, { formed: true, redPill: { choice: "keep", ms: MINUTE } })).terms[1]?.source,
+    ).not.toContain("no pause");
   });
 
   test("D: none before The Red Pill (no BN2 prior: at least); a prior at 4,500 isn't; levelling's after it", () => {

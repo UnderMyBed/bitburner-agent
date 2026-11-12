@@ -3997,16 +3997,17 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
     const termsOf = (event: DestroyEstimateEvent | undefined) =>
       event?.terms.map((term) => [term.term, term.ms === null ? null : Math.round(term.ms / 1000), term.label]);
 
-    // The start: it waits for τ_g, the experience rate's first minute; then A is A6's τ_g, BC and D none, at least.
+    // The start: it waits for τ_g, measured over the experience rate's whole window (#378's review); then A is A6's τ_g,
+    // BC and D none, at least.
     const first = brainOf();
-    first.run(3, slowAt());
+    first.run(12, slowAt());
     expect(moments()).toEqual(["start"]);
     const waitMs = first.controller.augmentationsView().progress?.timing?.gang?.waitMs as number;
     expect(waitMs).toBeGreaterThan(70_000);
     expect(estimates[0]).toMatchObject({ stage: "start", late: false, bitNode: "BN2.1", requiredLevel: 15_000 });
-    expect(estimates[0]?.onlineMs).toBe(60_000);
+    expect(estimates[0]?.onlineMs).toBe(10 * 60_000);
     expect(termsOf(estimates[0])).toEqual([
-      ["A", expect.any(Number), "either way"],
+      ["A", expect.any(Number), "cautious"],
       ["BC", null, "optimistic"],
       ["D", null, "optimistic"],
     ]);
@@ -4047,5 +4048,54 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
     const fourth = brainOf();
     fourth.run(2, slowAt(installedAt, { "The Red Pill": 1 }), NITESEC_GANG);
     expect(moments()).toEqual(["start", "gang formed", "install"]);
+  });
+
+  test("the time to the destroy (#378's review): an install's first slow snapshot before any medium one, A6's view the last cycle's, isn't taken", () => {
+    const START = 10 * 3_600_000;
+    let gameTimeMs = START;
+    const estimates: DestroyEstimateEvent[] = [];
+    store.setSetting("hackLoop.enabled", "false");
+    const controller = new DesiredStateController({ channel, store, installTiming: "planner", bn2Route: "planner" });
+    controller.subscribe((event) => {
+      if (event.type === DESTROY_ESTIMATED_EVENT_KIND) estimates.push(event as DestroyEstimateEvent);
+    });
+    const slowAt = (lastAugReset: number, ownedAugs: Record<string, number> = {}) => ({
+      ...bn2Slow,
+      resetInfo: { ...bn2Slow.resetInfo, lastNodeReset: START, lastAugReset, ownedAugs },
+    });
+    const snapshot = (connection: MemoryConnection, session: string, tier: SnapshotTier, data: unknown) =>
+      connection.receive(
+        encodeControlMessage({
+          protocolVersion: CONTROL_PROTOCOL_VERSION,
+          type: "snapshot",
+          agentSessionId: session,
+          tier,
+          sequenceNumber: ++sequenceNumber,
+          gameTimeMs,
+          data,
+        }),
+      );
+    // The start, at τ_g over the rate's window.
+    const first = connectAgent();
+    snapshot(first, "session-1", "static", bn2Network);
+    for (let second = 0; second < 12 * 60; second += 10) {
+      gameTimeMs += 10_000;
+      if (second % 60 === 0) snapshot(first, "session-1", "slow", slowAt(START));
+      snapshot(first, "session-1", "medium", bn2Medium((gameTimeMs - START) / 1000));
+    }
+    expect(estimates.map((each) => each.moment)).toEqual(["start"]);
+    // An install, the Agent's next session: its first slow snapshot before any medium one. A6 returns early, its view
+    // the last cycle's (τ_g measured then); the install waits for this cycle's figure.
+    const installedAt = gameTimeMs;
+    const next = connectAgent("session-2");
+    snapshot(next, "session-2", "static", bn2Network);
+    gameTimeMs += 10_000;
+    snapshot(next, "session-2", "slow", slowAt(installedAt, { BitWire: 1 }));
+    expect(controller.augmentationsView().progress).toMatchObject({
+      lastAugReset: START,
+      timing: { route: "gang forming" },
+    });
+    expect(controller.augmentationsView().progress?.timing?.gang?.waitMs).toEqual(expect.any(Number));
+    expect(estimates.map((each) => each.moment)).toEqual(["start"]);
   });
 });
