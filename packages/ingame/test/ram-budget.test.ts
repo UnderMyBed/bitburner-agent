@@ -10,6 +10,8 @@ import {
   BATCH_WEAKEN_SCRIPT_NAME,
   BATCHER_RAM_BUDGET_GB,
   BATCHER_SCRIPT_NAME,
+  BLADEBURNER_CITY_WORKER_NAME,
+  BLADEBURNER_CITY_WORKER_RAM_GB,
   BLADEBURNER_SKILL_WORKER_NAME,
   BLADEBURNER_SKILL_WORKER_RAM_GB,
   BLADEBURNER_WORKER_NAME,
@@ -114,6 +116,7 @@ test("the Agent's budget plus the division's join fits BN6's home as the campaig
     JOIN_BLADEBURNER_WORKER_NAME,
     BLADEBURNER_WORKER_NAME,
     BLADEBURNER_SKILL_WORKER_NAME,
+    BLADEBURNER_CITY_WORKER_NAME,
   ]);
   expect((budgets["agent.js"] as number) + (budgets[JOIN_BLADEBURNER_WORKER_NAME] as number)).toBeLessThanOrEqual(
     homeGb,
@@ -125,6 +128,10 @@ test("the Agent's budget plus the division's join fits BN6's home as the campaig
   expect(homeGb).toBe(32);
   expect(budgets[BLADEBURNER_WORKER_NAME]).toBe(BLADEBURNER_WORKER_RAM_GB);
   expect(budgets[BLADEBURNER_SKILL_WORKER_NAME]).toBe(BLADEBURNER_SKILL_WORKER_RAM_GB);
+  // The cities' worker (#383) runs just before the reading worker, never beside it (the runner waits for each to
+  // exit): under its figure, B1's gate covers it, and home keeps nothing more for it.
+  expect(budgets[BLADEBURNER_CITY_WORKER_NAME]).toBe(BLADEBURNER_CITY_WORKER_RAM_GB);
+  expect(BLADEBURNER_CITY_WORKER_RAM_GB).toBeLessThanOrEqual(BLADEBURNER_WORKER_RAM_GB);
   expect((budgets["agent.js"] as number) + BLADEBURNER_WORKER_RAM_GB).toBeGreaterThan(homeGb);
 });
 

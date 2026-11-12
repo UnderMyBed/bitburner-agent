@@ -211,7 +211,7 @@ describe("the rule (#379)", () => {
   test("the owner's work holds the actions, not the skills: they stop no work", () => {
     const rule = new BladeburnerRule();
     const decision = decide(rule, medium(reading({ points: 30 })), 6, true);
-    expect(decision.state).toEqual({ joinTheFaction: false });
+    expect(decision.state).toEqual({ joinTheFaction: false, city: null });
     expect(decision.skillIntents.length).toBeGreaterThan(0);
     expect(rule.acting()).toBe(false);
   });
@@ -263,7 +263,7 @@ describe("the rule (#379)", () => {
     ]) {
       expect(bladeburnerSnapshotOf(medium(bad)).reading).toEqual({
         kind: "unread",
-        problem: "the Bladeburner reading's stamina, actions or skills aren't figures",
+        problem: "the Bladeburner reading's stamina, actions, skills or cities aren't figures",
       });
     }
   });
@@ -364,7 +364,7 @@ describe("the controller (#379)", () => {
     // The owner's work: the action held, A5 not, and a new point still bought.
     controller.setWork({ kind: "crime", crime: "Shoplift" });
     send("medium", medium(reading({ points: 30 - plan.spent + 20, levels })));
-    expect(last()?.bladeburner).toEqual({ joinTheFaction: false });
+    expect(last()?.bladeburner).toEqual({ joinTheFaction: false, city: null });
     expect(skillIds(last()).length).toBeGreaterThan(0);
   });
 

@@ -4,10 +4,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
   BLADEBURNER_BITNODES,
+  BLADEBURNER_CITY_WORKER_NAME,
+  BLADEBURNER_CITY_WORKER_RAM_GB,
   BLADEBURNER_FACTION,
   BLADEBURNER_FACTION_RANK,
   BLADEBURNER_JOIN_LEVEL,
   BLADEBURNER_WORKER_RAM_GB,
+  bladeburnerWorkerFileNames,
   bladeburnerWorkerFits,
   COMBAT_GYM_TYPES,
   COMBAT_STATS,
@@ -406,6 +409,35 @@ describe("the worker", () => {
     });
     expect(parseBladeburnerState({ joinTheFaction: 1 })).toMatchObject({ ok: false });
     expect(parseBladeburnerState("x")).toMatchObject({ ok: false });
+    // B4 (#383): the city, one of the six or null, kept; absent, absent (a B3 brain's: the city worker not run).
+    expect(parseBladeburnerState({ joinTheFaction: false, city: "New Tokyo" })).toEqual({
+      ok: true,
+      bladeburner: { joinTheFaction: false, city: "New Tokyo" },
+    });
+    expect(
+      parseBladeburnerState({
+        joinTheFaction: false,
+        action: { type: "General", name: "Diplomacy", level: null },
+        city: null,
+      }),
+    ).toEqual({
+      ok: true,
+      bladeburner: { joinTheFaction: false, action: { type: "General", name: "Diplomacy", level: null }, city: null },
+    });
+    for (const city of ["Tokyo", 3, {}]) {
+      expect(parseBladeburnerState({ joinTheFaction: false, city }), JSON.stringify(city)).toEqual({
+        ok: false,
+        reason: "bladeburner's city isn't one of the six, or null",
+      });
+    }
+  });
+
+  test("the city worker (#383): 21.6 GB, under the reading worker's, among the home workers", () => {
+    expect(BLADEBURNER_CITY_WORKER_RAM_GB).toBe(21.6);
+    expect(BLADEBURNER_CITY_WORKER_RAM_GB).toBeLessThan(BLADEBURNER_WORKER_RAM_GB);
+    expect(bladeburnerWorkerFileNames()).toContain(BLADEBURNER_CITY_WORKER_NAME);
+    // In bladeburner.js instead (its five functions' 20 GB), past a 128 GB home at SF4.3.
+    expect(65.9 + BLADEBURNER_WORKER_RAM_GB + 20).toBeGreaterThan(128);
   });
 
   test("it fits home beyond what home keeps: 50.6 GB of room (B3, #379), not less", () => {

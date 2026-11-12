@@ -729,6 +729,16 @@ describe("Bladeburner (#367)", () => {
     expect(bladeburnerOf({ joinTheFaction: false, action: { ...action, level: 0 } })).toMatch(
       /^desiredState's bladeburner's action isn't /,
     );
+    // B4 (#383): the city, carried; one not the six's refused.
+    expect(bladeburnerOf({ joinTheFaction: false, action, city: "Ishima" })).toEqual({
+      joinTheFaction: false,
+      action,
+      city: "Ishima",
+    });
+    expect(bladeburnerOf({ joinTheFaction: false, city: null })).toEqual({ joinTheFaction: false, city: null });
+    expect(bladeburnerOf({ joinTheFaction: false, city: "Tokyo" })).toBe(
+      "desiredState's bladeburner's city isn't one of the six, or null",
+    );
   });
 
   test.each([
