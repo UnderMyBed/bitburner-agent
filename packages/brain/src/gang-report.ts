@@ -33,7 +33,8 @@
 // brain at 12 members for `GANG_OBJECTIVE_NEVER_MS` online, added up across the BitNode. And (1): an install chosen in
 // BN2 before the gang, with avmnite-02h's level read (a static snapshot), without the planner's estimates for it. And
 // (3), slice 2: each install chosen in BN2 with the gang formed, with its cost (its `gangCost`: the reputation lost,
-// the favour gained, The Red Pill's estimate then); one before The Red Pill without the planner's (3) estimates fails.
+// the favour gained, The Red Pill's estimate then); one before The Red Pill without the planner's (3) estimates fails
+// once a reading in its cycle showed the gang earning respect (p knowable then, #372's review), and is said otherwise.
 // The ascensions themselves (G2) are seen as a member's ascension points rising between readings (core's
 // `gangAscensionPointsOf`), each with its largest multiplier gain and the respect it had earned, by hour; the
 // equipment bought (G3) as an item new in a member's lists, its cost the discounted one at the reading before; the
@@ -309,6 +310,11 @@ export class GangFold {
   readonly #slows: { atMs: number; data: SlowSnapshotData }[] = [];
   /** Each BN2 gang reading (#357): whether a gang was formed then, for an install before it. */
   readonly #formedAt: { atMs: number; formed: boolean }[] = [];
+  /**
+   * Each BN2 gang reading earning respect (#372's review), with its cycle (the slow snapshot's `lastAugReset` then):
+   * p was knowable in that cycle from then on, so an install there without (3)'s estimates fails.
+   */
+  readonly #earningAt: { atMs: number; cycle: number | undefined }[] = [];
   /** The readings at 12 members (#357), with core's choice. */
   readonly #atTwelve: AtTwelve[] = [];
   /** Core's last choice (#357), and the slow snapshot and members it's from: worked out again as either changes. */
@@ -395,6 +401,9 @@ export class GangFold {
     if (snapshot.kind === "none") this.#sawNone = true;
     if (snapshot.kind === "none" || snapshot.kind === "gang") {
       this.#formedAt.push({ atMs, formed: snapshot.kind === "gang" });
+    }
+    if (snapshot.kind === "gang" && snapshot.gang.respectGainRate > 0) {
+      this.#earningAt.push({ atMs, cycle: this.#slowAt(atMs)?.resetInfo?.lastAugReset });
     }
     if (snapshot.kind !== "gang") {
       this.#recruitWaiting.add(atMs, null);
@@ -926,16 +935,13 @@ export class GangFold {
       const estimated =
         (timing?.route === GANG_FORMED_ROUTE && finite(timing.gangInstall?.installNow)) ||
         (timing?.route === GANG_FORMING_ROUTE && finite(timing.gang?.installNowMs));
-      // The gang earning nothing there then (p unknown, members training): the rules' install, as A6 has it.
-      const earningNothing = cost !== undefined && cost.rateKept === null;
-      if (earningNothing) lines.push("      (the gang earning no respect then: the rules' install, as before #357)");
-      if (
-        reason !== THE_RED_PILL &&
-        reason !== "the hacking level" &&
-        !redPillInstalled &&
-        !estimated &&
-        !earningNothing
-      ) {
+      // p never knowable in the cycle by then (#372's review: no reading earning respect since its install, members
+      // training from the start): the rules' install, as A6 has it, said; else one without (3)'s estimates fails.
+      const cycle = this.#slowAt(atMs)?.resetInfo?.lastAugReset;
+      const earned = this.#earningAt.some((each) => each.atMs <= atMs && each.cycle === cycle);
+      if (!earned)
+        lines.push("      (the gang earned no respect in its cycle by then: p never known, the rules' install)");
+      if (reason !== THE_RED_PILL && reason !== "the hacking level" && !redPillInstalled && !estimated && earned) {
         fail(
           `install chosen in BN2 with the gang before The Red Pill without the planner's estimates: at ` +
             `${formatIsoTime(atMs)}, its reason ${reason}`,

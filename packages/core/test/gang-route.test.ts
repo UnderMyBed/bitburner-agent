@@ -324,15 +324,15 @@ describe("(3) installing with a gang, before The Red Pill (#357)", () => {
     expect(gangBankReputation(N, 0, P)).toBeCloseTo(R, 3);
   });
 
-  test("installing now beats keeping below r = 1.69m (from favour 0, p 0.979), not above; nor under about 2k", () => {
+  test("installing now beats keeping from r = 1.11k to 1.685m (from favour 0, p 0.979), not outside", () => {
     const wins = (reputation: number) => {
       const timing = at({ reputation });
       return (timing.installNow as number) < timing.keep;
     };
-    expect(wins(1.68e6)).toBe(true);
-    expect(wins(1.7e6)).toBe(false);
-    expect(wins(1e3)).toBe(false);
-    expect(wins(3e3)).toBe(true);
+    expect(wins(1.685e6)).toBe(true);
+    expect(wins(1.6852e6)).toBe(false);
+    expect(wins(1.1e3)).toBe(false);
+    expect(wins(1.12e3)).toBe(true);
     // Past R* (242k) installing now is the choice, up to there.
     expect(at({ reputation: 1.68e6 }).choice).toBe("install");
     expect(at({ reputation: 1.7e6 }).choice).toBe("keep");
@@ -397,8 +397,8 @@ describe("(3) installing with a gang, before The Red Pill (#357)", () => {
   });
 
   test("edge cases: nothing to install, p unknown or 0, reached; ties", () => {
-    // Nothing to install now: no install now; banking, a wait, still (at R*, installing needs something then).
-    expect(at({ installable: false })).toMatchObject({ installNow: null, choice: "bank" });
+    // Nothing to install now: neither install, nor banking (#372's review: banking's estimate is an install's): keeping.
+    expect(at({ installable: false })).toMatchObject({ installNow: null, bankAt: null, bank: null, choice: "keep" });
     expect(at({ installable: false, reputation: 300e3 })).toMatchObject({
       installNow: null,
       bankAt: null,

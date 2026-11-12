@@ -51,6 +51,7 @@ import {
   readAugmentationsEnabled,
   readCountHold,
   readCycleSeen,
+  readGangRateKept,
   readGangRedPillHold,
   readInstallWait,
   readOnlineClock,
@@ -3667,7 +3668,8 @@ describe("BN2 before the gang (#357's (1)): wait for the gang, or install now", 
 
 describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R* then install", () => {
   /** BN2, CyberSec joined (the gang's faction NiteSec left out, as the controller's `withoutGangFaction` has it). */
-  const bn2 = () => slow({ joined: [{ name: "CyberSec", reputation: 18_750, favor: 0 }], currentNode: 2 });
+  const bn2Fields = { joined: [{ name: "CyberSec", reputation: 18_750, favor: 0 }], currentNode: 2 };
+  const bn2 = () => slow(bn2Fields);
   /** 5.875 reputation a second at favour 0 and `faction_rep` 1: 88.125 respect a cycle (× 5 a second, / 75). */
   const RESPECT_PER_CYCLE = (5.875 * 75) / 5;
   const FIGURES = { rateKept: 0.979, respectPerCycle: RESPECT_PER_CYCLE };
@@ -3791,7 +3793,7 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     expect(chosen()[0]?.timing?.gangInstall).toMatchObject({ choice: "install", bankAt: null });
   });
 
-  test("p unknown: the gang unread, no install, the hold said; earning no respect now, the rules as before", () => {
+  test("p unknown: the gang unread, no install, the hold said; never earning in the cycle, the rules as before", () => {
     rule = newRule("planner");
     at(5e5, withGang(5e5, 0, null));
     expect(timing()?.gangInstall).toMatchObject({ choice: "keep", heldForRate: true, installNow: null, keepMs: null });
@@ -3800,9 +3802,10 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     );
     expect(chosen()).toEqual([]);
     expect(rule.redPillHeldAtGang()).toBe(true);
-    // Members training, no respect earned there now (#357's G3 suite): (3) has no rate after an install, and what's
-    // banked isn't growing, so the rules decide, as before #357: no planner's route, the count rule's countdown (G5's
-    // hold not within its window at 500k), its install carrying its cost with p unknown.
+    // Members training from the cycle's start, so p never known in it (#357's G3 suite, #372's review): (3) has no rate
+    // after an install, and what's banked isn't growing, so the rules decide, as before #357: no planner's route, the
+    // count rule's countdown (G5's hold not within its window at 500k), its install carrying its cost with p unknown.
+    expect(readGangRateKept(store)).toBeNull();
     const training = withGang(5e5, 0, { rateKept: null, respectPerCycle: 0 });
     at(5e5, training);
     expect(timing()?.route).toBeUndefined();
@@ -3813,6 +3816,48 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     expect(chosen()).toHaveLength(1);
     expect(chosen()[0]?.reason).not.toBe("the gang's favour");
     expect(chosen()[0]?.gangCost).toMatchObject({ reputation: 5e5, rateKept: null });
+  });
+
+  test("a pause to train longer than the countdown (#372's review): the cycle's last p decides, keeping; no install, no stall", () => {
+    rule = newRule("planner");
+    gameTimeMs += MINUTE;
+    at(2e6);
+    expect(readGangRateKept(store)).toEqual({ lastAugReset: 0, rateKept: 0.979 });
+    // Five minutes training (the plan earns no respect: p unread now) with $1t: the count rule would install.
+    const training = withGang(2e6, 0, { rateKept: null, respectPerCycle: 0 });
+    for (let minute = 1; minute <= 5; minute += 1) {
+      gameTimeMs += MINUTE;
+      expect(at(2e6, training), `minute ${minute}`).toEqual({ intent: null, install: false, committed: false });
+      expect(timing()).toMatchObject({ route: "gang formed", gangInstall: { choice: "keep", rateKept: 0.979 } });
+      expect(rule.view().progress?.countdown).toBeNull();
+      // The World Daemon's reputation stall not raised while the plan expects no respect, and said once.
+      expect(rule.redPillHeldAtGang()).toBe(false);
+    }
+    expect(chosen()).toEqual([]);
+    expect(
+      lines.filter((line) =>
+        line.startsWith(
+          "augmentations: installs held for The Red Pill at the gang's faction while the gang's plan earns no respect " +
+            "(training, justice or warfare): the planner decides with the cycle's last p (0.979); the World Daemon's " +
+            "reputation stall isn't raised meanwhile",
+        ),
+      ),
+    ).toHaveLength(1);
+    // Earning again: the stall watched again.
+    at(2e6);
+    expect(rule.redPillHeldAtGang()).toBe(true);
+    // A restart keeps p (the store's): training, still the planner's.
+    rule = newRule("planner");
+    at(2e6, training);
+    expect(timing()?.gangInstall).toMatchObject({ choice: "keep", rateKept: 0.979 });
+    // Another cycle (an install since): p never known there, so the rules, as G3's never-earning gang.
+    at(2e6, { ...training, slowData: slow({ ...bn2Fields, lastAugReset: 5 * MINUTE }) });
+    expect(timing()?.route).toBeUndefined();
+    // A p the brain didn't write fails, as the wait's does.
+    store.setSetting("augmentations.gangRateKept", "not json");
+    expect(() => readGangRateKept(store)).toThrow("isn't JSON");
+    store.setSetting("augmentations.gangRateKept", JSON.stringify({ lastAugReset: 0 }));
+    expect(() => readGangRateKept(store)).toThrow("isn't a p the brain wrote");
   });
 
   test("favour multiplies the rate (`Gang.ts:152-155`): at favour 100 keeping's minutes are half favour 0's", () => {

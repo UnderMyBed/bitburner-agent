@@ -409,7 +409,7 @@ export interface GangInstallTiming extends GangInstallInputs {
   keep: number;
   /** Install now: (r_i − r) / g(f) + N / (g(f(r_i)) · p · s); null with nothing to install, or p unknown. */
   installNow: number | null;
-  /** Bank R*, then install: (R* − r) / g(f) + N / (g(f(R*)) · p · s); null with no R*, or p unknown. */
+  /** Bank R*, then install: (R* − r) / g(f) + N / (g(f(R*)) · p · s); null with no R*, nothing to install, or p unknown. */
   bank: number | null;
   /** The same in ms at the rate (Infinity with none earned); null with the rate unmeasured, or no candidate. */
   keepMs: number | null;
@@ -476,8 +476,8 @@ export interface GangInstallFigures {
  * (3), installing with a gang before The Red Pill is reached (#357): keep the cycle, install now, or bank R* and then
  * install, each scored by the time to The Red Pill's reputation at the gang's faction. Every candidate is reputation
  * over the same rate (the members' respect, × `faction_rep` / 75 at favour 0), so the choice doesn't depend on it, only
- * its minutes do. The least wins; a tie goes to keeping, then to installing now (sooner than banking). Installing now
- * only with something to install; either install only with p known (`heldForRate`). Left out, each labelled:
+ * its minutes do. The least wins; a tie goes to keeping, then to installing now (sooner than banking). Either install
+ * only with something to install, and only with p known (`heldForRate`). Left out, each labelled:
  * - more than one more install: cautious for installing (the brain decides again each cycle, from its favour then);
  * - the commit's 2 minutes and the reading's age (`aheadMs`): counted, as the gang earns through them and the install
  *   converts that too (#357's A/B: banking with them left out chose at 262k, its install converting about 356k);
@@ -500,7 +500,8 @@ export function gangInstallTiming(inputs: GangInstallInputs): GangInstallTiming 
       : (atInstall - reputation) / favorGain(favor) + needed / (favorGain(favorAfter) * rateGain);
   const optimum = reached || rateGain === null ? null : gangBankReputation(needed, favor, rateGain);
   // Banking while the reputation an install now would convert is short of R*: from there, installing now is it.
-  const bankAt = optimum !== null && optimum > atInstall && optimum < needed ? optimum : null;
+  // Only with something to install (#372's review): banking's estimate is an install's.
+  const bankAt = installable && optimum !== null && optimum > atInstall && optimum < needed ? optimum : null;
   const favorAtBank = bankAt === null ? null : favorAfterInstall(favor, bankAt);
   const bank =
     bankAt === null || favorAtBank === null || rateGain === null

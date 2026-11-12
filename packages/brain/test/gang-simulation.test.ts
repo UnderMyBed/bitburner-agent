@@ -881,6 +881,15 @@ test("installing with the gang (#357's (3)) A/B from 0: banking to R* against th
   // The planner banked, then installed for the gang's favour, its estimates and its cost with it.
   expect(chosen).toMatchObject({ reason: "the gang's favour", timing: { route: "gang formed", choice: 0 } });
   expect(chosen?.timing?.gangInstall?.atInstall as number).toBeLessThan(2.5e6);
+  // Its cost is the estimate at the choice (#372's review): the favour the install gave, measured at the next slow
+  // snapshots, against it. Measured on 2026-11-12: 115.0 against 116.8 (the commit shorter than its 2 minutes); the
+  // rules' 115.0 against 119.1 (their choice at the countdown's end, the commit after it).
+  const measured = planner.last.favor;
+  console.log(
+    `the favour after the install: the planner's ${measured.toFixed(1)} against its ${chosen?.gangCost?.favorAfter.toFixed(1)}; ` +
+      `the rules' ${rules.last.favor.toFixed(1)} against their ${rules.installs[0]?.gangCost?.favorAfter.toFixed(1)}`,
+  );
+  expect(Math.abs(measured - (chosen?.gangCost?.favorAfter as number))).toBeLessThan(3);
   expect(planner.installs.at(-1)?.reason).toBe("The Red Pill");
   expect(planner.estimate).toMatchObject({ choice: "bank" });
   expect(planner.reachedMs).not.toBeNull();
@@ -893,6 +902,11 @@ test("installing with the gang (#357's (3)) A/B from 1.9m: the planner keeps the
   const windowMs = 40 * 60_000;
   // Member-01 at a sixteenth of the points (a quarter of the multiplier): NiteSec's rate about 365 a second, so the
   // rest past 1.9m is beyond G5's 20 minutes. $100b: the count rule's 8 affordable once its quick install is past.
+  // The 1.9m is injected at the start (#372's review), so G5's estimate at the cycle's rate (the reputation over the
+  // game's time since the install) sees it all earned in minutes and holds its whole 20 minutes; live, with the
+  // reputation earned over the cycle, its estimate would be the true one, so it wouldn't hold and the count rule would
+  // install sooner (its quick install), losing about 1.9m earlier and starting again sooner: the rules' arm installs
+  // later here than it would live, so the planner's margin is overstated (the planner keeps either way).
   const arm = (bn2Route: "planner" | "rules") =>
     installArm(bn2Route, { windowMs, reputation: 1.9e6, points: 4.5e11 / 16, money: 1e11 });
   const planner = await arm("planner");
