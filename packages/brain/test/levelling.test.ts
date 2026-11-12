@@ -207,6 +207,7 @@ function slow({
   lastAugReset = 0,
   currentNode = 1,
   neuroFluxLevel = 0,
+  favor = 0,
 }: {
   redPill?: boolean;
   faction?: string;
@@ -215,6 +216,8 @@ function slow({
   currentNode?: number;
   /** NeuroFlux Governor's level installed: its next level's reputation 500 × 1.14 to it (`Augmentations.ts:1159`). */
   neuroFluxLevel?: number;
+  /** `faction`'s favour: 0 unless given; 150 or more unlocks its donations (#380's case). */
+  favor?: number;
 } = {}): SlowSnapshotData {
   return {
     resetInfo: {
@@ -231,7 +234,7 @@ function slow({
     purchasedServers: ["pserv-0"],
     factions: {
       backend: "sim",
-      state: { joined: [{ name: faction, reputation, favor: 0 }], invitations: [], queuedAugmentations: [] },
+      state: { joined: [{ name: faction, reputation, favor }], invitations: [], queuedAugmentations: [] },
       problem: null,
     },
   };
@@ -349,6 +352,20 @@ describe("levelling mode's figures (#336)", () => {
     expect(window.measured()).toEqual({ expPerSecond: 100, atLevel: 100.5 });
     window.add(70 * SECOND, 10, 1);
     expect(window.measured()).toBeNull();
+  });
+
+  test("(d)'s income (#380): the money's rises over the same window; a purchase's fall counts nothing; unread, none", () => {
+    const window = new LevellingRateWindow();
+    window.add(0, 1000, 100, 1e6);
+    window.add(30 * SECOND, 2000, 100, 4e6);
+    expect(window.income()).toBeNull();
+    // $3m, then a purchase of $2m (a fall: none counted, not −2m), then $5m: $8m in a minute.
+    window.add(40 * SECOND, 2500, 100, 2e6);
+    window.add(60 * SECOND, 3000, 100, 7e6);
+    expect(window.income()).toBeCloseTo(8e6 / 60, 6);
+    // A sample's money unread: none.
+    window.add(70 * SECOND, 3500, 100, null);
+    expect(window.income()).toBeNull();
   });
 
   test("a mode settles a minute and the longest weaken still landing, at each target's security now", () => {
@@ -761,6 +778,45 @@ describe("the levelling rule (#336)", () => {
     expect(events.at(-1)).toMatchObject({ from: "batch" });
   });
 
+  test("(d) (#380): money and (d) both batch: the move between them keeps the window, the income measured on", () => {
+    const levelling = rule();
+    const switchedMs = SETTLE_MS + MINUTE + 10 * SECOND;
+    batchFor(levelling, 0, switchedMs, { incomePerSecond: 1e7 });
+    expect(levelling.mode()).toBe("batch");
+    const incomeIn = () => /at \$([\d.e+]+)\/s/.exec(levelling.view().lines.at(-1) ?? "")?.[1];
+    expect(incomeIn()).toBe("1.00e+7");
+    // Twice the income from the switch on: within 20 s the window's income moves (not settled afresh, a minute's wait).
+    batchFor(levelling, switchedMs + 10 * SECOND, 10 * SECOND, {
+      incomePerSecond: 2e7,
+      money: (switchedMs / 1000) * 1e7 + 1e8,
+      expAt: (switchedMs / 1000) * 10 + 100,
+    });
+    expect(Number(incomeIn())).toBeGreaterThan(1e7);
+  });
+
+  test("(d) (#380): a snapshot's money unread keeps the income measured, rather than dropping (d) for the window", () => {
+    const levelling = rule();
+    const switchedMs = SETTLE_MS + MINUTE + 10 * SECOND;
+    batchFor(levelling, 0, switchedMs, { incomePerSecond: 1e7 });
+    expect(levelling.mode()).toBe("batch");
+    const unread = inputsAt(switchedMs + 10 * SECOND, {
+      mult: MULT,
+      batchOffer: OFFER,
+      expAbove: (switchedMs / 1000) * 10 + 100,
+      levelLoop: { sent: false, homeThreads: 0 },
+    });
+    delete (unread.mediumData?.player as { money?: number }).money;
+    levelling.update(unread);
+    // Read again: the window holds the unread sample a while, and the income measured before it stands.
+    batchFor(levelling, switchedMs + 20 * SECOND, 20 * SECOND, {
+      incomePerSecond: 1e7,
+      money: ((switchedMs + 20 * SECOND) / 1000) * 1e7,
+      expAt: ((switchedMs + 20 * SECOND) / 1000) * 10,
+    });
+    expect(levelling.view().estimates?.batch).not.toBeNull();
+    expect(levelling.mode()).toBe("batch");
+  });
+
   test("(d) (#380): none without A6's ladder or an income; the income kept through levelling mode, gone at an install", () => {
     // No ladder (A6 off, or (d) off for the A/B): levelling mode, as before #380.
     const without = rule();
@@ -1085,6 +1141,30 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     expect(controller.levellingView().mode).toBe("install");
   });
 
+  test("BN4, by donations (#380): under the destroy's hold only what adds to levelling, those a donation buys too", () => {
+    // NiteSec joined at no reputation, its donations unlocked (favour 200): every augmentation of its shop is within
+    // reach by a donation, DataJack (`hacking_money` alone) among them. Only those that add to levelling are bought,
+    // so (d)'s set at any money is the one the commit at its M buys.
+    const controller = new DesiredStateController({ channel, store });
+    const events: RuleEvent[] = [];
+    controller.subscribe((event) => events.push(event));
+    const connection = connectAgent();
+    const slowData = slow({ faction: "NiteSec", reputation: 0, favor: 200, currentNode: 4, neuroFluxLevel: 70 });
+    aMinuteOf(connection, { money: 1e15, slowData });
+    send(connection, "medium", medium({ level: 2000, money: 1e15, expAbove: 3000 }), 200 * SECOND);
+    send(connection, "slow", slowData, 200 * SECOND);
+    expect(augmentationsSoldBy("NiteSec", 4, null)).toContain("DataJack");
+    const installs = events.filter((event) => event.type === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND);
+    expect(installs).toEqual([expect.objectContaining({ reason: "the hacking level" })]);
+    const bought = (installs[0] as unknown as { set: { augmentation: string }[] }).set.map((each) => each.augmentation);
+    expect(bought.length).toBeGreaterThan(1);
+    for (const name of bought) expect(addsToLevelling([name]), name).toBe(true);
+    // The chosen install's set is the offer, (d)'s ladder priced with the same set.
+    const chosen = events.findLast((event) => event.type === LEVELLING_CHOSEN_EVENT_KIND) as unknown as LevellingEvent;
+    expect(bought).toEqual(chosen.installAugmentations);
+    expect(controller.levellingView().mode).toBe("install");
+  });
+
   test("no install without A6's offer: the switch off, or no faction's reputation reaching a level", () => {
     for (const setUp of [() => writeAugmentationsEnabled(store, false), () => {}]) {
       const controller = new DesiredStateController({ channel, store });
@@ -1187,6 +1267,23 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
       }),
     );
     expect(controller.augmentationsView().committed).toBe(true);
+  });
+
+  test("(d) (#380): A6 switched off while batching: its ladder gone, (d) none, the rest weighed", () => {
+    const controller = new DesiredStateController({ channel, store });
+    const connection = connectAgent();
+    const after = batchingStart(connection);
+    expect(controller.levellingView().mode).toBe("batch");
+    writeAugmentationsEnabled(store, false);
+    batchingFor(connection, {
+      fromMs: 1_000 + 3 * MINUTE + 10 * SECOND,
+      durationMs: 10 * SECOND,
+      money: after.money,
+      incomePerSecond: 1e7,
+      expAt: after.expAt,
+    });
+    expect(controller.levellingView().estimates?.batch).toBeNull();
+    expect(controller.levellingView().mode).toBe("level");
   });
 
   test("(d) (#380): a drop in income re-decides: the money flat for the window, (d) gone, the shortest of the rest", () => {

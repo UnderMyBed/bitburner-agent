@@ -351,9 +351,12 @@ function afterInstallSeconds(
  * and its time after the install is at least 0. So the least is found exactly, whatever the shape of the time after
  * the install; it takes about log(best × income / first price) / log(2.17) steps past the best k, each level costing
  * about 2.17 times the one before it (×1.14 a level, `NEUROFLUX_LEVEL_GROWTH`; ×1.9 a purchase,
- * `Augmentation/AugmentationHelpers.ts:29-31`). Left out, as (c)'s: the cloud servers bought back, the experience
- * while w0r1d_d43m0n is rooted again (cautious), and later installs (toward (d)); and (d)'s own: the experience
- * batching earns, which the install takes (none lost to it), and the share's trade-off with the income (#342).
+ * `Augmentation/AugmentationHelpers.ts:29-31`, `Constants.ts:41`). Left out, as (c)'s: the cloud servers bought back,
+ * the experience while w0r1d_d43m0n is rooted again (cautious), and later installs (toward (d)); and (d)'s own: the
+ * experience batching earns, which the install resets (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:80-102`,
+ * `Prestige.ts:44`: so none counted, exact); the money cloud servers and home RAM may take while batching toward M,
+ * nothing held back for it (toward (d): bounded purchases, which raise the income); and the share's trade-off with
+ * the income (#342's placeholder).
  */
 export function batchThenInstallPlan(inputs: LevellingInputs): LevellingBatchPlan | null {
   const offer = inputs.batch ?? null;

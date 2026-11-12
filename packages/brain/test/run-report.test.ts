@@ -3665,7 +3665,7 @@ describe("the levelling choice (#336)", () => {
    * (d) chosen at a minute (#380): A6's ladder as the event carries it (NeuroFlux Governor's levels after 76, BN4.1's
    * count before its last install, every level's reputation reached), the money rising `incomePerSecond` from $6.96e15.
    */
-  function batchChosen(incomePerSecond: number) {
+  function batchChosen(incomePerSecond: number, chosenIncome = incomePerSecond) {
     const ladder = neuroFluxLadder({
       state: {
         installed: { [NEUROFLUX_GOVERNOR]: 76 },
@@ -3689,7 +3689,7 @@ describe("the levelling choice (#336)", () => {
       factor: null,
       neuroFluxLevels: null,
       installAugmentations: [],
-      batch: { incomePerSecond, ladder, augmentations: [], levels: 18, money: ladder[18] },
+      batch: { incomePerSecond: chosenIncome, ladder, augmentations: [], levels: 18, money: ladder[18] },
       detail: "batching for money to batching for the money, then an install",
     });
   }
@@ -3708,8 +3708,9 @@ describe("the levelling choice (#336)", () => {
   });
 
   test("(d) at a trickle (#380): levelling mode 1.25 times shorter for over 10 minutes: the report fails it", () => {
-    // $1b a second, measured by the report while batching: ×18 would take 3 months.
-    batchChosen(1e9);
+    // $1b a second, measured by the report while batching (the brain's $10t at its choice, since fallen): ×18 would
+    // take 3 months.
+    batchChosen(1e9, 1e13);
     const { text, failures } = report();
     expect(text).toMatch(/batching for the money, then an install about [\d.]+ h/);
     expect(failures.filter((failure) => failure.startsWith("levelling:"))).toContainEqual(
