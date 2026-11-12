@@ -26,7 +26,7 @@ import {
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { DESTROY_ESTIMATED_EVENT_KIND } from "../src/destroy-estimate.ts";
-import { GangFactionCarry, type GangView, gangSnapshotOf } from "../src/gang.ts";
+import { GangFactionCarry, gangSnapshotOf } from "../src/gang.ts";
 import { runReport } from "../src/run-report.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -101,24 +101,8 @@ test("BN2's end: the gang formed in BN2.1, the destroy held short of 15,000, the
   const gangKind = () => gangSnapshotOf(fresh.medium()).kind;
   const joined = () =>
     ((fresh.medium()?.player as { factions?: string[] } | undefined)?.factions ?? []).includes(FACTION);
-  // The gang rule's stages in order, with the BitNode's reset each was seen in.
-  const stages: { stage: GangView["stage"]; line: string; lastNodeReset: unknown }[] = [];
-  const watch = () => {
-    const { stage, line } = controller.gangView();
-    if (stages.at(-1)?.stage !== stage) stages.push({ stage, line, lastNodeReset: slow()?.resetInfo.lastNodeReset });
-  };
-  const runUntil = (done: () => boolean, ms: number) =>
-    game.runUntil(() => {
-      watch();
-      return done();
-    }, ms);
-  /** `ms` on, watching the stages each 10 s (a medium snapshot's period). */
-  const runFor = async (ms: number) => {
-    for (let ran = 0; ran < ms; ran += 10_000) {
-      await game.run(10_000);
-      watch();
-    }
-  };
+  const runUntil = (done: () => boolean, ms: number) => game.runUntil(done, ms);
+  const runFor = (ms: number) => game.run(ms);
 
   await runUntil(() => slow() !== null && fresh.medium() !== null, MINUTE);
   const before = slow()?.resetInfo;
@@ -215,24 +199,32 @@ test("BN2's end: the gang formed in BN2.1, the destroy held short of 15,000, the
   expect(slow()?.resetInfo.lastNodeReset).toBe(nodeResetAfter);
   expect(controller.worldDaemonView()).toMatchObject({ destroying: false, stall: null });
 
-  // The gang rule's stages (`GangRule.update`), BN2.1's then BN2.2's. The destroy drops the first gang's faction
-  // before any "none" reading: the next Agent's session starts with no slow snapshot, so not managed (the faction
-  // null, no faction hidden), then waiting for the gang worker's first reading, none, NiteSec not joined; then forming
-  // and managed again once it is.
-  console.log(stages.map((each) => `${each.stage} (${String(each.lastNodeReset)}): ${each.line}`).join("\n"));
-  expect(stages.map((each) => each.stage)).toEqual([
-    "notManaged",
-    "waiting",
-    "forming",
+  // The gang rule's stages, from its own log (a line on each change of stage, recruits or task mix; none while not
+  // managed), the managed lines' changes as one: BN2.1's, then BN2.2's from the destroy's line on. The Agent that
+  // destroys goes, and the next starts, with no slow snapshot: the BitNode unknown, so the rule waits, keeping the
+  // first gang's faction (#365's review); then the gang worker's first reading, none, NiteSec not joined, which drops
+  // it; forming once NiteSec is joined, and managed.
+  const stageOf = (line: string) =>
+    /^gang: \S+'s gang: /.test(line) ? "managed" : line.startsWith("gang: ") ? line.replace(/^gang: /, "") : null;
+  const gangLines = brain.logLines.flatMap((line) => {
+    if (/^world daemon: .*destroying the BitNode/.test(line)) return ["(destroyed)"];
+    if (/^gang: (buying |member-\d+ died)/.test(line)) return [];
+    const stage = stageOf(line);
+    return stage === null ? [] : [stage];
+  });
+  const stages = gangLines.filter((each, index) => each !== gangLines[index - 1]);
+  console.log(stages.join("\n"));
+  expect(stages).toEqual([
+    "waiting for the gang worker's reading",
+    "forming with NiteSec",
     "managed",
-    "notManaged",
-    "waiting",
-    "noFaction",
-    "forming",
+    "(destroyed)",
+    "waiting for a slow snapshot to say the BitNode",
+    "waiting for the gang worker's reading",
+    "none yet: no gang faction joined (NiteSec comes with avmnite-02h's backdoor)",
+    "forming with NiteSec",
     "managed",
   ]);
-  expect(stages.slice(5).every((each) => each.lastNodeReset === nodeResetAfter)).toBe(true);
-  expect(stages[4]?.line).toBe("Gang: not managed (no slow snapshot yet)");
 
   // The report's gang faction carry (`GangFactionCarry`), per BitNode by its reset, on the slow snapshots as stored: a
   // new Agent's first slow snapshot comes before its gang worker's reading, so it shows no gang's faction. In BN2.1 it
