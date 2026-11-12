@@ -7,6 +7,7 @@
 import {
   type DestroyPrior,
   daedalusAugmentationsRequired,
+  LEVELLING_REROOT_MS,
   type SlowSnapshotData,
   THE_RED_PILL,
   worldDaemonRequiredLevel,
@@ -20,6 +21,7 @@ import {
 } from "./augmentations.ts";
 import { type BitNodeSpan, ResetDetection } from "./cycle-report.ts";
 import { BRAIN_STARTED_EVENT_KIND } from "./dashboard/status.ts";
+import { LEVELLING_SETTLE_MS } from "./levelling.ts";
 import type { SlowResetInfo, StoredEvent } from "./telemetry-store.ts";
 import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
@@ -590,8 +592,9 @@ export interface DestroyStretches {
   countMetOnlineMs: number | null;
   /** The time online at The Red Pill's install (the start of the first cycle with it), or null. */
   redPillOnlineMs: number | null;
-  /** The first slow snapshot after The Red Pill's install (the brain's clock), or null. */
+  /** The first slow snapshot after The Red Pill's install, and the install (the brain's clock); null without it. */
   redPillSeenAtMs: number | null;
+  redPillInstalledAtMs: number | null;
   aMs: number | null;
   bcMs: number | null;
   redPillCycleMs: number | null;
@@ -622,6 +625,7 @@ export function destroyStretchesOf(view: BitNodeView): DestroyStretches {
   return {
     countMetOnlineMs,
     redPillOnlineMs,
+    redPillInstalledAtMs: redPill?.startMs ?? null,
     redPillSeenAtMs:
       redPill === undefined
         ? null
@@ -642,9 +646,9 @@ export function destroyStretchesOf(view: BitNodeView): DestroyStretches {
  * The prior for the BitNode `views[index]` (#360): the last destroyed before it, the same BitNode number first (by
  * its `currentNode`), else the last destroyed of any; its stretches (`destroyStretchesOf`) and w0r1d_d43m0n's level
  * there; null with none destroyed. Its D is from before levelling (#336) where its first levelling choice
- * (`levellingChosenAtMs`, the brain's clock) came later than the first slow snapshot after The Red Pill's install and
- * a slow gap (`AUGMENTATION_SLOW_GAP_MS`), or none came before its destroy: D, or most of it, at the money pace (BN4.1's
- * 419 min: #336's brain chose 4 min before the destroy, after 409 at the money pace), cautious.
+ * (`levellingChosenAtMs`, the brain's clock) came later than `LEVELLING_PROMPT_MS` after The Red Pill's install, or
+ * none came before its destroy: D, or most of it, at the money pace (BN4.1's 419 min: #336's brain chose 4 min before
+ * the destroy, after 409 at the money pace), cautious.
  */
 export function destroyPriorOf(
   views: readonly BitNodeView[],
@@ -670,12 +674,22 @@ export function destroyPriorOf(
   };
 }
 
+/**
+ * The latest a levelling brain's first choice comes after The Red Pill's install (#360): levelling can't choose before
+ * w0r1d_d43m0n is rooted again, which the store's slow snapshots and events don't record (only the medium snapshots
+ * do, which the campaign never reads, #283), so the bound is computed: the re-root, `LEVELLING_REROOT_MS` (core's
+ * levelling.ts: 3.4 min, BN4.1's on 2026-11-10); the mode's settle before money's rate is measured,
+ * `LEVELLING_SETTLE_MS` (./levelling.ts: 60 s, the Agent's hack loop converging twice); and one slow snapshot's gap,
+ * `AUGMENTATION_SLOW_GAP_MS` (./augmentations.ts: 3 min), for the slow snapshot that shows it.
+ */
+export const LEVELLING_PROMPT_MS = LEVELLING_REROOT_MS + LEVELLING_SETTLE_MS + AUGMENTATION_SLOW_GAP_MS;
+
 /** Whether a destroyed BitNode's D came before levelling (`destroyPriorOf`): its first choice late, or none. */
 function dBeforeLevelling(view: BitNodeView, stretches: DestroyStretches, levellingChosenAtMs: readonly number[]) {
-  const seenAtMs = stretches.redPillSeenAtMs;
-  if (seenAtMs === null) return false;
+  const installedAtMs = stretches.redPillInstalledAtMs;
+  if (installedAtMs === null) return false;
   const first = levellingChosenAtMs
-    .filter((atMs) => atMs >= seenAtMs && atMs <= (view.ending.destroyedAtMs ?? Number.POSITIVE_INFINITY))
+    .filter((atMs) => atMs >= installedAtMs && atMs <= (view.ending.destroyedAtMs ?? Number.POSITIVE_INFINITY))
     .reduce((least, atMs) => Math.min(least, atMs), Number.POSITIVE_INFINITY);
-  return first > seenAtMs + AUGMENTATION_SLOW_GAP_MS;
+  return first > installedAtMs + LEVELLING_PROMPT_MS;
 }

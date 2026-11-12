@@ -13,6 +13,7 @@ import {
   campaignViews,
   destroyPriorOf,
   destroyStretchesOf,
+  LEVELLING_PROMPT_MS,
   sum,
 } from "../src/campaign-model.ts";
 import { campaignReport } from "../src/campaign-report.ts";
@@ -271,13 +272,18 @@ describe("the campaign fold's stretches and the prior (#360)", () => {
     expect(destroyPriorOf(views, 1, [])).toMatchObject({ bitNode: "BN1.2", requiredLevel: 3000 });
     expect(destroyPriorOf(views, 3, [])).toMatchObject({ bitNode: "BN1.4", currentNode: 1, requiredLevel: 3000 });
     expect(destroyPriorOf(views, 4, [])).toMatchObject({ bitNode: "BN1.4", currentNode: 1 });
-    // Its D from before levelling (#336): no levelling choice, or its first more than a slow gap after the first slow
-    // snapshot after The Red Pill's install; within it, not. A choice in another BitNode doesn't count.
-    const seenAt = destroyStretchesOf(views[0] as BitNodeView).redPillSeenAtMs as number;
-    expect(destroyPriorOf(views, 1, [])?.dBeforeLevelling).toBe(true);
-    expect(destroyPriorOf(views, 1, [seenAt + MINUTE])?.dBeforeLevelling).toBe(false);
-    expect(destroyPriorOf(views, 1, [seenAt + 3.5 * MINUTE])?.dBeforeLevelling).toBe(true);
-    expect(destroyPriorOf(views, 1, [m(700)])?.dBeforeLevelling).toBe(true);
+    // Its D from before levelling (#336): no levelling choice, or its first later than The Red Pill's install plus the
+    // re-root, the settle and a slow gap (`LEVELLING_PROMPT_MS`, 7.4 min); within it, not. BN4.1 as the prior (its D
+    // 419 min): a prompt choice just inside the bound, then BN4.1's shape, its first choice hours after.
+    expect(LEVELLING_PROMPT_MS).toBe(3.4 * MINUTE + MINUTE + 3 * MINUTE);
+    const bn41 = [views[3] as BitNodeView, views[4] as BitNodeView];
+    const installedAt = destroyStretchesOf(bn41[0] as BitNodeView).redPillInstalledAtMs as number;
+    expect(destroyPriorOf(bn41, 1, [])?.dBeforeLevelling).toBe(true);
+    expect(destroyPriorOf(bn41, 1, [installedAt + LEVELLING_PROMPT_MS - 1000])?.dBeforeLevelling).toBe(false);
+    expect(destroyPriorOf(bn41, 1, [installedAt + LEVELLING_PROMPT_MS + 1000])?.dBeforeLevelling).toBe(true);
+    expect(destroyPriorOf(bn41, 1, [installedAt + 415 * MINUTE])?.dBeforeLevelling).toBe(true);
+    // A choice in another BitNode doesn't count.
+    expect(destroyPriorOf(bn41, 1, [installedAt - 600 * MINUTE])?.dBeforeLevelling).toBe(true);
   });
 
   test("a save loaded: its cycle left out of the count; an open BitNode's so far, D none", () => {
