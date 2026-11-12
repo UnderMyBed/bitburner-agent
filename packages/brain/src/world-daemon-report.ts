@@ -49,6 +49,7 @@ import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
   DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
   describeWorldDaemonPath,
+  HACKING_EXP_GAP_MS,
   HACKING_EXP_WINDOW_MS,
   HackingExpRate,
   sinceResetOf,
@@ -122,6 +123,15 @@ export class WorldDaemonFold {
   #samplesBitNode: number | null = null;
   /** Since when the hacking level has been all that's left (#336), unbroken to the last medium snapshot, or null. */
   #levelOnlySinceMs: number | null = null;
+  /**
+   * The time the hacking level has been all that's left in the window's last BitNode (#355's review), added up across
+   * its levelling installs (each breaks it while w0r1d_d43m0n is rooted again): each interval between two medium
+   * snapshots that both show it, up to `HACKING_EXP_GAP_MS` (a longer one, the brain down, counts none). The hopeless
+   * failure's 10 minutes are the BitNode's own, so installs coming every few minutes can't keep it from firing.
+   */
+  #levelOnlyMs = 0;
+  #levelOnlyLastMs: number | null = null;
+  #levelOnlyBitNode: number | null = null;
 
   /** A slow snapshot's game time, in order (#334). */
   addSlow(gameTimeMs: number): void {
@@ -152,6 +162,16 @@ export class WorldDaemonFold {
     const daemonRooted = data.servers?.find((server) => server.hostname === WORLD_DAEMON)?.hasAdminRights === true;
     const levelOnly = required !== undefined && typeof level === "number" && level < required && daemonRooted;
     this.#levelOnlySinceMs = levelOnly ? (this.#levelOnlySinceMs ?? atMs) : null;
+    if (this.#levelOnlyBitNode !== bitNode) {
+      this.#levelOnlyMs = 0;
+      this.#levelOnlyLastMs = null;
+    }
+    this.#levelOnlyBitNode = bitNode;
+    const lastLevelOnlyMs = this.#levelOnlyLastMs;
+    if (levelOnly && lastLevelOnlyMs !== null && atMs - lastLevelOnlyMs <= HACKING_EXP_GAP_MS) {
+      this.#levelOnlyMs += Math.max(0, atMs - lastLevelOnlyMs);
+    }
+    this.#levelOnlyLastMs = levelOnly ? atMs : null;
     const ready =
       required !== undefined &&
       typeof level === "number" &&
@@ -342,7 +362,9 @@ export class WorldDaemonFold {
    * brain's mode from its events (`levellingModeAt`), the mode's rate measured from the medium snapshots once it
    * settled, and the failures: off the shortest past the hysteresis for `LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS`, or
    * the mode's estimate past the BitNode's game time so far (from the slow snapshot's `lastNodeReset`): the whole path
-   * to here took that long, so a last step longer than all of it is hopeless (BN4.1: about 2,900 h to go, 27 h in).
+   * to here took that long, so a last step longer than all of it is hopeless (BN4.1: about 2,900 h to go, 27 h in),
+   * once the level has been all that's left 10 minutes in the BitNode, added up across its levelling installs
+   * (#355's review: `#levelOnlyMs`).
    */
   #levelling(
     { staticLast, mediumLast, slowLast }: LastSnapshots,
@@ -432,7 +454,7 @@ export class WorldDaemonFold {
       ours !== null &&
       soFarMs !== null &&
       ours * 1000 > soFarMs &&
-      lastMs - sinceMs > LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS
+      this.#levelOnlyMs > LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS
     ) {
       failures.push(
         `levelling: the brain's choice, ${words[mode]}, ${describeEstimate(ours)} to w0r1d_d43m0n's level, past the ` +

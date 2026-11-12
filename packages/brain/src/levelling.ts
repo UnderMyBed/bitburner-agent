@@ -266,10 +266,11 @@ export function levellingInputsOf(
   };
 }
 
-/** "about 2,873.4 h", "about 41 min", "none". */
+/** "about 2,873.4 h", "about 41 min", "about 1.28e+193 h" (3 figures past a million hours), "none". */
 export function describeEstimate(seconds: number | null): string {
   if (seconds === null) return "none";
   if (!Number.isFinite(seconds)) return "never";
+  if (seconds / 3600 >= 1e6) return `about ${(seconds / 3600).toPrecision(3)} h`;
   return `about ${describeEta(seconds)}`;
 }
 

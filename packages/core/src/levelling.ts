@@ -292,7 +292,10 @@ export type LevellingEstimates = Record<LevellingCandidate, number | null>;
  * multipliers the levels and the set give (`levelMult`, `hacking_exp` and `hacking_speed` × theirs,
  * `levellingInstallMultipliers`), at (b)'s factor, on home's threads alone. On offer with a level to buy or a set that
  * adds to levelling (`addsToLevelling`, #355), and home's threads. Left out of (c): the cloud servers bought back, the
- * experience while w0r1d_d43m0n is rooted again (both cautious).
+ * experience while w0r1d_d43m0n is rooted again (both cautious); and later installs on both sides: the option to wait
+ * for a larger set, and the cost to later sets of the install's reset of the factions' reputation and the money
+ * (`Prestige.ts`), which bias toward (c). Where every estimate is hopeless any set that adds wins, so it installs
+ * greedily; the cadence is #357's.
  */
 export function levellingEstimates(inputs: LevellingInputs): LevellingEstimates {
   const { exp, required, levelMult } = inputs;

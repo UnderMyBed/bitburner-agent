@@ -233,7 +233,9 @@ test("BN2 (#355): The Red Pill installed, the gang's faction's reputation for it
   expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toContainEqual(
     expect.objectContaining({ reason: "the hacking level" }),
   );
-  // Bought at the gang's faction, the set offered among them, no NeuroFlux Governor; installed; the gang kept.
+  // Bought at the gang's faction, the set offered and nothing else (#355's review: under the destroy's hold, only
+  // what adds to levelling), no NeuroFlux Governor; installed; the gang kept.
+  expect(bought).toEqual(offered.map((name) => `${name} (NiteSec)`));
   const owned = slow()?.resetInfo.ownedAugs ?? {};
   for (const name of offered) expect(owned, name).toHaveProperty([name]);
   expect(Object.keys(owned).length).toBeGreaterThan(installedBefore.length);
@@ -249,7 +251,35 @@ test("BN2 (#355): The Red Pill installed, the gang's faction's reputation for it
   expect(line).toMatch(/, augmentations, then an install about [^,]+$/);
   expect(text).toContain("the brain's choice: augmentations, then an install since");
   expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
-  // And to now, the gang there again after the reset: nothing fails.
-  const now = runReport(data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() }, {});
-  expect(now.failures).toEqual([]);
+  // On, $1t again (the install took the money, `Prestige.ts`: a harness edit for the port openers), w0r1d_d43m0n
+  // rooted again, NiteSec's reputation gone with the install: no set now, levelling mode. Once the
+  // level has been all that's left 10 minutes in the BitNode, added up across the install (#355's review), the hopeless
+  // estimate fails the report, as it must: BN2's 15,000 at ×0.8 from a fresh level is far past the BitNode's time.
+  const resetMs = chosen.find((event) => event.mode === "money")?.storedAtMs as number;
+  await simulation.diagnostics.setMoney(1e12);
+  const rootedAgain = () =>
+    fresh.medium()?.servers.find((server) => server.hostname === "w0r1d_d43m0n")?.hasAdminRights;
+  await game.runUntil(() => rootedAgain() === true, STAGE_MS);
+  const rerootedMs = game.clock.now();
+  const reportNow = () =>
+    runReport(data.store, { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() }, {});
+  const hopeless = (failures: string[]) => failures.filter((failure) => / a hopeless estimate$/.test(failure));
+  // Before the install's 5 min and this stretch add up to 10: passing, the last stretch alone short of it anyway.
+  await game.run(MINUTE);
+  expect(hopeless(reportNow().failures)).toEqual([]);
+  // Checked every 30 s (a report each time), for 10 minutes at most.
+  for (let checks = 0; checks < 20 && hopeless(reportNow().failures).length === 0; checks++) await game.run(30_000);
+  const firedMs = game.clock.now();
+  const now = reportNow();
+  console.log(
+    `reset at ${new Date(resetMs).toISOString()}, rooted again at ${new Date(rerootedMs).toISOString()}, the hopeless ` +
+      `failure from ${new Date(firedMs).toISOString()}:\n${now.failures.join("\n")}`,
+  );
+  // The stretch since the root again alone is under 10 minutes: only the sum across the install fires it.
+  expect(firedMs - rerootedMs).toBeLessThan(10 * MINUTE);
+  expect(now.failures).toEqual([
+    expect.stringMatching(
+      /^levelling: the brain's choice, .*, past the .* the BitNode has taken so far: a hopeless estimate$/,
+    ),
+  ]);
 });

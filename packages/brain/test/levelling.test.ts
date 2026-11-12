@@ -40,6 +40,7 @@ import { BN1_HACKING } from "../src/batcher.ts";
 import { DesiredStateController, type RuleEvent } from "../src/desired-state.ts";
 import { HACK_LOOP_ENABLED_SETTING } from "../src/hack-loop.ts";
 import {
+  describeEstimate,
   LEVELLING_CHOSEN_EVENT_KIND,
   LEVELLING_SETTLE_MS,
   LevellingRateWindow,
@@ -284,6 +285,16 @@ describe("levelling mode's figures (#336)", () => {
     expect(levellingInputsOf(figures, 3000, null, null, null, set).install).toBeNull();
     expect(levellingInputsOf(figures, 3000, null, null, 0, ["Combat Rib I"]).install).toBeNull();
     expect(levellingInputsOf(figures, 3000, null, null, 0).install).toBeNull();
+  });
+
+  test("the estimates in words: hours to a tenth, past a million hours 3 figures (#355's review), never, none", () => {
+    expect(describeEstimate(2307.7 * 3600)).toBe("about 2307.7 h");
+    expect(describeEstimate(41 * 60)).toBe("about 41 min");
+    expect(describeEstimate(1.2827388715587469e193 * 3600)).toBe("about 1.28e+193 h");
+    expect(describeEstimate(1e6 * 3600)).toBe("about 1.00e+6 h");
+    expect(describeEstimate(999_999 * 3600)).toBe("about 999999.0 h");
+    expect(describeEstimate(Number.POSITIVE_INFINITY)).toBe("never");
+    expect(describeEstimate(null)).toBe("none");
   });
 
   test("the target computed (joesguns), the batcher's hosts and home's RAM beyond what it keeps, the player's", () => {
@@ -849,6 +860,9 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
       true,
     );
     expect(installs).toEqual([expect.objectContaining({ reason: "the hacking level" })]);
+    // Under the destroy's hold A6 buys only what adds to levelling (#355's review): its whole set is the offer.
+    const bought = (installs[0] as unknown as { set: { augmentation: string }[] }).set.map((each) => each.augmentation);
+    expect(bought).toEqual(chosen.installAugmentations);
     // Bought at the gang's faction, no NeuroFlux Governor level; the hack loop levelling meanwhile.
     const state = lastDesired(connection);
     expect(state?.intents).toContainEqual(
@@ -880,6 +894,9 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
       expect(addsToLevelling([name]), name).toBe(true);
     }
     expect(installs).toEqual([expect.objectContaining({ reason: "the hacking level" })]);
+    // Under the destroy's hold A6 buys only what adds to levelling (#355's review): its whole set is the offer.
+    const bought = (installs[0] as unknown as { set: { augmentation: string }[] }).set.map((each) => each.augmentation);
+    expect(bought).toEqual(chosen.installAugmentations);
     expect(lastDesired(connection)?.intents).toContainEqual(
       expect.objectContaining({
         action: "purchaseAugmentation",

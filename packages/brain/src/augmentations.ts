@@ -521,9 +521,10 @@ export interface AugmentationInputs {
    */
   gangUnread?: boolean;
   /**
-   * The planner's levelling choice is NeuroFlux Governor's levels and an install (#336, ./levelling.ts): with The Red
-   * Pill installed and the destroy wanted, the install is chosen at once ("the hacking level") in place of the
-   * destroy's hold, if the money buys a level. Absent, not.
+   * The planner's levelling choice is NeuroFlux Governor's levels and the set, then an install (#336, #355,
+   * ./levelling.ts): with The Red Pill installed and the destroy wanted, the install is chosen at once ("the hacking
+   * level") in place of the destroy's hold, if the money buys a level or the set has an augmentation that adds to
+   * levelling. Absent, not.
    */
   levellingInstall?: boolean;
   /**
@@ -809,8 +810,8 @@ export function describeReason(reason: InstallReason | string, figures: Partial<
   }
   if (reason === "the hacking level") {
     return (
-      `the hacking level: the planner's shortest way to w0r1d_d43m0n's is NeuroFlux Governor's levels, then an ` +
-      `install (#336; ${counted})`
+      `the hacking level: the planner's shortest way to w0r1d_d43m0n's is augmentations, then an ` +
+      `install (#336, #355; ${counted})`
     );
   }
   if (reason === "Daedalus donations") {
@@ -1817,7 +1818,12 @@ export class AugmentationRule {
             multipliers,
           )
         : undefined;
-    let set = chooseAugmentationsToBuy(reached, purchaseState, money, hackingLevel, terms, short);
+    // The destroy's hold (#355's review): The Red Pill installed and the destroy wanted, every install is for the
+    // level, so the set is only what adds to levelling (core's `addsToLevelling`), NeuroFlux Governor's levels after
+    // it. Any other would raise each later price 1.9 times (`AugmentationHelpers.ts:29-31`) for nothing.
+    const forLevelOnly = destroyWanted && Object.hasOwn(ownedAugs, THE_RED_PILL);
+    const toBuy = forLevelOnly ? reached.filter((name) => addsToLevelling([name])) : reached;
+    let set = chooseAugmentationsToBuy(toBuy, purchaseState, money, hackingLevel, terms, short);
     let setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
 
     // A donation asked for, its reputation shown before its done is reported (#225 review): recorded now, as the next
@@ -1841,7 +1847,7 @@ export class AugmentationRule {
       const redPillAmount = endgame0.kind === "redPill" ? (endgame0.donation?.amount ?? 0) : 0;
       const budget = money - redPillAmount;
       if (redPillAmount > 0) {
-        set = chooseAugmentationsToBuy(reached, purchaseState, budget, hackingLevel, terms, short);
+        set = chooseAugmentationsToBuy(toBuy, purchaseState, budget, hackingLevel, terms, short);
         setView = set.purchases.map(({ name, money: price }) => ({ augmentation: name, price }));
       }
       const notCommitted = { set: setView, setCost: set.money, committed: false, donations: [] as Donation[] };

@@ -3460,7 +3460,7 @@ describe("the levelling choice (#336)", () => {
   function bn4Run(
     expAt: (offsetMs: number) => number,
     money: (offsetMs: number) => number = () => 6.96e15,
-    rootedFromMs = 0,
+    rootedFromMs: number | ((offsetMs: number) => boolean) = 0,
   ) {
     event(0, "brainStarted", { release: "v1.0.1-19-g1d08268" });
     for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
@@ -3469,7 +3469,12 @@ describe("the levelling choice (#336)", () => {
       snapshot("slow", offsetMs, bn4Slow(), GAME_NOW - RUN_MS + offsetMs);
     }
     for (let offsetMs = 10 * SECOND; offsetMs <= RUN_MS; offsetMs += 10 * SECOND) {
-      const medium = bn4Medium(offsetMs, expAt, money(offsetMs), offsetMs >= rootedFromMs);
+      const medium = bn4Medium(
+        offsetMs,
+        expAt,
+        money(offsetMs),
+        typeof rootedFromMs === "number" ? offsetMs >= rootedFromMs : rootedFromMs(offsetMs),
+      );
       snapshot("medium", offsetMs, medium, GAME_NOW - RUN_MS + offsetMs);
     }
   }
@@ -3517,6 +3522,37 @@ describe("the levelling choice (#336)", () => {
     bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6, undefined, 10 * MINUTE + 10 * SECOND);
     const { text, failures } = report();
     expect(text).toContain("levelling (the hacking level all that's left since 2026-10-26T00:10:10.000Z, #336)");
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
+  });
+
+  /**
+   * A levelling install at 6 min (#355's review): the experience from 1e9 after it, w0r1d_d43m0n unrooted until
+   * `rerootedMs`, then rooted to the window's end; batching's rate throughout.
+   */
+  const acrossAnInstall = (rootedUntilMs: number, rerootedMs: number) =>
+    bn4Run(
+      (offsetMs) =>
+        offsetMs < 6 * MINUTE ? 6.34e10 + (offsetMs / 1000) * 2.65e6 : 1e9 + ((offsetMs - 6 * MINUTE) / 1000) * 2.65e6,
+      undefined,
+      (offsetMs) => offsetMs < rootedUntilMs || offsetMs >= rerootedMs,
+    );
+
+  test("the hopeless check's 10 minutes add up across a levelling install (#355's review): 5 min 40 s, then 8 min, fails", () => {
+    // Level-only from 10 s to 5 min 50 s, the install, rooted again from 12 min: 5 min 40 s and 8 min, 13 min 40 s. The
+    // last stretch alone is under 10 minutes, so before #355's review this passed while installs kept coming.
+    acrossAnInstall(6 * MINUTE, 12 * MINUTE);
+    const { failures } = report();
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([
+      expect.stringMatching(
+        /^levelling: the brain's choice, batching for money, about [\d.]+ h to w0r1d_d43m0n's level, past the 26 h 59 min the BitNode has taken so far: a hopeless estimate$/,
+      ),
+    ]);
+  });
+
+  test("the hopeless check across a levelling install, under 10 minutes in all: none (1 min 50 s, then 8 min)", () => {
+    acrossAnInstall(2 * MINUTE + 10 * SECOND, 12 * MINUTE);
+    const { text, failures } = report();
+    expect(text).toContain("levelling (the hacking level all that's left since ");
     expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([]);
   });
 
