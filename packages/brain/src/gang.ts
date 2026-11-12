@@ -666,6 +666,15 @@ export class GangRule {
   }
 
   /**
+   * The plan earning no respect at the last reading (#374): its stretch from its first reading, with the rule's
+   * estimate of the time until it earns and its bound (twice that and 10 minutes); null while it earns, or unread.
+   * The World Daemon's reputation stall at the gang's faction takes that bound meanwhile.
+   */
+  earningPause(): GangStallStretch | null {
+    return this.#stalls.earningPause();
+  }
+
+  /**
    * The decision on the latest snapshots, `mediumAtMs` when the medium one arrived (the stalls' times). Null for both
    * outside BN2: no gang is managed. `nowMs`: the controller's clock, for the events; `redPillBought`: The Red Pill
    * reported bought and not yet shown queued (A6's queue, #357).

@@ -14,7 +14,9 @@ import {
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
+  GANG_CYCLE_MS,
   GANG_CYCLES_PER_PROCESS,
+  GANG_EARNING_MARGIN_MS,
   GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
   GANG_FACTIONS,
   GANG_STATS,
@@ -25,11 +27,14 @@ import {
   type GangReading,
   type GangRuleInputs,
   type GangWarfareFigures,
+  gangMemberAfter,
   gangMemberAscended,
   gangObjectiveChoice,
   gangSkillLevel,
   gangSoftcapOf,
+  gangTask,
   gangTerritoryPerUpdate,
+  gangTimeToEarningMs,
   gangWarfareBasis,
   gangWarfareMeasure,
   homeRamUpgradePrice,
@@ -73,11 +78,14 @@ import {
   GangFold,
 } from "../src/gang-report.ts";
 import {
+  GANG_EARNING_STALL_WHAT,
   GANG_PROBLEM_WITHIN_MS,
   GANG_RESPECT_FLAT_WITHIN_MS,
   GANG_TASK_WITHIN_MS,
   type GangStallReading,
   GangStallWatch,
+  gangEarningEstimateOf,
+  gangPlanEarnsNone,
   gangPlannedRespectPerCycle,
   gangStallsAt,
 } from "../src/gang-stalls.ts";
@@ -892,7 +900,10 @@ describe("the run report's section", () => {
     const onCourse = withGang(
       formed([{ ...member("member-01"), task: "Ethical Hacking" }, ...three.slice(1)], figures),
     );
-    expect(fold(repeat(onCourse, steps(GANG_WANTED_OUTCOME_MS) - 1)).failures).toEqual([]);
+    // The readings frozen, its members training without gaining: the plan earning no respect past its own bound (#374),
+    // stuck, which this test doesn't judge.
+    const wantedOnly = (failures: string[]) => failures.filter((each) => !each.startsWith(GANG_EARNING_STALL_WHAT));
+    expect(wantedOnly(fold(repeat(onCourse, steps(GANG_WANTED_OUTCOME_MS) - 1)).failures)).toEqual([]);
     // The outcome check (#325's review), whatever the forecast: held there, on course by the forecast but not back
     // (a forecast wrong, as bonus time's slower decay makes it), over the bound with a member off justice, for the
     // recovery time and half again: a failure.
@@ -910,7 +921,7 @@ describe("the run report's section", () => {
         /^a member off the rule's task for 23 min 10 s, .* \(member-02 on Train Hacking, the rule's Ethical Hacking\)$/,
       ),
     ]);
-    expect(fold(repeat(onCourse, steps(GANG_WANTED_OUTCOME_MS))).failures).toEqual([
+    expect(wantedOnly(fold(repeat(onCourse, steps(GANG_WANTED_OUTCOME_MS))).failures)).toEqual([
       expect.stringMatching(
         /^the wanted penalty over the rule's bound with a member off justice for 34 min 40 s, from .* \(37\.5% over 33\.3%, wanted 4, 1 of 3 on justice\)$/,
       ),
@@ -1102,6 +1113,115 @@ describe("the run report's section", () => {
     // With the rule's members all training (under 12, the grown hacker trains as it would): nothing expected, none.
     const training = withGang(formed([member("member-01"), member("member-02"), member("member-03")]));
     expect(fold(repeat(training, 2 * steps(GANG_RESPECT_FLAT_WITHIN_MS))).failures).toEqual([]);
+  });
+});
+
+describe("the plan earning no respect past its own estimate (#374)", () => {
+  function fold(readings: MediumSnapshotData[]) {
+    const gang = new GangFold();
+    gang.addSlow(0, slowData(2));
+    readings.forEach((data, index) => {
+      gang.addMedium(index * 10_000, data);
+    });
+    const failures: string[] = [];
+    const lines = gang.section(failures, readings.length * 10_000);
+    return { text: lines.join("\n"), failures: failures.filter((each) => each.startsWith(GANG_EARNING_STALL_WHAT)) };
+  }
+  const steps = (ms: number) => Math.ceil(ms / 10_000) + 1;
+  const names = ["member-01", "member-02", "member-03"];
+  /** The three fresh hackers trained `ms`, by the game's experience a cycle (`GangMember.ts:155-210`). */
+  const trainedFor = (ms: number) =>
+    withGang(
+      formed(
+        names.map((name) => ({
+          ...member(name),
+          ...gangMemberAfter(member(name), gangTask("Train Hacking"), ms / GANG_CYCLE_MS),
+          task: "Train Hacking",
+        })),
+      ),
+    );
+
+  test("stuck (the readings frozen, three fresh hackers training): past 2 × 9 min + 10 min fails, under it not", () => {
+    // The plan: three training; the rule's estimate 9 minutes (core's golden), its bound 28.
+    const reading = { gang: { ...NITESEC }, members: names.map((name) => member(name)), softcap: gangSoftcapOf(2) };
+    const plan = planGang({ ...reading, isHacking: true });
+    expect(gangPlanEarnsNone(plan)).toBe(true);
+    expect(gangEarningEstimateOf({ ...reading, plan })).toMatchObject({ ms: 9 * MINUTE, boundMs: 28 * MINUTE });
+    const frozen = trainedFor(0);
+    expect(fold(Array.from({ length: steps(28 * MINUTE) - 1 }, () => frozen)).failures).toEqual([]);
+    const { text, failures } = fold(Array.from({ length: steps(28 * MINUTE) }, () => frozen));
+    expect(failures).toEqual([
+      `${GANG_EARNING_STALL_WHAT} for 28 min, from 1970-01-01T00:00:00.000Z to 1970-01-01T00:28:00.000Z ` +
+        "(3 training; the rule's estimate 9 min (member-01 first), its bound 28 min)",
+    ]);
+    expect(text).toContain(`  ${GANG_EARNING_STALL_WHAT} (twice it and 10 min):\n    ${failures[0]}`);
+  });
+
+  test("the live watch (the dashboard's `gangStalled`): its pause, and the stall at its own bound, not the 10 minutes", () => {
+    const rule = new GangRule();
+    const frozen = trainedFor(0);
+    const read = (atMs: number) => rule.update({ mediumData: { ...frozen }, slowData: slowData(2), mediumAtMs: atMs });
+    for (let atMs = 0; atMs < 28 * MINUTE; atMs += 10_000) read(atMs);
+    expect(rule.earningPause()).toMatchObject({ kind: "earning", fromMs: 0, estimateMs: 9 * MINUTE });
+    expect(rule.stalls()).toEqual([]);
+    read(28 * MINUTE);
+    expect(rule.stalls()).toEqual([
+      expect.objectContaining({ kind: "earning", fromMs: 0, toMs: 28 * MINUTE, withinMs: 28 * MINUTE }),
+    ]);
+  });
+
+  test("stuck on justice (frozen, the three on Ethical Hacking at wanted 6, respect 4): past its bound fails, not before", () => {
+    // Over the bound (5/10 against 1/3): all three kept on justice, released at 1/6, W_r = (4/6 + 1) / (5/6) = 2. At
+    // level 1 they add no wanted, so the decay alone, × 0.997 a process: ln(6/2) / −ln(0.997) = 365.6, 366 processes,
+    // 732 s; then their training, 9 min: 21 min 12 s, the bound 52 min 24 s.
+    const onJustice = withGang(
+      formed(
+        names.map((name) => ({ ...member(name), task: "Ethical Hacking" })),
+        { respect: 4, wantedLevel: 6, wantedPenalty: 0.4 },
+      ),
+    );
+    const bound = (52 * 60 + 24) * 1000;
+    expect(fold(Array.from({ length: steps(bound) - 1 }, () => onJustice)).failures).toEqual([]);
+    expect(fold(Array.from({ length: steps(bound) }, () => onJustice)).failures).toEqual([
+      `${GANG_EARNING_STALL_WHAT} for 52 min 30 s, from 1970-01-01T00:00:00.000Z to 1970-01-01T00:52:30.000Z ` +
+        "(3 on justice; the rule's estimate 21 min 12 s (member-01 first), its bound 52 min 24 s)",
+    ]);
+  });
+
+  test("a normal pause (the three training as the game trains them): it works within its estimate, no failure", () => {
+    const readings = Array.from({ length: steps(40 * MINUTE) }, (_, index) => trainedFor(index * 10_000));
+    const { text, failures } = fold(readings);
+    expect(failures).toEqual([]);
+    expect(text).toContain(`  ${GANG_EARNING_STALL_WHAT} (twice it and 10 min):\n    none`);
+    // The plan works within 9 minutes' training (the estimate's to the rule's minute): the stretch is no longer.
+    const at = (ms: number) => {
+      const data = trainedFor(ms).gang as GangReading;
+      const inputs = { gang: { ...NITESEC }, isHacking: true, members: data.members, softcap: gangSoftcapOf(2) };
+      return gangPlanEarnsNone(planGang(inputs));
+    };
+    expect(at(8 * MINUTE)).toBe(true);
+    expect(at(9 * MINUTE)).toBe(false);
+  });
+
+  test("the bound's least is 10 minutes: a plan earning now has none, a member working ends the stretch", () => {
+    expect(GANG_EARNING_MARGIN_MS).toBe(10 * MINUTE);
+    const inputs: GangRuleInputs = {
+      gang: { ...NITESEC },
+      isHacking: true,
+      members: names.map((name) => member(name)),
+      softcap: gangSoftcapOf(2),
+    };
+    const plan = planGang(inputs);
+    const working = {
+      ...plan,
+      assignments: plan.assignments.map((each, index) => (index === 0 ? { ...each, role: "working" as const } : each)),
+    };
+    expect(gangPlanEarnsNone(working)).toBe(false);
+    expect(gangTimeToEarningMs(inputs, working)).toMatchObject({ ms: 0, boundMs: 10 * MINUTE });
+    // Nobody of the rule's (an owner's long name only, no recruit): no stretch.
+    expect(
+      gangPlanEarnsNone({ assignments: [{ ...plan.assignments[0], name: "x".repeat(65) } as never], recruit: [] }),
+    ).toBe(false);
   });
 });
 
@@ -1464,49 +1584,66 @@ describe("the controller (#325)", () => {
     );
   });
 
-  test("A8's hold there (#335's review): the reputation flat near 2.5m, held 20 min online, its stall at 10, the rate said", () => {
-    // G5's hold is the rules' since #357's (3) (the A/B's baseline): the planner's own is "BN2 with the gang" below.
-    const { controller, send } = connected("rules");
-    const slow = niteSecSlow(2);
-    const state = slow.factions?.state;
-    if (!state) throw new Error("no faction state");
-    const at2400k = {
-      ...slow,
-      factions: { ...slow.factions, state: { ...state, joined: [{ name: "NiteSec", reputation: 2.4e6, favor: 0 }] } },
-    };
-    const data = niteSecMedium(formed([]));
-    data.player = { ...data.player, money: 0 } as MediumSnapshotData["player"];
-    // An hour since the install (lastAugReset 0), then a minute a step: the slow snapshot's game time, the rate's.
-    let gameTimeMs = 3_600_000;
-    const step = () => {
-      clock.advance(60_000);
-      gameTimeMs += 60_000;
+  test.each([
+    // The grown hacker working (twelve, the money objective): the plan expects respect, the stall's 10 minutes. With
+    // none (#374): three recruits training, the plan's estimate 9 min, its bound 28, past the hold's 20 minutes.
+    [
+      "the plan earning",
+      formed(twelveWith(grownHacker("member-01")), GROWN_GANG),
+      [10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+    ],
+    ["no member yet, the plan earning none (#374)", formed([]), []],
+  ])(
+    "A8's hold there (#335's review): the reputation flat near 2.5m, held 20 min online, its stall at 10, the rate said: %s",
+    (_, gang, stalls) => {
+      // G5's hold is the rules' since #357's (3) (the A/B's baseline): the planner's own is "BN2 with the gang" below.
+      const { controller, send } = connected("rules");
+      const slow = niteSecSlow(2);
+      const state = slow.factions?.state;
+      if (!state) throw new Error("no faction state");
+      const at2400k = {
+        ...slow,
+        factions: { ...slow.factions, state: { ...state, joined: [{ name: "NiteSec", reputation: 2.4e6, favor: 0 }] } },
+      };
+      const data = niteSecMedium(gang);
+      data.player = { ...data.player, money: 0 } as MediumSnapshotData["player"];
+      // An hour since the install (lastAugReset 0), then a minute a step: the slow snapshot's game time, the rate's.
+      let gameTimeMs = 3_600_000;
+      const step = () => {
+        clock.advance(60_000);
+        gameTimeMs += 60_000;
+        send("slow", at2400k, gameTimeMs);
+        send("medium", data, gameTimeMs);
+      };
       send("slow", at2400k, gameTimeMs);
       send("medium", data, gameTimeMs);
-    };
-    send("slow", at2400k, gameTimeMs);
-    send("medium", data, gameTimeMs);
-    const held = () =>
-      (controller.augmentationsView().waitingFor ?? "").startsWith("The Red Pill: NiteSec's reputation");
-    expect(held()).toBe(true);
-    // Daedalus's count doesn't count with The Red Pill at the gang's faction: never short of it.
-    expect(controller.augmentationsView().progress?.short).toBeNull();
-    // 2.4m in an hour: 666.7 a second, the rest in 150 s at it ("3 min").
-    expect(controller.worldDaemonView().lines).toContain(
-      "The Red Pill: NiteSec's (the gang's faction) reputation 2,400,000 of 2,500,000 at 666.7/s (the cycle's): about " +
-        "3 min",
-    );
-    const stalledAt: number[] = [];
-    for (let minute = 1; minute <= 25; minute += 1) {
-      step();
-      expect(held(), `minute ${minute}`).toBe(minute < 20);
-      const stall = controller.worldDaemonView().stall;
-      if (stall?.step === "redPillReputation") stalledAt.push(minute);
-      if (minute === 10) expect(stall?.detail).toContain("The Red Pill's reputation at NiteSec not rising");
-    }
-    // Not rising while held: the stall from 10 minutes, as Daedalus's, to the hold's end at 20, never restarted.
-    expect(stalledAt).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
-  });
+      const held = () =>
+        (controller.augmentationsView().waitingFor ?? "").startsWith("The Red Pill: NiteSec's reputation");
+      expect(held()).toBe(true);
+      // Daedalus's count doesn't count with The Red Pill at the gang's faction: never short of it.
+      expect(controller.augmentationsView().progress?.short).toBeNull();
+      // 2.4m in an hour: 666.7 a second, the rest in 150 s at it ("3 min").
+      expect(controller.worldDaemonView().lines).toContain(
+        "The Red Pill: NiteSec's (the gang's faction) reputation 2,400,000 of 2,500,000 at 666.7/s (the cycle's): about " +
+          "3 min",
+      );
+      const stalledAt: number[] = [];
+      for (let minute = 1; minute <= 25; minute += 1) {
+        step();
+        expect(held(), `minute ${minute}`).toBe(minute < 20);
+        const stall = controller.worldDaemonView().stall;
+        if (stall?.step === "redPillReputation") stalledAt.push(minute);
+        if (minute === 10 && stalls.length > 0) {
+          expect(stall?.detail).toContain("The Red Pill's reputation at NiteSec not rising");
+        }
+      }
+      // Not rising while held: the stall from 10 minutes, as Daedalus's, to the hold's end at 20, never restarted; with
+      // the plan earning none, its own bound (#374).
+      expect(stalledAt).toEqual(stalls);
+      if (stalls.length === 0)
+        expect(controller.gangView().plan?.recruit).toEqual(["member-01", "member-02", "member-03"]);
+    },
+  );
 
   test("the exclusion lifts outside BN2: a BN2 gang's faction is worked for again in BN4", () => {
     const { send, last } = connected();
@@ -1836,10 +1973,15 @@ describe("the controller (#325)", () => {
         { respect: 2e6, wantedLevel: 1, wantedPenalty: 2e6 / (2e6 + 1) },
       );
       const flat = 1.9e6 + 2 * 10_000;
-      // Within the stall's bound (the reputation not risen for 10 minutes, `RED_PILL_REPUTATION_STALLED_AFTER_MS`): 8
-      // minutes, longer than a countdown, and no install, no stall.
-      play(brain, 8, () => flat, { gang: training, fromMinute: 3 });
+      // The reputation last risen at minute 3, the plan training from minute 4. Its estimate (#374, core's
+      // `gangTimeToEarningMs`): 9 minutes (each trains to 5,000 experience, its ascension then pays, and of twelve
+      // whose ascensions pay at once one ascends, the rest work), its bound twice that and 10 minutes, 28.
+      play(brain, 1, () => flat, { gang: training, fromMinute: 3 });
       expect(brain.controller.gangView().plan?.assignments.every((each) => each.role === "training")).toBe(true);
+      const pause = brain.controller.gangPause();
+      expect(pause).toMatchObject({ kind: "earning", estimateMs: 9 * MINUTE, withinMs: 28 * MINUTE });
+      // Within the bound: past the stall's generic 10 minutes (to minute 31, 28 minutes on), no install, no stall.
+      play(brain, 27, () => flat, { gang: training, fromMinute: 4 });
       expect(brain.controller.augmentationsView().progress?.timing).toMatchObject({
         route: "gang formed",
         gangInstall: { choice: "keep", rateKept: 1 },
@@ -1847,9 +1989,17 @@ describe("the controller (#325)", () => {
       expect(brain.controller.augmentationsView().committed).toBe(false);
       expect(installAsked(brain.controller)).toBe(false);
       expect(brain.controller.worldDaemonView().stall?.step).not.toBe("redPillReputation");
-      // Past it: the stall fires, as on main (a loud failure, not a silent halt), and still no install.
-      play(brain, 4, () => flat, { gang: training, fromMinute: 11 });
-      expect(brain.controller.worldDaemonView().stall?.step).toBe("redPillReputation");
+      // Past it (the readings frozen: the members never gain, stuck): the stall fires at 32, loud, and still no
+      // install. The World Daemon keeps the pause from its start: the gang rule's own watch starts again at each of
+      // these readings, a minute apart, a gap (#364's review), so its `gangStalled` is the report's at 10 s.
+      play(brain, 1, () => flat, { gang: training, fromMinute: 31 });
+      expect(brain.controller.worldDaemonView().stall).toMatchObject({
+        step: "redPillReputation",
+        detail: expect.stringMatching(
+          /; the gang's plan earning no respect since .*, its bound 28 min \(twice the gang rule's estimate of 9 min, and 10 min\)$/,
+        ),
+      });
+      expect(brain.controller.gangPause()?.fromMs).toBeGreaterThan(pause?.fromMs as number);
       expect(brain.controller.augmentationsView().committed).toBe(false);
       expect(installAsked(brain.controller)).toBe(false);
     });

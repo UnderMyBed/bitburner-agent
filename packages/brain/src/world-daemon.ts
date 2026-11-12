@@ -60,6 +60,8 @@ import {
 } from "@bitburner-agent/core";
 import type { CountFacts } from "./augmentations.ts";
 import { describeEta, redPillWork, resetInfoOf, workConditionsOf, workingPersonOf } from "./factions.ts";
+import type { GangStallStretch } from "./gang-stalls.ts";
+import { formatDuration, formatIsoTime } from "./gap-report.ts";
 import { type DaedalusReach, daedalusReach, describeReach } from "./invitations.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -633,6 +635,11 @@ export interface WorldDaemonInputs {
   slowGameTimeMs?: number | null;
   /** A6 holds installs for The Red Pill at the gang's faction (#335's review): its not rising stall; not when absent. */
   redPillHeldAtGang?: boolean;
+  /**
+   * The gang's plan earning no respect (#374, the gang rule's `earningPause`): from when, and its bound (twice the
+   * rule's estimate of the time until it earns, and 10 minutes); null or absent while it earns.
+   */
+  gangPause?: Pick<GangStallStretch, "fromMs" | "withinMs" | "estimateMs"> | null;
 }
 
 /** The World Daemon rule (#215), as the controller runs it. */
@@ -655,6 +662,13 @@ export class WorldDaemonRule {
   #ready = new Map<StallStep, { sinceMs: number; stored: boolean; detail: string }>();
   /** Daedalus's reputation while The Red Pill is short, and when it last rose (or was first seen). */
   #reputation: { value: number; risenAtMs: number } | null = null;
+  /**
+   * The gang's plan earning no respect (#374), as first handed over, kept while it lasts: the gang rule's own stretch
+   * starts again after a gap in its readings (#364's review), which would move the bound on at each. Within one brain
+   * process only: a restart starts both it and the reputation's clock again; while the Agent is away (no snapshots)
+   * the reputation's clock starts again, and this is kept.
+   */
+  #gangPause: { fromMs: number; withinMs: number; estimateMs: number } | null = null;
   /** Daedalus's count as last seen (#228), and the install since its `lastAugReset`; A6's commit's facts (#238). */
   #count: {
     lastAugReset: number;
@@ -734,6 +748,7 @@ export class WorldDaemonRule {
     gangShop = null,
     slowGameTimeMs = null,
     redPillHeldAtGang = false,
+    gangPause = null,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
     if (slowData !== null) {
@@ -778,7 +793,7 @@ export class WorldDaemonRule {
     }
     this.#path = path;
     this.#watchCount(path, slowData, nowMs ?? 0, countFacts, augmentationsInstalling);
-    this.#watch(path, nowMs ?? 0, enabled, redPillHeldAtGang);
+    this.#watch(path, nowMs ?? 0, enabled, redPillHeldAtGang, gangPause);
     const ready = path.daemon !== null && path.daemon.problem === null;
     if (enabled && ready && this.#asked === null && isFiniteNumber(lastNodeReset)) {
       // The slow snapshot's BitNode or Source-Files not read (#321): no destroy into a BitNode guessed; the destroy
@@ -873,8 +888,28 @@ export class WorldDaemonRule {
   }
 
   /** Each step that could be done, from when; one not done its `STALLED_AFTER_MS` on is stored and logged. */
-  #watch(path: WorldDaemonPath, nowMs: number, enabled: boolean, redPillHeldAtGang = false): void {
-    const steps = new Map<StallStep, { detail: string; sinceMs?: number }>();
+  #watch(
+    path: WorldDaemonPath,
+    nowMs: number,
+    enabled: boolean,
+    redPillHeldAtGang = false,
+    gangPause: WorldDaemonInputs["gangPause"] = null,
+  ): void {
+    const steps = new Map<StallStep, { detail: string; sinceMs?: number; withinMs?: number }>();
+    if (gangPause === null || gangPause.withinMs === undefined) {
+      // The pause over (#376's review): the members just put to work, the reputation rises only from the next process
+      // on, so its 10 minutes count from now, not from its last rise before the pause, which would fail every pause.
+      if (this.#gangPause !== null && this.#reputation !== null) {
+        this.#reputation = { ...this.#reputation, risenAtMs: Math.max(this.#reputation.risenAtMs, nowMs) };
+      }
+      this.#gangPause = null;
+    } else {
+      this.#gangPause ??= {
+        fromMs: gangPause.fromMs,
+        withinMs: gangPause.withinMs,
+        estimateMs: gangPause.estimateMs ?? 0,
+      };
+    }
     const { daedalus, redPill, daemon } = path;
     if (this.#stuck !== null) {
       steps.set("daedalusCount", { detail: this.#stuck.detail, sinceMs: this.#stuck.atMs });
@@ -894,9 +929,10 @@ export class WorldDaemonRule {
     }
     // Short at a joined Daedalus, A6 holds every install: its reputation not rising is loud (#215 review). At the gang's
     // faction (#334) only while A6 holds for it: G5's hold, at most 20 min a cycle (#335's review, the rules'), or the
-    // planner's keeping or banking (#357's (3)), with no limit, a pause to train included (#372's re-review: no computed
-    // bound for the plan's time to earning yet, so a long pause fails loudly, falsely in a long justice stretch). A
-    // gang's respect pauses while its members train, which holds nothing otherwise.
+    // planner's keeping or banking (#357's (3)), with no limit, a pause to train included (#372's re-review). While the
+    // gang's plan earns no respect (training, justice, warfare), the bound is the plan's own (#374): its reputation flat
+    // until twice the gang rule's estimate of the time to earning and 10 minutes from the pause's start, if later than
+    // the 10 minutes. A gang's respect pauses while its members train, which holds nothing otherwise.
     if (
       redPill !== null &&
       !redPill.installed &&
@@ -910,11 +946,23 @@ export class WorldDaemonRule {
         // Risen; or fallen (an install, a reload): watched afresh.
         this.#reputation = { value, risenAtMs: nowMs };
       }
+      const sinceMs = this.#reputation.risenAtMs;
+      // The gang's pause (#374): its bound, from its start, in place of the 10 minutes when it ends later.
+      const paused = redPill.gang ? this.#gangPause : null;
+      const pauseEndsMs = paused === null ? null : paused.fromMs + paused.withinMs;
       steps.set("redPillReputation", {
         detail:
           `${THE_RED_PILL}'s reputation at ${redPill.seller ?? DAEDALUS} not rising (${count(value)} of ` +
-          `${count(redPill.reputationNeeded ?? 0)}): no install is chosen meanwhile, so nothing earning it stalls A6`,
-        sinceMs: this.#reputation.risenAtMs,
+          `${count(redPill.reputationNeeded ?? 0)}): no install is chosen meanwhile, so nothing earning it stalls A6` +
+          (paused === null
+            ? ""
+            : `; the gang's plan earning no respect since ${formatIsoTime(paused.fromMs)}, its bound ` +
+              `${formatDuration(paused.withinMs)} (twice the gang rule's estimate of ` +
+              `${formatDuration(paused.estimateMs)}, and 10 min)`),
+        sinceMs,
+        ...(pauseEndsMs === null
+          ? {}
+          : { withinMs: Math.max(RED_PILL_REPUTATION_STALLED_AFTER_MS, pauseEndsMs - sinceMs) }),
       });
     } else {
       this.#reputation = null;
@@ -932,7 +980,7 @@ export class WorldDaemonRule {
       });
     }
     for (const step of [...this.#ready.keys()]) if (!steps.has(step)) this.#ready.delete(step);
-    for (const [step, { detail, sinceMs }] of steps) {
+    for (const [step, { detail, sinceMs, withinMs }] of steps) {
       const ready = this.#ready.get(step) ?? { sinceMs: sinceMs ?? nowMs, stored: false, detail };
       ready.detail = detail;
       if (sinceMs !== undefined && sinceMs !== ready.sinceMs) {
@@ -941,7 +989,7 @@ export class WorldDaemonRule {
         ready.stored = false;
       }
       this.#ready.set(step, ready);
-      if (ready.stored || nowMs - ready.sinceMs < STALLED_AFTER_MS[step]) continue;
+      if (ready.stored || nowMs - ready.sinceMs < (withinMs ?? STALLED_AFTER_MS[step])) continue;
       ready.stored = true;
       this.#emit({ type: WORLD_DAEMON_STALLED_EVENT_KIND, atMs: nowMs, step, sinceMs: ready.sinceMs, detail });
       this.#log(`world daemon: STALLED ${Math.floor((nowMs - ready.sinceMs) / 60_000)} min: ${detail}`);

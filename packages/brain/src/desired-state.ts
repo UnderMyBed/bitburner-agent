@@ -938,6 +938,11 @@ export class DesiredStateController {
     return this.#gang.stalls();
   }
 
+  /** The gang's plan earning no respect (#374): its pause, the rule's estimate and bound; null while it earns. */
+  gangPause(): GangStallStretch | null {
+    return this.#gang.earningPause();
+  }
+
   /** The brain's faction work's watch (#203): its faction, its stall's window, its newest reading; or null. */
   factionWorkStall(): FactionWorkStall | null {
     return this.#factions.stall();
@@ -1862,8 +1867,10 @@ export class DesiredStateController {
       // The Red Pill's seller in BN2 with a gang (#334), and the game's time for its rate.
       gangShop,
       slowGameTimeMs: this.#slowGameTimeMs,
-      // A6 holding installs for it there (#335's review): the reputation not rising is then loud.
+      // A6 holding installs for it there (#335's review): the reputation not rising is then loud; while the gang's plan
+      // earns no respect, past the plan's own bound (#374).
       redPillHeldAtGang: this.#augmentations.redPillHeldAtGang(),
+      gangPause: this.#gang.earningPause(),
     });
     // The planner's levelling choice (#336), on A8's path as it now reads, and A6's offer of NeuroFlux Governor levels.
     const batcherConfig = this.#desired?.batcher?.config ?? null;

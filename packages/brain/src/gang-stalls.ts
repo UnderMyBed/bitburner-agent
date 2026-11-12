@@ -9,7 +9,11 @@
 // - **respect flat while the plan has members working:** the respect risen by less than the plan's tasks earn in one of
 //   the game's processes, from the gang formulas, between readings that span two processes or more, for
 //   `GANG_RESPECT_FLAT_WITHIN_MS`. Respect is the gang's faction's only reputation (`Gang.ts:144-155`), so this stalls
-//   The Red Pill's route in BN2.
+//   The Red Pill's route in BN2;
+// - **the plan earning no respect past its own estimate (#374):** every member training, on justice or on Territory
+//   Warfare, for longer than twice the rule's own time until its plan earns respect (core's `gangTimeToEarningMs`, at
+//   the stretch's first reading) and 10 minutes (`gangEarningBoundMs`, as #343's waits are bounded). The respect stall
+//   above can't see it, the plan expecting none. A normal pause ends within its estimate; one past twice it is stuck.
 // The live brain (../gang.ts, `GangRule`) and the run report feed it each gang reading in order; a reading with no
 // gang (none formed, unread, absent, or outside BN2) ends every stretch, and so does a gap: readings further apart than
 // the medium snapshots' cadence allows (`MEDIUM_SNAPSHOT_GAP_MS`, a thinned store's minute or a degraded medium tier),
@@ -17,16 +21,20 @@
 import {
   GANG_CYCLE_MS,
   GANG_CYCLES_PER_PROCESS,
+  GANG_EARNING_MARGIN_MS,
   GANG_TASK_NAMES,
+  type GangEarningEstimate,
   type GangInformation,
   type GangMemberReading,
   type GangPlan,
   gangRespectPerCycle,
   gangTask,
+  gangTimeToEarningMs,
   gangTrainingTask,
   MAX_GANG_MEMBER_NAME_LENGTH,
 } from "@bitburner-agent/core";
 import { MEDIUM_SNAPSHOT_GAP_MS } from "./backdoors.ts";
+import { formatDuration } from "./gap-report.ts";
 
 /**
  * How long one problem of the worker's may be in every reading: 1 minute. The Agent runs the worker when the brain's
@@ -56,9 +64,15 @@ const PROCESS_MS = GANG_CYCLES_PER_PROCESS * GANG_CYCLE_MS;
 /** Whether the protocol takes `name` as a member's (core's `parseGangState`): an owner's longer name is skipped. */
 export const isGangProtocolName = (name: string) => name !== "" && name.length <= MAX_GANG_MEMBER_NAME_LENGTH;
 
-export type GangStallKind = "problem" | "task" | "respect";
+export type GangStallKind = "problem" | "task" | "respect" | "earning";
 
-/** Each kind's bound, and how the report and the alert name it. */
+/** How the report and the alert name the plan earning no respect past its bound (#374). */
+export const GANG_EARNING_STALL_WHAT = "the rule's plan earning no respect past its estimate";
+
+/**
+ * Each kind's bound, and how the report and the alert name it. The plan earning no respect (#374): each stretch's own,
+ * twice its estimate and 10 minutes (`GangStallStretch.withinMs`); the 10 minutes is the least.
+ */
 export const GANG_STALL_KINDS: readonly { kind: GangStallKind; withinMs: number; what: string }[] = [
   { kind: "problem", withinMs: GANG_PROBLEM_WITHIN_MS, what: "a gang worker's problem in every reading" },
   { kind: "task", withinMs: GANG_TASK_WITHIN_MS, what: "a member off the rule's task" },
@@ -67,6 +81,7 @@ export const GANG_STALL_KINDS: readonly { kind: GangStallKind; withinMs: number;
     withinMs: GANG_RESPECT_FLAT_WITHIN_MS,
     what: "the gang's respect flat with the rule's members working",
   },
+  { kind: "earning", withinMs: GANG_EARNING_MARGIN_MS, what: GANG_EARNING_STALL_WHAT },
 ];
 
 /** A gang reading and the rule's plan on it. */
@@ -94,6 +109,12 @@ export interface GangStallStretch {
   fromMs: number;
   toMs: number;
   detail: string;
+  /**
+   * The plan earning no respect (#374): the rule's estimate at the stretch's first reading (`gangTimeToEarningMs`), and
+   * the stretch's bound, twice it and 10 minutes (`gangEarningBoundMs`); absent for the other kinds (`withinMsOf`).
+   */
+  estimateMs?: number;
+  withinMs?: number;
 }
 
 /** Each member's task by the plan: its assignments, and its recruits, set to train at once (../gang.ts). */
@@ -118,6 +139,36 @@ export function gangPlannedRespectPerCycle(reading: Omit<GangStallReading, "atMs
   }, 0);
 }
 
+/**
+ * Whether the plan has nobody working (#374): each of the rule's members training, on justice or on Territory Warfare,
+ * and its recruits training; false with nobody of the rule's at all. A member working on a task that earns no respect
+ * (under the money objective, one whose respect and wanted are both 0) is left to the respect stall, which expects none
+ * of it either: a corner the rule's money tasks don't reach while respect covers wanted.
+ */
+export function gangPlanEarnsNone(plan: Pick<GangPlan, "assignments" | "recruit">): boolean {
+  const rules = plan.assignments.filter((each) => isGangProtocolName(each.name));
+  return rules.length + plan.recruit.length > 0 && rules.every((each) => each.role !== "working");
+}
+
+/** The rule's time until the reading's plan earns respect (#374, core's `gangTimeToEarningMs`), on what it read. */
+export function gangEarningEstimateOf(reading: Omit<GangStallReading, "atMs" | "problems">): GangEarningEstimate {
+  const { gang, members, plan, softcap } = reading;
+  const figures = { respect: gang.respect, wantedLevel: gang.wantedLevel, territory: gang.territory };
+  return gangTimeToEarningMs({ gang: figures, isHacking: gang.isHacking, members, softcap }, plan);
+}
+
+/** The roles of the rule's members in the plan, counted: "3 training, 1 on justice". */
+function describeRoles(plan: Pick<GangPlan, "assignments" | "recruit">): string {
+  const counts = new Map<string, number>();
+  for (const { name, role } of plan.assignments) {
+    if (!isGangProtocolName(name)) continue;
+    const label = role === "justice" ? "on justice" : role === "territory" ? "on Territory Warfare" : role;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  if (plan.recruit.length > 0) counts.set("recruited", plan.recruit.length);
+  return [...counts].map(([label, count]) => `${count} ${label}`).join(", ");
+}
+
 /** The stalls holding at `now`, with `before` the gang reading before it (null: none, or a reading with no gang). */
 export function gangStallsAt(before: GangStallReading | null, now: GangStallReading): GangStallCondition[] {
   const conditions: GangStallCondition[] = [];
@@ -139,6 +190,10 @@ export function gangStallsAt(before: GangStallReading | null, now: GangStallRead
       fromMs: before?.atMs ?? now.atMs,
       detail: `${name} on ${task}, the rule's ${wanted}`,
     });
+  }
+  if (gangPlanEarnsNone(now.plan)) {
+    // The bound and the detail are the watch's, from the estimate at the stretch's first reading (#374).
+    conditions.push({ key: "earning", kind: "earning", fromMs: now.atMs, detail: "" });
   }
   if (before !== null && now.atMs - before.atMs >= 2 * PROCESS_MS) {
     const perCycle = gangPlannedRespectPerCycle(before);
@@ -192,8 +247,22 @@ export class GangStallWatch {
     }
     for (const { key, kind, fromMs, detail } of conditions) {
       const open = this.#open.get(key);
-      if (open === undefined) this.#open.set(key, { kind, fromMs, toMs: reading.atMs, detail });
-      else open.toMs = reading.atMs;
+      if (open !== undefined) open.toMs = reading.atMs;
+      else if (kind !== "earning") this.#open.set(key, { kind, fromMs, toMs: reading.atMs, detail });
+      else {
+        // The plan's own estimate at its first reading (#374), its bound twice it and 10 minutes, kept for the stretch.
+        const estimate = gangEarningEstimateOf(reading);
+        this.#open.set(key, {
+          kind,
+          fromMs,
+          toMs: reading.atMs,
+          detail:
+            `${describeRoles(reading.plan)}; the rule's estimate ${formatDuration(estimate.ms)} ` +
+            `(${estimate.first ?? "nobody"} first), its bound ${formatDuration(estimate.boundMs)}`,
+          estimateMs: estimate.ms,
+          withinMs: estimate.boundMs,
+        });
+      }
     }
     this.#before = reading;
   }
@@ -205,7 +274,16 @@ export class GangStallWatch {
 
   /** The open stretches at or past their bound: the stalls. */
   stalls(): GangStallStretch[] {
-    return this.open().filter((each) => each.toMs - each.fromMs >= withinMsOf(each.kind));
+    return this.open().filter((each) => each.toMs - each.fromMs >= stretchWithinMs(each));
+  }
+
+  /**
+   * The plan earning no respect at the last reading (#374): its stretch, from its first reading, with the rule's
+   * estimate and bound; null while it earns (or with no gang read).
+   */
+  earningPause(): GangStallStretch | null {
+    const open = this.#open.get("earning");
+    return open === undefined ? null : { ...open };
   }
 
   #closeAll(): void {
@@ -217,4 +295,9 @@ export class GangStallWatch {
 /** The bound of `kind`. */
 export function withinMsOf(kind: GangStallKind): number {
   return (GANG_STALL_KINDS.find((each) => each.kind === kind) as (typeof GANG_STALL_KINDS)[number]).withinMs;
+}
+
+/** A stretch's bound: its own (the plan earning no respect, #374), else its kind's. */
+export function stretchWithinMs(stretch: Pick<GangStallStretch, "kind" | "withinMs">): number {
+  return stretch.withinMs ?? withinMsOf(stretch.kind);
 }

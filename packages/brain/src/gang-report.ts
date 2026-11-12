@@ -110,7 +110,7 @@ import {
   gangWarfareFiguresOf,
   topAscensionGain,
 } from "./gang.ts";
-import { GANG_STALL_KINDS, type GangStallStretch, GangStallWatch } from "./gang-stalls.ts";
+import { GANG_EARNING_STALL_WHAT, GANG_STALL_KINDS, type GangStallStretch, GangStallWatch } from "./gang-stalls.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 import { HACKING_EXP_GAP_MS } from "./world-daemon.ts";
@@ -783,8 +783,16 @@ export class GangFold {
       ),
     ];
     for (const [stretches, withinMs, what] of judged) {
-      lines.push(`  ${what} for ${formatDuration(withinMs)} or more:`);
-      const long = stretches.filter((each) => each.toMs - each.fromMs >= withinMs);
+      // The plan earning no respect (#374): each stretch past its own bound, twice the rule's estimate and 10 minutes.
+      const own = what === GANG_EARNING_STALL_WHAT;
+      lines.push(
+        own
+          ? `  ${what} (twice it and ${formatDuration(withinMs)}):`
+          : `  ${what} for ${formatDuration(withinMs)} or more:`,
+      );
+      const long = stretches.filter(
+        (each) => each.toMs - each.fromMs >= ((each as Partial<GangStallStretch>).withinMs ?? withinMs),
+      );
       if (long.length === 0) lines.push("    none");
       for (const { fromMs, toMs, detail } of long) {
         const line =
