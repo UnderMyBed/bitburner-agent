@@ -12,8 +12,8 @@
 // - BN2.2: the gang rule drops the first gang's faction (the next Agent's session starts with no slow snapshot), reads
 //   none, NiteSec joined again by a harness edit, and the brain forms the second gang, `createGang(NiteSec)` again.
 // - The run report across both BN2s: the gang's faction carried per BitNode (`GangFactionCarry`, keyed by
-//   `lastNodeReset`), the gang's checks (#354's silent stalls too), the time to the destroy (#362: none in BN2, said
-//   once a BitNode), and PASS.
+//   `lastNodeReset`), the gang's checks (#354's silent stalls too), the time to the destroy (#362, by the gang's route
+//   since #357's slice 3: BN2.1's first look and levelling's first choice, BN2.2's start and the gang formed), and PASS.
 // One seed, as bn5-path's: a thin slice, no sweep.
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
@@ -25,7 +25,7 @@ import {
   type StaticSnapshotData,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { DESTROY_ESTIMATED_EVENT_KIND } from "../src/destroy-estimate.ts";
+import { DESTROY_ESTIMATED_EVENT_KIND, type DestroyEstimateRecord, describeTerms } from "../src/destroy-estimate.ts";
 import { GangFactionCarry, gangSnapshotOf } from "../src/gang.ts";
 import { runReport } from "../src/run-report.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
@@ -290,9 +290,51 @@ test("BN2's end: the gang formed in BN2.1, the destroy held short of 15,000, the
   ]) {
     expect(section).toContain(what);
   }
-  // The time to the destroy (#362): none in BN2 (the gang's route, #357), said once a BitNode, each by its reset.
-  expect(stored(DESTROY_ESTIMATED_EVENT_KIND)).toEqual([]);
-  expect(brain.logLines.filter((line) => line.startsWith("destroy estimate: none in BitNode 2"))).toHaveLength(2);
+  // The time to the destroy (#362) by the gang's route (#357's slice 3), at 15,000. BN2.1: a first look at The Red Pill's
+  // cycle (the harness installed it before the Agent), A and BC done, D none (nothing destroyed at 15,000 before: at
+  // least); then levelling's first choice, D its estimate, the whole measured. BN2.2: its start, waiting for τ_g, goes
+  // as the gang forms (NiteSec joined by the harness at once: τ_g never measured, A none), then the gang formed, A
+  // done, BC none while the fresh gang trains (the plan's time to earning said); D the prior's, BN2.1's, at 15,000.
+  const estimates = stored(DESTROY_ESTIMATED_EVENT_KIND) as DestroyEstimateRecord[];
+  const termsOf = (record: DestroyEstimateRecord | undefined) =>
+    record?.terms.map((term) => [term.term, term.ms === null ? null : term.ms > 0 ? "some" : 0, term.label]);
+  console.log(
+    estimates
+      .map((each) => `${each.bitNode} ${each.moment} at ${each.onlineMs} ms online: ${describeTerms(each.terms)}`)
+      .join("\n"),
+  );
+  expect(estimates.map((each) => [each.bitNode, each.moment, each.requiredLevel, each.atLeast])).toEqual([
+    ["BN2.1", "first seen", 15_000, true],
+    ["BN2.1", "levelling", 15_000, false],
+    ["BN2.2", "start", 15_000, true],
+    ["BN2.2", "gang formed", 15_000, true],
+  ]);
+  expect(estimates.map(termsOf)).toEqual([
+    [
+      ["A", 0, "done"],
+      ["BC", 0, "done"],
+      ["D", null, "optimistic"],
+    ],
+    [
+      ["A", 0, "done"],
+      ["BC", 0, "done"],
+      ["D", "some", "either way"],
+    ],
+    [
+      ["A", null, "optimistic"],
+      ["BC", null, "optimistic"],
+      ["D", "some", "either way"],
+    ],
+    [
+      ["A", 0, "done"],
+      ["BC", null, "optimistic"],
+      ["D", "some", "either way"],
+    ],
+  ]);
+  expect(estimates[1]?.terms[2]?.source).toBe("levelling's chosen candidate (#336)");
+  expect(estimates[3]?.terms[2]?.source).toBe("the prior's (BN2.1)");
+  expect(estimates[3]?.terms[1]?.source).toMatch(/^with the gang: \(3\)'s estimate not made .*\(#374\): none$/);
+  expect(brain.logLines.filter((line) => line.startsWith("destroy estimate: none in BitNode"))).toEqual([]);
   expect(failures).toEqual([]);
   expect(lines.at(-1)).toBe("Verdict: PASS");
   console.log(

@@ -19,6 +19,7 @@ import {
   GANG_EARNING_MARGIN_MS,
   GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
   GANG_FACTIONS,
+  GANG_ROUTE_COMMIT_MS,
   GANG_STATS,
   GANG_TERRITORY_UPDATE_MS,
   type GangInformation,
@@ -53,6 +54,7 @@ import { MEDIUM_SNAPSHOT_GAP_MS } from "../src/backdoors.ts";
 import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "../src/cloud-servers.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
+import { DESTROY_ESTIMATED_EVENT_KIND, type DestroyEstimateEvent } from "../src/destroy-estimate.ts";
 import {
   describeWarfare,
   GANG_PLACED_ON_JUSTICE_SETTING,
@@ -1881,13 +1883,26 @@ describe("the controller (#325)", () => {
       brain: ReturnType<typeof connected>,
       minutes: number,
       reputation: (minute: number) => number,
-      { money = 1e12, queued = [] as string[], gang = reading, fromMinute = 0 } = {},
+      {
+        money = 1e12,
+        queued = [] as string[],
+        gang = reading,
+        fromMinute = 0,
+        lastAugReset = 0,
+        installed = {} as Record<string, number>,
+      } = {},
     ) {
       let gameTimeMs = 7 * 3_600_000 + fromMinute * 60_000;
       for (let minute = 0; minute < minutes; minute += 1) {
         gameTimeMs += 60_000;
         clock.advance(60_000);
-        brain.send("slow", niteSecAt(reputation(minute), queued), gameTimeMs);
+        const slow = niteSecAt(reputation(minute), queued);
+        // An install (#357's slice 3): the cycle from `lastAugReset`, `installed` installed.
+        brain.send(
+          "slow",
+          { ...slow, resetInfo: { ...slow.resetInfo, lastAugReset, ownedAugs: installed } },
+          gameTimeMs,
+        );
         const data = niteSecMedium(gang);
         data.player = { ...data.player, money } as MediumSnapshotData["player"];
         brain.send("medium", data, gameTimeMs);
@@ -2031,6 +2046,43 @@ describe("the controller (#325)", () => {
       const inBn2 = decide("planner", 2);
       expect(inBn2.timing?.route).not.toBe("gang formed");
       expect(inBn2).toEqual(decide("rules", 2));
+    });
+
+    test("the time to the destroy (#357's slice 3): an install with the gang, BC (3)'s chosen estimate and its commit; once across a restart", () => {
+      const estimates: DestroyEstimateEvent[] = [];
+      const listen = (brain: ReturnType<typeof connected>) =>
+        brain.controller.subscribe((event) => {
+          if (event.type === DESTROY_ESTIMATED_EVENT_KIND) estimates.push(event as DestroyEstimateEvent);
+        });
+      const brain = connected();
+      listen(brain);
+      play(brain, 3, () => 2e6);
+      const before = estimates.length;
+      // The install (a harness's reset: the cycle from 7 h 10 min, BitWire installed): the gang kept, (3) keeps.
+      const installedAt = 7 * 3_600_000 + 10 * 60_000;
+      play(brain, 3, () => 2e6, { fromMinute: 10, lastAugReset: installedAt, installed: { BitWire: 1 } });
+      const keepMs = brain.controller.augmentationsView().progress?.timing?.gangInstall?.keepMs as number;
+      expect(brain.controller.augmentationsView().progress?.timing).toMatchObject({
+        route: "gang formed",
+        gangInstall: { choice: "keep" },
+      });
+      const installs = estimates.slice(before);
+      expect(installs.map((each) => [each.moment, each.stage, each.lastAugReset])).toEqual([
+        ["install", "install", installedAt],
+      ]);
+      expect(installs[0]?.terms.map((term) => [term.term, term.ms, term.label])).toEqual([
+        ["A", 0, "done"],
+        ["BC", keepMs + GANG_ROUTE_COMMIT_MS, "either way"],
+        ["D", null, "optimistic"],
+      ]);
+      expect(installs[0]?.terms[1]?.source).toMatch(/^\(3\)'s choice, keep: /);
+      // A restarted brain in the same cycle: none again.
+      channel = new ControlChannel({ token: TOKEN, clock });
+      channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+      const restarted = connected();
+      listen(restarted);
+      play(restarted, 3, () => 2e6, { fromMinute: 13, lastAugReset: installedAt, installed: { BitWire: 1 } });
+      expect(estimates.slice(before)).toHaveLength(1);
     });
   });
 
