@@ -69,6 +69,13 @@ const TWENTY_FIVE_INSTALLED: Record<string, number> = Object.fromEntries(
     .map((name) => [name, 1]),
 );
 const intentOf = (request: IntentRequest): Intent => ({ ...request, id: intentId(request.action, request.args) });
+/** Each combat stat's level and experience multipliers, 1 (#367). */
+const COMBAT_MULTS = Object.fromEntries(
+  ["strength", "defense", "dexterity", "agility"].flatMap((stat) => [
+    [stat, 1],
+    [`${stat}_exp`, 1],
+  ]),
+);
 /** Every action; three joins (Sector-12 and Chongqing are enemies, so irreversible; CyberSec isn't); two destroys. */
 const OWNER_INTENTS: Intent[] = [
   intentOf({ action: "buyTor", args: { vendor: "Alpha Enterprises" } }),
@@ -88,6 +95,8 @@ const OWNER_INTENTS: Intent[] = [
   intentOf({ action: "destroyBitNode", args: { nextBitNode: 3 } }),
   // Forming a gang (#325): irreversible, its guard NiteSec joined.
   intentOf({ action: "createGang", args: { faction: "NiteSec" } }),
+  // Joining the Bladeburner division (#367): irreversible, its guard the four combat stats at 100.
+  intentOf({ action: "joinBladeburnerDivision", args: {} }),
 ];
 const OWNER_INTENTS_BY_ID = new Map(OWNER_INTENTS.map((each) => [each.id, each]));
 /** Whether `id` is an install's or a destroy's: the brain's own resets, when not the owner's (#210, #215). */
@@ -147,6 +156,8 @@ const anyMedium = fc.record({
     { arbitrary: fc.subarray(JOINABLE), weight: 1 },
   ),
   daemonReady: fc.oneof({ arbitrary: fc.constant(true), weight: 3 }, { arbitrary: fc.constant(false), weight: 1 }),
+  /** The four combat stats at 100, the Bladeburner division's guard (#367). */
+  trained: fc.oneof({ arbitrary: fc.constant(true), weight: 3 }, { arbitrary: fc.constant(false), weight: 1 }),
 });
 type Medium = typeof anyMedium extends fc.Arbitrary<infer Each> ? Each : never;
 /**
@@ -294,6 +305,7 @@ async function play(
       return !(FACTION_ENEMIES[id.slice(12, -1)] ?? []).some((enemy) => snapshot.factions.includes(enemy));
     }
     if (id.startsWith("createGang(")) return snapshot.factions.includes(id.slice(11, -1));
+    if (id === "joinBladeburnerDivision()") return snapshot.trained;
     if ([...ownerQueue, ...brainsResets()][0] !== id) return false;
     return !id.startsWith("destroyBitNode(") || snapshot.daemonReady;
   };
@@ -328,6 +340,7 @@ async function play(
     if (irreversible.action === "createGang" && !latestMedium.factions.includes(irreversible.args.faction)) {
       return `${irreversible.args.faction} isn't joined`;
     }
+    if (irreversible.action === "joinBladeburnerDivision" && !latestMedium.trained) return "a combat stat under 100";
     return null;
   };
   /**
@@ -487,11 +500,16 @@ async function play(
       factions,
     };
     const data = mediumData(hacking, { [WORLD_DAEMON]: true }, player);
+    const level = snapshot.trained ? 100 : 1;
+    const combat = { strength: level, defense: level, dexterity: level, agility: level };
+    const combatExpOf = snapshot.trained ? 11_256 : 0;
+    const combatExp = { strength: combatExpOf, defense: combatExpOf, dexterity: combatExpOf, agility: combatExpOf };
     data.player = {
       ...data.player,
-      skills: { hacking, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
-      exp: { hacking: 6_106_794 },
-      mults: { faction_rep: 1, hacking: 1 },
+      // The combat stats at 100 or 1, with their experience and multipliers (#367: the division's guard reads them).
+      skills: { hacking, ...combat, charisma: 1, intelligence: 0 },
+      exp: { hacking: 6_106_794, ...combatExp },
+      mults: { faction_rep: 1, hacking: 1, ...COMBAT_MULTS },
     };
     standInGame.timeMs += 10_000;
     send("medium", data, standInGame.timeMs);
@@ -601,7 +619,8 @@ async function play(
     // drains, at most one irreversible intent (or reset) a round.
     for (let round = 0; round < 25 && (ownerQueue.length > 0 || readManualIntents(store).length > 0); round += 1) {
       // NiteSec joined, for the gang's guard (#325): it has no enemies, so no join's guard fails on it.
-      for (let each = 0; each < 3; each += 1) medium({ factions: ["NiteSec"], daemonReady: true });
+      // Trained, for the Bladeburner division's (#367).
+      for (let each = 0; each < 3; each += 1) medium({ factions: ["NiteSec"], daemonReady: true, trained: true });
       await answerBackups(true, { all: true });
       agentRound(() => "done", { inTheSteps: false });
     }
