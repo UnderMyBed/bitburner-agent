@@ -85,7 +85,7 @@ import {
   type StopAtBitNodeEnd,
   writeStopAtBitNodeEnd,
 } from "./bitnode-end.ts";
-import { BladeburnerRule, type BladeburnerView } from "./bladeburner.ts";
+import { type BladeburnerEvent, BladeburnerRule, type BladeburnerView } from "./bladeburner.ts";
 import {
   CLOUD_SERVER_RESERVE_HORIZON_MS,
   CLOUD_SERVERS_ENABLED_SETTING,
@@ -279,7 +279,8 @@ export type RuleEvent =
   | BitNodeEndEvent
   | LevellingEvent
   | DestroyEstimateEvent
-  | GangEvent;
+  | GangEvent
+  | BladeburnerEvent;
 
 /** What the dashboard shows of the stop at the BitNode's end (#303). */
 export interface StopAtBitNodeEndView {
@@ -519,7 +520,7 @@ export class DesiredStateController {
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
     this.#gang = new GangRule(log, store, { emit: (event) => this.#emit(event), route: bn2Route });
-    this.#bladeburner = new BladeburnerRule(log);
+    this.#bladeburner = new BladeburnerRule(log, (event) => this.#emit(event));
     this.#augmentations = new AugmentationRule({
       store,
       log,
@@ -1785,6 +1786,8 @@ export class DesiredStateController {
       mediumData: this.#mediumData,
       slowData: this.#slowSnapshot,
       homeKeptGb: homeKeptGbOf(singularityRamMultiplierOf(this.#slowSnapshot)),
+      ownersWork: readOwnersWork(this.#store) !== null,
+      nowMs: this.#lastEventAtMs,
     });
     this.#bladeburnerIntent = bladeburner.intent;
     this.#bladeburnerState = bladeburner.state;
@@ -1874,7 +1877,7 @@ export class DesiredStateController {
       stood:
         readOwnersWork(this.#store) !== null
           ? "your work on the dashboard (it may be in a city)"
-          : this.#bladeburnerWork !== null
+          : this.#bladeburner.training()
             ? "Bladeburner's combat training at the gym (#367)"
             : readManualIntents(this.#store).some((each) => each.action === "travel")
               ? "your travel in the queue"
@@ -1908,7 +1911,7 @@ export class DesiredStateController {
       nowMs: this.#lastEventAtMs,
       ownersWork: readOwnersWork(this.#store) !== null,
       // Bladeburner's training (#367) goes as the brain's work ahead of A5's.
-      heldFor: this.#bladeburnerWork === null ? null : "Bladeburner's combat training at the gym (#367)",
+      heldFor: this.#bladeburner.training() ? "Bladeburner's combat training at the gym (#367)" : null,
       enabled: readFactionWorkEnabled(this.#store),
       augmentationsEnabled: readAugmentationsEnabled(this.#store),
       shareBonus,

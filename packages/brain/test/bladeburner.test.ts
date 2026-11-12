@@ -11,15 +11,25 @@ import {
   BLADEBURNER_WORKER_RAM_GB,
   COMBAT_STATS,
   CONTROL_PROTOCOL_VERSION,
+  type CombatPerson,
+  combatPersonOf,
   type DesiredState,
   encodeControlMessage,
   type MediumSnapshotData,
   type SlowSnapshotData,
   type SnapshotTier,
   skillExpFor,
+  slowestTrainingSeconds,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { BladeburnerRule, bladeburnerSnapshotOf, JOIN_BLADEBURNER_INTENT } from "../src/bladeburner.ts";
+import {
+  BLADEBURNER_TRAINING_HELD_EVENT_KIND,
+  BladeburnerRule,
+  bladeburnerSnapshotOf,
+  type GymWork,
+  JOIN_BLADEBURNER_INTENT,
+  travelIntent,
+} from "../src/bladeburner.ts";
 import {
   BLADEBURNER_FACTION_WITHIN_MS,
   BLADEBURNER_JOIN_WITHIN_MS,
@@ -28,6 +38,7 @@ import {
   BladeburnerFold,
 } from "../src/bladeburner-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
+import { formatDuration } from "../src/gap-report.ts";
 import { snapshotGuardFailure } from "../src/irreversible-gate.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
 import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
@@ -54,6 +65,9 @@ interface MediumOptions {
   /** Null: absent, as from an older Agent. */
   inBladeburner?: boolean | null;
   reading?: unknown;
+  /** The hacking level (10 unless said), and the TOR router (#367's review: an invitation's visit pending). */
+  hacking?: number;
+  hasTorRouter?: boolean;
 }
 function medium({
   levels = {},
@@ -63,8 +77,10 @@ function medium({
   homeRam = 32,
   inBladeburner = false,
   reading,
+  hacking = 10,
+  hasTorRouter = false,
 }: MediumOptions = {}): MediumSnapshotData {
-  const skills: Record<string, number> = { hacking: 10, charisma: 1, intelligence: 0 };
+  const skills: Record<string, number> = { hacking, charisma: 1, intelligence: 0 };
   const exp: Record<string, number> = { hacking: 0, charisma: 0, intelligence: 0 };
   const mults: Record<string, number> = { faction_rep: 1, hacking: 1, hacking_exp: 1, charisma: 1, charisma_exp: 1 };
   for (const stat of COMBAT_STATS) {
@@ -76,7 +92,7 @@ function medium({
   }
   return {
     player: { skills, exp, mults, money, city, factions },
-    hasTorRouter: false,
+    hasTorRouter,
     programs: [],
     servers: [
       {
@@ -134,31 +150,85 @@ describe("the rule", () => {
     }
   });
 
-  test("the stats in turn, at the gym the money covers: Iron's under Powerhouse's $1.44m, none under $72,000", () => {
+  test("the stats in turn, at the gym the money covers: Iron's under $416,000, none under $72,000", () => {
     const rule = new BladeburnerRule();
-    expect(decide(rule, medium({ levels: { strength: 100, defense: 100 }, money: 1e6 })).work).toEqual({
+    expect(decide(rule, medium({ levels: { strength: 100, defense: 100 }, money: 400_000 })).work).toEqual({
       kind: "class",
       location: "Iron Gym",
       classType: "dex",
     });
     const poor = new BladeburnerRule();
-    expect(decide(poor, medium({ money: 50_000 })).work).toBeNull();
+    expect(decide(poor, medium({ money: 50_000 }))).toEqual({ work: null, intent: null, state: null });
     expect(poor.training()).toBe(false);
     expect(poor.view().line).toBe(
-      "Bladeburner: training to join, training waits for money for a gym in Sector-12: 10 minutes of its cost " +
-        "(strength 1, defense 1, dexterity 1, agility 1)",
+      "Bladeburner: training to join, training waits for money for a gym: $72,000 at Iron Gym (10 minutes of its " +
+        "cost) (strength 1, defense 1, dexterity 1, agility 1)",
     );
-    expect(decide(poor, medium({ money: 50_000, city: "Chongqing" })).work).toBeNull();
-    expect(poor.view().line).toContain("training waits for a gym: none in Chongqing (the travel is left out)");
+  });
+
+  test("a start in Ishima, which has no gym: the travel to Sector-12 first, then Powerhouse's class there", () => {
+    const rule = new BladeburnerRule();
+    expect(decide(rule, medium({ city: "Ishima" }))).toEqual({
+      work: null,
+      intent: travelIntent("Sector-12"),
+      state: null,
+    });
+    expect(travelIntent("Sector-12")).toEqual({
+      action: "travel",
+      args: { city: "Sector-12" },
+      id: "travel(Sector-12)",
+    });
+    expect(rule.training()).toBe(true);
+    expect(rule.view().line).toBe(
+      "Bladeburner: training to join, travelling to Sector-12 for Powerhouse Gym (strength 1, defense 1, dexterity 1, " +
+        "agility 1)",
+    );
+    expect(decide(rule, medium({ city: "Sector-12", money: 1.8e6 }))).toEqual({
+      work: { kind: "class", location: "Powerhouse Gym", classType: "str" },
+      intent: null,
+      state: null,
+    });
+    // With too little for the travel and a gym: it waits, and says so.
+    const poor = new BladeburnerRule();
+    expect(decide(poor, medium({ city: "Ishima", money: 271_999 })).intent).toBeNull();
+    expect(poor.view().line).toContain("$72,000 at Iron Gym (10 minutes of its cost), and $200,000 to travel there");
+  });
+
+  test("the owner's work holds the training: no class, no travel, and its event at each change", () => {
+    const events: unknown[] = [];
+    const rule = new BladeburnerRule(
+      () => {},
+      (event) => events.push(event),
+    );
+    const update = (ownersWork: boolean, nowMs: number, changes: Parameters<typeof medium>[0] = {}) =>
+      rule.update({ mediumData: medium(changes), slowData: slow(6), homeKeptGb: 32, ownersWork, nowMs });
+    expect(update(false, 1)).toMatchObject({ work: { location: "Powerhouse Gym" } });
+    expect(update(true, 2)).toEqual({ work: null, intent: null, state: null });
+    expect(rule.training()).toBe(false);
+    expect(rule.view().line).toBe(
+      "Bladeburner: training to join held for your work on the dashboard (strength 1, defense 1, dexterity 1, agility 1)",
+    );
+    update(true, 3);
+    update(false, 4);
+    // Trained while held: the hold ends with the training.
+    update(true, 5);
+    update(true, 6, { levels: TRAINED });
+    expect(events).toEqual([
+      { type: BLADEBURNER_TRAINING_HELD_EVENT_KIND, atMs: 2, held: true },
+      { type: BLADEBURNER_TRAINING_HELD_EVENT_KIND, atMs: 4, held: false },
+      { type: BLADEBURNER_TRAINING_HELD_EVENT_KIND, atMs: 5, held: true },
+      { type: BLADEBURNER_TRAINING_HELD_EVENT_KIND, atMs: 6, held: false },
+    ]);
   });
 
   test("the gym chosen is kept while the money covers a minute of it: Powerhouse at $200,000, Iron at $100,000", () => {
     const rule = new BladeburnerRule();
-    expect(decide(rule, medium({ money: 2e6 })).work?.location).toBe("Powerhouse Gym");
-    expect(decide(rule, medium({ money: 200_000 })).work?.location).toBe("Powerhouse Gym");
-    expect(decide(rule, medium({ money: 100_000 })).work?.location).toBe("Iron Gym");
+    const location = (work: GymWork | null) => work?.location;
+    expect(location(decide(rule, medium({ money: 2e6 })).work)).toBe("Powerhouse Gym");
+    expect(location(decide(rule, medium({ money: 200_000 })).work)).toBe("Powerhouse Gym");
+    expect(location(decide(rule, medium({ money: 100_000 })).work)).toBe("Iron Gym");
     // A new rule (a restarted brain) starts afresh: Iron at $200,000.
-    expect(decide(new BladeburnerRule(), medium({ money: 200_000 })).work?.location).toBe("Iron Gym");
+    expect(location(decide(new BladeburnerRule(), medium({ money: 200_000 })).work)).toBe("Iron Gym");
   });
 
   test("all four at 100, not in the division: its join, no work; one at 99, never", () => {
@@ -365,6 +435,12 @@ describe("the controller (#367)", () => {
     // The owner's work still wins.
     controller.setWork({ kind: "crime", crime: "Shoplift" });
     expect(last()?.work).toMatchObject({ kind: "crime", crime: "Shoplift" });
+    // The training held for it: no travel either, from a city with no gym, and A5 and the invitations free.
+    send("medium", cyberSec({ city: "Ishima" }));
+    expect(controller.bladeburnerView().line).toContain("held for your work on the dashboard");
+    expect(last()?.intents.map((each) => each.id)).not.toContain("travel(Sector-12)");
+    controller.setWork(null);
+    expect(last()?.intents.map((each) => each.id)).toContain("travel(Sector-12)");
   });
 
   test("trained: A5's faction work back; the join only through the gate, after two medium snapshots and a backup", async () => {
@@ -410,6 +486,20 @@ describe("the controller (#367)", () => {
     expect(last()?.bladeburner).toEqual({ joinTheFaction: true });
   });
 
+  test("the invitations' travel waits for the training: Tian Di Hui's visit held, said why; trained, it goes", () => {
+    const { controller, send, last } = connected();
+    send("slow", withCyberSec(6));
+    const tianDiHui = (levels: Levels) =>
+      medium({ levels, money: 2e6, hacking: 100, hasTorRouter: true, homeRam: 2 ** 20, factions: ["CyberSec"] });
+    const sentIds = () => last()?.intents.map((each) => each.id) ?? [];
+    send("medium", tianDiHui({}));
+    expect(controller.invitationsView().waitingFor).toBe("Bladeburner's combat training at the gym (#367)");
+    expect(sentIds()).not.toContain("travel(Ishima)");
+    send("medium", tianDiHui(TRAINED));
+    expect(controller.invitationsView().waitingFor).toBeNull();
+    expect(sentIds()).toContain("travel(Ishima)");
+  });
+
   test("outside BN6 and BN7, with SF6 and SF7 too: no training, no join, no worker; A5's work goes", () => {
     const { controller, send, last } = connected();
     send("slow", withCyberSec(1, { 6: 1, 7: 1 }));
@@ -426,15 +516,23 @@ describe("the controller (#367)", () => {
 
 describe("the run report's section 8 (#367)", () => {
   const T0 = Date.UTC(2026, 0, 1);
+  /** The overdue bound from nothing at ×1: twice Iron Gym's estimate (core's `slowestTrainingSeconds`) and 10 min. */
+  const BOUND_MS =
+    Math.ceil(2 * slowestTrainingSeconds(combatPersonOf(medium().player) as CombatPerson) * 1000) +
+    BLADEBURNER_TRAINING_SLACK_MS;
   const iso = (atMs: number) => new Date(atMs).toISOString();
 
   /** A fold with BN6's slow snapshot at T0, home's reserve 32 GB (no Singularity), and each medium at its minute. */
-  function fold(mediums: [number, MediumSnapshotData][], bitNode = 6) {
-    const folded = new BladeburnerFold();
+  function fold(
+    mediums: [number, MediumSnapshotData][],
+    bitNode = 6,
+    events: { kind: string; atMs: number; detail: unknown }[] = [],
+  ) {
+    const folded = new BladeburnerFold(events);
     folded.addSlow(T0, slow(bitNode));
     for (const [minute, data] of mediums) folded.addMedium(T0 + minute * MINUTE, data);
     const failures: string[] = [];
-    const lines = folded.section(failures, T0 + 24 * 60 * MINUTE);
+    const lines = folded.section(failures, T0 + 48 * 60 * MINUTE);
     return { text: lines.join("\n"), failures };
   }
 
@@ -466,13 +564,15 @@ describe("the run report's section 8 (#367)", () => {
     expect(failures).toEqual([]);
     expect(text).toContain(
       `    from ${iso(T0)} (strength 1, defense 1, dexterity 1, agility 1): estimated 1 h 15 min at Powerhouse Gym from ` +
-        `${iso(T0)}; done ${iso(T0 + 74 * MINUTE)}, after 1 h 14 min (0.99 of the estimate from when it was made)\n`,
+        `${iso(T0)}; overdue past ${formatDuration(BOUND_MS)}; done ${iso(T0 + 74 * MINUTE)}, after 1 h 14 min (0.99 of ` +
+        "the estimate from when it was made)\n",
     );
     expect(text).toContain(`  the division: joined, first seen ${iso(T0 + 75 * MINUTE)}\n`);
     expect(text).toContain(`  rank: 0.0 → 25.0, read from ${iso(T0 + 75 * MINUTE)}\n`);
     expect(text).toContain(`  Bladeburners: joined, first seen ${iso(T0 + 76.5 * MINUTE)}\n`);
     for (const check of [
-      "the training past twice its estimate and 10 min, still short of 100, at any reading:\n    none",
+      "the training past twice the slowest gym's estimate and 10 min from its first sighting, still short of 100, at " +
+        "any reading:\n    none",
       "all four at 100 with the division not joined for 5 min or more:\n    none",
       "the division unread with home's RAM there for its worker for 5 min or more:\n    none",
       "the rank at 25 or more with Bladeburners not joined for 1 min or more:\n    none",
@@ -481,23 +581,89 @@ describe("the run report's section 8 (#367)", () => {
     }
   });
 
-  test("the training overdue: past twice its estimate and the slack, still short, fails; just inside, passes", () => {
-    const estimateMs = ((4 * skillExpFor(100, 1)) / 10) * 1000;
-    const boundMinutes = (2 * estimateMs + BLADEBURNER_TRAINING_SLACK_MS) / MINUTE;
-    const inside = fold([
-      [0, medium()],
-      [boundMinutes - 0.5, medium({ levels: { strength: 100, defense: 100, dexterity: 100, agility: 90 } })],
-    ]);
-    expect(inside.failures).toEqual([]);
+  test("overdue at twice the slowest gym's estimate and 10 min from its first sighting: at it passes, a reading on fails", () => {
+    // Iron Gym's 1 a second at ×1 from nothing: 4 × 11,255.3 s, 12.5 h; twice that and 10 min, 25 h 10 min.
+    expect(BOUND_MS).toBe(Math.ceil(2 * 4 * skillExpFor(100, 1) * 1000) + BLADEBURNER_TRAINING_SLACK_MS);
+    expect(formatDuration(BOUND_MS)).toBe("25 h 10 min");
+    const short = medium({ levels: { strength: 100, defense: 100, dexterity: 100, agility: 90 } });
+    const atBound = BOUND_MS / MINUTE;
+    expect(
+      fold([
+        [0, medium()],
+        [atBound, short],
+      ]).failures,
+    ).toEqual([]);
+    // A millisecond past it fails.
+    expect(
+      fold([
+        [0, medium()],
+        [atBound + 1 / MINUTE, short],
+      ]).failures,
+    ).toHaveLength(1);
     const late = fold([
       [0, medium()],
-      [boundMinutes + 0.5, medium({ levels: { strength: 100, defense: 100, dexterity: 100, agility: 90 } })],
+      [atBound + 10 / 60, short],
     ]);
     expect(late.failures).toEqual([
-      `the training past twice its estimate and 10 min, still short of 100, from ${iso(T0 + (boundMinutes + 0.5) * MINUTE)} ` +
-        `to ${iso(T0 + (boundMinutes + 0.5) * MINUTE)} (estimated 1 h 15 min at Powerhouse Gym from ${iso(T0)}; ` +
-        "strength 100, defense 100, dexterity 100, agility 90)",
+      "the training past twice the slowest gym's estimate and 10 min from its first sighting, still short of 100, " +
+        `from ${iso(T0 + (atBound + 10 / 60) * MINUTE)} to ${iso(T0 + (atBound + 10 / 60) * MINUTE)} (first seen ` +
+        `${iso(T0)}, its bound 25 h 10 min; strength 100, defense 100, dexterity 100, agility 90)`,
     ]);
+  });
+
+  test("no gym ever affordable, or a start in Ishima with nothing to travel on: the clock runs all the same, and fails", () => {
+    for (const changes of [{ money: 0 }, { money: 0, city: "Ishima" }]) {
+      const { text, failures } = fold([
+        [0, medium(changes)],
+        [BOUND_MS / MINUTE + 1, medium(changes)],
+      ]);
+      expect(text).toContain("no gym's estimate (none the money covered)");
+      expect(failures).toHaveLength(1);
+    }
+    // In Ishima with the money: the travel's gym's estimate, Powerhouse's.
+    expect(fold([[0, medium({ city: "Ishima" })]]).text).toContain("estimated 1 h 15 min at Powerhouse Gym");
+  });
+
+  test("the clock stops while the owner's work holds the training: 2 h held, 2 h more before it fails", () => {
+    const held = (atMinute: number, isHeld: boolean) => ({
+      kind: BLADEBURNER_TRAINING_HELD_EVENT_KIND,
+      atMs: T0 + atMinute * MINUTE,
+      detail: { held: isHeld },
+    });
+    const events = [held(60, true), held(180, false)];
+    const atBound = BOUND_MS / MINUTE;
+    const short = medium({ levels: { strength: 100 } });
+    expect(
+      fold(
+        [
+          [0, medium()],
+          [atBound + 120, short],
+        ],
+        6,
+        events,
+      ).failures,
+    ).toEqual([]);
+    expect(
+      fold(
+        [
+          [0, medium()],
+          [atBound + 120 + 10 / 60, short],
+        ],
+        6,
+        events,
+      ).failures,
+    ).toHaveLength(1);
+    // Still held at the reading: the time since it was held counts no more.
+    expect(
+      fold(
+        [
+          [0, medium()],
+          [atBound + 600, short],
+        ],
+        6,
+        [held(60, true)],
+      ).failures,
+    ).toEqual([]);
   });
 
   test("an install restarts the training: each cycle's estimate its own", () => {

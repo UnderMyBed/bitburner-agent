@@ -284,7 +284,7 @@ export async function main(ns: NS): Promise<void> {
           batcher.forget();
           workActivity.forget();
           gangActivity.forget();
-          bladeburnerActivity.forget();
+          // Bladeburner's (#367) was forgotten at the disconnect before this welcome, its reading with it.
           ns.print(`agent: welcomed (session ${agentSessionId})`);
         } else if (event.message.type === "restart") {
           if (startedBoot(`told to restart onto ${event.message.deploymentId}`)) return;

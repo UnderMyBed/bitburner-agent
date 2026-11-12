@@ -246,8 +246,10 @@ export {
   JOIN_BLADEBURNER_WORKER_NAME,
   parseBladeburnerState,
   planCombatTraining,
+  SLOWEST_GYM,
   skillExpFor,
   skillLevelOf,
+  slowestTrainingSeconds,
 } from "./bladeburner.ts";
 export {
   CAMPAIGN_ORDER,

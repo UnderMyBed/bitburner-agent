@@ -20,11 +20,14 @@ import {
   gymExpPerSecond,
   parseBladeburnerState,
   planCombatTraining,
+  SLOWEST_GYM,
   skillExpFor,
   skillLevelOf,
+  slowestTrainingSeconds,
 } from "../src/bladeburner.ts";
 import { CLASS_LOCATIONS, CLASS_TYPES } from "../src/classes.ts";
 import { FACTIONS } from "../src/faction-data.ts";
+import { TRAVEL_COST } from "../src/locations.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -59,8 +62,13 @@ describe("the game's facts", () => {
     expect(BLADEBURNER_BITNODES).toEqual([6, 7]);
   });
 
-  test("the faction: Bladeburners at rank 25, joined only by asking, and offering no work", () => {
+  test("the faction: Bladeburners at rank 25, by asking or by its invitation, and offering no work", () => {
     expect(gameSource("Bladeburner/data/Constants.ts")).toContain("RankNeededForFaction: 25,");
+    // Its invitation (#367's review): the rank among its requirements, which the engine checks every 10 cycles.
+    expect(gameSource("Faction/FactionInfo.tsx")).toContain(
+      "inviteReqs: [haveSomeSourceFile(6, 7), haveBladeburnerRank(BladeburnerConstants.RankNeededForFaction)],",
+    );
+    expect(gameSource("engine.tsx")).toContain("Engine.Counters.checkFactionInvitations = 10;");
     expect(gameSource("Bladeburner/Bladeburner.ts")).toContain(
       "if (this.rank >= BladeburnerConstants.RankNeededForFaction) {",
     );
@@ -170,9 +178,10 @@ describe("the experience to 100", () => {
 });
 
 describe("the gym, by money", () => {
-  test("Sector-12: Powerhouse from 10 minutes of its $2,400 a second, $1.44m; under it Iron's, from $72,000; under that none", () => {
+  test("Sector-12: Powerhouse from 10 minutes of its $2,400 a second, $1.44m; under it the next a travel away; Iron from $72,000; under that none", () => {
     expect(chooseGym({ money: 1_440_000, city: "Sector-12", kept: null })).toBe("Powerhouse Gym");
-    expect(chooseGym({ money: 1_439_999, city: "Sector-12", kept: null })).toBe("Iron Gym");
+    expect(chooseGym({ money: 1_439_999, city: "Sector-12", kept: null })).toBe("Snap Fitness Gym");
+    expect(chooseGym({ money: 415_999, city: "Sector-12", kept: null })).toBe("Iron Gym");
     expect(chooseGym({ money: 72_000, city: "Sector-12", kept: null })).toBe("Iron Gym");
     expect(chooseGym({ money: 71_999, city: "Sector-12", kept: null })).toBeNull();
   });
@@ -187,15 +196,24 @@ describe("the gym, by money", () => {
     expect(chooseGym({ money: 2e6, city: "Sector-12", kept: "Iron Gym" })).toBe("Powerhouse Gym");
   });
 
-  test("the player's city only: Aevum's Snap (5 a second) and Crush (2), Volhaven's Millenium (4); none in Chongqing", () => {
-    expect(chooseGym({ money: 1e9, city: "Aevum", kept: null })).toBe("Snap Fitness Gym");
-    expect(chooseGym({ money: 719_999, city: "Aevum", kept: null })).toBe("Crush Fitness Gym");
-    expect(chooseGym({ money: 1e9, city: "Volhaven", kept: null })).toBe("Millenium Fitness Gym");
-    for (const city of ["Chongqing", "New Tokyo", "Ishima"])
-      expect(chooseGym({ money: 1e9, city, kept: null })).toBeNull();
+  test("any city, the travel's $200,000 counted for another: from Ishima, Powerhouse from $1.64m, Snap from $920,000", () => {
+    expect(TRAVEL_COST).toBe(200_000);
+    expect(gameSource("Constants.ts")).toContain("TravelCost: 200e3,");
+    // Ishima has no gym: each is a travel away.
+    expect(chooseGym({ money: 1_640_000, city: "Ishima", kept: null })).toBe("Powerhouse Gym");
+    expect(chooseGym({ money: 1_639_999, city: "Ishima", kept: null })).toBe("Snap Fitness Gym");
+    expect(chooseGym({ money: 920_000, city: "Ishima", kept: null })).toBe("Snap Fitness Gym");
+    // Then Millenium (4 a second, $840) from $704,000, Crush (2, $360) from $416,000, Iron (1, $120) from $272,000.
+    expect(chooseGym({ money: 919_999, city: "Ishima", kept: null })).toBe("Millenium Fitness Gym");
+    expect(chooseGym({ money: 703_999, city: "Ishima", kept: null })).toBe("Crush Fitness Gym");
+    expect(chooseGym({ money: 415_999, city: "Ishima", kept: null })).toBe("Iron Gym");
+    expect(chooseGym({ money: 272_000, city: "Ishima", kept: null })).toBe("Iron Gym");
+    expect(chooseGym({ money: 271_999, city: "Ishima", kept: null })).toBeNull();
+    // In Aevum, its own Snap without the travel ($720,000), before Powerhouse with it.
+    expect(chooseGym({ money: 1_639_999, city: "Aevum", kept: null })).toBe("Snap Fitness Gym");
+    expect(chooseGym({ money: 1e9, city: "Aevum", kept: null })).toBe("Powerhouse Gym");
     // A gym kept from another city (a travel since) isn't kept: it's not where the player is.
-    expect(chooseGym({ money: 1e9, city: "Aevum", kept: "Powerhouse Gym" })).toBe("Snap Fitness Gym");
-    expect(chooseGym({ money: 1e9, city: "Ishima", kept: "Powerhouse Gym" })).toBeNull();
+    expect(chooseGym({ money: 200_000, city: "Aevum", kept: "Powerhouse Gym" })).toBeNull();
   });
 
   test("a gym's experience a second: its expMult times the stat's multiplier", () => {
@@ -231,12 +249,44 @@ describe("the training plan", () => {
     expect(plan.etaSeconds).toBeCloseTo((11_255.32 - 1_000) / 10 + 11_255.32 / 20, 1);
   });
 
-  test("no gym the money covers, or none in the city: no class, the reason said, no estimate", () => {
+  test("no gym the money covers: no class, no travel, the least it needs said, no estimate", () => {
     const poor = planCombatTraining(person(), { money: 1_000, city: "Sector-12", kept: null });
-    expect(poor).toMatchObject({ stat: "strength", gym: null, work: null, etaSeconds: null });
-    expect(poor.waitingFor).toBe("money for a gym in Sector-12: 10 minutes of its cost");
-    const far = planCombatTraining(person(), { money: 1e9, city: "Chongqing", kept: null });
-    expect(far.waitingFor).toBe("a gym: none in Chongqing (the travel is left out)");
+    expect(poor).toMatchObject({ stat: "strength", gym: null, travel: null, work: null, etaSeconds: null });
+    expect(poor.waitingFor).toBe("money for a gym: $72,000 at Iron Gym (10 minutes of its cost)");
+    const away = planCombatTraining(person(), { money: 1_000, city: "Ishima", kept: null });
+    expect(away.waitingFor).toBe(
+      "money for a gym: $72,000 at Iron Gym (10 minutes of its cost), and $200,000 to travel there",
+    );
+  });
+
+  test("a start in Ishima, which has no gym: the travel to the gym's city first, no class until there", () => {
+    const plan = planCombatTraining(person(), { money: 2e6, city: "Ishima", kept: null });
+    expect(plan).toMatchObject({
+      stat: "strength",
+      gym: "Powerhouse Gym",
+      travel: "Sector-12",
+      work: null,
+      waitingFor: "the travel to Sector-12",
+    });
+    expect(plan.etaSeconds).toBeCloseTo((4 * 11_255.32) / 10, 0);
+    // There: the class, and no travel.
+    expect(planCombatTraining(person(), { money: 1.8e6, city: "Sector-12", kept: null })).toMatchObject({
+      travel: null,
+      work: { location: "Powerhouse Gym", classType: "str" },
+    });
+  });
+
+  test("the slowest gym's estimate, the report's bound: Iron Gym's 1 a second at the multipliers, 4.7 h at SF1.3", () => {
+    expect(SLOWEST_GYM).toBe("Iron Gym");
+    expect(CLASS_LOCATIONS[SLOWEST_GYM]?.expMult).toBe(1);
+    expect(
+      Math.min(...Object.values(CLASS_LOCATIONS).flatMap((each) => (each.kind === "gym" ? [each.expMult] : []))),
+    ).toBe(1);
+    expect(slowestTrainingSeconds(person())).toBeCloseTo(4 * 11_255.32, 0);
+    const sf13 = person({}, { mult: 1.28, expMult: 1.28 });
+    expect(slowestTrainingSeconds(sf13)).toBeCloseTo((4 * skillExpFor(100, 1.28)) / 1.28, 3);
+    expect(slowestTrainingSeconds(sf13) / 3600).toBeCloseTo(4.7, 1);
+    expect(slowestTrainingSeconds(person({ strength: 100, defense: 100, dexterity: 100, agility: 100 }))).toBe(0);
   });
 
   test("trained: no stat, no class, an estimate of 0", () => {

@@ -102,10 +102,14 @@ test("BN6.1 with the campaign's Source-Files: trained at the gym, joined through
   expect(ratio).toBeLessThan(1.5);
   expect(section).toMatch(/\n {2}the division: joined, first seen /);
   expect(section).toMatch(/\n {2}rank: 0\.0 → 25\.0, read from /);
+  // Joined, by the worker's asking or A5's accepting its invitation: either path (#373's review).
   expect(section).toMatch(/\n {2}Bladeburners: joined, first seen /);
+  // Its bound: twice Iron Gym's estimate at SF1.3's ×1.28 (4 × 5,417 / 1.28 s) and 10 min.
+  expect(section).toContain("; overdue past 9 h 34 min; ");
   expect(section).toContain("  problems the Bladeburner worker reported, as first seen:\n    none\n");
   for (const check of [
-    "the training past twice its estimate and 10 min, still short of 100, at any reading:\n    none",
+    "the training past twice the slowest gym's estimate and 10 min from its first sighting, still short of 100, at " +
+      "any reading:\n    none",
     "all four at 100 with the division not joined for 5 min or more:\n    none",
     "the division unread with home's RAM there for its worker for 5 min or more:\n    none",
     "the rank at 25 or more with Bladeburners not joined for 1 min or more:\n    none",

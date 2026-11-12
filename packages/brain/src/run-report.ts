@@ -731,7 +731,6 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const worldDaemon = new WorldDaemonFold();
     // The gang (#325); avmnite-02h's level from the static snapshots, for BN2's route (#357).
     const gang = new GangFold();
-    const bladeburner = new BladeburnerFold();
     if (isObject(staticBefore?.data)) {
       gang.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
       hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
@@ -755,6 +754,8 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     }
     const events = store.eventsInWindow(window);
     const factionWork = new FactionWorkTimeline(events, BRAIN_STARTED_EVENT_KIND);
+    // Bladeburner (#367): the rule's holds for the owner's work stop the training's overdue clock.
+    const bladeburner = new BladeburnerFold(events);
     // The day before the window: an earlier brain start (section 1), and the install decisions (#244 review: a window
     // opening after an install was chosen doesn't judge its buying).
     const dayBefore = store.eventsInWindow({

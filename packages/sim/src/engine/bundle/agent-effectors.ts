@@ -763,10 +763,14 @@ const effectors = {
   /**
    * The NSA's "Apply to Bladeburner Division" (#367, `Locations/ui/SpecialLocation.tsx:54-113`): shown with access and
    * Bladeburner on in the BitNode (`:105-110`), it takes the player in with all four combat stats at 100 (`:68-76`).
-   * SF7.3's prompt over Stanek's Gift (`:77-95`) is left out: the campaign comes to BN6 and BN7 without it. Done once
-   * the player is in it. Not named `joinBladeburnerDivision`, which is an NS function.
+   * The NSA is in Sector-12 (`Locations/data/LocationsMetadata.ts:317-321`): from another city it's refused, as the page
+   * can't reach it (#367's review). SF7.3's prompt over Stanek's Gift (`:77-95`) is left out: the campaign comes to BN6
+   * and BN7 without it. Done once the player is in it. Not named `joinBladeburnerDivision`, which is an NS function.
    */
   enlistInBladeburner(): EffectorResult {
+    if (!Player.bladeburner && Player.city !== CityName.Sector12) {
+      return result(false, `the NSA is in Sector-12, and the player is in ${Player.city} (travel there first)`);
+    }
     if (!Player.bladeburner && Player.canAccessBladeburner() && currentNodeMults.BladeburnerRank !== 0) {
       const { strength, defense, dexterity, agility } = Player.skills;
       if (Math.min(strength, defense, dexterity, agility) >= 100) Player.startBladeburner();

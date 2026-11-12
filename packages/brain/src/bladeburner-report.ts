@@ -3,9 +3,12 @@
 // the rank, and the Bladeburners faction, from the medium snapshots (the player, `inBladeburner`, and the Agent's
 // Bladeburner worker's reading every 10 s). What can stall fails the report, each after a time computed from the game
 // or the brain's own pace:
-// - the training past twice its first estimate and `BLADEBURNER_TRAINING_SLACK_MS`, still short of 100: the estimate
-//   was wrong (as #343's waits are judged, augmentations.ts's `INSTALL_WAIT_OVERDUE_SLACK_MS`). An install restarts it
-//   (the combat experience goes, `PlayerObjectGeneralMethods.ts:86-97`), so each cycle's training is its own;
+// - the training still short of 100 past twice the slowest gym's estimate and `BLADEBURNER_TRAINING_SLACK_MS` from its
+//   first sighting (#367's review: core's `slowestTrainingSeconds`, Iron Gym's 1 a second at the player's experience
+//   multipliers then, as #343's waits are bounded, augmentations.ts's `INSTALL_WAIT_OVERDUE_SLACK_MS`). So a training
+//   that never starts (no gym the money covers, or a city with none and no travel) fails too. The clock stops while the
+//   owner's work holds the training (the rule's `bladeburnerTrainingHeld` events). An install restarts it (the combat
+//   experience goes, `PlayerObjectGeneralMethods.ts:86-97`), so each cycle's training is its own;
 // - all four at 100 with the division not joined, for over `BLADEBURNER_JOIN_WITHIN_MS`;
 // - the division joined, home's RAM holding the worker beyond what it keeps, and no reading, for over
 //   `BLADEBURNER_UNREAD_WITHIN_MS`;
@@ -22,8 +25,9 @@ import {
   type MediumSnapshotData,
   planCombatTraining,
   type SlowSnapshotData,
+  slowestTrainingSeconds,
 } from "@bitburner-agent/core";
-import { bladeburnerSnapshotOf, homeMaxRamOf } from "./bladeburner.ts";
+import { BLADEBURNER_TRAINING_HELD_EVENT_KIND, bladeburnerSnapshotOf, homeMaxRamOf } from "./bladeburner.ts";
 import { bitNodeOfSlow } from "./gang.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 import { homeKeptGbOf, singularityRamMultiplierOf } from "./share.ts";
@@ -77,6 +81,8 @@ interface Training {
   lastAugReset: number | null;
   fromLevels: string;
   estimate: { atMs: number; seconds: number; gym: string } | null;
+  /** The overdue bound from its first sighting: twice the slowest gym's estimate then, and the slack. */
+  boundMs: number;
   doneAtMs: number | null;
   lastAtMs: number;
   lastLevels: string;
@@ -87,6 +93,32 @@ const levelsOf = (person: CombatPerson) =>
 
 /** Bladeburner over a window, folded from the slow and medium snapshots in order of arrival. */
 export class BladeburnerFold {
+  /** When the training was held for the owner's work, and let go: the rule's events, in order. */
+  readonly #holds: { atMs: number; held: boolean }[];
+
+  /** `events`: the window's, for the rule's `bladeburnerTrainingHeld` (its overdue clock stops while held). */
+  constructor(events: readonly { kind: string; atMs: number; detail: unknown }[] = []) {
+    this.#holds = events
+      .filter((event) => event.kind === BLADEBURNER_TRAINING_HELD_EVENT_KIND)
+      .map((event) => ({ atMs: event.atMs, held: (event.detail as { held?: unknown } | null)?.held === true }))
+      .sort((a, b) => a.atMs - b.atMs);
+  }
+
+  /** The time from `fromMs` to `toMs` the training was held for the owner's work. */
+  #heldMsBetween(fromMs: number, toMs: number): number {
+    let total = 0;
+    let since: number | null = null;
+    for (const { atMs, held } of this.#holds) {
+      if (atMs > toMs) break;
+      if (held && since === null) since = Math.max(atMs, fromMs);
+      if (!held && since !== null) {
+        total += Math.max(0, Math.min(atMs, toMs) - since);
+        since = null;
+      }
+    }
+    return since === null ? total : total + Math.max(0, toMs - since);
+  }
+
   readonly #slows: { atMs: number; bitNode: number; homeKeptGb: number; lastAugReset: number | null }[] = [];
   #mediumInBitNode = 0;
   #lastAtMs: number | null = null;
@@ -156,6 +188,8 @@ export class BladeburnerFold {
           lastAugReset: slow.lastAugReset,
           fromLevels: levelsOf(person),
           estimate: null,
+          // To the millisecond, as the snapshots' times are: the bound's edge is then reachable, and judged.
+          boundMs: Math.ceil(2 * slowestTrainingSeconds(person) * 1000) + BLADEBURNER_TRAINING_SLACK_MS,
           doneAtMs: null,
           lastAtMs: atMs,
           lastLevels: levelsOf(person),
@@ -177,12 +211,10 @@ export class BladeburnerFold {
       current.lastLevels = levelsOf(person);
     }
     const open = training ? current : undefined;
-    const estimate = open?.estimate ?? null;
     this.#overdue.add(
       atMs,
-      estimate !== null && atMs - estimate.atMs > 2 * estimate.seconds * 1000 + BLADEBURNER_TRAINING_SLACK_MS
-        ? `estimated ${formatDuration(estimate.seconds * 1000)} at ${estimate.gym} from ` +
-            `${formatIsoTime(estimate.atMs)}; ${open?.lastLevels}`
+      open !== undefined && atMs - open.fromMs - this.#heldMsBetween(open.fromMs, atMs) > open.boundMs
+        ? `first seen ${formatIsoTime(open.fromMs)}, its bound ${formatDuration(open.boundMs)}; ${open.lastLevels}`
         : null,
     );
     this.#notJoined.add(
@@ -234,7 +266,7 @@ export class BladeburnerFold {
     for (const each of this.#trainings) {
       const estimate =
         each.estimate === null
-          ? "no estimate (no gym the money covered)"
+          ? "no gym's estimate (none the money covered)"
           : `estimated ${formatDuration(each.estimate.seconds * 1000)} at ${each.estimate.gym} from ` +
             `${formatIsoTime(each.estimate.atMs)}`;
       const end =
@@ -245,7 +277,10 @@ export class BladeburnerFold {
               ? ""
               : ` (${((each.doneAtMs - each.estimate.atMs) / (each.estimate.seconds * 1000)).toFixed(2)} of the ` +
                 "estimate from when it was made)");
-      lines.push(`    from ${formatIsoTime(each.fromMs)} (${each.fromLevels}): ${estimate}; ${end}`);
+      lines.push(
+        `    from ${formatIsoTime(each.fromMs)} (${each.fromLevels}): ${estimate}; overdue past ` +
+          `${formatDuration(each.boundMs)}; ${end}`,
+      );
     }
     lines.push(
       this.#joined === null
@@ -273,7 +308,11 @@ export class BladeburnerFold {
     for (const [problem, atMs] of this.#problems) lines.push(`    ${formatIsoTime(atMs)}: ${problem}`);
     // The overdue training fails at once: its stretch is already past its bound.
     const judged: [readonly Stretch[], number, string][] = [
-      [this.#overdue.all(endMs), 0, "the training past twice its estimate and 10 min, still short of 100,"],
+      [
+        this.#overdue.all(endMs),
+        0,
+        "the training past twice the slowest gym's estimate and 10 min from its first sighting, still short of 100,",
+      ],
       [this.#notJoined.all(endMs), BLADEBURNER_JOIN_WITHIN_MS, "all four at 100 with the division not joined"],
       [
         this.#unread.all(endMs),

@@ -5,11 +5,15 @@
 //   or SF7 elsewhere, it's #359's left-out question for the owner: not managed there, and nothing is sent.
 // - The training: core's `planCombatTraining`, from the medium snapshot's player (each stat's level, experience and
 //   multipliers, its money and city): the stats in the game's order, each to 100, at the gym with the most experience
-//   a second the money covers in the player's city (Powerhouse Gym: 10 a second for $2,400). Sent as the brain's work,
-//   a class (unfocused: a class has no focus penalty, `Work/Formulas.ts:108-121`), in place of A5's faction work, which
-//   waits for it (./factions.ts), as the invitations' travel does (./invitations.ts): the training would stop in
-//   another city. The owner's work on the dashboard still wins. The gym it chose is kept while the money covers a
-//   minute of it (core's `GYM_KEPT_SECONDS`), so the choice doesn't flip with each snapshot's money.
+//   a second the money covers in any city (Powerhouse Gym: 10 a second for $2,400), the travel's $200,000 counted for
+//   one in another city. The travel goes first, as a `travel` intent (Singularity's `travelToCity` with SF4, else the
+//   page). Then the class, as the brain's work (unfocused: a class has no focus penalty, `Work/Formulas.ts:108-121`),
+//   in place of A5's faction work, which waits for it (./factions.ts), as the invitations' travel does
+//   (./invitations.ts): a travel doesn't stop a class (`PersonObjects/Person.ts:243-252`), but the rule's own choice
+//   would then send the player back to the gym's city. The gym it chose is kept while the player is there and the money
+//   covers a minute of it (core's `GYM_KEPT_SECONDS`), so the choice doesn't flip with each snapshot's money.
+// - The owner's work on the dashboard wins: the training is held (no class, no travel), and `bladeburnerTrainingHeld`
+//   says so at each change, so the run report pauses the training's overdue clock meanwhile.
 // - The join: once all four are at 100, `joinBladeburnerDivision`, irreversible, past the gate (its guard: all four at
 //   100 on the medium snapshot, ./irreversible-gate.ts; then a save backup). Done once the medium snapshot shows the
 //   player in the division (`inBladeburner`, free of RAM).
@@ -20,8 +24,10 @@
 //   home needs.
 // - Left out, and labelled: crime and Bladeburner's own Training in place of the gym (the planner's choice of focus,
 //   a later slice); the gym's cost against the brain's purchases (only core's class guard: 10 minutes of its cost);
-//   the travel to a gym from a city with none (the rule waits, and says so); an install mid-training, which loses the
-//   combat experience (A6 doesn't weigh it: B7's); Bladeburner's actions (B2), so in a live B1 run the rank stays 0.
+//   below Powerhouse's $1.44m the training goes to Iron Gym, 10 times slower (about 4.7 h at SF1.3), A5's work and the
+//   invitations' travel held all the while (the player's focus is the planner's, later); an install mid-training,
+//   which loses the combat experience (A6 doesn't weigh it: B7's); Bladeburner's actions (B2), so in a live B1 run the
+//   rank stays 0.
 import {
   BLADEBURNER_BITNODES,
   BLADEBURNER_FACTION,
@@ -44,6 +50,16 @@ import {
 } from "@bitburner-agent/core";
 import { bitNodeOfSlow } from "./gang.ts";
 import type { OwnersWork } from "./work.ts";
+
+/** The training's held for the owner's work (#367's review), or not: at each change, for the report's overdue clock. */
+export const BLADEBURNER_TRAINING_HELD_EVENT_KIND = "bladeburnerTrainingHeld";
+
+export type BladeburnerEvent = { type: typeof BLADEBURNER_TRAINING_HELD_EVENT_KIND; atMs: number; held: boolean };
+
+/** The travel to a gym's city, as the rule asks for it (#367's review). */
+export function travelIntent(city: string): Intent {
+  return { action: "travel", args: { city }, id: intentId("travel", { city }) };
+}
 
 /** The division's join, as the rule asks for it. */
 export const JOIN_BLADEBURNER_INTENT: Intent = {
@@ -132,6 +148,9 @@ function describeLevels(skills: Record<string, number>): string {
 
 /** The training in words, for the dashboard, the log and the run report. */
 export function describeTraining(plan: CombatTrainingPlan, skills: Record<string, number>): string {
+  if (plan.work === null && plan.travel !== null && plan.gym !== null) {
+    return `travelling to ${plan.travel} for ${plan.gym} (${describeLevels(skills)})`;
+  }
   if (plan.work === null) return `training waits for ${plan.waitingFor} (${describeLevels(skills)})`;
   return (
     `${classLabel(plan.work)} (${describeLevels(skills)}; all four at ${BLADEBURNER_JOIN_LEVEL} in about ` +
@@ -150,8 +169,13 @@ export class BladeburnerRule {
   #gym: string | null = null;
   #lastLogged = "";
 
-  constructor(log: (line: string) => void = () => {}) {
+  readonly #emit: (event: BladeburnerEvent) => void;
+  /** Whether the training was held for the owner's work at the last update, as last said by its event. */
+  #held = false;
+
+  constructor(log: (line: string) => void = () => {}, emit: (event: BladeburnerEvent) => void = () => {}) {
     this.#log = log;
+    this.#emit = emit;
   }
 
   view(): BladeburnerView {
@@ -160,7 +184,8 @@ export class BladeburnerRule {
 
   /** Whether the brain's work is the training now: A5's faction work and the invitations' travel wait for it. */
   training(): boolean {
-    return this.#view.stage === "training" && this.#view.training?.work != null;
+    const training = this.#view.training;
+    return this.#view.stage === "training" && !this.#held && (training?.work != null || training?.travel != null);
   }
 
   /**
@@ -171,10 +196,37 @@ export class BladeburnerRule {
     mediumData,
     slowData,
     homeKeptGb,
+    ownersWork = false,
+    nowMs = null,
   }: {
     mediumData: MediumSnapshotData | null;
     slowData: SlowSnapshotData | null;
     homeKeptGb: number;
+    /** The owner's work is set on the dashboard: it wins, and the training is held. */
+    ownersWork?: boolean;
+    /** The controller's clock, for the events; null before any. */
+    nowMs?: number | null;
+  }): BladeburnerDecision {
+    const decision = this.#update({ mediumData, slowData, homeKeptGb, ownersWork });
+    // Held while training with the owner's work set: said at each change, for the run report's overdue clock.
+    const held = this.#view.stage === "training" && ownersWork;
+    if (held !== this.#held && nowMs !== null) {
+      this.#held = held;
+      this.#emit({ type: BLADEBURNER_TRAINING_HELD_EVENT_KIND, atMs: nowMs, held });
+    }
+    return decision;
+  }
+
+  #update({
+    mediumData,
+    slowData,
+    homeKeptGb,
+    ownersWork,
+  }: {
+    mediumData: MediumSnapshotData | null;
+    slowData: SlowSnapshotData | null;
+    homeKeptGb: number;
+    ownersWork: boolean;
   }): BladeburnerDecision {
     const none: BladeburnerDecision = { work: null, intent: null, state: null };
     const bitNode = bitNodeOfSlow(slowData);
@@ -201,9 +253,14 @@ export class BladeburnerRule {
       if (!combatTrained(person)) {
         const training = planCombatTraining(person, { money, city, kept: this.#gym });
         this.#gym = training.gym ?? this.#gym;
+        if (ownersWork) {
+          const line = `Bladeburner: training to join held for your work on the dashboard (${describeLevels(person.skills)})`;
+          return this.#decide({ stage: "training", line, training }, none);
+        }
         const line = `Bladeburner: training to join, ${describeTraining(training, person.skills)}`;
         const work: GymWork | null = training.work === null ? null : { kind: "class", ...training.work };
-        return this.#decide({ stage: "training", line, training }, { ...none, work });
+        const intent = training.travel === null ? null : travelIntent(training.travel);
+        return this.#decide({ stage: "training", line, training }, { ...none, work, intent });
       }
       const line =
         `Bladeburner: joining the division (${describeLevels(person.skills)}: all four at ${BLADEBURNER_JOIN_LEVEL})` +

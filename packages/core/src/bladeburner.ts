@@ -9,8 +9,10 @@
  *   (`NetscriptFunctions/Bladeburner.ts:349-363`; the NSA's button checks the same, `Locations/ui/SpecialLocation.tsx:
  *   62-98`). It can't be undone in the BitNode (an install keeps it, `Prestige.ts:155-158`; a destroy clears it), so its
  *   intent is irreversible.
- * - **The faction:** Bladeburners, at rank 25 (`Bladeburner/data/Constants.ts:42`), joined only by asking
- *   (`Bladeburner/Bladeburner.ts:265-273`: the API's `joinBladeburnerFaction`, or an install's rejoin, `:259-263`); it
+ * - **The faction:** Bladeburners, at rank 25 (`Bladeburner/data/Constants.ts:42`), by two paths: an invitation (its
+ *   requirements, SF6 or SF7 or BN6 or BN7, and the rank, `Faction/FactionInfo.tsx:709`, which the engine checks
+ *   every 10 cycles, `engine.tsx:176-183`), which A5 may accept as any; or asking (`Bladeburner/Bladeburner.ts:265-273`:
+ *   the API's `joinBladeburnerFaction`, or an install's rejoin, `:259-263`), which the Bladeburner worker does. It
  *   offers no work (`Faction/FactionInfo.tsx:698-714`; core's `FACTIONS`: no work types).
  * - **Combat to 100:** a level is ⌊m·(32·ln(exp + 534.6) − 200)⌋, at least 1, its inverse the experience a level needs
  *   (`PersonObjects/formulas/skill.ts:7-34`), m the player's `mults.<stat>` times the BitNode's `<Stat>LevelMultiplier`
@@ -32,8 +34,8 @@ import {
   CLASS_MONEY_GUARD_SECONDS,
   type ClassChoice,
   classCostPerSecond,
-  classStartProblem,
 } from "./classes.ts";
+import { TRAVEL_COST } from "./locations.ts";
 
 /** The BitNodes the brain plays Bladeburner in (B1): those that have it with no Source-File. */
 export const BLADEBURNER_BITNODES: readonly number[] = [6, 7];
@@ -184,32 +186,39 @@ export function gymExpPerSecond(gym: string, stat: CombatStat, person: CombatPer
  */
 export const GYM_KEPT_SECONDS = 60;
 
+/** The gym with the least experience a second: Iron Gym, 1 a second (`Locations/data/LocationsMetadata.ts:293-296`). */
+export const SLOWEST_GYM = "Iron Gym";
+
 /**
- * The gym with the most experience a second the money covers in the player's city (#367): each by its `expMult`, the
- * most first, started only past core's class guard (10 minutes of its cost), and `kept` (the gym the rule last chose)
- * kept while the money covers `GYM_KEPT_SECONDS` of it. Null with none: no gym in the city (Chongqing, New Tokyo and
- * Ishima have none; the travel is left out, labelled: the rule waits), or none the money covers.
+ * The gym with the most experience a second the money covers (#367), in any city: each by its `expMult`, the most
+ * first. One in the player's city is started past core's class guard (10 minutes of its cost); one in another city
+ * needs that and the travel there too, `TRAVEL_COST` ($200,000, `Constants.ts:28`, `PersonObjects/Person.ts:243-252`),
+ * which the rule then asks for. `kept` (the gym the rule last chose) is kept while the player is in its city and the
+ * money covers `GYM_KEPT_SECONDS` of it. Null with none the money covers.
  */
 export function chooseGym({ money, city, kept }: { money: number; city: string; kept: string | null }): string | null {
-  const gyms = CLASS_LOCATION_NAMES.filter((name) => {
-    const location = CLASS_LOCATIONS[name];
-    return location?.kind === "gym" && location.city === city;
-  }).sort((a, b) => (CLASS_LOCATIONS[b]?.expMult ?? 0) - (CLASS_LOCATIONS[a]?.expMult ?? 0));
+  const gyms = CLASS_LOCATION_NAMES.filter((name) => CLASS_LOCATIONS[name]?.kind === "gym").sort(
+    (a, b) => (CLASS_LOCATIONS[b]?.expMult ?? 0) - (CLASS_LOCATIONS[a]?.expMult ?? 0),
+  );
   for (const gym of gyms) {
     const choice: ClassChoice = { location: gym, classType: "str" };
-    if (gym === kept && money >= classCostPerSecond(choice) * GYM_KEPT_SECONDS) return gym;
-    if (classStartProblem(choice, { money, city }) === null) return gym;
+    const here = CLASS_LOCATIONS[gym]?.city === city;
+    if (here && gym === kept && money >= classCostPerSecond(choice) * GYM_KEPT_SECONDS) return gym;
+    const travel = here ? 0 : TRAVEL_COST;
+    if (money >= classCostPerSecond(choice) * CLASS_MONEY_GUARD_SECONDS + travel) return gym;
   }
   return null;
 }
 
-/** The training to join: the stat now, the gym and its class, what's left, and the time to all four at 100. */
+/** The training to join: the stat now, the gym, its city to travel to, its class, what's left, and the time to 100. */
 export interface CombatTrainingPlan {
   /** The first stat in the game's order short of 100, or null: all four there. */
   stat: CombatStat | null;
   /** The gym chosen (`chooseGym`), or null: none, or trained. */
   gym: string | null;
-  /** The class to work, or null. */
+  /** The gym's city, while the player is in another: the travel to ask for first. Null otherwise. */
+  travel: string | null;
+  /** The class to work, once the player is in the gym's city; or null. */
   work: ClassChoice | null;
   expLeft: Record<CombatStat, number>;
   /** Seconds to all four at 100 at the gym chosen, each at its own rate; 0 trained; null with no gym. */
@@ -218,11 +227,30 @@ export interface CombatTrainingPlan {
   waitingFor: string | null;
 }
 
+/** Seconds to all four at 100 at `gym`, each stat's experience left over its own rate there. */
+function trainingSecondsAt(gym: string, person: CombatPerson, expLeft: Record<CombatStat, number>): number {
+  return COMBAT_STATS.reduce((sum, each) => {
+    const rate = gymExpPerSecond(gym, each, person);
+    return sum + (expLeft[each] === 0 ? 0 : rate > 0 ? expLeft[each] / rate : Number.POSITIVE_INFINITY);
+  }, 0);
+}
+
+/**
+ * The longest the training to join can take once a gym is affordable (#367's review): all four to 100 at the slowest
+ * gym, Iron Gym's 1 a second times the player's experience multipliers. The run report's overdue bound is twice this
+ * and 10 minutes from the training's first sighting, as #343's waits are bounded. About 4.7 h at SF1.3's ×1.28
+ * (4 × 5,417 / 1.28 s), 12.5 h at ×1 (4 × 11,255 s).
+ */
+export function slowestTrainingSeconds(person: CombatPerson): number {
+  return trainingSecondsAt(SLOWEST_GYM, person, combatExpLeft(person));
+}
+
 /**
  * The training to join the division (#367): the stats in the game's order, each to 100 in turn (the order doesn't
- * change the total: one gym trains one stat at a time), at `chooseGym`'s gym, the estimate each stat's experience left
- * over its rate there. Left out, and labelled: crime and Bladeburner's own Training (the planner's choice of focus,
- * later); the rise of the experience multipliers meanwhile (none without an install, which loses the experience).
+ * change the total: one gym trains one stat at a time), at `chooseGym`'s gym, first travelling to its city, the
+ * estimate each stat's experience left over its rate there. Left out, and labelled: crime and Bladeburner's own
+ * Training (the planner's choice of focus, later); the rise of the experience multipliers meanwhile (none without an
+ * install, which loses the experience).
  */
 export function planCombatTraining(
   person: CombatPerson,
@@ -230,28 +258,27 @@ export function planCombatTraining(
 ): CombatTrainingPlan {
   const expLeft = combatExpLeft(person);
   const stat = COMBAT_STATS.find((each) => person.skills[each] < BLADEBURNER_JOIN_LEVEL) ?? null;
-  if (stat === null) return { stat, gym: null, work: null, expLeft, etaSeconds: 0, waitingFor: null };
+  if (stat === null) return { stat, gym: null, travel: null, work: null, expLeft, etaSeconds: 0, waitingFor: null };
   const gym = chooseGym(where);
   if (gym === null) {
-    const inCity = CLASS_LOCATION_NAMES.some(
-      (name) => CLASS_LOCATIONS[name]?.kind === "gym" && CLASS_LOCATIONS[name]?.city === where.city,
-    );
-    const waitingFor = inCity
-      ? `money for a gym in ${where.city}: ${CLASS_MONEY_GUARD_SECONDS / 60} minutes of its cost`
-      : `a gym: none in ${where.city} (the travel is left out)`;
-    return { stat, gym, work: null, expLeft, etaSeconds: null, waitingFor };
+    const least = classCostPerSecond({ location: SLOWEST_GYM, classType: "str" }) * CLASS_MONEY_GUARD_SECONDS;
+    const travel =
+      CLASS_LOCATIONS[SLOWEST_GYM]?.city === where.city
+        ? ""
+        : `, and $${TRAVEL_COST.toLocaleString("en-US")} to travel there`;
+    const waitingFor = `money for a gym: $${least.toLocaleString("en-US")} at ${SLOWEST_GYM} (${CLASS_MONEY_GUARD_SECONDS / 60} minutes of its cost)${travel}`;
+    return { stat, gym, travel: null, work: null, expLeft, etaSeconds: null, waitingFor };
   }
-  const etaSeconds = COMBAT_STATS.reduce((sum, each) => {
-    const rate = gymExpPerSecond(gym, each, person);
-    return sum + (expLeft[each] === 0 ? 0 : rate > 0 ? expLeft[each] / rate : Number.POSITIVE_INFINITY);
-  }, 0);
+  const gymCity = CLASS_LOCATIONS[gym]?.city ?? where.city;
+  const away = gymCity !== where.city;
   return {
     stat,
     gym,
-    work: { location: gym, classType: COMBAT_GYM_TYPES[stat] },
+    travel: away ? gymCity : null,
+    work: away ? null : { location: gym, classType: COMBAT_GYM_TYPES[stat] },
     expLeft,
-    etaSeconds,
-    waitingFor: null,
+    etaSeconds: trainingSecondsAt(gym, person, expLeft),
+    waitingFor: away ? `the travel to ${gymCity}` : null,
   };
 }
 

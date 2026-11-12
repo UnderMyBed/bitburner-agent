@@ -98,3 +98,49 @@ test("the Bladeburner worker: no rank out of the division; in it, the rank read,
   await fresh.game.run(12_000);
   expect(fresh.medium()?.bladeburner).toEqual({ rank: 25, problems: [] });
 });
+
+test("the brain gone: the Agent forgets the Bladeburner state, so its worker doesn't run on in safe mode", async () => {
+  const fresh = await freshStart({ withDesiredState: false, fixture: BN6, beforeAgent: trained });
+  expect(await triedOnce(fresh, JOIN_BLADEBURNER_INTENT)).toMatchObject({ done: true });
+  // Kept for safe mode (its ttl), so the Agent's rounds go on once the brain is gone.
+  fresh.brain.channel.setDesiredState({
+    hackLoop: HACK_LOOP_OFF,
+    intents: [],
+    bladeburner: { joinTheFaction: true },
+    ttlMs: 600_000,
+  });
+  await fresh.game.runUntil(() => (fresh.medium()?.bladeburner?.problems.length ?? 0) > 0, 30_000);
+  fresh.brain.stop();
+  await fresh.game.run(5_000);
+  // The rank there now: a worker still running on the old state would join the faction within 10 s.
+  await fresh.simulation.diagnostics.setBladeburnerRank(25);
+  await fresh.game.run(60_000);
+  await fresh.simulation.writeFile(
+    "home",
+    "factions.js",
+    'export async function main(ns) { ns.print("factions:" + JSON.stringify(ns.getPlayer().factions)); }',
+  );
+  const { pid, error } = await fresh.simulation.run("home", "factions.js");
+  expect(error).toBeUndefined();
+  await fresh.game.run(1_000);
+  const line = (await fresh.simulation.logs(pid)).find((each) => each.startsWith("factions:"));
+  expect(JSON.parse((line ?? "factions:null").slice(9))).not.toContain("Bladeburners");
+}, 120_000);
+
+test("the division's join (sim) from outside Sector-12: refused, as the NSA's button is there", async () => {
+  const fresh = await freshStart({
+    withDesiredState: false,
+    fixture: BN6,
+    beforeAgent: async (game) => {
+      await trained(game);
+      await game.simulation.diagnostics.setMoney(1e6);
+    },
+  });
+  const travel = { action: "travel", args: { city: "Aevum" }, id: "travel(Aevum)" } as const;
+  expect(await triedOnce(fresh, travel)).toMatchObject({ done: true });
+  expect(await triedOnce(fresh, JOIN_BLADEBURNER_INTENT)).toMatchObject({
+    done: false,
+    backend: "sim",
+    problem: "the NSA is in Sector-12, and the player is in Aevum (travel there first)",
+  });
+});
