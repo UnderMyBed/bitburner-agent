@@ -963,9 +963,10 @@ describe("the levelling rule (#336)", () => {
     batchFor(flat, 0, measuredMs, { incomePerSecond: 0 });
     expect(flat.mode()).toBe("money");
     expect(flat.view().estimates?.batch).toBeNull();
-    // Waiting, no choice made: the time to the destroy takes no estimate from it yet (#360).
-    expect(flat.view()).toMatchObject({ waitingForIncome: true });
-    expect(levellingEstimateMs(flat.view())).toBeNull();
+    // Waiting: the time to the destroy (#360) takes the candidate the choice would take meanwhile, (d) left out:
+    // levelling mode here, its estimate.
+    expect(flat.view()).toMatchObject({ waitingForIncome: true, meanwhile: "level" });
+    expect(levellingEstimateMs(flat.view())).toBe((flat.view().estimates?.level as number) * 1000);
     expect(flat.view().lines.at(-1)).toBe("  money waits for (d)'s income: none measured yet (5 min at most, #382)");
     batchFor(flat, measuredMs + 10 * SECOND, LEVELLING_INCOME_WAIT_MS - 20 * SECOND, {
       incomePerSecond: 0,

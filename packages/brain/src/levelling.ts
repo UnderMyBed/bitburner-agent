@@ -497,10 +497,13 @@ export interface LevellingView {
   /** The view in words, for the dashboard. */
   lines: string[];
   /**
-   * Money waiting for (d)'s income (#382's review, `LEVELLING_INCOME_WAIT_MS`): no choice made yet, so no chosen
-   * estimate for the time to the destroy (#360). Absent, not waiting.
+   * Money waiting for (d)'s income (#382's review, `LEVELLING_INCOME_WAIT_MS`), and the candidate the choice would
+   * take meanwhile with (d) left out (core's `chooseLevelling` from money): the time to the destroy (#360) takes its
+   * estimate, as levelling's first choice, since (d), once measured, can only shorten the one chosen. Absent, not
+   * waiting.
    */
   waitingForIncome?: boolean;
+  meanwhile?: LevellingCandidate;
 }
 
 /** The levelling rule (#336), as the controller runs it. */
@@ -676,7 +679,9 @@ export class LevellingRule {
         ...this.#lines(estimates, target?.hostname ?? null, figures, inputs, plan),
         ...(waitsForIncome ? ["  money waits for (d)'s income: none measured yet (5 min at most, #382)"] : []),
       ],
-      ...(waitsForIncome ? { waitingForIncome: true } : {}),
+      ...(waitsForIncome
+        ? { waitingForIncome: true, meanwhile: chooseLevelling({ ...estimates, batch: null }, "money") }
+        : {}),
     };
     return {
       mode: this.#mode,

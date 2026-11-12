@@ -66,7 +66,7 @@ import { bitNodeLabel } from "./cycle-report.ts";
 import type { GangStallStretch } from "./gang-stalls.ts";
 import { formatDuration } from "./gap-report.ts";
 import { LEVELLING_CHOSEN_EVENT_KIND, type LevellingView } from "./levelling.ts";
-import type { Environment, TelemetryStore } from "./telemetry-store.ts";
+import type { Environment, StoredEvent, TelemetryStore } from "./telemetry-store.ts";
 import { HACKING_EXP_WINDOW_MS } from "./world-daemon.ts";
 
 /** Stored at each estimate (#360), for the campaign report and the run report. */
@@ -305,17 +305,15 @@ export function readDestroySeed(store: TelemetryStore, environment: Environment,
       environment,
       sinceMs: 0,
       untilMs: Number.MAX_SAFE_INTEGER,
-      kinds: [...CAMPAIGN_EVENT_KINDS, LEVELLING_CHOSEN_EVENT_KIND],
+      kinds: [...CAMPAIGN_EVENT_KINDS, LEVELLING_CHOSEN_EVENT_KIND, DESTROY_ESTIMATED_EVENT_KIND],
     });
   });
   fold.add({ id: 0, release: "", ...live });
-  const levellingChosenAtMs = events
-    .filter((each) => each.kind === LEVELLING_CHOSEN_EVENT_KIND)
-    .map((each) => each.atMs);
+  const levellingChosenAtMs = levellingLookTimesOf(events);
   const views =
     campaignViews(
       fold,
-      events.filter((each) => each.kind !== LEVELLING_CHOSEN_EVENT_KIND),
+      events.filter((each) => (CAMPAIGN_EVENT_KINDS as readonly string[]).includes(each.kind)),
     )?.views ?? [];
   const index = views.findLastIndex((view) => view.bitNode.lastNodeReset === live.resetInfo.lastNodeReset);
   const view = views[index];
@@ -743,10 +741,26 @@ export class DestroyEstimateRule {
 }
 
 /**
- * Levelling's chosen candidate's estimate (#336), ms, once it applies and has one; Infinity where it's never. None
- * while money waits for (d)'s income (#382's review): the choice isn't made yet.
+ * When levelling first looked, among `events` (#360, a prior's D from before levelling): each `levellingChosen`, and
+ * (#382's review) each estimate at levelling's moment, made while money waits for (d)'s income, before any choice.
+ */
+export function levellingLookTimesOf(events: readonly StoredEvent[]): number[] {
+  return events
+    .filter(
+      (event) =>
+        event.kind === LEVELLING_CHOSEN_EVENT_KIND ||
+        (event.kind === DESTROY_ESTIMATED_EVENT_KIND &&
+          (event.detail as { moment?: unknown } | null | undefined)?.moment === "levelling"),
+    )
+    .map((event) => event.atMs);
+}
+
+/**
+ * Levelling's chosen candidate's estimate (#336), ms, once it applies and has one; Infinity where it's never. While
+ * money waits for (d)'s income (#382's review), the candidate the choice would take meanwhile with (d) left out.
  */
 export function levellingEstimateMs(view: LevellingView): number | null {
-  const seconds = view.applies && view.waitingForIncome !== true ? (view.estimates?.[view.mode] ?? null) : null;
+  const candidate = view.waitingForIncome === true ? (view.meanwhile ?? view.mode) : view.mode;
+  const seconds = view.applies ? (view.estimates?.[candidate] ?? null) : null;
   return seconds === null || Number.isNaN(seconds) ? null : seconds * 1000;
 }
