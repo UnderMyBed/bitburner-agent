@@ -3818,7 +3818,7 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     expect(chosen()[0]?.gangCost).toMatchObject({ reputation: 5e5, rateKept: null });
   });
 
-  test("a pause to train longer than the countdown (#372's review): the cycle's last p decides, keeping; no install, no stall", () => {
+  test("a pause to train longer than the countdown (#372's review): the cycle's last p decides, keeping; no install, held for the stall to watch", () => {
     rule = newRule("planner");
     gameTimeMs += MINUTE;
     at(2e6);
@@ -3830,22 +3830,10 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
       expect(at(2e6, training), `minute ${minute}`).toEqual({ intent: null, install: false, committed: false });
       expect(timing()).toMatchObject({ route: "gang formed", gangInstall: { choice: "keep", rateKept: 0.979 } });
       expect(rule.view().progress?.countdown).toBeNull();
-      // The World Daemon's reputation stall not raised while the plan expects no respect, and said once.
-      expect(rule.redPillHeldAtGang()).toBe(false);
+      // Held for The Red Pill there: the World Daemon's reputation stall watches, as on main (#372's re-review).
+      expect(rule.redPillHeldAtGang()).toBe(true);
     }
     expect(chosen()).toEqual([]);
-    expect(
-      lines.filter((line) =>
-        line.startsWith(
-          "augmentations: installs held for The Red Pill at the gang's faction while the gang's plan earns no respect " +
-            "(training, justice or warfare): the planner decides with the cycle's last p (0.979); the World Daemon's " +
-            "reputation stall isn't raised meanwhile",
-        ),
-      ),
-    ).toHaveLength(1);
-    // Earning again: the stall watched again.
-    at(2e6);
-    expect(rule.redPillHeldAtGang()).toBe(true);
     // A restart keeps p (the store's): training, still the planner's.
     rule = newRule("planner");
     at(2e6, training);

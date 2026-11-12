@@ -79,7 +79,8 @@
 //   installing now is chosen at once (`reason` "the gang's favour"), through the controller's gate. Every install in
 //   BN2 with the gang carries its cost (`gangCost`: the reputation lost, the favour gained, The Red Pill's estimate),
 //   the rules' too. While the plan earns no respect (training, justice, warfare), the cycle's last p decides (kept in
-//   the store, #372's review), the World Daemon's stall not raised meanwhile; only in a cycle where p was never known
+//   the store, #372's review), the World Daemon's reputation stall as on main: a pause past its 10 minutes fails the
+//   report, falsely in a long justice stretch, until the plan's time to earning is computed; only in a cycle where p was never known
 //   do the rules decide there, as before: nothing banked is growing, and a hold would only stall. The A/B's baseline
 //   (`bn2Route` "rules") keeps the count rule and G5's hold.
 //   Once the count is met (Daedalus inviting or joined), or never short (The Red Pill elsewhere), the count rule times
@@ -1362,8 +1363,6 @@ export class AugmentationRule {
   #holding: HoldReason | null = null;
   /** The last decision held installs for The Red Pill at the gang's faction (#335's review): the World Daemon's stall. */
   #redPillHeldAtGang = false;
-  /** The planner held installs with the gang's plan earning no respect at the last such decision (#372's review). */
-  #earningNoneLogged = false;
   /**
    * NeuroFlux Governor's levels the money buys (#336), donations included (decision 53), as the last decision held
    * every install for the destroy, or null: the planner's install candidate.
@@ -2125,8 +2124,6 @@ export class AugmentationRule {
       );
     }
     if (readRateKept !== null) cycleRateKept = readRateKept;
-    // The gang's plan earning no respect now (training, justice, warfare), its p the cycle's last.
-    const earningNone = gangInstall !== null && gangInstall.rateKept === null;
     if (cycle === null) {
       const endgame0 = this.#endgame({
         resetInfo,
@@ -2469,18 +2466,10 @@ export class AugmentationRule {
                 : "the planner times installs short of Daedalus's count",
           );
           // Keeping or banking with the gang (#357's (3)): installs held for The Red Pill there, the World Daemon's
-          // stall to watch (its reputation not rising); not while the plan expects no respect (#372's review), said.
-          if (timing.route === GANG_FORMED_ROUTE) {
-            this.#redPillHeldAtGang = !earningNone;
-            if (earningNone && !this.#earningNoneLogged) {
-              this.#log(
-                `augmentations: installs held for ${THE_RED_PILL} at the gang's faction while the gang's plan earns no ` +
-                  "respect (training, justice or warfare): the planner decides with the cycle's last p " +
-                  `(${cycleRateKept?.toFixed(3) ?? "unknown"}); the World Daemon's reputation stall isn't raised meanwhile`,
-              );
-            }
-            this.#earningNoneLogged = earningNone;
-          }
+          // stall to watch (its reputation not rising), as on main, a pause to train included (#372's re-review): no
+          // computed bound exists for the plan's time to earning, so a pause past the stall's 10 minutes fails the
+          // report, falsely in a long justice stretch, until that time is computed (the issue filed for it).
+          if (timing.route === GANG_FORMED_ROUTE) this.#redPillHeldAtGang = true;
           const waitedFor = timing.choice === null ? [] : next.slice(0, timing.choice);
           this.#waitedFor = waitedFor;
           const last = waitedFor.at(-1);

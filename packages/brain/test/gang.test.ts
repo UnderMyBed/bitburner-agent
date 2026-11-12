@@ -1825,16 +1825,20 @@ describe("the controller (#325)", () => {
       expect(brain.controller.worldDaemonView().stall?.step).toBe("redPillReputation");
     });
 
-    test("a pause to train (#372's review): the plan earning nothing for 5 minutes with $1t, the planner keeps, no stall", () => {
+    test("a pause to train (#372's reviews): no install with the kept p; within the stall's bound no stall, past it the stall", () => {
       const brain = connected();
-      play(brain, 3, () => 2e6);
+      // Earning: NiteSec's reputation rising 10,000 a minute from 1.9m.
+      play(brain, 3, (minute) => 1.9e6 + minute * 10_000);
       expect(brain.controller.augmentationsView().progress?.timing?.gangInstall?.rateKept).toBe(1);
-      // The twelve at hacking 1: the plan trains them all, earning no respect (p unread now), longer than a countdown.
+      // The twelve at hacking 1: the plan trains them all, earning no respect (p unread now), the reputation flat.
       const training = formed(
         Array.from({ length: 12 }, (_, index) => member(`member-${String(index + 1).padStart(2, "0")}`, 1)),
         { respect: 2e6, wantedLevel: 1, wantedPenalty: 2e6 / (2e6 + 1) },
       );
-      play(brain, 12, () => 2e6, { gang: training, fromMinute: 3 });
+      const flat = 1.9e6 + 2 * 10_000;
+      // Within the stall's bound (the reputation not risen for 10 minutes, `RED_PILL_REPUTATION_STALLED_AFTER_MS`): 8
+      // minutes, longer than a countdown, and no install, no stall.
+      play(brain, 8, () => flat, { gang: training, fromMinute: 3 });
       expect(brain.controller.gangView().plan?.assignments.every((each) => each.role === "training")).toBe(true);
       expect(brain.controller.augmentationsView().progress?.timing).toMatchObject({
         route: "gang formed",
@@ -1842,13 +1846,12 @@ describe("the controller (#325)", () => {
       });
       expect(brain.controller.augmentationsView().committed).toBe(false);
       expect(installAsked(brain.controller)).toBe(false);
-      // The reputation flat 12 minutes, but the plan expects none: the World Daemon's stall isn't raised, and why is said.
       expect(brain.controller.worldDaemonView().stall?.step).not.toBe("redPillReputation");
-      expect(brain.lines).toContainEqual(
-        expect.stringMatching(
-          /^augmentations: installs held for The Red Pill at the gang's faction while the gang's plan/,
-        ),
-      );
+      // Past it: the stall fires, as on main (a loud failure, not a silent halt), and still no install.
+      play(brain, 4, () => flat, { gang: training, fromMinute: 11 });
+      expect(brain.controller.worldDaemonView().stall?.step).toBe("redPillReputation");
+      expect(brain.controller.augmentationsView().committed).toBe(false);
+      expect(installAsked(brain.controller)).toBe(false);
     });
 
     test("no gang (BN1, NiteSec an ordinary faction; BN2, none formed): the planner's and the rules' controllers decide the same", () => {
