@@ -111,6 +111,7 @@ import {
   gangShopOf,
   withoutGangFaction,
 } from "./gang.ts";
+import type { GangStallStretch } from "./gang-stalls.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type InvitationEvent, type InvitationInputs, InvitationRule, type InvitationView } from "./invitations.ts";
@@ -883,6 +884,11 @@ export class DesiredStateController {
   /** Where the gang stands (#325): the dashboard's line. */
   gangView(): GangView {
     return this.#gang.view();
+  }
+
+  /** The gang's silent stalls (#354) past their bounds: the `gangStalled` alerts. */
+  gangStalls(): GangStallStretch[] {
+    return this.#gang.stalls();
   }
 
   /** The brain's faction work's watch (#203): its faction, its stall's window, its newest reading; or null. */
@@ -1704,7 +1710,11 @@ export class DesiredStateController {
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     // The gang (#325) first: its faction, once formed, is left out of what the other rules see as joined.
-    const gang = this.#gang.update({ mediumData: this.#mediumData, slowData: this.#slowSnapshot });
+    const gang = this.#gang.update({
+      mediumData: this.#mediumData,
+      slowData: this.#slowSnapshot,
+      mediumAtMs: this.#mediumAtMs,
+    });
     this.#gangIntent = gang.intent;
     this.#gangState = gang.gang;
     this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.hiddenFactions());

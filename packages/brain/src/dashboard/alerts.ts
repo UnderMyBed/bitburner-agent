@@ -8,6 +8,8 @@ import { BATCHER_NOT_RUNNING_AFTER } from "../batcher.ts";
 import type { DataBackupProblem } from "../data-backup.ts";
 import { FACTION_STATE_UNREAD_AFTER } from "../faction-state.ts";
 import { FACTION_WORK_STALLED_AFTER_MS, type FactionWorkStall } from "../factions.ts";
+import { GANG_STALL_KINDS, type GangStallStretch } from "../gang-stalls.ts";
+import { formatDuration } from "../gap-report.ts";
 import type { WorldDaemonStall } from "../world-daemon.ts";
 
 /** No fast snapshot (the heartbeat, every 2 s) for longer than this, with the brain up, is `agentSilent`. */
@@ -56,6 +58,7 @@ export type AlertName =
   | "augmentationDonationFailed"
   | "installNotRestarted"
   | "worldDaemonStalled"
+  | "gangStalled"
   | "storeThinningFailed"
   | "dataBackupFailed";
 
@@ -133,6 +136,11 @@ export interface AlertFacts {
   installAwaitingRestart: InstallAwaitingRestart | null;
   /** A step on the path to the World Daemon stalled (#215): the controller's, or null. */
   worldDaemonStall?: WorldDaemonStall | null;
+  /**
+   * The gang's silent stalls past their bounds (#354): a worker problem in every reading, a member off the rule's task,
+   * the respect flat with members working; the controller's (`GangRule.stalls`). Optional for callers with no gang.
+   */
+  gangStalls?: GangStallStretch[];
   /** This brain start's store thinning, failed (#283's review), or null. Optional for the callers that don't thin. */
   storeThinningFailure?: { atMs: number; failure: string } | null;
   /** The newest data backup's problem (#284), until one is taken cleanly; null or absent: none. */
@@ -153,8 +161,8 @@ export interface IncomeFacts {
  * dialogBlocking, incomeStalled, cloudServerProblem, messageRefused, factionStateUnread, then one intentStuck per stuck
  * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then
  * batcherOutOfStep, then one augmentationNotQueued per purchase not queued, then one augmentationDonationFailed per
- * donation not shown (#225), then installNotRestarted, then worldDaemonStalled, then storeThinningFailed, then
- * dataBackupFailed.
+ * donation not shown (#225), then installNotRestarted, then worldDaemonStalled, then one gangStalled per gang stall
+ * (#354), then storeThinningFailed, then dataBackupFailed.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -266,6 +274,7 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
     const minutes = Math.floor((facts.nowMs - stall.sinceMs) / 60_000);
     alerts.push({ name: "worldDaemonStalled", sinceMs: stall.sinceMs, detail: `${stall.detail}, for ${minutes} min` });
   }
+  alerts.push(...gangStalledAlerts(facts));
   const thinning = facts.storeThinningFailure ?? null;
   if (thinning !== null) {
     alerts.push({
@@ -395,6 +404,20 @@ export function incomeStalledAlert({
       `money hasn't risen for ${minutes} min, at $${Math.round(income.money).toLocaleString("en-US")}, with the hack ` +
       `loop on against ${hackLoopTarget}`,
   };
+}
+
+/**
+ * `gangStalled` (#354), one per stall the gang rule watches past its bound (../gang-stalls.ts): the run report fails
+ * the same, so each says so.
+ */
+export function gangStalledAlerts({ gangStalls = [] }: Pick<AlertFacts, "gangStalls">): Alert[] {
+  return gangStalls.map(({ kind, fromMs, toMs, detail }) => ({
+    name: "gangStalled",
+    sinceMs: fromMs,
+    detail:
+      `${GANG_STALL_KINDS.find((each) => each.kind === kind)?.what ?? kind} for ${formatDuration(toMs - fromMs)} ` +
+      `(${detail}): the run report fails it too`,
+  }));
 }
 
 /**

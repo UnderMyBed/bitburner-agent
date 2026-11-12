@@ -4,7 +4,7 @@
 // (hacking 202-220, which an hour from a fresh start doesn't reach; gang-start-simulation runs that path, #353). One
 // seed each: a thin slice, no sweep.
 // - A bounded hour: the gang forms through the gate, recruits, trains, works, ascends (G2) and keeps growing, and the
-//   run report's gang section passes.
+//   run report's gang section passes, its silent stalls' checks (#354) too.
 // - Wanted control, end to end: a gang the owner left with its wanted level far over the bound (three members on DDoS
 //   Attacks, which earns them no respect at their levels), then the brain for 10 minutes: every member goes to
 //   justice, as fewer couldn't bring the wanted level back to the bound within the 23 min, it falls fast, and the
@@ -131,6 +131,10 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
     "the gang unread in BN2 for 5 min or more:\n    none",
     "an ascension the rule makes not made for 1 min or more:\n    none",
     "equipment the rule buys, with the money free, not bought for 1 min or more:\n    none",
+    // The silent stalls (#354), on the brain's own plan at each reading against the engine's gang.
+    "a gang worker's problem in every reading for 1 min or more:\n    none",
+    "a member off the rule's task for 1 min or more:\n    none",
+    "the gang's respect flat with the rule's members working for 1 min or more:\n    none",
   ]) {
     expect(section).toContain(what);
   }

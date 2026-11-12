@@ -94,6 +94,47 @@ describe("augmentations (#210)", () => {
     expect(activeAlerts({ ...quiet, worldDaemonStall: null })).toEqual([]);
   });
 
+  test("the gang's silent stalls (#354): one alert each, the rule's past its bound, saying the report fails it too", () => {
+    const task = {
+      kind: "task" as const,
+      fromMs: 1_000,
+      toMs: 61_000,
+      detail: "member-01 on Unassigned, the rule's Train Hacking",
+    };
+    const problem = {
+      kind: "problem" as const,
+      fromMs: 2_000,
+      toMs: 92_000,
+      detail: "the game didn't set member-01 to Nap",
+    };
+    const respect = { kind: "respect" as const, fromMs: 3_000, toMs: 63_000, detail: "respect 4, 1.26/s expected" };
+    expect(activeAlerts({ ...quiet, gangStalls: [task, problem, respect] })).toEqual([
+      {
+        name: "gangStalled",
+        sinceMs: 1_000,
+        detail:
+          "a member off the rule's task for 1 min (member-01 on Unassigned, the rule's Train Hacking): the run " +
+          "report fails it too",
+      },
+      {
+        name: "gangStalled",
+        sinceMs: 2_000,
+        detail:
+          "a gang worker's problem in every reading for 1 min 30 s (the game didn't set member-01 to Nap): the run " +
+          "report fails it too",
+      },
+      {
+        name: "gangStalled",
+        sinceMs: 3_000,
+        detail:
+          "the gang's respect flat with the rule's members working for 1 min (respect 4, 1.26/s expected): the run " +
+          "report fails it too",
+      },
+    ]);
+    expect(activeAlerts({ ...quiet, gangStalls: [] })).toEqual([]);
+    expect(activeAlerts(quiet)).toEqual([]);
+  });
+
   test("the store's thinning at this start failed (#283's review): with why, from its time", () => {
     const failure = { atMs: quiet.nowMs - 60_000, failure: "disk I/O error" };
     expect(activeAlerts({ ...quiet, storeThinningFailure: failure })).toEqual([
