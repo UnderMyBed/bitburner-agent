@@ -1126,6 +1126,8 @@ function windowSection(facts: RunFacts): string[] {
     INVITATION_TRAVEL_EVENT_KIND,
     CITY_GROUP_CHOSEN_EVENT_KIND,
     INVITATION_WAITING_EVENT_KIND,
+    // The objective at 12 (#357): section 7 lists each, in words (#368's review: not raw here).
+    GANG_OBJECTIVE_CHOSEN_EVENT_KIND,
   ];
   const timeline = facts.events.filter((event) => !actions.includes(event.kind));
   for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event, facts.sinceMs)}`);

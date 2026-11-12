@@ -598,6 +598,7 @@ describe("the run report's section", () => {
       detail: {
         objective,
         reason: "estimates",
+        bitNode: "2:0",
         members: 12,
         respect: { respectPerCycle: 50, reputationPerSecond: 3.3, etaMs: 7.5e8 },
         money: { respectPerCycle: 5, reputationPerSecond: 0.33, etaMs: 7.5e9 },
@@ -630,6 +631,21 @@ describe("the run report's section", () => {
       // The brain's event, in the window or the day before: none.
       expect(judged(61, [chosenEvent(0, "respect")]).failures).toEqual([]);
       expect(judged(61, [], [chosenEvent(-60_000, "respect")]).failures).toEqual([]);
+      // One from another BitNode (#368's review) isn't this one's.
+      expect(judged(61, [], [chosenEvent(-60_000, "respect", { bitNode: "2:-5000" })]).failures).toHaveLength(1);
+    });
+
+    test("(2) The Red Pill bought (its `augmentationBought`, #368's review): core's money from then, before a slow snapshot shows it", () => {
+      const steps = Math.ceil(GANG_OBJECTIVE_DIFFERS_WITHIN_MS / 10_000) + 1;
+      const bought: StoredEvent = {
+        atMs: 0,
+        kind: "augmentationBought",
+        detail: { augmentation: "The Red Pill", faction: "NiteSec", level: 1, price: 0 },
+      };
+      const owned = chosenEvent(0, "money", { reason: "The Red Pill owned", respect: null, money: null });
+      expect(judged(steps, [bought, owned]).failures).toEqual([]);
+      // Without it, the brain's money is a minute against core's respect: the failure.
+      expect(judged(steps, [owned]).failures).toHaveLength(1);
     });
 
     test("(2) the brain's objective against core's from the snapshots: a minute apart fails, under it not", () => {
@@ -1416,6 +1432,7 @@ describe("the controller (#325)", () => {
           atMs: expect.any(Number),
           objective: "respect",
           reason: "estimates",
+          bitNode: "2:0",
           members: 12,
           respect: {
             respectPerCycle: choice.respect?.respectPerCycle,
@@ -1437,9 +1454,28 @@ describe("the controller (#325)", () => {
         /^Gang: NiteSec's, 12 members of 12 \(.*\); objective at 12: respect, The Red Pill in \d+\.\d h \(money's \d+\.\d h\); respect /,
       );
       expect(lines).toContainEqual(expect.stringMatching(/^gang: the objective at 12: respect, The Red Pill in /));
-      // Again on the next reading: no second event.
+      // Again on the next reading: no second event; nor after the gang unread a while (an install's restart, #368's
+      // review), the same BitNode and gang.
+      send("medium", niteSecMedium(reading));
+      send("medium", niteSecMedium(undefined));
+      expect(controller.gangView().stage).toBe("waiting");
       send("medium", niteSecMedium(reading));
       expect(events.filter((event) => (event as { type: string }).type === "gangObjectiveChosen")).toHaveLength(1);
+    });
+
+    test("another BitNode, the same objective (#368's review): sent again, keyed by its BitNode", () => {
+      const { controller, send } = connected();
+      const events: { type: string; bitNode?: string }[] = [];
+      controller.subscribe((event) => events.push(event as (typeof events)[number]));
+      send("slow", withQueue([]));
+      send("medium", niteSecMedium(reading));
+      const next = withQueue([]);
+      send("slow", { ...next, resetInfo: { ...next.resetInfo, lastNodeReset: 5_000 } });
+      send("medium", niteSecMedium(reading));
+      expect(events.filter((event) => event.type === "gangObjectiveChosen").map((event) => event.bitNode)).toEqual([
+        "2:0",
+        "2:5000",
+      ]);
     });
 
     test("The Red Pill queued: money's plan, and an event at the change", () => {
@@ -1476,6 +1512,43 @@ describe("the controller (#325)", () => {
       const queued = new GangRule();
       queued.update({ mediumData: medium, slowData: withQueue(["The Red Pill"]) });
       expect(queued.view().plan?.objective).toBe("money");
+    });
+
+    test("A6's purchase of The Red Pill, reported done before a slow snapshot shows it (#368's review): its reason to the gang", () => {
+      const { controller, send, last } = connected();
+      const events: { type: string; objective?: string; reason?: string }[] = [];
+      controller.subscribe((event) => events.push(event as (typeof events)[number]));
+      // NiteSec at The Red Pill's 2.5m: reached, both estimates 0, a tie to money; A6 chooses its install, buys it.
+      const reached = withQueue([]);
+      const state = reached.factions?.state as NonNullable<NonNullable<SlowSnapshotData["factions"]>["state"]>;
+      const slow = {
+        ...reached,
+        factions: {
+          backend: "sim",
+          state: { ...state, joined: [{ name: "NiteSec", reputation: 2.5e6, favor: 0 }] },
+          problem: null,
+        },
+      };
+      send("slow", slow);
+      send("medium", niteSecMedium(reading));
+      const buy = last()?.intents.find((each) => each.action === "purchaseAugmentation");
+      expect(buy?.args).toMatchObject({ faction: "NiteSec", augmentation: "The Red Pill" });
+      // Reported done in a fast snapshot; the slow snapshot doesn't show it queued yet.
+      send("fast", {
+        degradedTiers: [],
+        pageHeapUsedBytes: null,
+        game: null,
+        intents: [{ id: buy?.id, done: true, tries: 1, problem: null, backend: "sim" }],
+      });
+      send("medium", niteSecMedium(reading));
+      expect(
+        events
+          .filter((event) => event.type === "gangObjectiveChosen")
+          .map(({ objective, reason }) => [objective, reason]),
+      ).toEqual([
+        ["money", "estimates"],
+        ["money", "The Red Pill owned"],
+      ]);
     });
 
     test("the rules (`bn2Route` rules, the A/B's baseline): money's plan at 12, no event", () => {

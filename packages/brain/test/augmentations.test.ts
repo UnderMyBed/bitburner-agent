@@ -3497,7 +3497,7 @@ describe("BN2 before the gang (#357's (1)): wait for the gang, or install now", 
     expect(gang?.installNowMs).toBeCloseTo(120_000 + (gang?.rebuildMs as number), 3);
     expect(gang).toMatchObject({ required: 218, level: 214, heldForRate: false, choice: "wait" });
     expect(timing()?.words).toMatch(
-      /^no gang yet: wait for the gang \(avmnite-02h's 218 at 214, 12 min\) against install now \(34 min: the commit and 32 min from 0 at 64\.8 experience a second\); chosen: wait$/,
+      /^no gang yet: wait for the gang \(avmnite-02h's 218 at 214, 12 min\) against install now \(34 min: the commit and 32 min from 0 at \d+\.\d experience a second \(64\.8 now, at the install's multipliers\)\); chosen: wait$/,
     );
     expect(rule.view().waitingFor).toBe(`the planner's time to the gang formed: ${timing()?.words}`);
     // No money held for it, no countdown, nothing for A5 to work for; the wait kept in the store.
@@ -3567,6 +3567,27 @@ describe("BN2 before the gang (#357's (1)): wait for the gang, or install now", 
     expect(timing()?.gang).toMatchObject({ heldForInvitation: true, choice: "wait" });
     expect(timing()?.gang?.installNowMs as number).toBeLessThan(timing()?.gang?.waitMs as number);
     expect(timing()?.words).toContain("; install now held: the money held for an invitation (#228); chosen: wait");
+    expect(chosen()).toEqual([]);
+  });
+
+  test("the gang's reading unread, no gang known (#368's review): installing now held where it'd win", () => {
+    rule = newRule("planner");
+    for (let t = 0; t <= 70; t += 10) {
+      mediumMs += 10_000;
+      if (t % 60 === 0) gameTimeMs += MINUTE;
+      update({
+        slowData: bn2Slow(),
+        mediumData: bn2Medium(1, t),
+        mediumGameTimeMs: mediumMs,
+        fastGameTimeMs: mediumMs,
+        gangForming: { required: 218, unread: true },
+      });
+    }
+    expect(timing()?.gang).toMatchObject({ heldForGangUnread: true, choice: "wait" });
+    expect(timing()?.gang?.installNowMs as number).toBeLessThan(timing()?.gang?.waitMs as number);
+    expect(timing()?.words).toContain(
+      "; install now held: the gang's reading unread, so whether there's a gang isn't known",
+    );
     expect(chosen()).toEqual([]);
   });
 

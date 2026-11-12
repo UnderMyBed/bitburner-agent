@@ -95,6 +95,7 @@ import {
   describeTaskMix,
   GANG_BITNODE,
   GANG_OBJECTIVE_CHOSEN_EVENT_KIND,
+  gangBitNodeKeyOf,
   gangDeathsBetween,
   gangRouteFactionOf,
   gangShopOf,
@@ -168,10 +169,6 @@ interface AtTwelve {
   bitNode: string;
   choice: GangObjectiveChoice;
 }
-
-/** The BitNode a slow snapshot is in: its number and its start (`lastNodeReset`), as `GangFactionCarry` has it. */
-const bitNodeKeyOf = (slow: SlowSnapshotData | null) =>
-  `${String(slow?.resetInfo?.currentNode)}:${String(slow?.resetInfo?.lastNodeReset)}`;
 
 /** Whether an estimate as the event carries it is whole (#357): its rates numbers, its time a number or null (never). */
 function estimateWhole(value: unknown): boolean {
@@ -562,7 +559,7 @@ export class GangFold {
       last = { slow, members, choice: gangObjectiveChoice(inputs, gangRouteFactionOf(slow, faction, data)) };
       this.#lastChoice = last;
     }
-    this.#atTwelve.push({ atMs, bitNode: bitNodeKeyOf(slow), choice: last.choice });
+    this.#atTwelve.push({ atMs, bitNode: gangBitNodeKeyOf(slow), choice: last.choice });
     return last.choice.objective;
   }
 
@@ -804,20 +801,30 @@ export class GangFold {
       if (estimates) lines.push(`    ${formatIsoTime(atMs)}: ${words}`);
       else fail(`the objective at 12 without its estimates: ${String(fields.objective)} at ${formatIsoTime(atMs)}`);
     }
-    // At each reading at 12: the brain's objective then (its last event by then, in the same BitNode), against core's.
+    // At each reading at 12: the brain's objective then (its last event by then, of the same BitNode, the event's
+    // `bitNode`, #368's review), against core's. Core's is money from The Red Pill's `augmentationBought` in the
+    // BitNode on (#368's review): A6's queue has it before a slow snapshot shows it queued, and the brain's choice with it.
+    const redPillBought = events
+      .filter(
+        (event) =>
+          event.kind === AUGMENTATION_BOUGHT_EVENT_KIND &&
+          (event.detail as { augmentation?: unknown } | null)?.augmentation === THE_RED_PILL,
+      )
+      .map((event) => ({ atMs: event.atMs, bitNode: gangBitNodeKeyOf(this.#slowAt(event.atMs)) }));
+    const owned: GangObjectiveChoice = { objective: "money", reason: "The Red Pill owned", respect: null, money: null };
     const differs = new Stretches();
     let neverMs = 0;
     let lastNever: { atMs: number; bitNode: string } | null = null;
-    let bitNodeSinceMs = Number.NEGATIVE_INFINITY;
-    let lastBitNode: string | null = null;
-    let index = -1;
-    for (const { atMs, bitNode, choice } of this.#atTwelve) {
-      if (bitNode !== lastBitNode) {
-        if (lastBitNode !== null) bitNodeSinceMs = atMs;
-        lastBitNode = bitNode;
+    const latest = new Map<string, StoredEvent>();
+    let index = 0;
+    for (const { atMs, bitNode, choice: read } of this.#atTwelve) {
+      for (; index < chosen.length && (chosen[index] as StoredEvent).atMs <= atMs; index += 1) {
+        const event = chosen[index] as StoredEvent;
+        latest.set(String((event.detail as { bitNode?: unknown } | null)?.bitNode), event);
       }
-      while (index + 1 < chosen.length && (chosen[index + 1] as StoredEvent).atMs <= atMs) index += 1;
-      const brains = index >= 0 && (chosen[index] as StoredEvent).atMs >= bitNodeSinceMs ? chosen[index] : undefined;
+      const bought = redPillBought.some((each) => each.atMs <= atMs && each.bitNode === bitNode);
+      const choice = bought ? owned : read;
+      const brains = latest.get(bitNode);
       const brainObjective = (brains?.detail as { objective?: unknown } | undefined)?.objective;
       if (brainObjective === undefined) {
         if (lastNever !== null && lastNever.bitNode === bitNode && atMs - lastNever.atMs <= HACKING_EXP_GAP_MS) {

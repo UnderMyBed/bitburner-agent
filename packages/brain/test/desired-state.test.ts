@@ -3778,7 +3778,9 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
     },
   };
   /** Hacking 216 of avmnite-02h's 217, `seconds` of experience at the rate on; the money for CyberSec's two cheapest. */
-  const bn2Medium = (seconds: number) => ({
+  /** The gang worker's reading: none formed, unless given (`absent` leaves it out). */
+  const NO_GANG = { gang: null, members: [], problems: [] };
+  const bn2Medium = (seconds: number, gang: unknown = NO_GANG) => ({
     ...mediumData(216, { home: true }, { money: 40e6, homeRam: 2 ** 20, hasTorRouter: true, factions: ["CyberSec"] }),
     player: {
       skills: { hacking: 216, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
@@ -3788,11 +3790,13 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
       city: "Volhaven",
       factions: ["CyberSec"],
     },
-    // The gang worker's reading: none formed.
-    gang: { gang: null, members: [], problems: [] },
+    ...(gang === "absent" ? {} : { gang }),
   });
   /** A brain, its BN2 route `bn2Route`, with the hack loop off, an Agent connected and its static snapshot sent. */
-  function bn2Brain(bn2Route: "planner" | "rules") {
+  function bn2Brain(
+    bn2Route: "planner" | "rules",
+    { gang = NO_GANG as unknown, slow = bn2Slow as unknown }: { gang?: unknown; slow?: unknown } = {},
+  ) {
     store.setSetting("hackLoop.enabled", "false");
     const controller = new DesiredStateController({ channel, store, installTiming: "planner", bn2Route });
     // The owner's travel queued, so #228's travel for a city group's invitations stands, and holds no money (it would
@@ -3806,8 +3810,8 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
       for (let second = 0; second < minutes * 60; second += 10) {
         gameTimeMs += 10_000;
         const tiers: [SnapshotTier, unknown][] = [
-          ...(second % 60 === 0 ? ([["slow", bn2Slow]] as [SnapshotTier, unknown][]) : []),
-          ...(second >= mediumFrom ? ([["medium", bn2Medium(second)]] as [SnapshotTier, unknown][]) : []),
+          ...(second % 60 === 0 ? ([["slow", slow]] as [SnapshotTier, unknown][]) : []),
+          ...(second >= mediumFrom ? ([["medium", bn2Medium(second, gang)]] as [SnapshotTier, unknown][]) : []),
         ];
         for (const [tier, data] of tiers) {
           connection.receive(
@@ -3868,5 +3872,77 @@ describe("BN2 before the gang (#357's (1)): the controller hands A6 avmnite-02h'
     });
     expect(controller.augmentationsView().committed).toBe(false);
     expect(sent()).toEqual([]);
+  });
+
+  /** The gang's NiteSec, formed, no members yet: managed. */
+  const NITESEC_GANG = {
+    gang: {
+      faction: "NiteSec",
+      isHacking: true,
+      respect: 1,
+      wantedLevel: 1,
+      wantedPenalty: 0.5,
+      territory: 1 / 7,
+      respectGainRate: 0,
+      moneyGainRate: 0,
+      wantedLevelGainRate: 0,
+      power: 1,
+    },
+    members: [],
+    problems: [],
+  };
+
+  test.each([
+    ["absent (no reading in the medium snapshot)", "absent"],
+    ["unread (the reading isn't one)", { gang: "a string" }],
+    ["the worker's problems", { gang: null, members: [], problems: ["ns.gang.getGangInformation threw"] }],
+  ])(
+    "the gang %s, none known (#368's review): the gang's route, installing now held; the rules would install",
+    (_, gang) => {
+      const planner = bn2Brain("planner", { gang });
+      planner.run(11);
+      expect(planner.controller.gangView().stage).toBe("waiting");
+      expect(planner.controller.augmentationsView().progress?.timing).toMatchObject({
+        route: "gang forming",
+        gang: { heldForGangUnread: true, choice: "wait" },
+      });
+      expect(planner.controller.augmentationsView().committed).toBe(false);
+      expect(planner.sent()).toEqual([]);
+    },
+  );
+
+  test("after a restart, the gang not read yet (#368's review): held too", () => {
+    const first = bn2Brain("planner");
+    first.run(2);
+    expect(first.controller.gangView().stage).toBe("noFaction");
+    // A new brain on the same store, its Agent's readings without the gang's for now.
+    channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    const restarted = bn2Brain("planner", { gang: "absent" });
+    restarted.run(11);
+    expect(restarted.controller.augmentationsView().progress?.timing?.gang?.heldForGangUnread).toBe(true);
+    expect(restarted.sent()).toEqual([]);
+  });
+
+  test("formed, its faction in no slow snapshot yet (#363's seed 5): the gang's route, not #343's; the shop shown, #343's ends", () => {
+    const planner = bn2Brain("planner", { gang: NITESEC_GANG });
+    planner.run(11);
+    expect(planner.controller.gangView().stage).toBe("managed");
+    expect(planner.controller.augmentationsView().progress?.timing?.route).toBe("gang forming");
+    expect(planner.sent()).toEqual([]);
+    // The slow snapshot shows NiteSec, the gang's faction: never short of Daedalus's count, no route (the count rule's).
+    const state = bn2Slow.factions.state;
+    const shown = {
+      ...bn2Slow,
+      factions: {
+        ...bn2Slow.factions,
+        state: { ...state, joined: [...state.joined, { name: "NiteSec", reputation: 0, favor: 0 }] },
+      },
+    };
+    channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
+    channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+    const after = bn2Brain("planner", { gang: NITESEC_GANG, slow: shown });
+    after.run(2);
+    expect(after.controller.augmentationsView().progress?.timing ?? null).toBeNull();
   });
 });

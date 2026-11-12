@@ -266,11 +266,18 @@ export interface GangObjectiveEstimateView {
   etaMs: number | null;
 }
 
+/** A BitNode's key (#357): its number and its start (`lastNodeReset`), as `GangFactionCarry` has it. */
+export function gangBitNodeKeyOf(slowData: SlowSnapshotData | null | undefined): string {
+  return `${String(slowData?.resetInfo?.currentNode)}:${String(slowData?.resetInfo?.lastNodeReset)}`;
+}
+
 export type GangEvent = {
   type: typeof GANG_OBJECTIVE_CHOSEN_EVENT_KIND;
   atMs: number;
   objective: GangObjective;
   reason: GangObjectiveChoice["reason"];
+  /** The BitNode it's chosen in, `gangBitNodeKeyOf`'s (#368's review): the report keys the brain's by it. */
+  bitNode: string;
   members: number;
   respect: GangObjectiveEstimateView | null;
   money: GangObjectiveEstimateView | null;
@@ -750,7 +757,7 @@ export class GangRule {
       this.#route === "planner" ? gangRouteFactionOf(slowData, gang.faction, mediumData, redPillBought) : null;
     const choice = this.#route === "planner" ? gangObjectiveChoice(inputs, routeFaction) : null;
     const plan = planGang(inputs, choice?.objective ?? gangObjectiveOf(members.length));
-    this.#watchObjective(choice, routeFaction, nowMs);
+    this.#watchObjective(choice, routeFaction, nowMs, gangBitNodeKeyOf(slowData), gang.faction);
     this.#basis = { mediumData, inputs, plan, costMult: gangEquipmentCostMultOf(gang) };
     this.#setPlaced(plan.assignments.filter((each) => each.role === "justice").map((each) => each.name));
     if (fresh && mediumAtMs !== null) {
@@ -795,13 +802,21 @@ export class GangRule {
    * reason, with both estimates; none while the gang's faction is unread (money meanwhile, as the rule's). Under 12,
    * forgotten, so the next 12 sends one again.
    */
-  #watchObjective(choice: GangObjectiveChoice | null, read: GangRouteFaction | null, nowMs: number | null): void {
+  #watchObjective(
+    choice: GangObjectiveChoice | null,
+    read: GangRouteFaction | null,
+    nowMs: number | null,
+    bitNode: string,
+    faction: string,
+  ): void {
     if (choice === null || choice.reason === "recruiting") {
       this.#objectiveSent = null;
       return;
     }
     if (choice.reason === "unread" || read === null) return;
-    const key = `${choice.objective} ${choice.reason}`;
+    // Sent again only for a change: of the objective or why, the BitNode or the gang (#368's review), not an install's
+    // restart, which reads the gang afresh.
+    const key = `${bitNode} ${faction} ${choice.objective} ${choice.reason}`;
     if (key === this.#objectiveSent) return;
     this.#objectiveSent = key;
     this.#emit({
@@ -809,6 +824,7 @@ export class GangRule {
       atMs: nowMs ?? 0,
       objective: choice.objective,
       reason: choice.reason,
+      bitNode,
       members: GANG_MOST_MEMBERS,
       respect: gangObjectiveEstimateView(choice.respect),
       money: gangObjectiveEstimateView(choice.money),
@@ -868,11 +884,7 @@ export class GangRule {
   #decide(view: GangView, intent: Intent | null, gang: GangState | null): GangDecision {
     this.#view = view;
     this.#state = gang;
-    if (view.stage !== "managed") {
-      this.#basis = null;
-      // No gang read: the next one's objective at 12 is sent afresh (#357).
-      this.#objectiveSent = null;
-    }
+    if (view.stage !== "managed") this.#basis = null;
     // Logged on a change of stage, recruits or task mix, not each figure.
     const logged =
       view.plan === null

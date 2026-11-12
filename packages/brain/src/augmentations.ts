@@ -570,7 +570,7 @@ export interface AugmentationInputs {
    * gang rule reads no gang in BN2; then the planner's candidates there are wait for the gang or install now. Absent or
    * null, #343's.
    */
-  gangForming?: { required: number } | null;
+  gangForming?: { required: number; unread?: boolean } | null;
 }
 
 /** What the rule asks of the controller. */
@@ -1098,8 +1098,13 @@ export function describeInstallTiming(
  * experience a second); chosen: wait".
  */
 export function describeGangFormingTiming(gang: GangFormingTiming): string {
+  // R's rate: the rate now at the install's experience and speed multipliers (#368's review), as R reads it.
+  const scaledRate =
+    gang.expPerSecond === null ? null : gang.expPerSecond * gang.gain.hackingExp * gang.gain.hackingSpeed;
   const rate =
-    gang.expPerSecond === null ? "the rate not measured" : `${gang.expPerSecond.toFixed(1)} experience a second`;
+    scaledRate === null || gang.expPerSecond === null
+      ? "the rate not measured"
+      : `${scaledRate.toFixed(1)} experience a second (${gang.expPerSecond.toFixed(1)} now, at the install's multipliers)`;
   const install =
     gang.installNowMs === null
       ? gang.heldForRate
@@ -1108,7 +1113,10 @@ export function describeGangFormingTiming(gang: GangFormingTiming): string {
       : `install now (${formatEta(gang.installNowMs)}: the commit and ${formatEta(gang.rebuildMs)} from 0 at ${rate})`;
   const scaled =
     (gang.tauScale > 1 ? `; τ_g ×${gang.tauScale.toFixed(1)}, the overdue wait's measured error` : "") +
-    (gang.heldForInvitation ? "; install now held: the money held for an invitation (#228)" : "");
+    (gang.heldForInvitation ? "; install now held: the money held for an invitation (#228)" : "") +
+    (gang.heldForGangUnread
+      ? "; install now held: the gang's reading unread, so whether there's a gang isn't known"
+      : "");
   return (
     `no gang yet: wait for the gang (${GANG_ROUTE_SERVER}'s ${gang.required} at ${gang.level}, ` +
     `${gang.waitMs === null ? "not measured yet" : formatEta(gang.waitMs)}) ` +
@@ -1881,7 +1889,7 @@ export class AugmentationRule {
     levellingInstall: boolean;
     invitationHold: number;
     shareBonus: number;
-    gangForming: { required: number } | null;
+    gangForming: { required: number; unread?: boolean } | null;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -2142,6 +2150,8 @@ export class AugmentationRule {
             installable: adding > 0,
             tauScale,
             invitationHeld: invitationHold > 0,
+            // The gang's reading unread, no gang known (#368's review): whether there's one isn't known yet.
+            gangUnread: gangRoute.unread === true,
           });
           const figures: Omit<InstallTimingView, "words"> = {
             needed,

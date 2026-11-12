@@ -27,6 +27,7 @@ import {
   type FastSnapshotData,
   GANG_AUGMENTATION_HORIZON_MS,
   GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
+  gangAscensionToMake,
   gangBestWork,
   gangEquipment,
   gangEquipmentAppraisal,
@@ -495,6 +496,25 @@ async function fightingGang(game: FreshGame) {
   await withoutSimEffectors(game);
 }
 
+/** Core's warfare crew (G4) recomputed from a reading at 12 members, money's objective (#368's review); null with an ascension due. */
+function coreCrewOf(reading: ReturnType<typeof gangSnapshotOf>): number | null {
+  if (reading.kind !== "gang") return null;
+  const warfare = gangWarfareFiguresOf(reading.gang);
+  if (warfare === undefined) return null;
+  const inputs = {
+    gang: { respect: reading.gang.respect, wantedLevel: reading.gang.wantedLevel, territory: reading.gang.territory },
+    isHacking: reading.gang.isHacking,
+    members: reading.members,
+    softcap: 1,
+    warfare,
+  };
+  if (gangAscensionToMake(inputs, "money") !== null) return null;
+  const basis = gangWarfareBasis(inputs, "money");
+  const crew = gangWarfareCrew(inputs, basis).crew;
+  const clashing = warfare.engaged || warfare.clashChance > 0;
+  return crew.length > 0 && clashing && !gangWarfareMeasure(inputs, basis, crew).pays ? 0 : crew.length;
+}
+
 test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare engaged, territory grows, deaths counted", async () => {
   const fresh = await freshStartOf({ withDesiredState: true, fixture: BN2, beforeAgent: fightingGang });
   // As G3's: The Red Pill installed (#357), the destroy not wanted, so A6 buys as before.
@@ -508,6 +528,7 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
     engaged: boolean;
     crew: number;
     planCrew: number | null;
+    coreCrew: number | null;
   }[] = [];
   for (let minute = 5; minute <= 20; minute += 5) {
     await fresh.game.run(5 * 60_000);
@@ -521,6 +542,10 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
       crew: reading.members.filter((each) => each.task === "Territory Warfare").length,
       // The rule's warfare plan on that reading (`GangWarfarePlan`'s crew), as the brain sent it.
       planCrew: fresh.controller().gangView().plan?.warfare?.crew.length ?? null,
+      // Core's rule recomputed from the reading (#368's review): `gangWarfareCrew` on money's basis, the crew dropped
+      // while clashes run and the measure says they don't pay (as `planGang`); null where an ascension comes first
+      // (the plan's crew is then the ascended gang's).
+      coreCrew: coreCrewOf(reading),
     });
   }
   console.log(readings.map((each) => JSON.stringify(each)).join("\n"));
@@ -567,8 +592,12 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   // 9, 9, two on Identity Theft from the first plan; engaged throughout, 19 min 30 s, territory 17.4%; two deaths,
   // member-04 and member-08. The crew read is the plan's at each reading, not a fixed list.
   expect(readings.every((each) => each.engaged)).toBe(true);
+  // Core's crew recomputed on most readings (none with an ascension due then).
+  expect(readings.filter((each) => each.coreCrew !== null).length).toBeGreaterThanOrEqual(2);
   for (const { minute, crew, planCrew, engaged } of readings) {
     expect(crew, `minute ${minute}`).toBe(planCrew);
+    const core = readings.find((each) => each.minute === minute)?.coreCrew;
+    if (core !== null && core !== undefined) expect(planCrew, `minute ${minute}: core's crew`).toBe(core);
     if (engaged) expect(crew, `minute ${minute}`).toBeGreaterThanOrEqual(1);
   }
   expect(last.gang.territory).toBeGreaterThan(1 / 7 + 0.02);
@@ -717,6 +746,13 @@ test("the objective at 12 (#357's (2)) A/B, 20 virtual minutes an arm: the plann
   const estimate = first?.respect?.reputationPerSecond as number;
   expect(perSecond(planner)).toBeGreaterThan(estimate / 2);
   expect(perSecond(planner)).toBeLessThan(estimate * 2);
+  // Money's estimate against the rules arm's measure (#368's review), the same ×2. Money's is under it: member-01's
+  // hacking grows ×2.3 in the first four minutes on Money Laundering (7.7m to 17.4m, its work's own experience at its
+  // ×15,000 multiplier, `GangMember.ts:155-210`), its rate then 319.6 a second, against 161.8 at the choice
+  // (core's left-out "members' growth"); on Cyberterrorism it grows a thousandth. Measured on 2026-11-11.
+  const moneyEstimate = first?.money?.reputationPerSecond as number;
+  expect(perSecond(rules)).toBeGreaterThan(moneyEstimate / 2);
+  expect(perSecond(rules)).toBeLessThan(moneyEstimate * 2);
   // Member-01 on the objective's task in each arm, and both reports pass.
   if (planner.last.kind !== "gang" || rules.last.kind !== "gang") throw new Error("no gang read");
   expect(planner.last.members[0]?.task).not.toBe(rules.last.members[0]?.task);

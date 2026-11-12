@@ -10,10 +10,12 @@
  *   `hackingEtaSeconds` with the level multiplier read), plus `GANG_FORMING_STEPS_MS` for the backdoor, the invitation,
  *   the join and the forming (#363's seed 1);
  * - **install now**: the commit (`GANG_ROUTE_COMMIT_MS`, #343's) plus R, the level's experience from 0 (an install
- *   resets it, `Prestige.ts:74`) at the multipliers the install gives (core's `levellingInstallMultipliers`: the
+ *   resets it, `Player.prestigeAugmentation()`, `Prestige.ts:69`) at the multipliers the install gives (core's `levellingInstallMultipliers`: the
  *   level's, the experience's and the speed's, which scales the operations' times, `Hacking.ts:60-80`) at the rate now.
  * The least wins; a tie goes to waiting. With no rate measured, installing now is held, as #343's income hold is; and,
- * as #343's is, while an invitation's money is held (#228).
+ * as #343's is, while an invitation's money is held (#228); and while the gang's reading is unread in BN2 with no gang
+ * known (the gang rule's "waiting": no reading yet, a worker's problem, a brain just restarted), when whether there's a
+ * gang at all isn't known (#368's review).
  * Left out, each labelled:
  * - the money for the two port openers avmnite-02h needs (`numOpenPortsRequired` 2), where they're not bought yet: left
  *   out of τ_g, optimistic for waiting;
@@ -22,7 +24,11 @@
  * - the re-roll of avmnite-02h's level at the install (`Prestige.ts:98`, a new roll in 202-220) taken as today's: either
  *   way;
  * - on waiting's side, the install's multipliers come a cycle later: optimistic for waiting;
- * - the 70 s of steps after the level on installing's side: optimistic for installing.
+ * - the 70 s of steps after the level on installing's side: optimistic for installing;
+ * - an install deletes home's programs (`Server/ServerHelpers.ts:227`), so the TOR router and the port openers are
+ *   bought again, their money and time left out of R: optimistic for installing;
+ * - the experience rate rising with the level (the operations' times fall as it rises, `Hacking.ts:66-70`), the
+ *   10-minute window behind it: the rate's taken as measured, cautious for waiting.
  *
  * **(2) The gang's objective at 12 members** (`GANG_MOST_MEMBERS`): respect or money, each scored by the time to The Red
  * Pill's reputation at the gang's faction (`Augmentation/Augmentations.ts:1946-1952`, `augmentationCost`'s, less the
@@ -31,11 +37,19 @@
  * Singularity.ts:808-810`, `:934-935`). The rate: the members' respect a cycle under that objective's plan (core's
  * `planGang` given the objective, so with its training, ascension, justice and warfare; `Gang/formulas/formulas.ts:
  * 15-31` at the gang's penalty now), × 5 cycles a second (`GANG_CYCLE_MS`). Left out, labelled:
- * - the members' growth: either way;
+ * - the members' growth, by training or their work's own experience (`GangMember.ts:155-210`, × the ascension
+ *   multiplier): either way. In #357's A/B it favoured money: Money Laundering grew member-01's hacking ×2.3 in four
+ *   minutes (7.7m to 17.4m), its rate then 319.6 a second against the 161.8 estimated at the choice; Cyberterrorism
+ *   grew it by a thousandth. Respect still won, 1,150 a second;
+ * - the penalty's course, and each plan's training, ascension or warfare counted at once as no output (the plan's
+ *   tasks now, at the penalty now): against the objective whose plan invests;
  * - bonus time's faster cycles: cautious for both;
  * - what money buys toward it (gang equipment, a `faction_rep` set at an install): cautious for money.
  * The least wins; a tie goes to money, the rule's objective before #357. Under 12 it's respect (the rule's, recruiting);
- * once The Red Pill is bought, queued or installed it's money, as before, and said so.
+ * once The Red Pill is bought, queued or installed it's money, as before, and said so. No hysteresis: a choice made on
+ * one reading can flip on the next. A static probe (#368's review) flips it at respect 1,000, wanted 100 and hacking
+ * 500 (respect's plan all on Ethical Hacking); dynamic probes at 2 million respect found no flapping in 24 hours, nor
+ * in 2 hours from a penalty of 0.89.
  * Pure, so the brain's rules and the run report read the same figures.
  */
 import { hackingExpOfLevel } from "./batcher.ts";
@@ -80,6 +94,8 @@ export interface GangFormingInputs {
   tauScale?: number;
   /** An invitation's money held (#228's hold): installing now, which would spend it, held, as #343's is. */
   invitationHeld?: boolean;
+  /** The gang's reading unread with no gang known (#368's review): whether there's a gang isn't known; held. */
+  gangUnread?: boolean;
 }
 
 /** (1)'s estimates and the choice (#357). */
@@ -101,6 +117,8 @@ export interface GangFormingTiming {
   heldForRate: boolean;
   /** Installing now held: an invitation's money held (#228), as #343's. */
   heldForInvitation: boolean;
+  /** Installing now held: the gang's reading unread with no gang known (#368's review). */
+  heldForGangUnread: boolean;
   tauScale: number;
 }
 
@@ -143,6 +161,7 @@ export function gangFormingTiming(inputs: GangFormingInputs): GangFormingTiming 
   const installNowMs = installable && rebuildMs !== null ? GANG_ROUTE_COMMIT_MS + rebuildMs : null;
   const heldForRate = expPerSecond === null;
   const heldForInvitation = inputs.invitationHeld === true;
+  const heldForGangUnread = inputs.gangUnread === true;
   return {
     required,
     level,
@@ -153,9 +172,10 @@ export function gangFormingTiming(inputs: GangFormingInputs): GangFormingTiming 
     waitMs,
     rebuildMs,
     installNowMs,
-    choice: gangFormingChoice(waitMs, installNowMs, heldForRate || heldForInvitation),
+    choice: gangFormingChoice(waitMs, installNowMs, heldForRate || heldForInvitation || heldForGangUnread),
     heldForRate,
     heldForInvitation,
+    heldForGangUnread,
     tauScale,
   };
 }

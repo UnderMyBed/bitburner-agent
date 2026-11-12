@@ -114,6 +114,12 @@ describe("(1) before the gang: wait for the gang, or install now (#357)", () => 
     expect(at(1, 218, { ...wins, invitationHeld: true })).toMatchObject({ choice: "wait", heldForInvitation: true });
   });
 
+  test("the gang's reading unread, no gang known (#368's review): installing now held where it'd win", () => {
+    const wins = { exp: 0, gain: { hacking: 3, hackingExp: 3, hackingSpeed: 1 } };
+    expect(at(1, 218, { ...wins, gangUnread: true })).toMatchObject({ choice: "wait", heldForGangUnread: true });
+    expect(at(1, 218, wins).heldForGangUnread).toBe(false);
+  });
+
   test("never: no experience coming, both never, a tie to waiting", () => {
     const timing = at(214, 218, { expPerSecond: 0 });
     expect(timing.waitMs).toBe(Number.POSITIVE_INFINITY);

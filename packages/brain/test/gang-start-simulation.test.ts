@@ -142,7 +142,7 @@ test.each(SEEDS)(
     // avmnite-02h's roll when the backdoor was asked for (#357: an install after the gang re-rolls it, `Prestige.ts:98`).
     let rollAsked: number | undefined;
     // The installs on the way (a reset recreates the servers, re-rolling avmnite-02h, and the hacking level starts
-    // again: `Prestige.ts:74`, `:98`): when, and at what level against which roll.
+    // again: `Prestige.ts:69`, `:74`, `:98`): when, and at what level against which roll.
     const installs: { atMs: number; hacking: number; required: number | undefined }[] = [];
     let lastAugReset: number | undefined;
     let before: { hacking: number; required: number | undefined } = { hacking: 0, required: undefined };
@@ -285,7 +285,7 @@ test.each(SEEDS)(
 
 /**
  * #357's A/B, the rules' arm (`bn2Route` "rules": #343's install timing before the gang, as before #357): on seeds 3 and
- * 5 the install comes before the gang, the level reset and the servers re-rolled (`Prestige.ts:74`, `:98`). The
+ * 5 the install comes before the gang, the level reset and the servers re-rolled (`Prestige.ts:69`, `:74`, `:98`). The
  * planner's arm is the suite above, on the same seeds: no install, the gang at 34 min 41 s and 28 min 41 s.
  */
 test.each([3, 5])(

@@ -1728,16 +1728,20 @@ export class DesiredStateController {
    * while the gang rule reads no gang in BN2 (none formed, a gang faction joined or not), or one formed whose faction no
    * slow snapshot shows yet; null otherwise.
    */
-  #gangFormingInputs(): { required: number } | null {
+  #gangFormingInputs(): { required: number; unread: boolean } | null {
     const stage = this.#gang.view().stage;
+    // Unread with no gang known (#368's review: no reading yet, a worker's problem, a brain just restarted): the gang's
+    // route too, installing now held, as #343's install now would otherwise go before a gang there may be.
+    const unread = stage === "waiting" && this.#gang.gangUnread();
     // Formed, its faction not in a slow snapshot yet (one a minute): still the gang's route, not Daedalus's count, which
     // the faction's shop ends (`gangSellsRedPill`). Else #343's install now could go in that minute (#363's seed 5).
-    const forming = stage === "noFaction" || stage === "forming" || (stage === "managed" && this.#gangShop === null);
+    const forming =
+      unread || stage === "noFaction" || stage === "forming" || (stage === "managed" && this.#gangShop === null);
     if (bitNodeOfSlow(this.#slowSnapshot) !== GANG_BITNODE || !forming) return null;
     const required = this.#staticData?.servers.find(
       (server) => server?.hostname === GANG_ROUTE_SERVER,
     )?.requiredHackingSkill;
-    return typeof required === "number" && Number.isFinite(required) ? { required } : null;
+    return typeof required === "number" && Number.isFinite(required) ? { required, unread } : null;
   }
 
   #update(): void {
