@@ -4,7 +4,7 @@
 // (hacking 202-220, which an hour from a fresh start doesn't reach; gang-start-simulation runs that path, #353). One
 // seed each: a thin slice, no sweep.
 // - A bounded hour: the gang forms through the gate, recruits, trains, works, ascends (G2) and keeps growing, and the
-//   run report's gang section passes.
+//   run report's gang section passes, its silent stalls' checks (#354) too.
 // - Wanted control, end to end: a gang the owner left with its wanted level far over the bound (three members on DDoS
 //   Attacks, which earns them no respect at their levels), then the brain for 10 minutes: every member goes to
 //   justice, as fewer couldn't bring the wanted level back to the bound within the 23 min, it falls fast, and the
@@ -131,6 +131,10 @@ test("1 virtual hour from BN2.1 with SF1.3 and SF4.3: the gang forms with NiteSe
     "the gang unread in BN2 for 5 min or more:\n    none",
     "an ascension the rule makes not made for 1 min or more:\n    none",
     "equipment the rule buys, with the money free, not bought for 1 min or more:\n    none",
+    // The silent stalls (#354), on the brain's own plan at each reading against the engine's gang.
+    "a gang worker's problem in every reading for 1 min or more:\n    none",
+    "a member off the rule's task for 1 min or more:\n    none",
+    "the gang's respect flat with the rule's members working for 1 min or more:\n    none",
   ]) {
     expect(section).toContain(what);
   }
@@ -493,15 +497,19 @@ test("territory warfare (G4) end to end: fighters on Territory Warfare, warfare 
   // bought, no install after The Red Pill's). One fighter died (member-06; about 0.35
   // × 0.005 a clash at defence 1, 2 clashes an update: about 2.3 deaths expected among 11 over 60 updates); its recruit
   // trains, as a slot's later deaths each cost the respect toll, and the ten others stayed. The dashboard expects
-  // about 111 deaths on the ten slots in a day engaged. Expected 9.4% territory an hour at the end.
+  // about 111 deaths on the ten slots in a day engaged. Expected 9.4% territory an hour at the end. Since #365's
+  // review (2026-11-11): the gang's faction kept across each install's restart (no slow snapshot then), so after them
+  // A8 holds for The Red Pill at NiteSec and invitations no longer travel for Daedalus's count (15, then 27 of 30); the
+  // same four installs, a run a little different, and a second death, member-09's, in the last minutes: its recruit
+  // trains at the 20-minute reading, nine on Territory Warfare.
   expect(readings.every((each) => each.engaged)).toBe(true);
-  expect(readings.every((each) => each.crew === 10)).toBe(true);
+  expect(readings.map((each) => each.crew)).toEqual([10, 10, 10, 9]);
   expect(last.gang.territory).toBeGreaterThan(1 / 7 + 0.02);
   expect(section).toMatch(
-    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 1 death \(member-06\)\n/,
+    /; territory 14\.3% → \d+\.\d%, power 1\.0 → [\d.]+; warfare engaged 19 min 30 s; 2 deaths \(member-06, member-09\)\n/,
   );
   expect(fresh.controller().gangView().line).toMatch(
-    /; warfare on: .*; 10 on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 1 death seen; /,
+    /; warfare on: .*; 9 on Territory Warfare \(about [\d.]+ deaths expected in a day engaged\); 2 deaths seen; /,
   );
   expect(section).toContain(
     "territory warfare engaged while the rule's measure says it loses for 1 min or more:\n    none",

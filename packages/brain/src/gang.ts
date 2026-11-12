@@ -28,6 +28,9 @@
 //   player's `faction_rep`), each objective's plan's respect a cycle its rate; money once The Red Pill is bought, queued
 //   or installed. A `gangObjectiveChosen` event at each change, with both estimates; the dashboard's line says it. The
 //   A/B's baseline (`bn2Route` "rules", tests alone) keeps the rule's money at 12.
+// - Its silent stalls (#354, ./gang-stalls.ts): a worker problem in every reading, a member off the rule's task, or
+//   the respect flat with members working, each for over a minute, watched on each new medium snapshot with the
+//   rule's own plan: `stalls`, the dashboard's `gangStalled` alerts (the run report judges the same).
 // - No switch (#325): in BN2 the gang is the brain's to play; the owner can move members in the game, and the brain
 //   sets them back within 10 s.
 import {
@@ -66,7 +69,6 @@ import {
   type Intent,
   intentId,
   type JoinedFaction,
-  MAX_GANG_MEMBER_NAME_LENGTH,
   type MediumSnapshotData,
   planGang,
   planGangEquipment,
@@ -76,6 +78,7 @@ import {
 } from "@bitburner-agent/core";
 import { formatEta } from "./augmentations.ts";
 import type { CloudServerPurchase } from "./cloud-servers.ts";
+import { type GangStallStretch, GangStallWatch, isGangProtocolName } from "./gang-stalls.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
 /** The store's setting with the members the gang rule put on justice (#325's re-review), as a JSON list of names. */
@@ -332,8 +335,7 @@ export function describeObjective(choice: GangObjectiveChoice): string {
   );
 }
 
-/** Whether the protocol takes `name` as a member's (core's `parseGangState`): an owner's longer name is skipped. */
-const isProtocolName = (name: string) => name !== "" && name.length <= MAX_GANG_MEMBER_NAME_LENGTH;
+const isProtocolName = isGangProtocolName;
 
 /**
  * The gang's faction carried forward within a BitNode (#325's re-review), for the reports: an Agent's first slow
@@ -586,6 +588,11 @@ export class GangRule {
   readonly #route: Bn2Route;
   /** The objective at 12 as last chosen and sent (#357), or null under 12: an event at each change. */
   #objectiveSent: string | null = null;
+  /** The silent stalls (#354), on each new medium snapshot, and the last one watched. */
+  readonly #stalls = new GangStallWatch();
+  #watched: unknown = null;
+  /** The BitNode the last slow snapshot said, or null before any (#365's review). */
+  #lastBitNode: number | null = null;
 
   /**
    * `store`: where the rule's justice members are kept across a restart; none (the tests), in memory only. `emit`: its
@@ -628,30 +635,66 @@ export class GangRule {
   }
 
   /**
-   * The decision on the latest snapshots. Null for both outside BN2: no gang is managed. `nowMs`: the controller's
-   * clock, for the events; `redPillBought`: The Red Pill reported bought and not yet shown queued (A6's queue, #357).
+   * The silent stalls (#354) at or past their bound, by the medium snapshots watched: the `gangStalled` alerts. None
+   * outside BN2, or with no gang.
+   */
+  stalls(): GangStallStretch[] {
+    return this.#stalls.stalls();
+  }
+
+  /**
+   * The decision on the latest snapshots, `mediumAtMs` when the medium one arrived (the stalls' times). Null for both
+   * outside BN2: no gang is managed. `nowMs`: the controller's clock, for the events; `redPillBought`: The Red Pill
+   * reported bought and not yet shown queued (A6's queue, #357).
    */
   update({
     mediumData,
     slowData,
+    mediumAtMs = null,
     nowMs = null,
     redPillBought = false,
   }: {
     mediumData: MediumSnapshotData | null;
     slowData: SlowSnapshotData | null;
+    mediumAtMs?: number | null;
     nowMs?: number | null;
     redPillBought?: boolean;
   }): GangDecision {
+    // Each medium snapshot watched once (#354): the decision is made again on other snapshots with the same one.
+    const fresh = mediumData !== this.#watched;
+    this.#watched = mediumData;
     const bitNode = bitNodeOfSlow(slowData);
+    if (bitNode === null) {
+      // No slow snapshot (#365's review): a brain just started, or an Agent's session begun or ended (the controller
+      // clears its snapshots at each). The BitNode unknown, not another: the justice members (the store's too), the
+      // members read and the gang's faction kept, so a restart or a reconnect in BN2 keeps them. No gang state sent.
+      this.#stalls.add(null);
+      const view: GangView =
+        this.#lastBitNode === GANG_BITNODE
+          ? {
+              stage: "waiting",
+              line: "Gang: waiting for a slow snapshot to say the BitNode",
+              plan: null,
+              equipment: null,
+            }
+          : { stage: "notManaged", line: "Gang: not managed (no slow snapshot yet)", plan: null, equipment: null };
+      return this.#decide(view, null, null);
+    }
+    this.#lastBitNode = bitNode;
     if (bitNode !== GANG_BITNODE) {
+      this.#stalls.add(null);
       this.#faction = null;
       this.#holding = false;
       this.#setPlaced([]);
       // No gang here (G4): the next one's members are no deaths of this one's.
       this.#lastMembers = null;
-      const why = bitNode === null ? "no slow snapshot yet" : `gangs play in BN2 only for now; this is BN${bitNode}`;
       return this.#decide(
-        { stage: "notManaged", line: `Gang: not managed (${why})`, plan: null, equipment: null },
+        {
+          stage: "notManaged",
+          line: `Gang: not managed (gangs play in BN2 only for now; this is BN${bitNode})`,
+          plan: null,
+          equipment: null,
+        },
         null,
         null,
       );
@@ -659,6 +702,7 @@ export class GangRule {
     // Managed from here on: the worker reads the gang even before one is formed.
     const read: GangState = { recruit: [], ascend: [], tasks: {}, buy: [], keepMoney: null, warfare: null };
     const snapshot = gangSnapshotOf(mediumData);
+    if (snapshot.kind !== "gang") this.#stalls.add(null);
     if (snapshot.kind === "absent" || snapshot.kind === "unread") {
       this.#holding = this.#faction === null;
       const why = snapshot.kind === "unread" ? `unread: ${snapshot.problem}` : "waiting for the gang worker's reading";
@@ -709,6 +753,9 @@ export class GangRule {
     this.#watchObjective(choice, routeFaction, nowMs);
     this.#basis = { mediumData, inputs, plan, costMult: gangEquipmentCostMultOf(gang) };
     this.#setPlaced(plan.assignments.filter((each) => each.role === "justice").map((each) => each.name));
+    if (fresh && mediumAtMs !== null) {
+      this.#stalls.add({ atMs: mediumAtMs, gang, members, problems: snapshot.problems, plan, softcap: inputs.softcap });
+    }
     const tasks: Record<string, string> = {};
     // A member the owner named past what the protocol takes is left as it is: the Agent would refuse the whole state.
     for (const { name, task } of plan.assignments) if (isProtocolName(name)) tasks[name] = task;

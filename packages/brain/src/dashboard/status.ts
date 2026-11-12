@@ -29,6 +29,7 @@ import type {
 } from "../desired-state.ts";
 import { factionStatusOf, type SlowFactionStatus } from "../faction-state.ts";
 import type { FactionsView, FactionWorkStall } from "../factions.ts";
+import type { GangStallStretch } from "../gang-stalls.ts";
 import { DEFAULT_GAP_THRESHOLD_MS, findGaps, type Gap } from "../gap-report.ts";
 import { type HackingView, hackingView } from "../hacking-ceiling.ts";
 import { reportedRefusal } from "../record-channel-events.ts";
@@ -212,6 +213,8 @@ export interface DashboardStatusOptions {
   stopAtBitNodeEnd?: StopAtBitNodeEndView;
   /** The gang's view (#325), the controller's. */
   gang?: { line: string };
+  /** The gang's silent stalls past their bounds (#354), the controller's, for the `gangStalled` alerts. */
+  gangStalls?: GangStallStretch[];
   /** This start's store thinning that failed (#283's review), for the `storeThinningFailed` alert; null or absent: none. */
   storeThinningFailure?: { atMs: number; failure: string } | null;
   /** The newest data backup's problem (#284), for the `dataBackupFailed` alert; null or absent: none. */
@@ -259,6 +262,7 @@ export function buildDashboardStatus({
   share,
   stopAtBitNodeEnd,
   gang,
+  gangStalls = [],
   storeThinningFailure = null,
   dataBackupProblem = null,
   timeline,
@@ -404,6 +408,7 @@ export function buildDashboardStatus({
       augmentationDonationsFailed: augmentations.donationsFailed ?? [],
       installAwaitingRestart,
       worldDaemonStall,
+      gangStalls,
       storeThinningFailure,
       dataBackupProblem,
     }),

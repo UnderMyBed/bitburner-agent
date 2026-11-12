@@ -290,6 +290,7 @@ try {
         share: desiredState.shareView(),
         stopAtBitNodeEnd: desiredState.stopAtBitNodeEndView(),
         gang: desiredState.gangView(),
+        gangStalls: desiredState.gangStalls(),
         storeThinningFailure,
         dataBackupProblem: dataBackups?.problem() ?? null,
         timeline: campaignTimeline.read(),

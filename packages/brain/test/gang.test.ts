@@ -14,18 +14,21 @@ import {
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
+  GANG_CYCLES_PER_PROCESS,
   GANG_EQUIPMENT_PAYBACK_LIMIT_MS,
   GANG_FACTIONS,
   GANG_STATS,
   GANG_TERRITORY_UPDATE_MS,
   type GangInformation,
   type GangMemberReading,
+  type GangPlan,
   type GangReading,
   type GangRuleInputs,
   type GangWarfareFigures,
   gangMemberAscended,
   gangObjectiveChoice,
   gangSkillLevel,
+  gangSoftcapOf,
   gangTerritoryPerUpdate,
   gangWarfareBasis,
   gangWarfareMeasure,
@@ -41,6 +44,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { donationStatus } from "../src/augmentation-report.ts";
 import { AUGMENTATION_RESERVE_LOOKAHEAD_MS } from "../src/augmentations.ts";
+import { MEDIUM_SNAPSHOT_GAP_MS } from "../src/backdoors.ts";
 import { HOME_KEPT_FOR_THE_AGENT_GB } from "../src/batcher.ts";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "../src/cloud-servers.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
@@ -68,6 +72,15 @@ import {
   GANG_WARFARE_WITHIN_MS,
   GangFold,
 } from "../src/gang-report.ts";
+import {
+  GANG_PROBLEM_WITHIN_MS,
+  GANG_RESPECT_FLAT_WITHIN_MS,
+  GANG_TASK_WITHIN_MS,
+  type GangStallReading,
+  GangStallWatch,
+  gangPlannedRespectPerCycle,
+  gangStallsAt,
+} from "../src/gang-stalls.ts";
 import { snapshotGuardFailure } from "../src/irreversible-gate.ts";
 import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
 import { type StoredEvent, TelemetryStore } from "../src/telemetry-store.ts";
@@ -76,8 +89,8 @@ import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.
 const MINUTE = 60_000;
 const expFor = (level: number) => Math.max(0, Math.exp((level + 200) / 32) - 534.5);
 
-/** A member as the gang worker reads it: `hack` and `cha` levels, the rest 1, no multipliers. */
-function member(name: string, hack = 1, task = "Unassigned"): GangMemberReading {
+/** A member as the gang worker reads it: `hack` and `cha` levels, the rest 1, no multipliers; training by default. */
+function member(name: string, hack = 1, task = "Train Hacking"): GangMemberReading {
   const reading: Record<string, unknown> = {
     name,
     task,
@@ -290,6 +303,53 @@ describe("the rule", () => {
       "member-02": "Ethical Hacking",
       "member-03": "Ethical Hacking",
     });
+  });
+
+  test("no slow snapshot (#365's review): the BitNode unknown, not another; the justice members and the faction kept, cleared in another BitNode", () => {
+    const settings = new Map<string, string>();
+    const store = {
+      getSetting: (key: string) => settings.get(key) ?? null,
+      setSetting: (key: string, value: string) => settings.set(key, value),
+    } as unknown as TelemetryStore;
+    const placed = () => JSON.parse(settings.get(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null");
+    settings.set(GANG_PLACED_ON_JUSTICE_SETTING, JSON.stringify(["member-02", "member-03"]));
+    // A restarted brain: its first updates come with no snapshots (the controller's constructor, an Agent's hello).
+    const rule = new GangRule(() => {}, store);
+    expect(rule.update({ mediumData: null, slowData: null })).toEqual({ intent: null, gang: null });
+    expect(rule.view()).toMatchObject({ stage: "notManaged", line: "Gang: not managed (no slow snapshot yet)" });
+    expect(placed()).toEqual(["member-02", "member-03"]);
+    // Then the readings, in the band: the stored justice members kept there.
+    const band = withGang(
+      formed(
+        [
+          member("member-01", 300, "Plant Virus"),
+          member("member-02", 250, "Ethical Hacking"),
+          member("member-03", 200, "Ethical Hacking"),
+        ],
+        { respect: 1_000, wantedLevel: (1_000 * 0.32 + 1) / (1 - 0.32), wantedPenalty: 0.5 },
+      ),
+    );
+    const onJustice = { "member-02": "Ethical Hacking", "member-03": "Ethical Hacking" };
+    expect(rule.update({ mediumData: band, slowData: slowData(2) }).gang?.tasks).toMatchObject(onJustice);
+    // An Agent's session ends or begins (the controller's snapshots cleared): waiting, the faction and members kept.
+    expect(rule.update({ mediumData: null, slowData: null })).toEqual({ intent: null, gang: null });
+    expect(rule.view()).toMatchObject({
+      stage: "waiting",
+      line: "Gang: waiting for a slow snapshot to say the BitNode",
+    });
+    expect(rule.gangFaction()).toBe("NiteSec");
+    expect(rule.hiddenFactions()).toEqual(["NiteSec"]);
+    expect(placed()).toEqual(["member-02", "member-03"]);
+    expect(rule.update({ mediumData: band, slowData: slowData(2) }).gang?.tasks).toMatchObject(onJustice);
+    // Another BitNode, read: everything cleared, the store's too.
+    expect(rule.update({ mediumData: band, slowData: slowData(1) })).toEqual({ intent: null, gang: null });
+    expect(rule.view().line).toBe("Gang: not managed (gangs play in BN2 only for now; this is BN1)");
+    expect(rule.gangFaction()).toBeNull();
+    expect(rule.hiddenFactions()).toEqual([]);
+    expect(placed()).toEqual([]);
+    // An Agent's session there ends: not managed, as before any slow snapshot (waiting only after BN2's).
+    rule.update({ mediumData: null, slowData: null });
+    expect(rule.view()).toMatchObject({ stage: "notManaged", line: "Gang: not managed (no slow snapshot yet)" });
   });
 
   test("in bonus time (over 2 s stored), more members to justice: the game's decay is slower a cycle", () => {
@@ -668,9 +728,13 @@ describe("the run report's section", () => {
     const oneOnJustice = [{ ...member("member-01"), task: "Ethical Hacking" }, ...three.slice(1)];
     const higher = { respect: 4, wantedLevel: 6, wantedPenalty: 0.4 };
     expect(fold(repeat(withGang(formed(oneOnJustice, higher)), steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([]);
+    // The rule puts member-02 on justice too, which the readings don't show: off its task as well (#354).
     const inBonusTime = withGang(formed(oneOnJustice, { ...higher, bonusTimeMs: 60_000 }));
     expect(fold(repeat(inBonusTime, steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([
       expect.stringMatching(/^the wanted penalty over the rule's bound, off course, for 23 min 10 s, /),
+      expect.stringMatching(
+        /^a member off the rule's task for 23 min 10 s, .* \(member-02 on Train Hacking, the rule's Ethical Hacking\)$/,
+      ),
     ]);
     expect(fold(repeat(onCourse, steps(GANG_WANTED_OUTCOME_MS))).failures).toEqual([
       expect.stringMatching(
@@ -681,17 +745,23 @@ describe("the run report's section", () => {
     const allOnJustice = three.map((each) => ({ ...each, task: "Ethical Hacking" }));
     const far = withGang(formed(allOnJustice, { respect: 4, wantedLevel: 4_000, wantedPenalty: 0.001 }));
     expect(fold(repeat(far, 2 * steps(GANG_WANTED_OVER_BOUND_MS))).failures).toEqual([]);
-    expect(fold(repeat(wanted, steps(GANG_WANTED_OVER_BOUND_MS) - 1)).failures).toEqual([]);
+    // None on justice where the rule puts member-01 there: off its task too (#354), but the wanted's own bound is this.
+    const wantedOf = (failures: string[]) => failures.filter((each) => each.startsWith("the wanted penalty"));
+    expect(wantedOf(fold(repeat(wanted, steps(GANG_WANTED_OVER_BOUND_MS) - 1)).failures)).toEqual([]);
     const { failures } = fold(repeat(wanted, steps(GANG_WANTED_OVER_BOUND_MS)));
-    expect(failures).toHaveLength(1);
+    expect(failures).toHaveLength(2);
     expect(failures[0]).toMatch(
       /^the wanted penalty over the rule's bound, off course, for 23 min 10 s, from .* \(37\.5% over 33\.3%, wanted 4, 0 of 3 on justice, off course\)$/,
+    );
+    expect(failures[1]).toMatch(
+      /^a member off the rule's task for 23 min 10 s, .* \(member-01 on Train Hacking, the rule's Ethical Hacking\)$/,
     );
   });
 
   test("ascensions (G2) by hour, each with its gain and the respect it had earned; one the rule makes undone for 1 min fails", () => {
-    // member-01 never ascended, its levels all experience: the rule ascends it (respect 4: no recruit due).
-    const ready = { ...member("member-01", 300, "Plant Virus"), earnedRespect: 12 };
+    // member-01 never ascended, its levels all experience: the rule ascends it (respect 4: no recruit due), and has it
+    // train after, as it does.
+    const ready = { ...member("member-01", 300), earnedRespect: 12 };
     const others = [member("member-02"), member("member-03")];
     const due = withGang(formed([ready, ...others], { respect: 4 }));
     expect(fold(repeat(due, steps(GANG_ASCEND_WITHIN_MS) - 1)).failures).toEqual([]);
@@ -763,11 +833,238 @@ describe("the run report's section", () => {
     );
   });
 
-  test("the worker's problems are listed as first seen, and fail nothing by themselves", () => {
-    const reading = { ...formed([member("member-01")]), problems: ["the game didn't set member-01 to Nap"] };
-    const { text, failures } = fold([withGang(reading), withGang(reading)]);
+  test("the worker's problems are listed as first seen; one in every reading for a minute fails (#354), not under it", () => {
+    const problem = "the game didn't set member-01 to Nap";
+    // Three: no recruit allowed at respect 1.
+    const three = [member("member-01"), member("member-02"), member("member-03")];
+    const refused = withGang({ ...formed(three), problems: [problem] });
+    const { text, failures } = fold([refused, refused]);
     expect(text).toContain("    1970-01-01T00:00:00.000Z: the game didn't set member-01 to Nap");
     expect(failures).toEqual([]);
+    expect(fold(repeat(refused, steps(GANG_PROBLEM_WITHIN_MS) - 1)).failures).toEqual([]);
+    expect(fold(repeat(refused, steps(GANG_PROBLEM_WITHIN_MS))).failures).toEqual([
+      "a gang worker's problem in every reading for 1 min, from 1970-01-01T00:00:00.000Z to 1970-01-01T00:01:00.000Z " +
+        `(${problem})`,
+    ]);
+    // Gone a reading in between: each passes, however long, another problem in its place not keeping it going.
+    const other = withGang({ ...formed(three), problems: ["the game didn't recruit member-04"] });
+    const flickering = Array.from({ length: 3 * steps(GANG_PROBLEM_WITHIN_MS) }, (_, index) =>
+      index % 2 === 0 ? other : refused,
+    );
+    expect(fold(flickering).failures).toEqual([]);
+    // Nor one across a reading with no gang (unread): each side is under the minute.
+    const half = Math.ceil(steps(GANG_PROBLEM_WITHIN_MS) / 2);
+    expect(fold([...repeat(refused, half), withGang(undefined), ...repeat(refused, half)]).failures).toEqual([]);
+  });
+
+  test("a member off the rule's task for a minute fails (#354); under it, an owner's member, or a plan just changed, not", () => {
+    // Level 1: the rule has each train. member-01 left Unassigned: the worker sets it every run, the game refusing.
+    const off = withGang(formed([member("member-01", 1, "Unassigned"), member("member-02"), member("member-03")]));
+    expect(fold(repeat(off, steps(GANG_TASK_WITHIN_MS) - 1)).failures).toEqual([]);
+    expect(fold(repeat(off, steps(GANG_TASK_WITHIN_MS))).failures).toEqual([
+      "a member off the rule's task for 1 min, from 1970-01-01T00:00:00.000Z to 1970-01-01T00:01:00.000Z " +
+        "(member-01 on Unassigned, the rule's Train Hacking)",
+    ]);
+    // Set on the third reading: none.
+    const on = withGang(formed([member("member-01"), member("member-02"), member("member-03")]));
+    expect(fold([off, off, ...repeat(on, 2 * steps(GANG_TASK_WITHIN_MS))]).failures).toEqual([]);
+    // Moved off it after two readings on: from the reading before, whose order the worker had to set since.
+    expect(fold([on, on, ...repeat(off, steps(GANG_TASK_WITHIN_MS) - 2)]).failures).toEqual([]);
+    expect(fold([on, on, ...repeat(off, steps(GANG_TASK_WITHIN_MS) - 1)]).failures).toEqual([
+      "a member off the rule's task for 1 min, from 1970-01-01T00:00:10.000Z to 1970-01-01T00:01:10.000Z " +
+        "(member-01 on Unassigned, the rule's Train Hacking)",
+    ]);
+    // The rule's justice member kept on justice in the band (the share between half the bound and the bound), as the
+    // brain keeps it (#325's hysteresis): at wanted 2.5, (2.5 − 1) / (4 + 2.5) = 23%, the bound 1/3.
+    const kept = withGang(
+      formed([member("member-01", 1, "Ethical Hacking"), member("member-02"), member("member-03")], {
+        respect: 4,
+        wantedLevel: 2.5,
+      }),
+    );
+    expect(fold(repeat(kept, 2 * steps(GANG_TASK_WITHIN_MS))).failures).toEqual([]);
+    // An owner's member named past what the protocol takes is the owner's: the brain never sets it.
+    const owners = withGang(
+      formed([member("x".repeat(65), 1, "Unassigned"), member("member-02"), member("member-03")]),
+    );
+    expect(fold(repeat(owners, 2 * steps(GANG_TASK_WITHIN_MS))).failures).toEqual([]);
+  });
+
+  test("the respect flat with the rule's members working for a minute fails (#354): under a process's worth a reading", () => {
+    // 12 members (money): the grown hacker on Money Laundering, by the rule; the others training. The respect a
+    // process its plan expects, by the formulas, at each reading's respect.
+    const members = twelveWith(grownHacker("member-01"));
+    const reading = (respect: number) => withGang(formed(members, { ...GROWN_GANG, respect }));
+    const perProcess = (respect: number) => {
+      const gang = { ...NITESEC, ...GROWN_GANG, respect };
+      const plan = planGang({ gang, isHacking: true, members, softcap: gangSoftcapOf(2) });
+      expect(plan.assignments[0]).toMatchObject({ task: "Money Laundering", role: "working" });
+      return gangPlannedRespectPerCycle({ gang, members, plan, softcap: gangSoftcapOf(2) }) * GANG_CYCLES_PER_PROCESS;
+    };
+    // Each reading's respect risen by its plan's process's worth, × `share`: just over, just under it.
+    const rising = (share: number, count: number) => {
+      const respects = [GROWN_GANG.respect];
+      while (respects.length < count) {
+        const last = respects.at(-1) as number;
+        respects.push(last + perProcess(last) * share);
+      }
+      return respects.map(reading);
+    };
+    expect(perProcess(GROWN_GANG.respect)).toBeGreaterThan(0);
+    expect(fold(rising(1 + 1e-9, 2 * steps(GANG_RESPECT_FLAT_WITHIN_MS))).failures).toEqual([]);
+    expect(fold(rising(1 - 1e-9, steps(GANG_RESPECT_FLAT_WITHIN_MS) - 1)).failures).toEqual([]);
+    const { failures } = fold(rising(1 - 1e-9, steps(GANG_RESPECT_FLAT_WITHIN_MS)));
+    expect(failures).toEqual([
+      expect.stringMatching(
+        /^the gang's respect flat with the rule's members working for 1 min, from 1970-01-01T00:00:00\.000Z to 1970-01-01T00:01:00\.000Z \(respect 2,000,000, the rule's tasks expected to earn [\d.e+]+\/s \(1 working\)\)$/,
+      ),
+    ]);
+    // Flat outright, but a fall between (an ascension's or a death's, the only ways down): not judged across it.
+    const flat = reading(GROWN_GANG.respect);
+    const fell = reading(GROWN_GANG.respect - 1_000);
+    const half = Math.ceil(steps(GANG_RESPECT_FLAT_WITHIN_MS) / 2);
+    expect(fold([...repeat(flat, half), fell, ...repeat(fell, half)]).failures).toEqual([]);
+    expect(fold(repeat(flat, steps(GANG_RESPECT_FLAT_WITHIN_MS))).failures).toHaveLength(1);
+    // With the rule's members all training (under 12, the grown hacker trains as it would): nothing expected, none.
+    const training = withGang(formed([member("member-01"), member("member-02"), member("member-03")]));
+    expect(fold(repeat(training, 2 * steps(GANG_RESPECT_FLAT_WITHIN_MS))).failures).toEqual([]);
+  });
+});
+
+describe("the gang's silent stalls (#354)", () => {
+  const steps = (ms: number) => Math.ceil(ms / 10_000) + 1;
+  /** A plan with each member's task (`working` roles), and `recruit`. */
+  const planOf = (tasks: Record<string, string>, recruit: string[] = []): GangPlan => ({
+    objective: "respect",
+    assignments: Object.entries(tasks).map(([name, task]) => ({
+      name,
+      task,
+      role: "working",
+      value: 1,
+      bestTask: task,
+      nextAscensionMs: 0,
+    })),
+    recruit,
+    lostShare: 0,
+    bound: 1,
+    ascend: null,
+    warfare: null,
+  });
+  const at = (atMs: number, task: string, plan: GangPlan, respect = 1): GangStallReading => ({
+    atMs,
+    gang: { ...NITESEC, respect },
+    members: [member("member-01", 1, task)],
+    problems: [],
+    plan,
+    softcap: 1,
+  });
+
+  test("a plan that moves a member back and forth each reading, the worker a reading behind, is no stall", () => {
+    const phishing = planOf({ "member-01": "Phishing" });
+    const training = planOf({ "member-01": "Train Hacking" });
+    const watch = new GangStallWatch();
+    for (let index = 0; index < 20; index += 1) {
+      const [plan, task] = index % 2 === 0 ? [phishing, "Train Hacking"] : [training, "Phishing"];
+      watch.add(at(index * 10_000, task, plan));
+    }
+    expect(watch.open()).toEqual([]);
+    // On the plan's task: none, at a first reading too.
+    expect(gangStallsAt(null, at(0, "Phishing", phishing))).toEqual([]);
+    expect(gangStallsAt(null, at(0, "Unassigned", phishing))).toHaveLength(1);
+    // Held: the order of the reading before not done, nor this one's.
+    expect(gangStallsAt(at(0, "Unassigned", phishing), at(10_000, "Unassigned", phishing))).toEqual([
+      { key: "task:member-01", kind: "task", fromMs: 0, detail: "member-01 on Unassigned, the rule's Phishing" },
+    ]);
+    // A recruit the plan before made, set to train at once: off it, held.
+    const recruiting = planOf({}, ["member-01"]);
+    expect(gangStallsAt(at(0, "Unassigned", recruiting), at(10_000, "Unassigned", phishing))).toHaveLength(1);
+    expect(gangStallsAt(at(0, "Unassigned", recruiting), at(10_000, "Train Hacking", phishing))).toEqual([]);
+  });
+
+  test("the respect is judged only across two of the game's processes (4 s) or more: one is the least it adds", () => {
+    const phishing = planOf({ "member-01": "Phishing" });
+    const before = { ...at(0, "Phishing", phishing), members: [member("member-01", 100, "Phishing")] };
+    const now = (atMs: number) => ({ ...before, atMs });
+    expect(gangPlannedRespectPerCycle(before)).toBeGreaterThan(0);
+    expect(gangStallsAt(before, now(3_999))).toEqual([]);
+    expect(gangStallsAt(before, now(4_000))).toEqual([expect.objectContaining({ key: "respect", fromMs: 0 })]);
+    // Judged on the plan at the reading before, whose tasks were worked since: this one's training changes nothing.
+    const training = planOf({ "member-01": "Train Hacking" });
+    expect(gangStallsAt(before, { ...now(10_000), plan: training })).toEqual([
+      expect.objectContaining({ key: "respect" }),
+    ]);
+    expect(gangStallsAt({ ...before, plan: training }, now(10_000))).toEqual([]);
+  });
+
+  test("the live watch (the dashboard's): stalls past their bound, each medium snapshot once", () => {
+    const rule = new GangRule();
+    const off = withGang(formed([member("member-01", 1, "Unassigned"), member("member-02"), member("member-03")]));
+    const readings = Array.from({ length: steps(GANG_TASK_WITHIN_MS) - 1 }, () => ({ ...off }));
+    readings.forEach((mediumData, index) => {
+      rule.update({ mediumData, slowData: slowData(2), mediumAtMs: index * 10_000 });
+    });
+    expect(rule.stalls()).toEqual([]);
+    // The same snapshot decided on again, later: not a reading more.
+    rule.update({ mediumData: readings.at(-1) as MediumSnapshotData, slowData: slowData(2), mediumAtMs: 60_000 });
+    expect(rule.stalls()).toEqual([]);
+    rule.update({ mediumData: { ...off }, slowData: slowData(2), mediumAtMs: 60_000 });
+    expect(rule.stalls()).toEqual([
+      {
+        kind: "task",
+        fromMs: 0,
+        toMs: 60_000,
+        detail: "member-01 on Unassigned, the rule's Train Hacking",
+      },
+    ]);
+    // Out of BN2 (a destroy): none.
+    rule.update({ mediumData: { ...off }, slowData: slowData(1), mediumAtMs: 70_000 });
+    expect(rule.stalls()).toEqual([]);
+  });
+
+  test("the live watch starts again after a reading with no gang (#364's review): unread, or absent", () => {
+    const off = withGang(formed([member("member-01", 1, "Unassigned"), member("member-02"), member("member-03")]));
+    for (const gap of [
+      withGang({ gang: null, members: [], problems: ["the gang state isn't one to do"] }),
+      withGang(undefined),
+    ]) {
+      const rule = new GangRule();
+      const read = (mediumData: MediumSnapshotData, mediumAtMs: number) =>
+        rule.update({ mediumData: { ...mediumData }, slowData: slowData(2), mediumAtMs });
+      for (const atMs of [0, 10_000, 20_000, 30_000]) read(off, atMs);
+      read(gap, 40_000);
+      expect(rule.stalls()).toEqual([]);
+      // From the first reading after it: 50 s at 100 s, a minute at 110 s.
+      for (const atMs of [50_000, 60_000, 70_000, 80_000, 90_000, 100_000]) read(off, atMs);
+      expect(rule.stalls()).toEqual([]);
+      read(off, 110_000);
+      expect(rule.stalls()).toEqual([expect.objectContaining({ kind: "task", fromMs: 50_000, toMs: 110_000 })]);
+    }
+  });
+
+  test("a gap in the readings (over 30 s, `MEDIUM_SNAPSHOT_GAP_MS`) ends every stretch (#364's review)", () => {
+    expect(MEDIUM_SNAPSHOT_GAP_MS).toBe(30_000);
+    // A thinned store's minute apart, or a degraded medium tier: a member off its task, and the respect flat with the
+    // grown hacker on Money Laundering, at every reading. None judged across a gap.
+    const off = withGang(formed([member("member-01", 1, "Unassigned"), member("member-02"), member("member-03")]));
+    const flat = withGang(formed(twelveWith(grownHacker("member-01")), GROWN_GANG));
+    const sparse = (data: MediumSnapshotData, everyMs: number, count: number) => {
+      const gang = new GangFold();
+      gang.addSlow(0, slowData(2));
+      for (let index = 0; index < count; index += 1) gang.addMedium(index * everyMs, data);
+      const failures: string[] = [];
+      gang.section(failures, count * everyMs);
+      return failures;
+    };
+    expect(sparse(off, 60_000, 10)).toEqual([]);
+    expect(sparse(flat, 60_000, 10)).toEqual([]);
+    expect(sparse(off, 31_000, 10)).toEqual([]);
+    // At the gap's edge, 30 s apart, still judged: a minute is three readings.
+    expect(sparse(off, 30_000, 3)).toEqual([
+      expect.stringMatching(/^a member off the rule's task for 1 min, from 1970-01-01T00:00:00\.000Z /),
+    ]);
+    expect(sparse(flat, 30_000, 3)).toEqual([
+      expect.stringMatching(/^the gang's respect flat with the rule's members working for 1 min, /),
+    ]);
   });
 });
 
@@ -861,7 +1158,7 @@ describe("the controller (#325)", () => {
         .sentMessages()
         .filter((message) => message.type === "desiredState")
         .at(-1) as unknown as DesiredState | undefined;
-    return { controller, send, last, lines };
+    return { controller, send, last, lines, connection };
   }
   /** A slow snapshot of `bitNode` with NiteSec joined, at no reputation, as forming the gang leaves it. */
   const niteSecSlow = (bitNode: number): SlowSnapshotData => ({
@@ -895,6 +1192,26 @@ describe("the controller (#325)", () => {
     expect(last()?.intents).toEqual([]);
     expect(lines).toContain("gang: forming with NiteSec");
     expect(controller.gangView().stage).toBe("forming");
+  });
+
+  test("the silent stalls (#354) from the snapshots in: the controller's `gangStalls()`, the alert's, past a minute", () => {
+    const { controller, send } = connected();
+    send("slow", niteSecSlow(2));
+    // member-01 left Unassigned at every reading, the rule's Train Hacking: the game refusing it, say.
+    const off = formed([member("member-01", 1, "Unassigned"), member("member-02"), member("member-03")]);
+    send("medium", niteSecMedium(off));
+    for (let step = 1; step <= 5; step += 1) {
+      clock.advance(10_000);
+      send("medium", niteSecMedium(off));
+    }
+    expect(controller.gangStalls()).toEqual([]);
+    clock.advance(10_000);
+    send("medium", niteSecMedium(off));
+    expect(controller.gangStalls()).toEqual([
+      expect.objectContaining({ kind: "task", detail: "member-01 on Unassigned, the rule's Train Hacking" }),
+    ]);
+    const [stall] = controller.gangStalls();
+    expect((stall?.toMs ?? 0) - (stall?.fromMs ?? 0)).toBe(60_000);
   });
 
   test("formed: its recruits and tasks sent, and the gang's faction gets none of the brain's faction work", () => {
@@ -1169,6 +1486,74 @@ describe("the controller (#325)", () => {
       expect(controller.gangView().line).not.toContain("objective at 12");
       expect(events.filter((event) => (event as { type: string }).type === "gangObjectiveChosen")).toEqual([]);
     });
+  });
+
+  /** Three members, the wanted penalty `share` above its floor at respect 1,000, on `tasks`. */
+  const justiceReading = (tasks: string[], share: number) =>
+    niteSecMedium(
+      formed(
+        [member("member-01", 300, tasks[0]), member("member-02", 250, tasks[1]), member("member-03", 200, tasks[2])],
+        { respect: 1_000, wantedLevel: (1_000 * share + 1) / (1 - share), wantedPenalty: 0.5 },
+      ),
+    );
+  /** Under the bound, over its half, member-02 and member-03 on justice: kept there only if the rule put them there. */
+  const inBand = () => justiceReading(["Plant Virus", "Ethical Hacking", "Ethical Hacking"], 0.32);
+  const ON_JUSTICE = { "member-02": "Ethical Hacking", "member-03": "Ethical Hacking" };
+
+  test("a restarted brain keeps the rule's justice members (#365's review): its updates with no snapshots leave the store's", () => {
+    store.setSetting(GANG_PLACED_ON_JUSTICE_SETTING, JSON.stringify(["member-02", "member-03"]));
+    // The constructor's update and the hello's, with no snapshot yet.
+    const { controller, send, last } = connected();
+    expect(controller.gangView().stage).toBe("notManaged");
+    expect(JSON.parse(store.getSetting(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null")).toEqual(["member-02", "member-03"]);
+    send("slow", niteSecSlow(2));
+    send("medium", inBand());
+    expect(last()?.gang?.tasks).toMatchObject(ON_JUSTICE);
+  });
+
+  test("an Agent's disconnect and reconnect in BN2 (#365's review): waiting for a slow snapshot, the justice members kept", () => {
+    const { controller, send, connection, lines } = connected();
+    send("slow", niteSecSlow(2));
+    send("medium", justiceReading(["Plant Virus", "Plant Virus", "DDoS Attacks"], 0.4));
+    expect(JSON.parse(store.getSetting(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null")).toEqual(["member-02", "member-03"]);
+    connection.close(1006, "the Agent went");
+    expect(controller.gangView()).toMatchObject({
+      stage: "waiting",
+      line: "Gang: waiting for a slow snapshot to say the BitNode",
+    });
+    expect(lines).toContain("gang: waiting for a slow snapshot to say the BitNode");
+    expect(JSON.parse(store.getSetting(GANG_PLACED_ON_JUSTICE_SETTING) ?? "null")).toEqual(["member-02", "member-03"]);
+    // The next Agent's session, its snapshots in the band: the rule's own kept on justice.
+    const next = new MemoryConnection();
+    channel.accept(next);
+    const message = (body: Record<string, unknown>) =>
+      next.receive(encodeControlMessage({ protocolVersion: CONTROL_PROTOCOL_VERSION, ...body } as never));
+    message({
+      type: "hello",
+      token: TOKEN,
+      deploymentId: "deployment-a",
+      agentSessionId: "session-2",
+      game: { version: "3.0.1", versionNumber: 51, commit: "3162fd2", platform: "Steam" },
+    });
+    for (const [tier, data] of [
+      ["slow", niteSecSlow(2)],
+      ["medium", inBand()],
+    ] as const) {
+      message({
+        type: "snapshot",
+        agentSessionId: "session-2",
+        tier,
+        sequenceNumber: ++sequenceNumber,
+        gameTimeMs: 2_000,
+        data,
+      });
+    }
+    const sent = next
+      .sentMessages()
+      .filter((each) => each.type === "desiredState")
+      .at(-1) as unknown as DesiredState | undefined;
+    expect(sent?.gang?.tasks).toMatchObject(ON_JUSTICE);
+    expect(controller.gangView().stage).toBe("managed");
   });
 
   test("equipment (G3): bought from the money above the brain's holds, this round's purchase held on top", () => {
