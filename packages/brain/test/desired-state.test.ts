@@ -33,6 +33,7 @@ import { type InstallTimingPolicy, readInstallWait } from "../src/augmentations.
 import { HACKING_MULTIPLIERS_UNREAD } from "../src/batcher.ts";
 import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
+import { DESTROY_ESTIMATED_EVENT_KIND } from "../src/destroy-estimate.ts";
 import { readHackLoopEnabled } from "../src/hack-loop.ts";
 import { readHomeRamEnabled } from "../src/home-ram.ts";
 import { readManualIntents, readResetSentNote, writeResetSentNote } from "../src/manual-intents.ts";
@@ -1672,6 +1673,9 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       await settleBackup(SAVED);
       expect(sentIds()).toEqual([INSTALL.id]);
       expect(sent).toEqual([
+        // The time to the destroy (#360): the first slow snapshot shows a cycle after the BitNode's first, and the brain
+        // has no note for the BitNode, so a first look ("first seen"), not an install.
+        expect.objectContaining({ type: DESTROY_ESTIMATED_EVENT_KIND, moment: "first seen", lastAugReset: 1000 }),
         expect.objectContaining({ type: "augmentationProgress", countdown: expect.objectContaining({ quick: true }) }),
         expect.objectContaining({ type: "augmentationInstallChosen" }),
         { type: "augmentationInstallSent", atMs: expect.any(Number), source: "brain", queued: FIVE },
@@ -1825,6 +1829,8 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       expect(controller.augmentationsView()).toMatchObject({ committed: false });
       expect(controller.augmentationReserve()).toBe(0);
       expect(sent.map((event) => event.type)).toEqual([
+        // The first slow snapshot's first look (#360); the next, the same cycle, none.
+        DESTROY_ESTIMATED_EVENT_KIND,
         "augmentationProgress",
         "augmentationInstallChosen",
         "augmentationInstallSent",
@@ -2514,6 +2520,9 @@ describe("factions and their work (#203)", () => {
     });
     expect(events).toEqual([
       expect.objectContaining({ type: "factionWorkChosen", faction: "CyberSec", augmentation: "Neurotrainer I" }),
+      // The time to the destroy (#360): the BitNode's start, its first slow snapshot (its first cycle), after A5's
+      // choice in the same update.
+      expect.objectContaining({ type: DESTROY_ESTIMATED_EVENT_KIND, moment: "start" }),
     ]);
     expect(lines.filter((line) => line.startsWith("faction work:"))).toHaveLength(1);
   });
@@ -2549,6 +2558,8 @@ describe("factions and their work (#203)", () => {
       events.map((event) => (event as { type: string; reason?: string }).reason ?? (event as { type: string }).type),
     ).toEqual([
       "factionWorkChosen",
+      // The BitNode's start (#360), at the first slow snapshot: once, whatever the work.
+      DESTROY_ESTIMATED_EVENT_KIND,
       "your work on the dashboard",
       "factionWorkChosen",
       "the brain's faction work is switched off",
@@ -2574,10 +2585,12 @@ describe("factions and their work (#203)", () => {
     const { controller, connection, events } = connected();
     send(connection, "medium", withSkills());
     expect(lastState(connection)?.work).toBeUndefined();
+    expect(events).toEqual([]);
     send(connection, "slow", factionsSlow({}));
     expect(lastState(connection)?.work).toBeUndefined();
     expect(controller.factionsView()).toMatchObject({ choice: null, waitingFor: "a faction to join" });
-    expect(events).toEqual([]);
+    // No faction work's event; the slow snapshot is the BitNode's start (#360), estimated whatever is joined.
+    expect(events).toEqual([expect.objectContaining({ type: DESTROY_ESTIMATED_EVENT_KIND, moment: "start" })]);
   });
 });
 
