@@ -6,6 +6,7 @@ import path from "node:path";
 import type { InGameBuild } from "@bitburner-agent/bridge";
 import {
   AGENT_SIM_EFFECTORS_GLOBAL,
+  type Bn2Route,
   BOOT_SCRIPT,
   type FastSnapshotData,
   type MediumSnapshotData,
@@ -75,6 +76,7 @@ export function useFreshStarts() {
     batcher = true,
     augmentations = true,
     installTiming = "planner",
+    bn2Route = "planner",
   }: {
     withDesiredState: boolean;
     beforeAgent?: (fresh: FreshGame) => Promise<void>;
@@ -93,6 +95,8 @@ export function useFreshStarts() {
     augmentations?: boolean;
     /** Who times installs short of Daedalus's count (#343): the planner, as on Steam; the count rule for an A/B. */
     installTiming?: InstallTimingPolicy;
+    /** BN2's route (#357): the planner's, as on Steam; the rules' for an A/B. */
+    bn2Route?: Bn2Route;
   }) {
     const simulation = await start({
       seed,
@@ -109,7 +113,7 @@ export function useFreshStarts() {
     if (!batcher) store.setSetting(BATCHER_ENABLED_SETTING, "false");
     if (!augmentations) writeAugmentationsEnabled(store, false);
     const data = { store, brainRelease: "fresh-start-test", dataDirectory };
-    const brain = startBrainInSimulation(game, { build, data, withDesiredState, installTiming });
+    const brain = startBrainInSimulation(game, { build, data, withDesiredState, installTiming, bn2Route });
     await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);
     expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
     await beforeAgent({ simulation, game });

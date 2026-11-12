@@ -23,19 +23,32 @@
 // - Its shop (#334, G5): nearly every augmentation, The Red Pill too in BN2 (`Faction/FactionHelpers.tsx:172-202`,
 //   core's `augmentationsSoldBy`). A6 and A8, and the World Daemon's path, get it apart (`gangShopOf`): its reputation
 //   as the slow snapshot reports it, which the gang's respect feeds (`Gang.ts:144-155`).
+// - The objective at 12 members (#357, the planner's BN2 route, core's `gangObjectiveChoice`): respect or money, by the
+//   time to The Red Pill's reputation at the gang's faction (`gangRouteFactionOf`: its reputation and favour, the
+//   player's `faction_rep`), each objective's plan's respect a cycle its rate; money once The Red Pill is bought, queued
+//   or installed. A `gangObjectiveChosen` event at each change, with both estimates; the dashboard's line says it. The
+//   A/B's baseline (`bn2Route` "rules", tests alone) keeps the rule's money at 12.
 // - No switch (#325): in BN2 the gang is the brain's to play; the owner can move members in the game, and the brain
 //   sets them back within 10 s.
 import {
+  augmentationBitNodeMultipliers,
+  augmentationCost,
+  type Bn2Route,
   factionReadingOf,
   GANG_ASCENSION_HORIZON_CAP_MS,
   GANG_EQUIPMENT_NAMES,
   GANG_FACTIONS,
+  GANG_MOST_MEMBERS,
   GANG_STATS,
   GANG_TERRITORY_UPDATE_MS,
   type GangEquipmentPlan,
   type GangInformation,
   type GangMemberReading,
+  type GangObjective,
+  type GangObjectiveChoice,
+  type GangObjectiveEstimate,
   type GangPlan,
+  type GangRouteFaction,
   type GangRuleInputs,
   type GangStat,
   type GangState,
@@ -46,6 +59,8 @@ import {
   gangFactionOf,
   gangFactionToForm,
   gangInBonusTime,
+  gangObjectiveChoice,
+  gangObjectiveOf,
   gangSoftcapOf,
   gangTrainingTask,
   type Intent,
@@ -57,7 +72,9 @@ import {
   planGangEquipment,
   type SlowSnapshotData,
   TERRITORY_WARFARE_TASK,
+  THE_RED_PILL,
 } from "@bitburner-agent/core";
+import { formatEta } from "./augmentations.ts";
 import type { CloudServerPurchase } from "./cloud-servers.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
 
@@ -234,6 +251,85 @@ export function gangShopOf(
   if (faction === null) return null;
   const joined = factionReadingOf(slowData)?.state?.joined ?? [];
   return joined.find((each) => each.name === faction) ?? null;
+}
+
+/** The gang's objective chosen at 12 members (#357, the planner's (2)): at each change, with both estimates. */
+export const GANG_OBJECTIVE_CHOSEN_EVENT_KIND = "gangObjectiveChosen";
+
+/** (2)'s estimate as the event and the dashboard carry it: its time null for never (JSON has no Infinity). */
+export interface GangObjectiveEstimateView {
+  respectPerCycle: number;
+  reputationPerSecond: number;
+  etaMs: number | null;
+}
+
+export type GangEvent = {
+  type: typeof GANG_OBJECTIVE_CHOSEN_EVENT_KIND;
+  atMs: number;
+  objective: GangObjective;
+  reason: GangObjectiveChoice["reason"];
+  members: number;
+  respect: GangObjectiveEstimateView | null;
+  money: GangObjectiveEstimateView | null;
+  /** The gang's faction's reputation and favour, `faction_rep`, and The Red Pill's reputation, as read. */
+  reputation: number;
+  favor: number;
+  factionRep: number;
+  needed: number;
+};
+
+/** An estimate as the event carries it. */
+export function gangObjectiveEstimateView(estimate: GangObjectiveEstimate | null): GangObjectiveEstimateView | null {
+  if (estimate === null) return null;
+  const { respectPerCycle, reputationPerSecond, etaMs } = estimate;
+  return { respectPerCycle, reputationPerSecond, etaMs: Number.isFinite(etaMs) ? etaMs : null };
+}
+
+/**
+ * The gang's faction as (2) reads it (#357, core's `GangRouteFaction`): its reputation and favour in `slowData`'s faction
+ * state (`gangShopOf`), the player's `faction_rep` in `mediumData`, The Red Pill's reputation (`augmentationCost`), and
+ * whether it's owned: installed, queued, or `bought` (A6's purchase reported done, not shown queued yet). Null where
+ * the snapshots don't say it all, or core doesn't know the BitNode.
+ */
+export function gangRouteFactionOf(
+  slowData: SlowSnapshotData | null | undefined,
+  faction: string,
+  mediumData: unknown,
+  bought = false,
+): GangRouteFaction | null {
+  const shop = gangShopOf(slowData, faction);
+  const info = slowData?.resetInfo;
+  const state = factionReadingOf(slowData)?.state ?? null;
+  const factionRep = (mediumData as { player?: { mults?: { faction_rep?: unknown } } } | null)?.player?.mults
+    ?.faction_rep;
+  if (shop === null || info === undefined || state === null || !isNumber(factionRep)) return null;
+  let needed: number;
+  try {
+    needed = augmentationCost(THE_RED_PILL, {
+      installed: info.ownedAugs,
+      queued: state.queuedAugmentations,
+      sourceFile11Level: info.ownedSF["11"] ?? 0,
+      bitNodeMultipliers: augmentationBitNodeMultipliers(info.currentNode, info.ownedSF),
+    }).reputation;
+  } catch {
+    return null;
+  }
+  const redPillOwned =
+    bought || Object.hasOwn(info.ownedAugs, THE_RED_PILL) || state.queuedAugmentations.includes(THE_RED_PILL);
+  return { reputation: shop.reputation, favor: shop.favor, factionRep, needed, redPillOwned };
+}
+
+/** (2)'s choice in words: "respect, The Red Pill in 118.2 h (money's 790.4 h)", or why it's money. */
+export function describeObjective(choice: GangObjectiveChoice): string {
+  if (choice.reason === "The Red Pill owned") return "money, The Red Pill bought, queued or installed";
+  if (choice.reason === "unread") return "money, the gang's faction unread (The Red Pill's reputation unknown)";
+  const chosen = choice.objective === "respect" ? choice.respect : choice.money;
+  const other = choice.objective === "respect" ? choice.money : choice.respect;
+  const eta = (ms: number | undefined) => (ms === undefined || !Number.isFinite(ms) ? "never" : formatEta(ms));
+  return (
+    `${choice.objective}, The Red Pill in ${eta(chosen?.etaMs)} ` +
+    `(${choice.objective === "respect" ? "money" : "respect"}'s ${eta(other?.etaMs)})`
+  );
 }
 
 /** Whether the protocol takes `name` as a member's (core's `parseGangState`): an owner's longer name is skipped. */
@@ -485,12 +581,26 @@ export class GangRule {
   #lastMembers: { name: string; task: string }[] | null = null;
   /** The deaths seen since the brain started (G4). */
   #deaths = 0;
+  readonly #emit: (event: GangEvent) => void;
+  /** BN2's route (#357): the planner's objective at 12 members, or (the A/B's baseline) the rule's money. */
+  readonly #route: Bn2Route;
+  /** The objective at 12 as last chosen and sent (#357), or null under 12: an event at each change. */
+  #objectiveSent: string | null = null;
 
-  /** `store`: where the rule's justice members are kept across a restart; none (the tests), in memory only. */
-  constructor(log: (line: string) => void = () => {}, store: TelemetryStore | null = null) {
+  /**
+   * `store`: where the rule's justice members are kept across a restart; none (the tests), in memory only. `emit`: its
+   * events (#357). `route`: the planner's objective at 12, unless a test asks for the rules' (the A/B's baseline).
+   */
+  constructor(
+    log: (line: string) => void = () => {},
+    store: TelemetryStore | null = null,
+    { emit = () => {}, route = "planner" }: { emit?: (event: GangEvent) => void; route?: Bn2Route } = {},
+  ) {
     this.#log = log;
     this.#store = store;
     this.#placed = readPlacedOnJustice(store);
+    this.#emit = emit;
+    this.#route = route;
   }
 
   /** Where the rule stands, for the dashboard. */
@@ -517,13 +627,20 @@ export class GangRule {
     return this.#holding ? GANG_FACTIONS : [];
   }
 
-  /** The decision on the latest snapshots. Null for both outside BN2: no gang is managed. */
+  /**
+   * The decision on the latest snapshots. Null for both outside BN2: no gang is managed. `nowMs`: the controller's
+   * clock, for the events; `redPillBought`: The Red Pill reported bought and not yet shown queued (A6's queue, #357).
+   */
   update({
     mediumData,
     slowData,
+    nowMs = null,
+    redPillBought = false,
   }: {
     mediumData: MediumSnapshotData | null;
     slowData: SlowSnapshotData | null;
+    nowMs?: number | null;
+    redPillBought?: boolean;
   }): GangDecision {
     const bitNode = bitNodeOfSlow(slowData);
     if (bitNode !== GANG_BITNODE) {
@@ -583,7 +700,13 @@ export class GangRule {
       bonusTime: gangInBonusTime(gang.bonusTimeMs),
       ...(warfareFigures === undefined ? {} : { warfare: warfareFigures }),
     };
-    const plan = planGang(inputs);
+    // The objective (#357): at 12 members the planner's, by the time to The Red Pill's reputation at the gang's faction;
+    // the rules' (the A/B's baseline) money.
+    const routeFaction =
+      this.#route === "planner" ? gangRouteFactionOf(slowData, gang.faction, mediumData, redPillBought) : null;
+    const choice = this.#route === "planner" ? gangObjectiveChoice(inputs, routeFaction) : null;
+    const plan = planGang(inputs, choice?.objective ?? gangObjectiveOf(members.length));
+    this.#watchObjective(choice, routeFaction, nowMs);
     this.#basis = { mediumData, inputs, plan, costMult: gangEquipmentCostMultOf(gang) };
     this.#setPlaced(plan.assignments.filter((each) => each.role === "justice").map((each) => each.name));
     const tasks: Record<string, string> = {};
@@ -595,6 +718,9 @@ export class GangRule {
       ascending === undefined ? [] : [{ name: ascending.name, pointsBefore: gangAscensionPointsOf(ascending) }];
     const line =
       `Gang: ${gang.faction}'s, ${formatCount(members.length, "member")} of 12 (${describeTaskMix(plan)}); ` +
+      (choice !== null && members.length >= GANG_MOST_MEMBERS
+        ? `objective at 12: ${describeObjective(choice)}; `
+        : "") +
       `respect ${Math.round(gang.respect).toLocaleString("en-US")}, wanted penalty ${percent(1 - gang.wantedPenalty)}` +
       ` (above its floor ${percent(plan.lostShare)}, bound ${percent(plan.bound)}); ` +
       `$${Math.round(gang.moneyGainRate * 5).toLocaleString("en-US")}/s; ${describeAscension(plan)}; ` +
@@ -615,6 +741,36 @@ export class GangRule {
       keepMoney: null,
       warfare,
     });
+  }
+
+  /**
+   * The objective at 12 members (#357): a `gangObjectiveChosen` event and a log line at each change of objective or
+   * reason, with both estimates; none while the gang's faction is unread (money meanwhile, as the rule's). Under 12,
+   * forgotten, so the next 12 sends one again.
+   */
+  #watchObjective(choice: GangObjectiveChoice | null, read: GangRouteFaction | null, nowMs: number | null): void {
+    if (choice === null || choice.reason === "recruiting") {
+      this.#objectiveSent = null;
+      return;
+    }
+    if (choice.reason === "unread" || read === null) return;
+    const key = `${choice.objective} ${choice.reason}`;
+    if (key === this.#objectiveSent) return;
+    this.#objectiveSent = key;
+    this.#emit({
+      type: GANG_OBJECTIVE_CHOSEN_EVENT_KIND,
+      atMs: nowMs ?? 0,
+      objective: choice.objective,
+      reason: choice.reason,
+      members: GANG_MOST_MEMBERS,
+      respect: gangObjectiveEstimateView(choice.respect),
+      money: gangObjectiveEstimateView(choice.money),
+      reputation: read.reputation,
+      favor: read.favor,
+      factionRep: read.factionRep,
+      needed: read.needed,
+    });
+    this.#log(`gang: the objective at 12: ${describeObjective(choice)}`);
   }
 
   /** The rule's justice members, written to the store on a change. */
@@ -665,7 +821,11 @@ export class GangRule {
   #decide(view: GangView, intent: Intent | null, gang: GangState | null): GangDecision {
     this.#view = view;
     this.#state = gang;
-    if (view.stage !== "managed") this.#basis = null;
+    if (view.stage !== "managed") {
+      this.#basis = null;
+      // No gang read: the next one's objective at 12 is sent afresh (#357).
+      this.#objectiveSent = null;
+    }
     // Logged on a change of stage, recruits or task mix, not each figure.
     const logged =
       view.plan === null

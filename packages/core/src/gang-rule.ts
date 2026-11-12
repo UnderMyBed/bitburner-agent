@@ -9,7 +9,8 @@
  *   exponent, 0.83 in BN2 at 1/7 territory, `formulas.ts:27`). What the gang keeps of a member is then about its
  *   respect less its wanted. Scored with the penalty at 1, a member's choice doesn't swing with the gang's wanted level
  *   of the moment, which wanted control looks after. With 12 members: money, from the tasks whose respect covers their
- *   wanted, so the penalty doesn't grow.
+ *   wanted, so the penalty doesn't grow; or, since #357, the planner's (`planGang`'s `objective`, core's
+ *   `gangObjectiveChoice` in ./gang-route.ts): respect or money by the time to The Red Pill's reputation.
  * - **Training:** a member trains (Train Hacking in a hacking gang, Train Combat in a combat one) while a minute's
  *   training, then work until its next ascension (`gangTimeToAscensionMs`, G2), beats that time's work now. Training
  *   raises its levels by the game's exp formula (`GangMember.ts:155-210`, `:70-72`); an ascension resets them.
@@ -564,9 +565,14 @@ export function gangWantedRecovers(
   return gangWantedAfter(gang, members, tasks, cycles, bonusTime) <= gangWantedAtBound(gang, members.length);
 }
 
-/** Each member's task, and the recruits, by the rule above. `members` in the game's order, each with its task now. */
-export function planGang(given: GangRuleInputs): GangPlan {
-  const objective = gangObjectiveOf(given.members.length);
+/**
+ * Each member's task, and the recruits, by the rule above. `members` in the game's order, each with its task now.
+ * `objective`: the rule's (`gangObjectiveOf`) unless given: at 12 members the planner's (#357, `gangObjectiveChoice`).
+ */
+export function planGang(
+  given: GangRuleInputs,
+  objective: GangObjective = gangObjectiveOf(given.members.length),
+): GangPlan {
   // The ascension first (G2): the rest of the plan is for the gang after it, the member ascended and the respect less.
   const ascend = gangAscensionToMake(given, objective);
   const inputs: GangRuleInputs =
@@ -715,8 +721,8 @@ function moneyOver(inputs: GangRuleInputs, member: GangMemberFigures, task: stri
  * cost now (`costMult`, the gang's `equipmentCostMult`, `Gang.ts:407-434`). Dollars against dollars, the money that
  * comes back (#330's re-review): a member training, on justice or on a task that earns none (most respect tasks: DDoS
  * Attacks, Plant Virus, Cyberterrorism) gains nothing, so nothing is bought for it. Under 12 members that's most of
- * them; with 12, the money objective, members work the tasks that earn it. Respect's own worth is left out: the
- * cautious side.
+ * them; with 12, the money objective, members work the tasks that earn it (since #357 the planner's objective at 12:
+ * under respect, as under 12). Respect's own worth is left out: the cautious side.
  */
 export function gangEquipmentAppraisal(
   inputs: GangRuleInputs,
@@ -782,12 +788,13 @@ export interface GangEquipmentPlan {
  */
 export function planGangEquipment(
   inputs: GangRuleInputs,
-  plan: Pick<GangPlan, "assignments" | "ascend">,
+  plan: Pick<GangPlan, "assignments" | "ascend"> & { objective?: GangObjective },
   { budget, costMult }: { budget: number; costMult: number },
 ): GangEquipmentPlan {
   const weighed = weighedStats(inputs.isHacking);
   const relevant = GANG_EQUIPMENT.filter((item) => Object.keys(item.mults).some((stat) => weighed.has(stat)));
-  const objective = gangObjectiveOf(inputs.members.length);
+  // The plan's objective (#357: the planner's at 12), else the rule's.
+  const objective = plan.objective ?? gangObjectiveOf(inputs.members.length);
   const paying: GangEquipmentAppraisal[] = [];
   for (const member of inputs.members) {
     if (member.name === "" || member.name.length > MAX_GANG_MEMBER_NAME_LENGTH) continue;

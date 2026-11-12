@@ -45,6 +45,7 @@ import {
   describeProgress,
   describeReason,
   formatEta,
+  GANG_FORMING_ROUTE,
   type OnlineClock,
 } from "./augmentations.ts";
 import { plural } from "./gap-report.ts";
@@ -62,6 +63,7 @@ export const AUGMENTATION_EVENT_KINDS = [
   AUGMENTATION_DONATED_EVENT_KIND,
   AUGMENTATION_DONATION_FAILED_EVENT_KIND,
   AUGMENTATION_WAIT_OVERDUE_EVENT_KIND,
+  GANG_FORMING_ROUTE,
   AUGMENTATION_INCOME_HELD_EVENT_KIND,
 ];
 
@@ -850,9 +852,18 @@ function describeIncomeHeld(fields: Record<string, unknown>): string {
   );
 }
 
-/** A wait overdue (#343), in words: when it began, its first τ, the n it waited for, and the planner's figures now. */
+/**
+ * A wait overdue (#343), in words: when it began, its first τ, the n it waited for, and the planner's figures now; a
+ * wait for the gang (#357's (1), its `route`), when it began and its first τ_g.
+ */
 function describeWaitOverdue(fields: Record<string, unknown>): string {
   const eta = (ms: unknown) => formatEta(isFiniteNumber(ms) ? ms : null);
+  if (fields.route === GANG_FORMING_ROUTE) {
+    return (
+      `wait overdue: the planner's wait for the gang from ${eta(fields.sinceOnlineMs)} online, in ~` +
+      `${eta(fields.firstTauMs)}, still none at ${eta(fields.onlineMs)} online${timingWords(fields.timing, ": ")}`
+    );
+  }
   return (
     `wait overdue: the planner's wait for Daedalus's count from ${eta(fields.sinceOnlineMs)} online, for ` +
     `${String(fields.untilAdding)} new at an install in ~${eta(fields.firstTauMs)}, still short at ` +
@@ -872,7 +883,9 @@ function timingLines(
   events: readonly StoredEvent[],
   { failures, formatTime }: { failures: string[]; formatTime: (ms: number) => string },
 ): string[] {
-  const lines = ["  the planner's install timing short of Daedalus's count (#343):"];
+  const lines = [
+    "  the planner's install timing short of Daedalus's count (#343) and, in BN2, before the gang (#357):",
+  ];
   const add = (atMs: number, line: string) => {
     lines.push(`    ${formatTime(atMs)}  ${line}`);
     failures.push(line);

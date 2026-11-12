@@ -2288,6 +2288,30 @@ describe("augmentations and the reset (#210)", () => {
       // Section 3's decisions, section 4's, and the failures' list.
       expect(report.text.split("\n").filter((each) => each.endsWith(line))).toHaveLength(3);
     });
+
+    test("fails a wait for the gang the brain found overdue (#357's (1)), in its own words", () => {
+      const words = "no gang yet: wait for the gang (avmnite-02h's 217 at 216, 25 min) against install now (2.0 h)";
+      const report = augmentationRun({
+        events: [
+          [
+            10 * MINUTE,
+            "augmentationWaitOverdue",
+            {
+              onlineMs: 33 * MINUTE,
+              sinceOnlineMs: 1 * MINUTE,
+              firstTauMs: 6 * MINUTE,
+              untilAdding: 4,
+              route: "gang forming",
+              timing: timing({ choice: 1, adding: 4, words: `${words}; chosen: wait` }),
+            },
+          ],
+        ],
+      });
+      const line =
+        "wait overdue: the planner's wait for the gang from 1 min online, in ~6 min, still none at 33 min online: " +
+        `${words}; chosen: wait`;
+      expect(failuresOf(report)).toEqual([line]);
+    });
   });
 });
 

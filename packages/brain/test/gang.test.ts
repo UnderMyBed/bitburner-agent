@@ -10,6 +10,7 @@ import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-help
 import {
   AUGMENTATION_NAMES,
   BATCHER_RAM_BUDGET_GB,
+  type Bn2Route,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
@@ -20,8 +21,10 @@ import {
   type GangInformation,
   type GangMemberReading,
   type GangReading,
+  type GangRuleInputs,
   type GangWarfareFigures,
   gangMemberAscended,
+  gangObjectiveChoice,
   gangSkillLevel,
   gangTerritoryPerUpdate,
   gangWarfareBasis,
@@ -31,6 +34,7 @@ import {
   intentId,
   type MediumSnapshotData,
   parseGangState,
+  planGang,
   type SlowSnapshotData,
   type SnapshotTier,
 } from "@bitburner-agent/core";
@@ -56,6 +60,7 @@ import {
   GANG_ASCEND_WITHIN_MS,
   GANG_EQUIP_WITHIN_MS,
   GANG_FORM_WITHIN_MS,
+  GANG_OBJECTIVE_DIFFERS_WITHIN_MS,
   GANG_RECRUIT_WITHIN_MS,
   GANG_UNREAD_WITHIN_MS,
   GANG_WANTED_OUTCOME_MS,
@@ -503,6 +508,124 @@ describe("the run report's section", () => {
     expect(unshown.section([], 30_000)).toContain("  the gang's faction: not shown by a slow snapshot in the window");
   });
 
+  describe("BN2's route (#357)", () => {
+    /** Twelve grown hackers (no ascension or equipment due), on Cyberterrorism: made in the tests, after the file's. */
+    const twelve = () =>
+      Array.from({ length: 12 }, (_, index) =>
+        grownHacker(`member-${String(index + 1).padStart(2, "0")}`, { task: "Cyberterrorism", upgrades: [] }),
+      );
+    /** A medium snapshot of the gang of 12, the player's `faction_rep` read. */
+    const atTwelve = (): MediumSnapshotData => {
+      const data = withGang(formed(twelve(), { respect: 2e6, wantedLevel: 1, wantedPenalty: 2e6 / (2e6 + 1) }));
+      data.player = { ...data.player, mults: { faction_rep: 1 } };
+      return data;
+    };
+    /** BN2's slow snapshot with NiteSec, the gang's faction, at 0 of The Red Pill's 2.5m. */
+    const niteSec: SlowSnapshotData = {
+      ...slowData(2),
+      gangFaction: "NiteSec",
+      factions: {
+        backend: "sim",
+        state: { joined: [{ name: "NiteSec", reputation: 0, favor: 0 }], invitations: [], queuedAugmentations: [] },
+        problem: null,
+      },
+    };
+    const chosenEvent = (atMs: number, objective: string, fields: Record<string, unknown> = {}): StoredEvent => ({
+      atMs,
+      kind: "gangObjectiveChosen",
+      detail: {
+        objective,
+        reason: "estimates",
+        members: 12,
+        respect: { respectPerCycle: 50, reputationPerSecond: 3.3, etaMs: 7.5e8 },
+        money: { respectPerCycle: 5, reputationPerSecond: 0.33, etaMs: 7.5e9 },
+        reputation: 0,
+        favor: 0,
+        factionRep: 1,
+        needed: 2.5e6,
+        ...fields,
+      },
+    });
+    /** A fold of `count` readings of the gang of 12, 10 s apart, judged with `events`. */
+    function judged(count: number, events: StoredEvent[] = [], before: StoredEvent[] = []) {
+      const gang = new GangFold();
+      gang.addSlow(0, niteSec);
+      for (let index = 0; index < count; index += 1) gang.addMedium(index * 10_000, atTwelve());
+      const failures: string[] = [];
+      const text = gang.section(failures, count * 10_000, events, before).join("\n");
+      return { text, failures };
+    }
+
+    test("(2) at 12 with no objective from the brain: 10 minutes, added up, fail; 9 min 50 s don't", () => {
+      expect(judged(60).failures).toEqual([]);
+      const { failures, text } = judged(61);
+      expect(failures).toEqual([
+        "at 12 members with no objective from the brain for 10 min online, added up (#357's (2))",
+      ]);
+      expect(text).toContain(
+        "  the objective at 12 members (#357), the brain's as chosen:\n    none chosen in the window\n",
+      );
+      // The brain's event, in the window or the day before: none.
+      expect(judged(61, [chosenEvent(0, "respect")]).failures).toEqual([]);
+      expect(judged(61, [], [chosenEvent(-60_000, "respect")]).failures).toEqual([]);
+    });
+
+    test("(2) the brain's objective against core's from the snapshots: a minute apart fails, under it not", () => {
+      // Core's is respect here (NiteSec at 0 of 2.5m, twelve at hacking 1,000).
+      const steps = Math.ceil(GANG_OBJECTIVE_DIFFERS_WITHIN_MS / 10_000) + 1;
+      expect(judged(steps - 1, [chosenEvent(0, "money")]).failures).toEqual([]);
+      const { failures, text } = judged(steps, [chosenEvent(0, "money")]);
+      expect(failures).toEqual([
+        expect.stringMatching(
+          /^the objective at 12 differing from core's for 1 min, from 1970-01-01T00:00:00\.000Z to 1970-01-01T00:01:00\.000Z \(the brain's money, core's respect, The Red Pill in /,
+        ),
+      ]);
+      expect(text).toContain(
+        "    1970-01-01T00:00:00.000Z: money, The Red Pill in respect's 208.3 h, money's 2083.3 h\n",
+      );
+      expect(judged(steps, [chosenEvent(0, "respect")]).failures).toEqual([]);
+    });
+
+    test("(2) an objective at 12 without its estimates fails; The Red Pill's money needs none", () => {
+      const { failures } = judged(3, [chosenEvent(0, "respect", { money: null })]);
+      expect(failures).toEqual(["the objective at 12 without its estimates: respect at 1970-01-01T00:00:00.000Z"]);
+      const owned = chosenEvent(0, "money", { reason: "The Red Pill owned", respect: null, money: null });
+      // Core's from these snapshots is respect (The Red Pill not queued): the difference, under a minute, passes.
+      expect(judged(3, [owned]).failures).toEqual([]);
+    });
+
+    test("(1) an install chosen in BN2 before the gang, avmnite-02h's level read, without the route's estimates fails", () => {
+      const install = (atMs: number, timing: unknown = undefined): StoredEvent => ({
+        atMs,
+        kind: "augmentationInstallChosen",
+        detail: { reason: "Daedalus's count", ...(timing === undefined ? {} : { timing }) },
+      });
+      const fold = (level: boolean) => {
+        const gang = new GangFold();
+        if (level) gang.addStatic(0, { servers: [staticServer("avmnite-02h", { requiredHackingSkill: 218 })] });
+        gang.addSlow(0, slowData(2));
+        gang.addMedium(10_000, withGang(NONE));
+        gang.addMedium(20_000, withGang(NONE));
+        gang.addMedium(60_000, withGang(formed([])));
+        return gang;
+      };
+      const failuresOf = (gang: GangFold, events: StoredEvent[]) => {
+        const failures: string[] = [];
+        gang.section(failures, 70_000, events);
+        return failures;
+      };
+      const routed = { route: "gang forming", gang: { installNowMs: 6_000_000, waitMs: 7_000_000 } };
+      expect(failuresOf(fold(true), [install(30_000)])).toEqual([
+        "install chosen in BN2 before the gang without the planner's estimates: at 1970-01-01T00:00:30.000Z, " +
+          "avmnite-02h's level read, its reason Daedalus's count",
+      ]);
+      // With the route's estimates, after the gang, or with the level unread: none.
+      expect(failuresOf(fold(true), [install(30_000, routed)])).toEqual([]);
+      expect(failuresOf(fold(true), [install(65_000)])).toEqual([]);
+      expect(failuresOf(fold(false), [install(30_000)])).toEqual([]);
+    });
+  });
+
   test("a gang faction joined and no gang formed for 5 min fails; under it, it doesn't", () => {
     expect(fold(repeat(withGang(NONE), steps(GANG_FORM_WITHIN_MS) - 1)).failures).toEqual([]);
     const { failures, text } = fold(repeat(withGang(NONE), steps(GANG_FORM_WITHIN_MS)));
@@ -700,11 +823,14 @@ describe("the controller (#325)", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  /** A brain with the hack loop off (its intents go at once), and an Agent connected, its static snapshot sent. */
-  function connected() {
+  /**
+   * A brain with the hack loop off (its intents go at once), and an Agent connected, its static snapshot sent; BN2's
+   * route the planner's unless said (#357).
+   */
+  function connected(bn2Route: Bn2Route = "planner") {
     store.setSetting("hackLoop.enabled", "false");
     const lines: string[] = [];
-    const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+    const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line), bn2Route });
     const connection = new MemoryConnection();
     channel.accept(connection);
     connection.receive(
@@ -923,6 +1049,126 @@ describe("the controller (#325)", () => {
       "member-02",
       "member-03",
     ]);
+  });
+
+  describe("BN2's route (#357): the objective at 12 reaches the tasks", () => {
+    /** Twelve members at hacking 1,000, a grown gang: respect's plan puts them on Cyberterrorism, money's elsewhere. */
+    const twelve = Array.from({ length: 12 }, (_, index) =>
+      member(`member-${String(index + 1).padStart(2, "0")}`, 1_000, "Train Hacking"),
+    );
+    const reading = formed(twelve, { respect: 2e6, wantedLevel: 1, wantedPenalty: 2e6 / (2e6 + 1) });
+    const inputs: GangRuleInputs = {
+      gang: { respect: 2e6, wantedLevel: 1, territory: 1 / 7 },
+      isHacking: true,
+      members: twelve,
+      softcap: 1,
+      placedOnJustice: [],
+      bonusTime: false,
+    };
+    const tasksOf = (objective: "respect" | "money") =>
+      Object.fromEntries(planGang(inputs, objective).assignments.map(({ name, task }) => [name, task]));
+    /** NiteSec's slow snapshot with The Red Pill `queued` or not. */
+    const withQueue = (queued: string[]): SlowSnapshotData => {
+      const slow = niteSecSlow(2);
+      const state = slow.factions?.state as NonNullable<NonNullable<SlowSnapshotData["factions"]>["state"]>;
+      return { ...slow, factions: { backend: "sim", state: { ...state, queuedAugmentations: queued }, problem: null } };
+    };
+
+    test("NiteSec at 0 of The Red Pill's 2.5m: respect's plan in the desired state, the event with both estimates", () => {
+      const { controller, send, last, lines } = connected();
+      const events: unknown[] = [];
+      controller.subscribe((event) => events.push(event));
+      // The precondition: the two objectives' plans differ.
+      expect(tasksOf("respect")).not.toEqual(tasksOf("money"));
+      send("slow", withQueue([]));
+      send("medium", niteSecMedium(reading));
+      expect(last()?.gang?.tasks).toEqual(tasksOf("respect"));
+      const choice = gangObjectiveChoice(inputs, {
+        reputation: 0,
+        favor: 0,
+        factionRep: 1,
+        needed: 2.5e6,
+        redPillOwned: false,
+      });
+      expect(choice.objective).toBe("respect");
+      expect(events.filter((event) => (event as { type: string }).type === "gangObjectiveChosen")).toEqual([
+        {
+          type: "gangObjectiveChosen",
+          atMs: expect.any(Number),
+          objective: "respect",
+          reason: "estimates",
+          members: 12,
+          respect: {
+            respectPerCycle: choice.respect?.respectPerCycle,
+            reputationPerSecond: choice.respect?.reputationPerSecond,
+            etaMs: choice.respect?.etaMs,
+          },
+          money: {
+            respectPerCycle: choice.money?.respectPerCycle,
+            reputationPerSecond: choice.money?.reputationPerSecond,
+            etaMs: choice.money?.etaMs,
+          },
+          reputation: 0,
+          favor: 0,
+          factionRep: 1,
+          needed: 2.5e6,
+        },
+      ]);
+      expect(controller.gangView().line).toMatch(
+        /^Gang: NiteSec's, 12 members of 12 \(.*\); objective at 12: respect, The Red Pill in \d+\.\d h \(money's \d+\.\d h\); respect /,
+      );
+      expect(lines).toContainEqual(expect.stringMatching(/^gang: the objective at 12: respect, The Red Pill in /));
+      // Again on the next reading: no second event.
+      send("medium", niteSecMedium(reading));
+      expect(events.filter((event) => (event as { type: string }).type === "gangObjectiveChosen")).toHaveLength(1);
+    });
+
+    test("The Red Pill queued: money's plan, and an event at the change", () => {
+      const { controller, send, last } = connected();
+      const events: { type: string; objective?: string; reason?: string }[] = [];
+      controller.subscribe((event) => events.push(event as (typeof events)[number]));
+      send("slow", withQueue([]));
+      send("medium", niteSecMedium(reading));
+      send("slow", withQueue(["The Red Pill"]));
+      send("medium", niteSecMedium(reading));
+      expect(last()?.gang?.tasks).toEqual(tasksOf("money"));
+      expect(
+        events
+          .filter((event) => event.type === "gangObjectiveChosen")
+          .map(({ objective, reason }) => [objective, reason]),
+      ).toEqual([
+        ["respect", "estimates"],
+        ["money", "The Red Pill owned"],
+      ]);
+      expect(controller.gangView().line).toContain(
+        "; objective at 12: money, The Red Pill bought, queued or installed; ",
+      );
+    });
+
+    test("The Red Pill reported bought, not yet queued (A6's queue): money's plan already", () => {
+      const rule = new GangRule();
+      const medium = niteSecMedium(reading);
+      rule.update({ mediumData: medium, slowData: withQueue([]) });
+      expect(rule.view().plan?.objective).toBe("respect");
+      const state = rule.update({ mediumData: medium, slowData: withQueue([]), redPillBought: true });
+      expect(rule.view().plan?.objective).toBe("money");
+      expect(state.gang?.tasks).toEqual(tasksOf("money"));
+      // Queued, as the slow snapshot shows it, the rule's own reading: money too.
+      const queued = new GangRule();
+      queued.update({ mediumData: medium, slowData: withQueue(["The Red Pill"]) });
+      expect(queued.view().plan?.objective).toBe("money");
+    });
+
+    test("the rules (`bn2Route` rules, the A/B's baseline): money's plan at 12, no event", () => {
+      const { controller, send, last } = connected("rules");
+      const events: unknown[] = [];
+      controller.subscribe((event) => events.push(event));
+      send("slow", withQueue([]));
+      send("medium", niteSecMedium(reading));
+      expect(last()?.gang?.tasks).toEqual(tasksOf("money"));
+      expect(controller.gangView().line).not.toContain("objective at 12");
+      expect(events.filter((event) => (event as { type: string }).type === "gangObjectiveChosen")).toEqual([]);
+    });
   });
 
   test("equipment (G3): bought from the money above the brain's holds, this round's purchase held on top", () => {

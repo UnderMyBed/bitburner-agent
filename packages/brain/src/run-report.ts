@@ -73,7 +73,7 @@ import {
   FactionWorkTimeline,
   SLOW_SNAPSHOT_GAP_MS,
 } from "./factions.ts";
-import { GangFactionCarry } from "./gang.ts";
+import { GANG_OBJECTIVE_CHOSEN_EVENT_KIND, GangFactionCarry } from "./gang.ts";
 import { GangFold } from "./gang-report.ts";
 import {
   countsOf,
@@ -617,6 +617,8 @@ interface RunFacts extends RunWindow {
   events: StoredEvent[];
   /** The reloads' events in the `RELOAD_LEAD_MS` before the window (#240): one can explain a gap at its start. */
   reloadsBefore: StoredEvent[];
+  /** The brain's last objective at 12 chosen in the day before the window (#357), for the gang section's checks. */
+  gangObjectiveBefore: StoredEvent[];
   /** Every fast snapshot's times, thinned or not (#283): the time checks. */
   fastTimes: FastTime[];
   /** The whole fast snapshots, each what it says: the content checks. */
@@ -708,7 +710,10 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const weakenTimes = new WeakenTimes();
     // w0r1d_d43m0n's requirement by then, for its readiness (#308).
     const worldDaemon = new WorldDaemonFold();
+    // The gang (#325); avmnite-02h's level from the static snapshots, for BN2's route (#357).
+    const gang = new GangFold();
     if (isObject(staticBefore?.data)) {
+      gang.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
       hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
       weakenTimes.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
       worldDaemon.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
@@ -723,6 +728,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       weakenTimes.addStatic(atMs, data);
       worldDaemon.addStatic(atMs, data);
       backdoors.addStatic(atMs, data);
+      gang.addStatic(atMs, data);
       for (const server of Array.isArray(data.servers) ? data.servers : []) {
         if (server?.purchasedByPlayer === true) playersServers.add(server.hostname);
       }
@@ -755,7 +761,6 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const cloudServers = new Set<string>();
     const factionState = new FactionStateFolding();
     const augmentations = new AugmentationTimeline();
-    const gang = new GangFold();
     // The gang's faction carried within each BitNode (#325): an Agent's first slow snapshot comes before its reading.
     const gangFactions = new GangFactionCarry();
     for (const { atMs, gameTimeMs, data: slowAsSent } of ofTier<SlowSnapshotData>("slow")) {
@@ -878,6 +883,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       ...window,
       events,
       reloadsBefore,
+      gangObjectiveBefore: dayBefore.filter((event) => event.kind === GANG_OBJECTIVE_CHOSEN_EVENT_KIND).slice(-1),
       fastTimes,
       fast,
       thinned,
@@ -1018,7 +1024,7 @@ export function runReport(
         : undefined,
     ),
     "",
-    ...facts.gang.section(failures, window.untilMs, facts.events),
+    ...facts.gang.section(failures, window.untilMs, facts.events, facts.gangObjectiveBefore),
     "",
     failures.length > 0 ? "Verdict: FAIL" : warnings.length > 0 ? "Verdict: WARN" : "Verdict: PASS",
     ...failures.map((failure) => `  ${failure}`),
