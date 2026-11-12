@@ -3701,7 +3701,8 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     // s: the faction_rep of what an install now installs: the set the money covers, and NeuroFlux Governor's levels
     // (CyberSec's) after it, a whole number of them.
     const set = rule.view().set.map((each) => each.augmentation);
-    const levels = Math.log((gang?.factionRepGain as number) / factionRepInstallMultiplier(0, set)) / Math.log(1.01000262);
+    const levels =
+      Math.log((gang?.factionRepGain as number) / factionRepInstallMultiplier(0, set)) / Math.log(1.01000262);
     expect(Math.round(levels)).toBeGreaterThanOrEqual(1);
     expect(gang?.factionRepGain).toBeCloseTo(factionRepInstallMultiplier(Math.round(levels), set), 12);
     expect(factionRepInstallMultiplier(0, set)).toBeGreaterThan(1.1);

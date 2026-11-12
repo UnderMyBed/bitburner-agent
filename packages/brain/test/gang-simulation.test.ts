@@ -789,7 +789,7 @@ test("the objective at 12 (#357's (2)) A/B, 20 virtual minutes an arm: the plann
 
 /**
  * #357's (3), an arm: the gang of 12 (`twelveToChoose`), member-01's ascension points `points` (its rate's), NiteSec
- * at `reputation` (set after the gang formed, which zeroes it) and $10b, harness edits; A6 on, as on Steam. Up to
+ * at `reputation` (set after the gang formed, which zeroes it) and `money` ($10b unless said), harness edits; A6 on. Up to
  * `windowMs` virtual: the time to The Red Pill's reputation at NiteSec (its slow snapshots, or The Red Pill bought),
  * else how far it got, and each install chosen with its cost. The gang rule's objective is the planner's in both arms
  * (the controller's test-only `gangRoute`): the arms differ in A6's install timing alone.
