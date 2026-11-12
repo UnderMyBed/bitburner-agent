@@ -4,9 +4,10 @@
 // start and install and at Daedalus joined (its first `factionWorkChosen` for The Red Pill, with that choice's ETA as
 // it was then), reading nothing after its moment; each against its BitNode's time online at the destroy, the ratio the
 // estimated over the actual remaining. Then each BitNode's median and worst, and the ratios by moment over the
-// campaign: Q9's (#39) measure. The run report's check: a hopeless estimate fails it, with the bar computed as #336's
-// is. From the count met on, a remaining time past the BitNode's time online so far fails: everything to here took
-// that long. A term that's never fails at once. With the World Daemon's switch off, both are warnings.
+// campaign: Q9's (#39) measure. The run report's check: a term that's never fails it at once (a warning with the World
+// Daemon's switch off). Every other estimate is reported, not judged: its ratio is the measure. No bar on the whole
+// estimate against the time online so far (#360 amended): a short history (harness-made, a save loaded) or the prior's
+// B + C (4.21× at BN1.4's count met) would break it. #336's bar stays on levelling's own estimate, D's.
 import { DAEDALUS, DESTROY_ESTIMATE_BITNODES, destroyEstimate, THE_RED_PILL } from "@bitburner-agent/core";
 import { fieldsOf, isFiniteNumber } from "./augmentation-report.ts";
 import { AUGMENTATION_SLOW_GAP_MS } from "./augmentations.ts";
@@ -355,9 +356,9 @@ export function destroyEstimateRows(
 }
 
 /**
- * The run report's lines (#360): each estimate in the window, and the failures: a term never, or from the count met on
- * a remaining time past the BitNode's time online so far (a hopeless estimate, decision 67's point 8). With the World
- * Daemon's switch off, warnings: the destroy isn't wanted. No lines with no estimate in the window.
+ * The run report's lines (#360): the failures among the window's estimates, a term never (a rate of 0: hopeless, decision
+ * 67's point 8) or an event it can't read. With the World Daemon's switch off, warnings: the destroy isn't wanted. No
+ * lines with no estimate in the window.
  */
 export function destroyEstimateHealthLines(
   events: readonly StoredEvent[],
@@ -368,10 +369,7 @@ export function destroyEstimateHealthLines(
     worldDaemonEnabled = true,
   }: { failures: string[]; warnings: string[]; formatTime: (ms: number) => string; worldDaemonEnabled?: boolean },
 ): string[] {
-  const lines = [
-    "  the time to the destroy (#360: a term never reached, or from the count met on an estimate past the BitNode's " +
-      "time online so far):",
-  ];
+  const lines = ["  the time to the destroy (#360: a term never reached):"];
   const { rows, unread } = storedEstimates(events);
   // None in the window (a brain from before #360, or a window with no moment): nothing to judge, no lines.
   if (rows.length === 0 && unread === 0) return [];
@@ -383,14 +381,6 @@ export function destroyEstimateHealthLines(
     if (record.never) {
       const never = record.terms.filter((term) => term.never).map((term) => `${term.term}: ${term.source}`);
       problems.push(`destroy estimate never ${at}: ${never.join("; ")}`);
-      continue;
-    }
-    const countMet = record.terms.find((term) => term.term === "A")?.label === "done";
-    if (countMet && record.remainingMs !== null && record.remainingMs > record.onlineMs) {
-      problems.push(
-        `destroy estimate hopeless ${at}: ${formatDuration(record.remainingMs)} to go, past the ` +
-          `${formatDuration(record.onlineMs)} the BitNode has taken online so far`,
-      );
     }
   }
   for (const problem of problems) {

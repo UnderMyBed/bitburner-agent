@@ -1,7 +1,7 @@
 // The time to the destroy (#360): the campaign fold's stretches, the prior, the hindcast (nothing after its moment
 // read), the campaign report's section over the four BitNodes rebuilt from the store's tables (#360's findings, by
 // cycle), the brain's rule at each moment (once across a restart, a missed install marked late), and the run report's
-// hopeless bar. Over synthetic stores built here, never the owner's .data/.
+// check (a term never). Over synthetic stores built here, never the owner's .data/.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -268,6 +268,21 @@ describe("the campaign fold's stretches and the prior (#360)", () => {
     expect(view?.soFar).toBe(true);
     const stretches = destroyStretchesOf(view as NonNullable<typeof view>);
     expect([stretches.aMs, stretches.bcMs, stretches.dMs, stretches.soFarMs].map(minutes)).toEqual([30, 40, null, 80]);
+  });
+
+  test("a save from a cycle never seen, at the count, isn't where the count was met: the install after it is", () => {
+    event(0, "brainStarted", { release: "v1.0.0" });
+    const ownedSF = { 1: 1 };
+    for (let minute = 1; minute <= 30; minute++) slow(minute, resetInfo(0, 0, 1, ownedSF, augs(0)));
+    // A save from a cycle the store never saw (its install at 10, before the last look), at 31: a save, not an install.
+    for (let minute = 31; minute <= 40; minute++) slow(minute, resetInfo(0, 10, 1, ownedSF, augs(31)));
+    for (let minute = 42; minute <= 60; minute++) slow(minute, resetInfo(0, 41, 1, ownedSF, augs(31)));
+    const { slows, events } = readAll();
+    const fold = new CampaignFold();
+    for (const snapshot of slows) fold.add(snapshot);
+    const [view] = campaignViews(fold, events)?.views ?? [];
+    expect(view?.bitNode.cycleList.map((cycle) => cycle.kind)).toEqual(["start", "save", "install"]);
+    expect(minutes(destroyStretchesOf(view as NonNullable<typeof view>).aMs)).toBe(41);
   });
 });
 
@@ -550,6 +565,22 @@ describe("the brain's rule (#360)", () => {
     expect(second.events[0]?.stage).toBe("install");
   });
 
+  test("a brain first seeing a BitNode in The Red Pill's cycle: Daedalus's favour says the donations install was made", () => {
+    const { rule, events } = ruleOf();
+    // No note: joined again with favour 152 (the donations' 150), A5's choice none (donations buy it).
+    update(rule, 50, 40, 36, { daedalus: 152 });
+    expect(events.map((each) => [each.moment, each.stage, minutes(each.terms[1]?.ms ?? null)])).toEqual([
+      ["install", "donations install", 18],
+      ["joined", "joined", 18],
+    ]);
+  });
+
+  test("a brain first seeing a BitNode with Daedalus joined at favour 0: the hold, A5's ETA plus the prior's cycle", () => {
+    const fresh = ruleOf();
+    update(fresh.rule, 50, 40, 36, { daedalus: 0, eta: 60 });
+    expect(fresh.events.map((each) => minutes(each.terms[1]?.ms ?? null))).toEqual([60 + 18, 60 + 18]);
+  });
+
   test("a term never (levelling at no rate) is stored as never, with no time", () => {
     const { rule, events } = ruleOf();
     update(rule, 1, 0, 36, { redPill: true });
@@ -641,23 +672,22 @@ describe("the run report's check (#360)", () => {
     return { failures, warnings, lines };
   };
 
-  test("from the count met on, a remaining time past the online so far fails; at it, or before the count, passes", () => {
+  test("an estimate is reported, not judged: past the time online so far, from the count met on or before, passes", () => {
+    // #360 amended: no bar on the whole estimate (a harness-made or short history, the prior's B + C, would break it).
     expect(judge([record({})]).failures).toEqual([]);
-    expect(judge([record({ remainingMs: 101 * MINUTE })]).failures).toEqual([
-      "destroy estimate hopeless at 100m (BN1.3, count met): 1 h 41 min to go, past the 1 h 40 min the BitNode has " +
-        "taken online so far",
-    ]);
-    // Before the count is met, A by the mean is above that bar by its form: never judged.
+    expect(judge([record({ remainingMs: 600 * MINUTE })]).failures).toEqual([]);
     const short = record({
       stage: "install",
       remainingMs: 900 * MINUTE,
       terms: [{ term: "A", ms: 800 * MINUTE, never: false, atLeast: false, source: "the mean", label: "either way" }],
     });
     expect(judge([short]).failures).toEqual([]);
-    expect(judge([record({})]).lines).toEqual([expect.stringMatching(/^ {2}the time to the destroy/), "    none"]);
+    expect(judge([record({})]).lines).toEqual(["  the time to the destroy (#360: a term never reached):", "    none"]);
+    // None in the window: no lines.
+    expect(judge([]).lines).toEqual([]);
   });
 
-  test("a term never fails at once; with the World Daemon's switch off, both are warnings", () => {
+  test("a term never fails at once; with the World Daemon's switch off, a warning", () => {
     const never = record({
       never: true,
       remainingMs: null,
@@ -677,9 +707,9 @@ describe("the run report's check (#360)", () => {
     expect(judge([never]).failures).toEqual([
       "destroy estimate never at 100m (BN1.3, levelling): D: levelling's chosen candidate",
     ]);
-    const off = judge([never, record({ remainingMs: 101 * MINUTE })], false);
+    const off = judge([never, record({ remainingMs: 600 * MINUTE })], false);
     expect(off.failures).toEqual([]);
-    expect(off.warnings).toHaveLength(2);
+    expect(off.warnings).toHaveLength(1);
     expect(off.warnings.every((each) => each.endsWith("so a warning)"))).toBe(true);
     // One the brain didn't write: a failure, not left out silently.
     expect(judge([{ atMs: m(1), kind: DESTROY_ESTIMATED_EVENT_KIND, detail: { moment: "x" } }]).failures).toEqual([

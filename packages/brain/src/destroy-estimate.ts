@@ -1,7 +1,8 @@
 // The time to the destroy (#360, decision 67's point 2): the brain's estimate of the time online to its BitNode's
 // destroy, end to end (core's `destroyEstimate`), made and recorded at the BitNode's start (its first slow snapshot),
 // at each install (a new `lastAugReset`), at Daedalus joined, and at levelling's first choice; the campaign report puts
-// each against the outcome (./destroy-estimate-report.ts) and the run report fails a hopeless one.
+// each against the outcome (./destroy-estimate-report.ts), and the run report fails one with a term never reached (#360
+// amended: the rest are reported, not judged).
 // - The inputs: the BitNode's time online, the campaign's clock (`advanceOnlineClock` keyed by its `lastNodeReset`,
 //   kept in the store so a restart carries it on); Daedalus's count (core's `daedalusCountOf`); A5's ETA for The Red
 //   Pill's hold (its `factionWorkChosen` choice, with the share); levelling's chosen candidate's estimate (#336); and
