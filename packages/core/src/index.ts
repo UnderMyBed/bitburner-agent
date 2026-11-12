@@ -643,6 +643,7 @@ export {
   resetsTheGame,
 } from "./intents.ts";
 export {
+  addsToLevelling,
   chooseLevelling,
   chooseLevellingTarget,
   LEVELLING_CANDIDATES,
@@ -653,11 +654,13 @@ export {
   type LevellingCandidate,
   type LevellingEstimates,
   type LevellingInputs,
+  type LevellingMultipliers,
   type LevellingOperation,
   type LevellingRate,
   levelLoopThreads,
   levellingEstimates,
   levellingExpPerThreadSecond,
+  levellingInstallMultipliers,
   levellingPreparationMs,
   neuroFluxMultipliers,
   secondsToHackingLevel,

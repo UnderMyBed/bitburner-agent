@@ -3,7 +3,8 @@
 // planner chooses among the rules' three candidates by their estimated time to the level (core's levelling.ts): (a)
 // batching for money as now, (b) levelling mode, grow or weaken loops on the server, and with the operation, earning the
 // most experience a thread-second (the hack loop's hosts and home's RAM beyond what it keeps), (c) NeuroFlux Governor's
-// levels the money buys (A6's count), an install, w0r1d_d43m0n rooted again, then levelling mode. The least wins, with hysteresis (core's `chooseLevelling`).
+// levels the money buys (A6's count) and (#355) A6's set that adds to levelling, an install,
+// w0r1d_d43m0n rooted again, then levelling mode. The least wins, with hysteresis (core's `chooseLevelling`).
 // - The rates are fitted online (decision 67's "adapt on the fly"): (a) is the experience a second measured while
 //   batching; (b) the formula's prediction for the RAM sent times the factor fitted from the rate measured in
 //   levelling mode while its loop runs, 1 until measured (optimistic); (c) at (b)'s factor. Each measurement starts once
@@ -18,6 +19,7 @@
 //   section shows them, and fails a brain that isn't on the shortest, or a chosen estimate past a computed bound
 //   (./world-daemon-report.ts); with the World Daemon's switch off, warnings.
 import {
+  addsToLevelling,
   type BitNodeHackingMultipliers,
   chooseLevelling,
   chooseLevellingTarget,
@@ -33,9 +35,9 @@ import {
   type LevellingRate,
   levelLoopThreads,
   levellingEstimates,
+  levellingInstallMultipliers,
   levellingPreparationMs,
   type MediumSnapshotData,
-  neuroFluxMultipliers,
   operationTimeMs,
   type SlowSnapshotData,
   type StaticSnapshotData,
@@ -64,6 +66,8 @@ export type LevellingEvent = {
   factor: number | null;
   /** (c)'s NeuroFlux Governor levels, A6's count, or null with none offered. */
   neuroFluxLevels: number | null;
+  /** (c)'s set (#355), A6's, or none: absent from a brain before #355. */
+  installAugmentations?: string[];
   detail: string;
 };
 
@@ -77,7 +81,7 @@ export const LEVELLING_SETTLE_MS = 60_000;
 export const LEVELLING_CANDIDATE_WORDS: Record<LevellingCandidate, string> = {
   money: "batching for money",
   level: "levelling mode",
-  install: "NeuroFlux Governor, then an install",
+  install: "augmentations, then an install",
 };
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -209,7 +213,9 @@ export function levellingFiguresOf(
 
 /**
  * The candidates' inputs (core's `LevellingInputs`) from levelling mode's figures, w0r1d_d43m0n's requirement, (a)'s
- * measured rate, (b)'s fitted factor, and (c)'s levels (A6's count, null with none offered).
+ * measured rate, (b)'s fitted factor, and (c)'s levels (A6's count, null with none offered) and (#355) its set
+ * (A6's, none absent). (c) is offered with a level, or a set that adds to levelling (core's
+ * `addsToLevelling`).
  */
 export function levellingInputsOf(
   figures: LevellingFigures,
@@ -217,22 +223,26 @@ export function levellingInputsOf(
   money: LevellingRate | null,
   factor: number | null,
   neuroFluxLevels: number | null,
+  augmentations: readonly string[] = [],
 ): LevellingInputs {
   const { target, level } = figures;
   const perThread = target === null ? null : { expPerSecond: target.expPerThreadSecond, atLevel: level };
   const after = figures.afterInstall;
   const afterInstall = after === null ? null : { expPerSecond: after.expPerThreadSecond, atLevel: level };
-  // The preparation at the level and speed the levels give from 0 experience (core's `levellingPreparationMs`).
+  // The preparation at the level and speed the levels and the set give from 0 experience (core's
+  // `levellingPreparationMs`).
   const preparationMs = (levels: number) => {
     if (after === null) return 0;
-    const neuroFlux = neuroFluxMultipliers();
+    const gain = levellingInstallMultipliers(levels, augmentations);
     const player = figures.player;
     const afterPlayer = {
-      skills: { ...player.skills, hacking: hackingLevelOfExp(0, figures.levelMult * neuroFlux.hacking ** levels) },
-      mults: { ...player.mults, hacking_speed: player.mults.hacking_speed * neuroFlux.hackingSpeed ** levels },
+      skills: { ...player.skills, hacking: hackingLevelOfExp(0, figures.levelMult * gain.hacking) },
+      mults: { ...player.mults, hacking_speed: player.mults.hacking_speed * gain.hackingSpeed },
     };
     return levellingPreparationMs(after.figures, afterPlayer, figures.homeThreads);
   };
+  const levels = neuroFluxLevels !== null && neuroFluxLevels > 0 ? neuroFluxLevels : 0;
+  const offered = levels > 0 || (neuroFluxLevels !== null && addsToLevelling(augmentations));
   return {
     exp: figures.exp,
     level,
@@ -244,25 +254,27 @@ export function levellingInputsOf(
         ? null
         : { predicted: { expPerSecond: perThread.expPerSecond * figures.threads, atLevel: level }, factor },
     install:
-      afterInstall === null || neuroFluxLevels === null || neuroFluxLevels <= 0
+      afterInstall === null || !offered
         ? null
         : {
-            levels: neuroFluxLevels,
+            levels,
+            ...(augmentations.length === 0 ? {} : { augmentations }),
             homeThreads: figures.homeThreads,
             perThread: afterInstall,
-            preparationMs: preparationMs(neuroFluxLevels),
+            preparationMs: preparationMs(levels),
           },
   };
 }
 
-/** "about 2,873.4 h", "about 41 min", "none". */
+/** "about 2,873.4 h", "about 41 min", "about 1.28e+193 h" (3 figures past a million hours), "none". */
 export function describeEstimate(seconds: number | null): string {
   if (seconds === null) return "none";
   if (!Number.isFinite(seconds)) return "never";
+  if (seconds / 3600 >= 1e6) return `about ${(seconds / 3600).toPrecision(3)} h`;
   return `about ${describeEta(seconds)}`;
 }
 
-/** "batching for money about 2,500.0 h, levelling mode about 1.2 h, NeuroFlux Governor, then an install none". */
+/** "batching for money about 2,500.0 h, levelling mode about 1.2 h, augmentations, then an install none". */
 export function describeEstimates(estimates: LevellingEstimates): string {
   return LEVELLING_CANDIDATES.map(
     (candidate) => `${LEVELLING_CANDIDATE_WORDS[candidate]} ${describeEstimate(estimates[candidate])}`,
@@ -340,6 +352,11 @@ export interface LevellingRuleInputs {
   hacking: BitNodeHackingMultipliers;
   /** A6's offer (#336): NeuroFlux Governor's levels the money buys, donations included; null with none. */
   neuroFluxLevels: number | null;
+  /**
+   * A6's offer's set (#355): what it would buy first that adds to levelling, while every install is held for the
+   * destroy. Absent, none.
+   */
+  installAugmentations?: readonly string[];
   /** A6 committed to an install (the levelling one, once chosen). */
   installCommitted: boolean;
   /**
@@ -463,12 +480,22 @@ export class LevellingRule {
       if (predicted > 0)
         this.#fit = { measured: measured.expPerSecond, predicted, factor: measured.expPerSecond / predicted };
     }
+    const augmentations = inputs.installAugmentations ?? [];
     const estimates = levellingEstimates(
-      levellingInputsOf(figures, required, this.#money, this.#fit?.factor ?? null, inputs.neuroFluxLevels),
+      levellingInputsOf(
+        figures,
+        required,
+        this.#money,
+        this.#fit?.factor ?? null,
+        inputs.neuroFluxLevels,
+        augmentations,
+      ),
     );
-    // The install chosen stays chosen while A6 commits it; a choice that A6 can no longer commit (no levels to buy, and
-    // not committed) is chosen afresh.
-    const installHeld = this.#mode === "install" && (inputs.installCommitted || (inputs.neuroFluxLevels ?? 0) > 0);
+    // The install chosen stays chosen while A6 commits it; a choice that A6 can no longer commit (no levels to buy, no
+    // set that adds to levelling, and not committed) is chosen afresh.
+    const onOffer =
+      (inputs.neuroFluxLevels ?? 0) > 0 || (inputs.neuroFluxLevels !== null && addsToLevelling(augmentations));
+    const installHeld = this.#mode === "install" && (inputs.installCommitted || onOffer);
     const choice = installHeld ? "install" : chooseLevelling(estimates, this.#mode);
     if (choice !== this.#mode) this.#switch(choice, inputs, estimates, figures, null);
     this.#view = {
@@ -477,7 +504,7 @@ export class LevellingRule {
       estimates,
       target: target?.hostname ?? null,
       fit: this.#fit,
-      lines: this.#lines(estimates, target?.hostname ?? null, figures),
+      lines: this.#lines(estimates, target?.hostname ?? null, figures, inputs),
     };
     return {
       mode: this.#mode,
@@ -503,8 +530,14 @@ export class LevellingRule {
     return settleMsOf(inputs.mediumData, inputs.hacking, settling);
   }
 
-  #lines(estimates: LevellingEstimates, target: string | null, figures: LevellingFigures): string[] {
+  #lines(
+    estimates: LevellingEstimates,
+    target: string | null,
+    figures: LevellingFigures,
+    inputs: LevellingRuleInputs,
+  ): string[] {
     const fit = this.#fit;
+    const augmentations = inputs.installAugmentations ?? [];
     return [
       `levelling (the hacking level all that's left, #336): ${describeEstimates(estimates)}`,
       `  chosen: ${LEVELLING_CANDIDATE_WORDS[this.#mode]}` +
@@ -518,6 +551,12 @@ export class LevellingRule {
           ? "not measured yet (1 taken, optimistic)"
           : `${fit.factor.toFixed(2)} (measured ${fit.measured.toExponential(2)}/s, the formula ` +
             `${fit.predicted.toExponential(2)}/s)`),
+      ...(estimates.install === null
+        ? []
+        : [
+            `  the install's augmentations: NeuroFlux Governor ×${inputs.neuroFluxLevels ?? 0}` +
+              (augmentations.length === 0 ? "" : `; the set's ${augmentations.join(", ")}`),
+          ]),
     ];
   }
 
@@ -549,6 +588,7 @@ export class LevellingRule {
       money: this.#money,
       factor: this.#fit?.factor ?? null,
       neuroFluxLevels: inputs.neuroFluxLevels,
+      installAugmentations: [...(inputs.installAugmentations ?? [])],
       detail,
     });
   }
