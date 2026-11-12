@@ -36,6 +36,7 @@ import {
   gangTask,
   gangWantedPenaltyOf,
   gangWantedPerCycle,
+  knownBitNodes,
   playableBitNodes,
 } from "@bitburner-agent/core";
 import { runScript, useSimulations } from "@bitburner-agent/sim/test-helpers";
@@ -429,10 +430,12 @@ out({ after: shop("NiteSec"), cyberSec: shop("CyberSec") });`,
   expect(cyberSec).toEqual(augmentationsSoldBy("CyberSec", 2, "NiteSec"));
 }, 60_000);
 
-test("the BitNode multipliers core has (#321, #323, #334) are the engine's, BN2's among them", async () => {
+test("the BitNode multipliers core has (#321, #323, #334, #367) are the engine's, BN2's, BN6's and BN7's among them", async () => {
   const sim = await start({ seed: 1, epochMs: Date.UTC(2026, 0, 1), fixture: { kind: "new", tutorial: "skipped" } });
   expect(playableBitNodes()).toEqual([1, 2, 4, 5]);
-  for (const bitNode of playableBitNodes()) {
+  // BN6 and BN7 known (#367), not playable: no win route until Bladeburner's B6.
+  expect(knownBitNodes()).toEqual([1, 2, 4, 5, 6, 7]);
+  for (const bitNode of knownBitNodes()) {
     const engine = (await sim.diagnostics.bitNodeMultipliers(bitNode, 1)) as Record<string, number>;
     const ours = { ...bitNodeHackingMultipliers(bitNode), ...bitNodePriceMultipliers(bitNode) };
     for (const [name, value] of Object.entries(ours)) expect(value, `BN${bitNode}'s ${name}`).toBe(engine[name]);

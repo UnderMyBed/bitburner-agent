@@ -248,6 +248,11 @@ const BUSY_STATUS: DashboardStatus = {
       "Gang: NiteSec's, 5 members of 12 (2 training, 3 on Phishing); respect 1,234, wanted penalty 2.0% (above its " +
       "floor 1.9%, bound 20%); $1,500/s",
   },
+  bladeburner: {
+    line:
+      "Bladeburner: training to join, Strength training at Powerhouse Gym (strength 40, defense 1, dexterity 1, " +
+      "agility 1; all four at 100 in about 62 min there)",
+  },
   intents: [
     {
       id: "travel(Aevum)",
@@ -462,6 +467,8 @@ test("a busy status: every part rendered, alerts, gaps, a tier with none yet", a
   );
   // The gang's line (#325), its "Gang: " in the row's name.
   expect(textOf(document, "#values")).toContain("GangNiteSec's, 5 members of 12 (2 training, 3 on Phishing); respect");
+  // Bladeburner's (#367), its "Bladeburner: " in the row's name.
+  expect(textOf(document, "#values")).toContain("Bladeburnertraining to join, Strength training at Powerhouse Gym (");
   expect(textOf(document, "#gaps")).toContain("1800 fast snapshots");
   expect(textOf(document, "#gaps")).toContain("25 gaps, 500 s in all; the newest 1:");
   expect(textOf(document, "#gaps")).toContain("(100 s)");
@@ -629,6 +636,7 @@ test("a healthy brain, from the real builder: no alerts, no gaps", async () => {
   );
   // From a builder given no gang's view (#325): a dash.
   expect(textOf(document, "#values")).toContain("Gang—");
+  expect(textOf(document, "#values")).toContain("Bladeburner—");
   // No medium snapshot: no intelligence either (#349).
   expect(textOf(document, "#values")).toContain("Hacking level—Intelligence—");
 });

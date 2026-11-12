@@ -539,17 +539,17 @@ describe("cloud servers (#194)", () => {
     );
   });
 
-  test("outside BN1, BN2, BN4 and BN5, the price is unknown; the BN1-only assumptions listed under the BitNode (#321)", () => {
+  test("outside the BitNodes core knows, the price is unknown; the BN1-only assumptions listed under the BitNode (#321)", () => {
     withPurchases(3);
     const { text } = report({ verbose: true });
     expect(text).toContain(`    ${at(5 * MINUTE)}  pserv-1 bought, 8 GB, price unknown in BitNode 3`);
     expect(text).toContain("    in all: 1 bought, 1 upgraded\n");
     expect(text).toContain(
-      "    the brain buys none in BitNode 3: cloud server prices are known only in BN1, BN2, BN4 and BN5\n",
+      "    the brain buys none in BitNode 3: cloud server prices are known only in BN1, BN2, BN4, BN5, BN6 and BN7\n",
     );
     expect(text).toContain(
-      "\n    taken as BN1's in BitNode 3 (#321):\n      BitNode 3's multipliers: the brain knows those of BN1, BN2, BN4 " +
-        "and BN5 only",
+      "\n    taken as BN1's in BitNode 3 (#321):\n      BitNode 3's multipliers: the brain knows those of BN1, BN2, BN4, " +
+        "BN5, BN6 and BN7 only",
     );
     expect(report().text).toContain(
       `    BN3.1 1, ${at(5 * MINUTE)} to ${at(12 * MINUTE)}: 1 server, 8 GB → 2 servers, 72 GB ` +
@@ -2550,11 +2550,12 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
   const busyWindow = { environment: "E0", sinceMs: T0, untilMs: T0 + BUSY_MS + 30 * SECOND } as const;
   const CLOUD_SERVERS = 20;
   /**
-   * The default report's most lines and characters for `busyRun` (#245): its own are 201 and 14,366 (with #349's
-   * intelligence line); --verbose's lines (909) are over 4 times the bound.
+   * The default report's most lines and characters for `busyRun` (#245): its own are 204 and 14,527 (with #349's
+   * intelligence line, and #367's section 8, three lines and 161 characters with no Bladeburner played); --verbose's
+   * lines (912) are over 4 times the bound.
    */
-  const BUSY_REPORT_LINES = 201;
-  const BUSY_REPORT_CHARACTERS = 14_500;
+  const BUSY_REPORT_LINES = 204;
+  const BUSY_REPORT_CHARACTERS = 14_700;
   /**
    * pserv-index's RAM at `offsetMs`, or null where the medium snapshots don't show it: in cycle 1, each bought at 8 GB
    * a minute apart from 1 min, all upgraded to 32 GB at 25 min; the install at 30 min deletes them; in cycle 2, ten
@@ -3028,10 +3029,10 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
         for (const [heading, most] of BLOCKS) {
           expect(blockOf(brief.text, heading).length, heading).toBeLessThanOrEqual(most(cycles));
         }
-        // About 1,350 characters a cycle (2b's block is most of it), and 9,300 besides: 17,388 for 6 cycles at 10 of
-        // each, 17,423 at 40, and 28,322 for 14 over 3 BitNodes (#349's intelligence line in each). Not how busy each
-        // cycle was.
-        expect(brief.text.length).toBeLessThanOrEqual(9_065 + 1_400 * cycles);
+        // About 1,350 characters a cycle (2b's block is most of it), and 9,500 besides: 17,549 for 6 cycles at 10 of
+        // each, 17,584 at 40, and 28,483 for 14 over 3 BitNodes (#349's intelligence line in each; #367's section 8, 161
+        // characters with no Bladeburner played). Not how busy each cycle was.
+        expect(brief.text.length).toBeLessThanOrEqual(9_230 + 1_400 * cycles);
         // What comes again each reset is one line, not one a reset (#245's second round): the backdoors, the joins,
         // and each BitNode's lists.
         const lines = brief.text.split("\n");

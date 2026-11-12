@@ -3,7 +3,7 @@
 // window starts at the newest brain start; without --until, it ends now, or at the run's last record when the brain
 // stopped itself at the BitNode's end (#308). Section 3 is summarised a line a cycle, and section 2's target is the
 // batcher's; --verbose lists each intent, purchase, dialog, travel, change of work and choice, and the inferred target,
-// instead (#245). The checks (sections 4 to 7), the failures and the verdict are the same.
+// instead (#245). The checks (sections 4 to 8), the failures and the verdict are the same.
 // Exits 0 on PASS or WARN (warnings only, #241), 1 on FAIL, 2 when it couldn't run: no store, no brain start to begin
 // from, a window that ends before it starts, or one with nothing recorded in it.
 import process from "node:process";

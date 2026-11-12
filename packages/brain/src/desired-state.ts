@@ -3,7 +3,8 @@
 // the next purchase of the hacking programs (#136), home's RAM (#138) or a cloud server (#194), the next backdoor for
 // the hacker factions (#195, ./backdoors.ts), the next faction to join and the brain's faction work (#203,
 // ./factions.ts), the travel for invitations (#228, ./invitations.ts), the augmentations' purchases and install (#210,
-// ./augmentations.ts), the gang in BN2 (#325, ./gang.ts), and the owner's manual queue and work. Irreversible
+// ./augmentations.ts), the gang in BN2 (#325, ./gang.ts), Bladeburner in BN6 and BN7 (#367, ./bladeburner.ts), and the
+// owner's manual queue and work. Irreversible
 // intents wait for their guard and a save backup first (#147). Each state carries how long the Agent keeps it with the
 // brain gone (`ttlMs`, safe mode, #160).
 // An install of augmentations (#164) or a destroy of the BitNode (#175) holds back what's queued after it, and leaves
@@ -13,6 +14,7 @@ import {
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BitNodeHackingMultipliers,
+  type BladeburnerState,
   bitNodeAssumptions,
   type DesiredState,
   EFFECTOR_BACKENDS,
@@ -80,6 +82,7 @@ import {
   type StopAtBitNodeEnd,
   writeStopAtBitNodeEnd,
 } from "./bitnode-end.ts";
+import { BladeburnerRule, type BladeburnerView } from "./bladeburner.ts";
 import {
   CLOUD_SERVER_RESERVE_HORIZON_MS,
   CLOUD_SERVERS_ENABLED_SETTING,
@@ -140,6 +143,7 @@ import {
 import { writeSwitch } from "./switches.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 import {
+  type OwnersWork,
   parseOwnersWork,
   readOwnersWork,
   reportedWorkOutcome,
@@ -281,7 +285,7 @@ export interface IntentView {
   /**
    * The owner's manual queue, the brain's purchase rules, its backdoors (#195), its joins (#203), its travel for an
    * invitation (#228: Tian Di Hui's or its city group's), or its augmentations' purchases and install (#210), or its
-   * destroy (#215), or its gang's forming (#325).
+   * destroy (#215), or its gang's forming (#325), or its Bladeburner division's join (#367).
    */
   source:
     | "manual"
@@ -292,7 +296,8 @@ export interface IntentView {
     | "augmentation"
     | "worldDaemon"
     | "bitNodeEnd"
-    | "gang";
+    | "gang"
+    | "bladeburner";
   /** From the connected Agent's latest fast snapshot, or null before it reports this intent. */
   outcome: IntentOutcome | null;
   /**
@@ -418,6 +423,11 @@ export class DesiredStateController {
   readonly #gang: GangRule;
   #gangIntent: Intent | null = null;
   #gangState: GangState | null = null;
+  /** Bladeburner (#367): the rule, its join, the worker's state, and the training it sends as the brain's work. */
+  readonly #bladeburner: BladeburnerRule;
+  #bladeburnerIntent: Intent | null = null;
+  #bladeburnerState: BladeburnerState | null = null;
+  #bladeburnerWork: OwnersWork | null = null;
   #backdoor: Intent | null = null;
   /** The joins and the brain's faction work (#203): the rule, the join it asks for now, the work it sends, or null. */
   readonly #factions: FactionRule;
@@ -499,6 +509,7 @@ export class DesiredStateController {
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
     this.#gang = new GangRule(log, store);
+    this.#bladeburner = new BladeburnerRule(log);
     this.#augmentations = new AugmentationRule({ store, log, emit: (event) => this.#emit(event), installTiming });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
@@ -863,11 +874,14 @@ export class DesiredStateController {
 
   /**
    * What the brain sends of the work, whose it is, and how the connected Agent last reported it: the owner's, or else
-   * the brain's faction work (#203).
+   * the brain's: Bladeburner's training at the gym (#367), or its faction work (#203).
    */
   workView(): WorkView {
     const owners = readOwnersWork(this.#store);
-    const work = owners ?? (this.#factionWork === null ? null : { kind: "faction" as const, ...this.#factionWork });
+    const work =
+      owners ??
+      this.#bladeburnerWork ??
+      (this.#factionWork === null ? null : { kind: "faction" as const, ...this.#factionWork });
     return {
       desired: work === null ? null : { ...work, focus: workFocus(work, this.#slowData) },
       source: owners !== null ? "owner" : work === null ? null : "brain",
@@ -884,6 +898,11 @@ export class DesiredStateController {
   /** Where the gang stands (#325): the dashboard's line. */
   gangView(): GangView {
     return this.#gang.view();
+  }
+
+  /** Where Bladeburner stands (#367): the dashboard's line. */
+  bladeburnerView(): BladeburnerView {
+    return this.#bladeburner.view();
   }
 
   /** The gang's silent stalls (#354) past their bounds: the `gangStalled` alerts. */
@@ -935,6 +954,7 @@ export class DesiredStateController {
       ...fromRule(this.#joinAlongside).map((intent) => ({ intent, source: "join" as const })),
       ...fromRule(this.#travel).map((intent) => ({ intent, source: "travel" as const })),
       ...fromRule(this.#gangIntent).map((intent) => ({ intent, source: "gang" as const })),
+      ...fromRule(this.#bladeburnerIntent).map((intent) => ({ intent, source: "bladeburner" as const })),
     ].map(({ intent, source }, index) => ({
       id: intent.id,
       source,
@@ -982,7 +1002,7 @@ export class DesiredStateController {
   /**
    * The rules' intents, in order, each only if the owner hasn't queued the same: the purchase, the augmentation purchase
    * (#210), the backdoor (#195), the join (#203) and the one beside it (#269 review), the travel for an invitation
-   * (#228), and the gang's forming (#325).
+   * (#228), the gang's forming (#325), and the Bladeburner division's join (#367).
    */
   #ruleIntents(): Intent[] {
     const manual = readManualIntents(this.#store);
@@ -994,6 +1014,7 @@ export class DesiredStateController {
       this.#joinAlongside,
       this.#travel,
       this.#gangIntent,
+      this.#bladeburnerIntent,
     ];
     return rules.filter((intent): intent is Intent => intent !== null && !manual.some((each) => each.id === intent.id));
   }
@@ -1718,6 +1739,16 @@ export class DesiredStateController {
     this.#gangIntent = gang.intent;
     this.#gangState = gang.gang;
     this.#slowData = withoutGangFaction(this.#slowSnapshot, this.#gang.hiddenFactions());
+    // Bladeburner (#367) in BN6 and BN7: the training to join, sent as the brain's work ahead of A5's, the join, and
+    // the worker's state, run only in home's RAM beyond what it keeps for the Agent and its workers.
+    const bladeburner = this.#bladeburner.update({
+      mediumData: this.#mediumData,
+      slowData: this.#slowSnapshot,
+      homeKeptGb: homeKeptGbOf(singularityRamMultiplierOf(this.#slowSnapshot)),
+    });
+    this.#bladeburnerIntent = bladeburner.intent;
+    this.#bladeburnerState = bladeburner.state;
+    this.#bladeburnerWork = bladeburner.work;
     // The gang's faction's shop (#334), apart: A6 buys there, and A8's The Red Pill is sold there in BN2.
     const gangShop = gangShopOf(this.#slowSnapshot, this.#gang.gangFaction());
     // The same for the invitations' count (#335's re-review), which reads it from `#invitationInputs`.
@@ -1801,11 +1832,13 @@ export class DesiredStateController {
       stood:
         readOwnersWork(this.#store) !== null
           ? "your work on the dashboard (it may be in a city)"
-          : readManualIntents(this.#store).some((each) => each.action === "travel")
-            ? "your travel in the queue"
-            : !readAugmentationsEnabled(this.#store)
-              ? "the Augmentations switch, off"
-              : null,
+          : this.#bladeburnerWork !== null
+            ? "Bladeburner's combat training at the gym (#367)"
+            : readManualIntents(this.#store).some((each) => each.action === "travel")
+              ? "your travel in the queue"
+              : !readAugmentationsEnabled(this.#store)
+                ? "the Augmentations switch, off"
+                : null,
       // An install chosen, or counting down: it puts the player back in Sector-12 and drops every faction.
       beforeInstall: this.#installUnderWay(),
       nowMs: this.#lastEventAtMs,
@@ -1832,6 +1865,8 @@ export class DesiredStateController {
       slowAtMs: this.#slowAtMs,
       nowMs: this.#lastEventAtMs,
       ownersWork: readOwnersWork(this.#store) !== null,
+      // Bladeburner's training (#367) goes as the brain's work ahead of A5's.
+      heldFor: this.#bladeburnerWork === null ? null : "Bladeburner's combat training at the gym (#367)",
       enabled: readFactionWorkEnabled(this.#store),
       augmentationsEnabled: readAugmentationsEnabled(this.#store),
       shareBonus,
@@ -1897,6 +1932,7 @@ export class DesiredStateController {
     const workAndTtl = {
       ...(work === null ? {} : { work }),
       ...(this.#gangState === null ? {} : { gang: this.#gangState }),
+      ...(this.#bladeburnerState === null ? {} : { bladeburner: this.#bladeburnerState }),
       ttlMs: SAFE_MODE_TTL_MS,
     };
     // Sharing (#224) goes with the batcher: none without it.

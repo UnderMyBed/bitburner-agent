@@ -8,16 +8,23 @@
  *   cycle, and lets the money go negative.
  */
 
-/** Each university and gym: its city, what it teaches, and its cost multiplier. Universities first. */
-export const CLASS_LOCATIONS: Record<string, { city: string; kind: "university" | "gym"; costMult: number }> = {
-  "Summit University": { city: "Aevum", kind: "university", costMult: 4 },
-  "Rothman University": { city: "Sector-12", kind: "university", costMult: 3 },
-  "ZB Institute of Technology": { city: "Volhaven", kind: "university", costMult: 5 },
-  "Crush Fitness Gym": { city: "Aevum", kind: "gym", costMult: 3 },
-  "Snap Fitness Gym": { city: "Aevum", kind: "gym", costMult: 10 },
-  "Iron Gym": { city: "Sector-12", kind: "gym", costMult: 1 },
-  "Powerhouse Gym": { city: "Sector-12", kind: "gym", costMult: 20 },
-  "Millenium Fitness Gym": { city: "Volhaven", kind: "gym", costMult: 7 },
+/**
+ * Each university and gym: its city, what it teaches, its cost multiplier, and (#367) its experience multiplier: a class
+ * gives its base experience a second times that (`calculateClassEarnings`, `Work/Formulas.ts:108-121`). Universities
+ * first.
+ */
+export const CLASS_LOCATIONS: Record<
+  string,
+  { city: string; kind: "university" | "gym"; costMult: number; expMult: number }
+> = {
+  "Summit University": { city: "Aevum", kind: "university", costMult: 4, expMult: 3 },
+  "Rothman University": { city: "Sector-12", kind: "university", costMult: 3, expMult: 2 },
+  "ZB Institute of Technology": { city: "Volhaven", kind: "university", costMult: 5, expMult: 4 },
+  "Crush Fitness Gym": { city: "Aevum", kind: "gym", costMult: 3, expMult: 2 },
+  "Snap Fitness Gym": { city: "Aevum", kind: "gym", costMult: 10, expMult: 5 },
+  "Iron Gym": { city: "Sector-12", kind: "gym", costMult: 1, expMult: 1 },
+  "Powerhouse Gym": { city: "Sector-12", kind: "gym", costMult: 20, expMult: 10 },
+  "Millenium Fitness Gym": { city: "Volhaven", kind: "gym", costMult: 7, expMult: 4 },
 };
 
 /** Every university and gym, by the game's name. */

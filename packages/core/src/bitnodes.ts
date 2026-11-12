@@ -63,14 +63,17 @@ const DEFAULT_PRICE_MULTIPLIERS: BitNodePriceMultipliers = {
 };
 
 /**
- * The BitNodes the brain plays (#321, #323: the campaign's order; BN2 since #334): BN2, BN4 and BN5 set only the softcap
- * among the prices (`BitNode.tsx:575-597`: 1.3; `:633-661`, `:663-693`: 1.2).
+ * The BitNodes core has the prices of (#321, #323: the campaign's order; BN2 since #334; BN6 and BN7 since #367): BN2,
+ * BN4, BN5, BN6 and BN7 set only the softcap among the prices (`BitNode.tsx:575-597`: 1.3; `:633-661`, `:663-693`:
+ * 1.2; `:694-727`, `:728-769`: 2).
  */
 const BITNODE_PRICE_MULTIPLIERS: Readonly<Record<number, BitNodePriceMultipliers>> = {
   1: DEFAULT_PRICE_MULTIPLIERS,
   2: { ...DEFAULT_PRICE_MULTIPLIERS, CloudServerSoftcap: 1.3 },
   4: { ...DEFAULT_PRICE_MULTIPLIERS, CloudServerSoftcap: 1.2 },
   5: { ...DEFAULT_PRICE_MULTIPLIERS, CloudServerSoftcap: 1.2 },
+  6: { ...DEFAULT_PRICE_MULTIPLIERS, CloudServerSoftcap: 2 },
+  7: { ...DEFAULT_PRICE_MULTIPLIERS, CloudServerSoftcap: 2 },
 };
 
 /** `bitNode`'s price multipliers, or null for a BitNode the brain doesn't know them in yet: it buys neither there. */
@@ -104,17 +107,21 @@ const DEFAULT_HACKING_MULTIPLIERS: BitNodeHackingMultipliers = {
 };
 
 /**
- * The BitNodes the brain plays (#321, #323, #334): BN1's the defaults, BN2's, BN4's and BN5's their own
- * (`BitNode/BitNode.tsx:575-597`: `ServerGrowthRate` and `HackingLevelMultiplier` 0.8; `:633-661`: `ScriptHackMoney`
- * 0.2, `HackExpGain` 0.4; `:663-693`: 0.15 and 0.5). Their other multipliers on hacking (`ServerWeakenRate`,
- * `HackingSpeedMultiplier`, `ScriptHackMoneyGain`) are 1 in all four. What they set on the servers (BN2's and BN4's
- * `ServerMaxMoney`, BN2's and BN5's `ServerStartingMoney`, BN5's `ServerStartingSecurity`) the snapshots read.
+ * The BitNodes core has the hacking multipliers of (#321, #323, #334, #367): BN1's the defaults, BN2's, BN4's, BN5's,
+ * BN6's and BN7's their own (`BitNode/BitNode.tsx:575-597`: `ServerGrowthRate` and `HackingLevelMultiplier` 0.8;
+ * `:633-661`: `ScriptHackMoney` 0.2, `HackExpGain` 0.4; `:663-693`: 0.15 and 0.5; `:694-727`: `ScriptHackMoney`
+ * 0.75, `HackExpGain` 0.25, `HackingLevelMultiplier` 0.35; `:728-769`: the same, but `ScriptHackMoney` 0.5). Their
+ * other multipliers on hacking (`ServerWeakenRate`, `HackingSpeedMultiplier`, `ScriptHackMoneyGain`) are 1 in all six.
+ * What they set on the servers (`ServerMaxMoney`, `ServerStartingMoney` and `ServerStartingSecurity`) the snapshots
+ * read.
  */
 const BITNODE_HACKING_MULTIPLIERS: Readonly<Record<number, BitNodeHackingMultipliers>> = {
   1: DEFAULT_HACKING_MULTIPLIERS,
   2: { ...DEFAULT_HACKING_MULTIPLIERS, ServerGrowthRate: 0.8, HackingLevelMultiplier: 0.8 },
   4: { ...DEFAULT_HACKING_MULTIPLIERS, ScriptHackMoney: 0.2, HackExpGain: 0.4 },
   5: { ...DEFAULT_HACKING_MULTIPLIERS, ScriptHackMoney: 0.15, HackExpGain: 0.5 },
+  6: { ...DEFAULT_HACKING_MULTIPLIERS, ScriptHackMoney: 0.75, HackExpGain: 0.25, HackingLevelMultiplier: 0.35 },
+  7: { ...DEFAULT_HACKING_MULTIPLIERS, ScriptHackMoney: 0.5, HackExpGain: 0.25, HackingLevelMultiplier: 0.35 },
 };
 
 /**
@@ -132,8 +139,8 @@ export function listedBitNodes(bitNodes: readonly number[]): string {
   return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
-/** The BitNodes the brain plays (#323): those core has both the hacking multipliers and the prices of, in order. */
-export function playableBitNodes(): number[] {
+/** The BitNodes core knows (#367): those it has both the hacking multipliers and the prices of, in order. */
+export function knownBitNodes(): number[] {
   return Object.keys(BITNODE_PRICE_MULTIPLIERS)
     .map(Number)
     .filter((bitNode) => bitNodeHackingMultipliers(bitNode) !== null)
@@ -141,26 +148,42 @@ export function playableBitNodes(): number[] {
 }
 
 /**
+ * The BitNodes core knows that the brain has no win route in yet (#367): a BitNode is playable only with one. BN6's and
+ * BN7's is the 21 Black Ops (Bladeburner's epic, #359: slice B6). The Red Pill's is hopeless there: w0r1d_d43m0n at
+ * hacking 6,000 (3,000, `Server/data/servers.ts:1536`, × `WorldDaemonDifficulty` 2, `Server/ServerHelpers.ts:383-385`)
+ * at a level multiplier of 0.35 (`BitNode.tsx:694-769`), 17,143 at ×1, against BN4's 9,000.
+ */
+const NO_WIN_ROUTE: ReadonlySet<number> = new Set([6, 7]);
+/** Why BN6 and BN7 are skipped until Bladeburner's B6 (#367). */
+export const BITNODE_NO_WIN_ROUTE_REASON = "no win route yet (the Black Ops, Bladeburner's B6)";
+
+/** The BitNodes the brain plays (#323): those core knows (`knownBitNodes`) with a win route (#367), in order. */
+export function playableBitNodes(): number[] {
+  return knownBitNodes().filter((bitNode) => !NO_WIN_ROUTE.has(bitNode));
+}
+
+/**
  * Why the brain can't play `bitNode` yet (#323), short, from what core lacks of it, or null where it can: the
- * campaign's order skips it, and says so.
+ * campaign's order skips it, and says so. Core's tables first, then (#367) the win route.
  */
 export function bitNodeUnplayableReason(bitNode: number): string | null {
   const missing = [
     ...(bitNodeHackingMultipliers(bitNode) === null ? ["hacking multipliers"] : []),
     ...(bitNodePriceMultipliers(bitNode) === null ? ["prices"] : []),
   ];
-  return missing.length === 0 ? null : `no ${missing.join(" or ")} yet`;
+  if (missing.length > 0) return `no ${missing.join(" or ")} yet`;
+  return NO_WIN_ROUTE.has(bitNode) ? BITNODE_NO_WIN_ROUTE_REASON : null;
 }
 
 /**
  * What the brain takes as BN1's in `bitNode` though the game may have it otherwise (#321): worded, for the brain's log
- * line and the run report, a known risk each until a slice models it. None in the BitNodes it plays (BN1, BN2, BN4 and
- * BN5, `playableBitNodes`), whose prices and hacking multipliers core has.
+ * line and the run report, a known risk each until a slice models it. None in the BitNodes core knows (BN1, BN2, BN4,
+ * BN5, BN6 and BN7, `knownBitNodes`), whose prices and hacking multipliers it has.
  */
 export function bitNodeAssumptions(bitNode: number): string[] {
-  if (bitNodeUnplayableReason(bitNode) === null) return [];
+  if (knownBitNodes().includes(bitNode)) return [];
   return [
-    `BitNode ${bitNode}'s multipliers: the brain knows those of ${listedBitNodes(playableBitNodes())} only, so it ` +
+    `BitNode ${bitNode}'s multipliers: the brain knows those of ${listedBitNodes(knownBitNodes())} only, so it ` +
       "buys no home RAM or cloud servers here, and its hacking takes BN1's (each multiplier on it 1)",
   ];
 }

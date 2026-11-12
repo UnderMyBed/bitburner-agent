@@ -12,9 +12,9 @@ import {
   HACKER_FACTION_SERVERS,
   type HandledDialog,
   type IntentOutcome,
+  knownBitNodes,
   listedBitNodes,
   type MediumSnapshotData,
-  playableBitNodes,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   type StaticSnapshotData,
@@ -40,6 +40,7 @@ import {
   GAME_CLOSE_TRIED_EVENT_KIND,
   GAME_CLOSED_EVENT_KIND,
 } from "./bitnode-end.ts";
+import { BladeburnerFold } from "./bladeburner-report.ts";
 import {
   type ClockIncident,
   type DeliveryLag,
@@ -655,6 +656,8 @@ interface RunFacts extends RunWindow {
   worldDaemon: WorldDaemonFold;
   /** The gang in BN2 (#325), from the slow and medium snapshots. */
   gang: GangFold;
+  /** Bladeburner in BN6 and BN7 (#367), from the slow and medium snapshots. */
+  bladeburner: BladeburnerFold;
   snapshotCount: number;
   /** Home and the player's purchased servers (static and slow snapshots): not the hack loop's targets. */
   playersServers: Set<string>;
@@ -756,12 +759,14 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const factionState = new FactionStateFolding();
     const augmentations = new AugmentationTimeline();
     const gang = new GangFold();
+    const bladeburner = new BladeburnerFold();
     // The gang's faction carried within each BitNode (#325): an Agent's first slow snapshot comes before its reading.
     const gangFactions = new GangFactionCarry();
     for (const { atMs, gameTimeMs, data: slowAsSent } of ofTier<SlowSnapshotData>("slow")) {
       const data = gangFactions.of(slowAsSent);
       snapshotCount++;
       gang.addSlow(atMs, data, gameTimeMs);
+      bladeburner.addSlow(atMs, data);
       hacking.addSlow(atMs, data);
       slowFirst ??= data;
       slowLast = data;
@@ -818,6 +823,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       factionWork.addMedium(atMs, data);
       augmentations.addMedium(atMs, data);
       gang.addMedium(atMs, data);
+      bladeburner.addMedium(atMs, data);
     }
     const fast: FastPoint[] = [];
     const fastTimes: FastTime[] = [];
@@ -898,6 +904,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       augmentations,
       worldDaemon,
       gang,
+      bladeburner,
       snapshotCount,
       playersServers,
       staticLast,
@@ -924,7 +931,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
  * last record (#308, `stopEndingWindow`). By default, section 3's busiest blocks (the intents, the cloud servers,
  * the augmentations, the dialogs, the faction work) and section 2's hack loop target are summarised; `verbose` (the
  * command's --verbose) lists each line instead (#245: run #3's 12.4 h was 3,270 lines, most of them those). Either way
- * the checks (sections 4 to 7), the failures, the warnings and the verdict are the same.
+ * the checks (sections 4 to 8), the failures, the warnings and the verdict are the same.
  */
 export function runReport(
   store: TelemetryStore,
@@ -1019,6 +1026,8 @@ export function runReport(
     ),
     "",
     ...facts.gang.section(failures, window.untilMs, facts.events),
+    "",
+    ...facts.bladeburner.section(failures, window.untilMs),
     "",
     failures.length > 0 ? "Verdict: FAIL" : warnings.length > 0 ? "Verdict: WARN" : "Verdict: PASS",
     ...failures.map((failure) => `  ${failure}`),
@@ -2123,10 +2132,10 @@ function cloudServerLines(facts: RunFacts, verbose: boolean): string[] {
     const total = sumOf(facts.cloudServerChanges);
     lines.push(`    in all: ${bought} bought, ${upgraded} upgraded${total === null ? "" : `, ${formatMoney(total)}`}`);
   }
-  // The brain's rule waits outside the BitNodes it plays (cloud-servers.ts; core's `playableBitNodes`): said here, so
-  // a run with none bought isn't a mystery.
+  // The brain's rule waits outside the BitNodes core knows (cloud-servers.ts; core's `knownBitNodes`): said here, so a
+  // run with none bought isn't a mystery.
   if (isNumber(currentNode) && bitNodePriceMultipliers(currentNode) === null) {
-    const known = listedBitNodes(playableBitNodes());
+    const known = listedBitNodes(knownBitNodes());
     lines.push(`    the brain buys none in BitNode ${currentNode}: cloud server prices are known only in ${known}`);
   }
   return lines;

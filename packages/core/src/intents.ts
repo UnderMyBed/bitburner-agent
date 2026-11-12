@@ -58,7 +58,12 @@ export type IntentRequest =
    * Forms a gang with `faction` (#325): irreversible for the BitNode (it resets that faction's reputation, and no other
    * gang can be formed), so it goes through the gate. Done once the game shows the player's gang is `faction`'s.
    */
-  | { action: "createGang"; args: { faction: string } };
+  | { action: "createGang"; args: { faction: string } }
+  /**
+   * Joins the Bladeburner division (#367), its combat stats at 100: irreversible for the BitNode (an install keeps it,
+   * `Prestige.ts:155-158`), so it goes through the gate. Done once the game shows the player in it (`inBladeburner`).
+   */
+  | { action: "joinBladeburnerDivision"; args: Record<string, never> };
 
 /** Each action, once: a `Record` over `ActionName`, so the compiler refuses a new action left out. */
 const EVERY_ACTION: Record<ActionName, true> = {
@@ -76,6 +81,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   destroyBitNode: true,
   closeGame: true,
   createGang: true,
+  joinBladeburnerDivision: true,
 };
 /** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
 export const INTENT_ACTIONS = Object.keys(EVERY_ACTION) as ActionName[];
@@ -248,6 +254,8 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
         return { ok: false, reason: "createGang's faction isn't one a gang can be formed with" };
       }
       return { ok: true, message: { action, args: { faction: args.faction as string } } };
+    case "joinBladeburnerDivision":
+      return { ok: true, message: { action, args: {} } };
     default:
       return null;
   }
@@ -280,10 +288,11 @@ export function parseIntentRequest(value: unknown): Parsed<Intent> {
  * Whether doing `intent` can't be undone (R2, R8; #147): the brain then sends it only once its guard has held on two
  * consecutive snapshots and a save backup has been taken: joining a faction with enemies, which bans them, and the
  * intents that reset the game (`resetsTheGame`), closing the game (#303), so a save backup comes first, and forming a
- * gang (#325), which can't be undone in the BitNode.
+ * gang (#325), which can't be undone in the BitNode, and joining the Bladeburner division (#367), likewise.
  */
 export function isIrreversibleIntent(intent: Intent): boolean {
   if (resetsTheGame(intent) || intent.action === "closeGame" || intent.action === "createGang") return true;
+  if (intent.action === "joinBladeburnerDivision") return true;
   return intent.action === "joinFaction" && FACTION_ENEMIES[intent.args.faction] !== undefined;
 }
 

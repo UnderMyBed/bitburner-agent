@@ -232,6 +232,11 @@ async function start(options: HostOptions): Promise<Host> {
         throw new RangeError(`respect must be finite and 0 or more, not ${respect}`);
       engine.setGangRespect(respect);
     },
+    "diagnostics.setBladeburnerRank": ({ rank }) => {
+      booted();
+      if (!Number.isFinite(rank) || rank < 0) throw new RangeError(`rank must be finite and 0 or more, not ${rank}`);
+      engine.setBladeburnerRank(rank);
+    },
     "diagnostics.gainHackingExp": ({ exp }) => {
       booted();
       if (!Number.isFinite(exp) || exp < 0) throw new RangeError(`exp must be finite and 0 or more, not ${exp}`);
@@ -241,6 +246,11 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       if (!Number.isFinite(exp) || exp < 0) throw new RangeError(`exp must be finite and 0 or more, not ${exp}`);
       engine.gainCharismaExp(exp);
+    },
+    "diagnostics.gainCombatExp": ({ exp }) => {
+      booted();
+      if (!Number.isFinite(exp) || exp < 0) throw new RangeError(`exp must be finite and 0 or more, not ${exp}`);
+      engine.gainCombatExp(exp);
     },
     "diagnostics.queueAugmentation": ({ augmentation }) => {
       booted();

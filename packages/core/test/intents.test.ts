@@ -48,6 +48,7 @@ describe("parseIntentRequest", () => {
     ["closeGame", {}],
     ["createGang", { faction: "NiteSec" }],
     ["createGang", { faction: "Slum Snakes" }],
+    ["joinBladeburnerDivision", {}],
   ])("%s with valid args, rebuilt from the known fields only", (action, args) => {
     expect(parseIntentRequest({ action, args: { ...args, extra: 1 }, extra: 2 })).toEqual({
       ok: true,
@@ -226,6 +227,13 @@ describe("isIrreversibleIntent", () => {
     expect(isIrreversibleIntent(intent({ action: "createGang", args: { faction: "NiteSec" } }))).toBe(true);
     expect(resetsTheGame(intent({ action: "createGang", args: { faction: "NiteSec" } }))).toBe(false);
     expect(intentId("createGang", { faction: "NiteSec" })).toBe("createGang(NiteSec)");
+  });
+
+  test("joining the Bladeburner division is irreversible for the BitNode, and resets nothing (#367)", () => {
+    const join = intent({ action: "joinBladeburnerDivision", args: {} });
+    expect(isIrreversibleIntent(join)).toBe(true);
+    expect(resetsTheGame(join)).toBe(false);
+    expect(intentId("joinBladeburnerDivision", {})).toBe("joinBladeburnerDivision()");
   });
 
   test("an install and a destroy reset the game; nothing else does (#164, #175)", () => {

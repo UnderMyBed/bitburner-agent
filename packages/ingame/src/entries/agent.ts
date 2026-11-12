@@ -3,8 +3,8 @@
 // welcomed, it sends a round of snapshots every 2 s (../agent/snapshotter.ts), the slow one with the faction state
 // (../agent/faction-state.ts, #197), converges the hack loop on the brain's
 // desired state when that's due (../agent/hack-loop.ts, #134), does the brain's intents through their effectors
-// (../agent/intent-runner.ts, #141), runs the gang's worker (../agent/gang.ts, #325), converges the work last
-// (../agent/work.ts, #151), and sleeps in between. Before
+// (../agent/intent-runner.ts, #141), runs the gang's worker (../agent/gang.ts, #325) and Bladeburner's
+// (../agent/bladeburner.ts, #367), converges the work last (../agent/work.ts, #151), and sleeps in between. Before
 // the hack loop, the intents and the work, it handles the game's routine dialogs (../agent/dialog-watcher.ts, #143).
 // With no brain, while it keeps a desired state for safe mode (../agent/safe-mode.ts, #160), its rounds go on without
 // snapshots or intents: the dialogs, the hack loop and the work, on the kept state, while it connects and waits.
@@ -36,6 +36,7 @@ import {
   TOKEN_FILE_NAME,
 } from "@bitburner-agent/core";
 import { createBatcherActivity } from "../agent/batcher.ts";
+import { createBladeburnerActivity } from "../agent/bladeburner.ts";
 import { createDialogWatcher } from "../agent/dialog-watcher.ts";
 import { createEffectorRunner } from "../agent/effector-runner.ts";
 import { createFactionStateReader } from "../agent/faction-state.ts";
@@ -120,6 +121,7 @@ export async function main(ns: NS): Promise<void> {
   const dialogWatcher = createDialogWatcher(ns);
   const batcher = createBatcherActivity(ns, { deploymentId, workerRunner });
   const gangActivity = createGangActivity(ns, { deploymentId, workerRunner });
+  const bladeburnerActivity = createBladeburnerActivity(ns, { deploymentId, workerRunner });
   /** The brain's last message refused, until a desired state is taken again, and the count this connection (#194). */
   let refused: RefusedBrainMessage | null = null;
   let refusedCount = 0;
@@ -143,6 +145,7 @@ export async function main(ns: NS): Promise<void> {
     takeRestartNote,
     refusedMessage: () => refused,
     gangReading: () => gangActivity.reading(),
+    bladeburnerReading: () => bladeburnerActivity.reading(),
     readFactions: (deadlineMs) => factionStateReader.read(deadlineMs),
     factionsUnread: (problem) => factionStateReader.unread(problem),
   });
@@ -197,6 +200,7 @@ export async function main(ns: NS): Promise<void> {
     await intentRunner.runDue(roundEndsAtMs);
     // The gang (#325) after the intents, so a gang formed this round is read; before the work, which goes last.
     await gangActivity.convergeIfDue(roundEndsAtMs);
+    await bladeburnerActivity.convergeIfDue(roundEndsAtMs);
     await workActivity.convergeIfDue(roundEndsAtMs);
     // Clamped all the same: a round never sleeps longer than a round.
     const untilNextRoundMs = roundEndsAtMs - monotonicMs();
@@ -280,6 +284,7 @@ export async function main(ns: NS): Promise<void> {
           batcher.forget();
           workActivity.forget();
           gangActivity.forget();
+          bladeburnerActivity.forget();
           ns.print(`agent: welcomed (session ${agentSessionId})`);
         } else if (event.message.type === "restart") {
           if (startedBoot(`told to restart onto ${event.message.deploymentId}`)) return;
@@ -291,6 +296,7 @@ export async function main(ns: NS): Promise<void> {
           intentRunner.desire(event.message.intents);
           workActivity.desire(event.message.work ?? null);
           gangActivity.desire(event.message.gang ?? null);
+          bladeburnerActivity.desire(event.message.bladeburner ?? null);
           // The wall clock: safe mode's time is kept in a file across reloads (#251).
           safeMode.heard(event.message, Date.now(), snapshotter.lastAugReset());
         }
@@ -305,6 +311,7 @@ export async function main(ns: NS): Promise<void> {
     // no brain weighs the clashes now, and the Agent may wait asleep for the next.
     intentRunner.forget();
     gangActivity.forget();
+    bladeburnerActivity.forget();
     await gangActivity.convergeIfDue(monotonicMs() + SNAPSHOT_ROUND_MS);
 
     // A newer Agent replaced this one: this one is stale, and must not come back (it would replace the new one), nor

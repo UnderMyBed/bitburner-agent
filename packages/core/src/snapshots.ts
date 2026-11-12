@@ -5,6 +5,7 @@
  * `ns.getPlayer`).
  */
 import type { BatcherDeployReport, BatcherHealth } from "./batcher.ts";
+import type { BladeburnerReading } from "./bladeburner.ts";
 import type { SnapshotTier } from "./control-protocol.ts";
 import type { FactionStateReading } from "./faction-state.ts";
 import type { GangReading } from "./gang.ts";
@@ -114,6 +115,17 @@ export interface MediumSnapshotData {
    * manages no gang, or before the worker's first reading; absent from an older Agent.
    */
   gang?: GangReading | null;
+  /**
+   * Whether the player is in the Bladeburner division (#367): `ns.bladeburner.inBladeburner()`, which costs no RAM
+   * (`Netscript/RamCostGenerator.ts:335`) and needs no access (`NetscriptFunctions/Bladeburner.ts:74`). Absent from an
+   * older Agent.
+   */
+  inBladeburner?: boolean;
+  /**
+   * Bladeburner (#367), as the Agent's Bladeburner worker last read it (within 10 s), added by the Agent: null while the
+   * brain asks for no reading, or before the worker's first; absent from an older Agent.
+   */
+  bladeburner?: BladeburnerReading | null;
 }
 
 /** What the fast tier's worker reads: money, home's RAM, and the scripts running on home. */

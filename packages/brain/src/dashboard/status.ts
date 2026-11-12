@@ -141,6 +141,8 @@ export interface DashboardStatus {
   stopAtBitNodeEnd: StopAtBitNodeEndView | null;
   /** The gang (#325): the rule's one line, as the brain's log has it; null from a brain that doesn't give it. */
   gang: { line: string } | null;
+  /** Bladeburner (#367): the rule's one line; null from a brain that doesn't give it. */
+  bladeburner: { line: string } | null;
   /** The intents sent (#141), in order, each with its source and how it went. */
   intents: IntentView[];
   /** The work the brain manages (#151), and how the Agent last reported it. */
@@ -213,6 +215,8 @@ export interface DashboardStatusOptions {
   stopAtBitNodeEnd?: StopAtBitNodeEndView;
   /** The gang's view (#325), the controller's. */
   gang?: { line: string };
+  /** Bladeburner's view (#367), the controller's. */
+  bladeburner?: { line: string };
   /** The gang's silent stalls past their bounds (#354), the controller's, for the `gangStalled` alerts. */
   gangStalls?: GangStallStretch[];
   /** This start's store thinning that failed (#283's review), for the `storeThinningFailed` alert; null or absent: none. */
@@ -262,6 +266,7 @@ export function buildDashboardStatus({
   share,
   stopAtBitNodeEnd,
   gang,
+  bladeburner,
   gangStalls = [],
   storeThinningFailure = null,
   dataBackupProblem = null,
@@ -439,6 +444,7 @@ export function buildDashboardStatus({
     share: share ?? null,
     stopAtBitNodeEnd: stopAtBitNodeEnd ?? null,
     gang: gang === undefined ? null : { line: gang.line },
+    bladeburner: bladeburner === undefined ? null : { line: bladeburner.line },
     intents,
     work,
     factions: slow
