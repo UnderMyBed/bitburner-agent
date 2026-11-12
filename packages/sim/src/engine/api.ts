@@ -82,6 +82,8 @@ export interface EngineApi {
   setGangRespect(respect: number): void;
   /** Sets the player's Bladeburner rank, through the game's own change. A harness edit, for tests (#367). */
   setBladeburnerRank(rank: number): void;
+  /** Sets Bladeburner's city, stamina and actions' max levels. A harness edit, for core's parity tests (#375). */
+  setBladeburnerFigures(figures: BladeburnerFigures): void;
   /** Queues `augmentation`, unpaid, not yet installed. A harness edit, for test scenarios (#164). */
   queueAugmentation(augmentation: string): void;
   /** The page the game's Router is on. */
@@ -175,6 +177,7 @@ const API_FUNCTIONS = {
   setGangMemberFigures: true,
   setGangRespect: true,
   setBladeburnerRank: true,
+  setBladeburnerFigures: true,
   queueAugmentation: true,
   bitNodeMultipliers: true,
   gameData: true,
@@ -207,4 +210,17 @@ export function assertEngineApi(exports: unknown): asserts exports is EngineApi 
     (name) => typeof (exports as Record<string, unknown>)[name] !== "function",
   );
   if (missing.length > 0) throw new Error(`engine bundle is missing EngineApi functions: ${missing.join(", ")}`);
+}
+
+/**
+ * Bladeburner's figures a harness may set (#375): its current city's population, estimate, communities and chaos, the
+ * stamina, and contracts' and operations' max levels by name. Each absent is left as it is.
+ */
+export interface BladeburnerFigures {
+  population?: number;
+  estimate?: number;
+  communities?: number;
+  chaos?: number;
+  stamina?: number;
+  maxLevels?: Record<string, number>;
 }

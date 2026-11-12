@@ -85,7 +85,12 @@ import {
   type StopAtBitNodeEnd,
   writeStopAtBitNodeEnd,
 } from "./bitnode-end.ts";
-import { type BladeburnerEvent, BladeburnerRule, type BladeburnerView } from "./bladeburner.ts";
+import {
+  BLADEBURNER_ACTIONS_HOLD,
+  type BladeburnerEvent,
+  BladeburnerRule,
+  type BladeburnerView,
+} from "./bladeburner.ts";
 import {
   CLOUD_SERVER_RESERVE_HORIZON_MS,
   CLOUD_SERVERS_ENABLED_SETTING,
@@ -1918,8 +1923,13 @@ export class DesiredStateController {
       slowAtMs: this.#slowAtMs,
       nowMs: this.#lastEventAtMs,
       ownersWork: readOwnersWork(this.#store) !== null,
-      // Bladeburner's training (#367) goes as the brain's work ahead of A5's.
-      heldFor: this.#bladeburner.training() ? "Bladeburner's combat training at the gym (#367)" : null,
+      // Bladeburner's training (#367) goes as the brain's work ahead of A5's; its actions (#375) hold A5's work, which
+      // would stop them (`Bladeburner/Bladeburner.ts:1356-1368`).
+      heldFor: this.#bladeburner.training()
+        ? "Bladeburner's combat training at the gym (#367)"
+        : this.#bladeburner.acting()
+          ? BLADEBURNER_ACTIONS_HOLD
+          : null,
       enabled: readFactionWorkEnabled(this.#store),
       augmentationsEnabled: readAugmentationsEnabled(this.#store),
       shareBonus,

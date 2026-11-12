@@ -20,26 +20,41 @@
 // - The reading: the desired state's `bladeburner`, done by the Agent's `bladeburner.js` every 10 s (the rank, and the
 //   faction joined once the rank is at 25: Bladeburners offers no work, so A5 never picks it, core's `FACTIONS`). Sent
 //   only once home's RAM beyond what it keeps for the Agent and its workers (`homeKeptGb`, share.ts's `homeKeptGbOf`)
-//   holds the worker's 9.6 GB (core's `bladeburnerWorkerFits`): #359's RAM decision. Until then the line says what
-//   home needs.
+//   holds the worker's 42.6 GB since B2 (core's `bladeburnerWorkerFits`): #359's RAM decision. Until then the line says
+//   what home needs.
 // - Left out, and labelled: crime and Bladeburner's own Training in place of the gym (the planner's choice of focus,
 //   a later slice); the gym's cost against the brain's purchases (only core's class guard: 10 minutes of its cost);
 //   below Powerhouse's $1.44m the training goes to Iron Gym, 10 times slower (about 4.7 h at SF1.3), A5's work and the
 //   invitations' travel held all the while (the player's focus is the planner's, later); an install mid-training,
-//   which loses the combat experience (A6 doesn't weigh it: B7's); Bladeburner's actions (B2), so in a live B1 run the
-//   rank stays 0.
+//   which loses the combat experience (A6 doesn't weigh it: B7's).
+// - The actions (B2, #375), once the reading has them: core's `chooseBladeburnerAction`, the contract or operation and
+//   its level with the most rank a game second over a cycle of work and rest, from the game's estimate's low end at
+//   each one's level, within the counts, and the rest with it (Field Analysis, the Regeneration Chamber or Training).
+//   Worked while the stamina is at least ½ max; below, rested, back to work at the max (core's
+//   `bladeburnerResting`). Sent as the worker's `action`. The focus is held for it: A5's faction work waits
+//   (./factions.ts's `heldFor`), as any work stops the action (`Bladeburner/Bladeburner.ts:178-180`, `:1356-1368`).
+//   The player's one focus across systems is the planner's: until that slice, this is a rule's, labelled. The owner's
+//   work on the dashboard wins: no action is sent (the game stops it anyway), and the line says so.
 import {
   BLADEBURNER_BITNODES,
+  BLADEBURNER_CONSTANTS,
   BLADEBURNER_FACTION,
   BLADEBURNER_FACTION_RANK,
   BLADEBURNER_JOIN_LEVEL,
   BLADEBURNER_WORKER_RAM_GB,
+  type BladeburnerActionOrder,
+  type BladeburnerActionPlan,
+  type BladeburnerActionReading,
   type BladeburnerReading,
   type BladeburnerState,
+  bladeburnerPersonOf,
+  bladeburnerRankMultiplierOf,
+  bladeburnerResting,
   bladeburnerWorkerFits,
   type ClassChoice,
   COMBAT_STATS,
   type CombatTrainingPlan,
+  chooseBladeburnerAction,
   classLabel,
   combatPersonOf,
   combatTrained,
@@ -62,6 +77,9 @@ export function travelIntent(city: string): Intent {
   return { action: "travel", args: { city }, id: intentId("travel", { city }) };
 }
 
+/** Why A5's faction work waits while an action is sent (#375): any work stops it. */
+export const BLADEBURNER_ACTIONS_HOLD = "Bladeburner's actions, which any work would stop (#375)";
+
 /** The division's join, as the rule asks for it. */
 export const JOIN_BLADEBURNER_INTENT: Intent = {
   action: "joinBladeburnerDivision",
@@ -81,7 +99,68 @@ export interface BladeburnerSnapshot {
   reading:
     | { kind: "absent" }
     | { kind: "unread"; problem: string }
-    | { kind: "read"; rank: number | null; problems: string[] };
+    | { kind: "read"; rank: number | null; problems: string[]; actions: BladeburnerActionsReading | null };
+}
+
+/** An action's type and name, as `getCurrentAction` gives them. */
+export interface BladeburnerActionId {
+  type: string;
+  name: string;
+}
+
+/**
+ * B2's reading (#375), checked: the stamina and its max, the bonus time in seconds, the action the worker found under
+ * way and the one after it acted (null idle), and every contract and operation read.
+ */
+export interface BladeburnerActionsReading {
+  stamina: number;
+  maxStamina: number;
+  bonusSeconds: number;
+  found: BladeburnerActionId | null;
+  current: BladeburnerActionId | null;
+  actions: BladeburnerActionReading[];
+}
+
+const actionIdOf = (value: unknown): BladeburnerActionId | null | undefined => {
+  if (value === null) return null;
+  const { type, name } = (typeof value === "object" ? value : {}) as Partial<Record<string, unknown>>;
+  return typeof type === "string" && typeof name === "string" ? { type, name } : undefined;
+};
+
+/** B2's figures of a reading in the division: null with none (a B1 Agent), undefined with any not as it should be. */
+function actionsReadingOf(reading: Partial<BladeburnerReading>): BladeburnerActionsReading | null | undefined {
+  const { stamina, maxStamina, bonusSeconds, found, current, actions } = reading;
+  if (stamina === undefined && actions === undefined) return null;
+  const foundId = actionIdOf(found);
+  const currentId = actionIdOf(current);
+  if (
+    !isNumber(stamina) ||
+    !isNumber(maxStamina) ||
+    !isNumber(bonusSeconds) ||
+    foundId === undefined ||
+    currentId === undefined ||
+    !Array.isArray(actions)
+  ) {
+    return undefined;
+  }
+  const checked: BladeburnerActionReading[] = [];
+  for (const each of actions as unknown[]) {
+    const { type, name, level, maxLevel, count, chance } = (each ?? {}) as Partial<Record<string, unknown>>;
+    if (
+      (type !== "Contracts" && type !== "Operations") ||
+      typeof name !== "string" ||
+      !isNumber(level) ||
+      !isNumber(maxLevel) ||
+      !isNumber(count) ||
+      !Array.isArray(chance) ||
+      chance.length !== 2 ||
+      !chance.every(isNumber)
+    ) {
+      return undefined;
+    }
+    checked.push({ type, name, level, maxLevel, count, chance: [chance[0], chance[1]] as [number, number] });
+  }
+  return { stamina, maxStamina, bonusSeconds, found: foundId, current: currentId, actions: checked };
 }
 
 /** The Bladeburner of `mediumData`, checked. */
@@ -99,10 +178,26 @@ export function bladeburnerSnapshotOf(mediumData: unknown): BladeburnerSnapshot 
     // No rank with a problem: the worker couldn't do its state (the Agent's word on why).
     return problems.length > 0
       ? { joined, reading: { kind: "unread", problem: problems.join("; ") } }
-      : { joined, reading: { kind: "read", rank: null, problems } };
+      : { joined, reading: { kind: "read", rank: null, problems, actions: null } };
   }
   if (!isNumber(rank)) return { joined, reading: { kind: "unread", problem: "the Bladeburner rank isn't a number" } };
-  return { joined, reading: { kind: "read", rank, problems } };
+  const actions = actionsReadingOf(reading as Partial<BladeburnerReading>);
+  if (actions === undefined) {
+    return {
+      joined,
+      reading: { kind: "unread", problem: "the Bladeburner reading's stamina or actions aren't figures" },
+    };
+  }
+  return { joined, reading: { kind: "read", rank, problems, actions } };
+}
+
+/**
+ * Game seconds a real second (#375): 5 while there's bonus time for a whole tick of 5 s (`Bladeburner.ts:1376-1380`),
+ * else 1.
+ */
+export function bladeburnerSpeedOf(bonusSeconds: number): number {
+  const most = BLADEBURNER_CONSTANTS.maxSecondsPerTick;
+  return bonusSeconds >= most ? most : 1;
 }
 
 /** Home's RAM, from the medium snapshot's servers, or null. */
@@ -133,6 +228,32 @@ export interface BladeburnerView {
   line: string;
   /** The training's plan while it trains, or null. */
   training: CombatTrainingPlan | null;
+  /** In the division (B2, #375): the actions' plan, the action sent, and whether it's resting; null, none sent. */
+  actions?: { plan: BladeburnerActionPlan; order: BladeburnerActionOrder; resting: boolean } | null;
+}
+
+/** "1.23 rank/min". */
+const perMinute = (perSecond: number) => `${(perSecond * 60).toFixed(2)} rank/min`;
+
+/** The plan and the action sent, in words, for the dashboard, the log and the run report. */
+export function describeActionPlan(
+  plan: BladeburnerActionPlan,
+  resting: boolean,
+  stamina: number,
+  max: number,
+): string {
+  const work = plan.work;
+  const staminaText = `stamina ${stamina.toFixed(1)} / ${max.toFixed(1)}`;
+  if (work === null) {
+    return `${plan.rest.name} (no contract or operation beats it; ${perMinute(plan.rankPerSecond)}; ${staminaText})`;
+  }
+  const working =
+    `${work.name} level ${work.level} (${(work.chance * 100).toFixed(1)}% at the estimate's low end, ` +
+    `${perMinute(work.rankPerSecond)} worked)`;
+  return (
+    `${resting ? `resting with ${plan.rest.name} for ${working}` : `${working}, resting with ${plan.rest.name}`}; ` +
+    `${staminaText}; worked ${(plan.duty * 100).toFixed(0)}% of a cycle, ${perMinute(plan.rankPerSecond)} over it`
+  );
 }
 
 /** "62 min", "1.3 h". */
@@ -173,6 +294,8 @@ export class BladeburnerRule {
   readonly #emit: (event: BladeburnerEvent) => void;
   /** Whether the training was held for the owner's work at the last update, as last said by its event. */
   #held = false;
+  /** Whether the actions are resting (#375): below ½ max stamina until back at the max. */
+  #resting = false;
 
   constructor(log: (line: string) => void = () => {}, emit: (event: BladeburnerEvent) => void = () => {}) {
     this.#log = log;
@@ -181,6 +304,11 @@ export class BladeburnerRule {
 
   view(): BladeburnerView {
     return this.#view;
+  }
+
+  /** Whether an action is sent now (#375): A5's faction work waits, as any work would stop it. */
+  acting(): boolean {
+    return this.#view.stage === "joined" && this.#view.actions != null;
   }
 
   /** Whether the brain's work is the training now: A5's faction work and the invitations' travel wait for it. */
@@ -239,6 +367,7 @@ export class BladeburnerRule {
     }
     if (!BLADEBURNER_BITNODES.includes(bitNode)) {
       this.#class = null;
+      this.#resting = false;
       const line = `Bladeburner: not managed (played in BN6 and BN7 only for now; this is BN${bitNode})`;
       return this.#decide({ stage: "notManaged", line, training: null }, none);
     }
@@ -282,6 +411,7 @@ export class BladeburnerRule {
     const { reading } = snapshot;
     const rank = reading.kind === "read" ? reading.rank : null;
     const joinTheFaction = !inFaction && rank !== null && rank >= BLADEBURNER_FACTION_RANK;
+    const actions = this.#actions(reading.kind === "read" ? reading.actions : null, mediumData, bitNode, ownersWork);
     const line =
       reading.kind === "absent"
         ? "Bladeburner: in the division; waiting for its worker's reading"
@@ -293,18 +423,59 @@ export class BladeburnerRule {
               : joinTheFaction
                 ? `joining ${BLADEBURNER_FACTION}`
                 : `${BLADEBURNER_FACTION} at rank ${BLADEBURNER_FACTION_RANK}`) +
+            (actions.text === null ? "" : `; ${actions.text}`) +
             (reading.problems.length > 0 ? `; ${reading.problems.join("; ")}` : "");
-    return this.#decide({ stage: "joined", line, training: null }, { ...none, state: { joinTheFaction } });
+    const state: BladeburnerState =
+      actions.sent === null ? { joinTheFaction } : { joinTheFaction, action: actions.sent.order };
+    return this.#decide({ stage: "joined", line, training: null, actions: actions.sent }, { ...none, state });
+  }
+
+  /**
+   * The action to send in the division (#375), from the reading's B2 figures: none with the owner's work set (said), or
+   * without them (a B1 Agent, or the player's figures unread).
+   */
+  #actions(
+    reading: BladeburnerActionsReading | null,
+    mediumData: MediumSnapshotData,
+    bitNode: number,
+    ownersWork: boolean,
+  ): { sent: NonNullable<BladeburnerView["actions"]> | null; text: string | null } {
+    if (reading === null) return { sent: null, text: null };
+    if (ownersWork) return { sent: null, text: "actions held for your work on the dashboard" };
+    const person = bladeburnerPersonOf(mediumData.player);
+    const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
+    if (person === null || rankMultiplier === null) {
+      return { sent: null, text: "no action: the player's Bladeburner figures aren't in the medium snapshot" };
+    }
+    const { stamina, maxStamina } = reading;
+    this.#resting = bladeburnerResting({ stamina, maxStamina, wasResting: this.#resting });
+    const plan = chooseBladeburnerAction({
+      readings: reading.actions,
+      person,
+      stamina,
+      maxStamina,
+      rankMultiplier,
+      speed: bladeburnerSpeedOf(reading.bonusSeconds),
+    });
+    const resting = this.#resting || plan.work === null;
+    const order: BladeburnerActionOrder =
+      plan.work !== null && !resting
+        ? { type: plan.work.type, name: plan.work.name, level: plan.work.level }
+        : { type: "General", name: plan.rest.name, level: null };
+    return { sent: { plan, order, resting }, text: describeActionPlan(plan, resting, stamina, maxStamina) };
   }
 
   #decide(view: BladeburnerView, decision: BladeburnerDecision): BladeburnerDecision {
     this.#view = view;
     // Logged on a change of stage, gym or stat, not each figure; never "not managed", which is every other BitNode's.
     const training = view.training;
+    const order = view.actions?.order;
     const logged =
       view.stage === "training" && training !== null
         ? `training ${training.stat} at ${training.gym ?? `nothing (waiting for ${training.waitingFor})`}`
-        : view.line.replace(/rank [\d.]+/, "rank");
+        : order != null
+          ? `in the division, ${order.name} ${order.level ?? ""}`
+          : view.line.replace(/rank [\d.]+/, "rank");
     if (logged !== this.#lastLogged && view.stage !== "notManaged") {
       this.#log(`bladeburner: ${view.line.replace(/^Bladeburner: /, "")}`);
     }

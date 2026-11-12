@@ -264,6 +264,15 @@ export class Simulation {
     setGangRespect: (respect: number) => this.rpc.call("diagnostics.setGangRespect", { respect }),
     /** Sets the player's Bladeburner rank, through the game's own change. A harness edit, for tests (#367). */
     setBladeburnerRank: (rank: number) => this.rpc.call("diagnostics.setBladeburnerRank", { rank }),
+    /** Sets Bladeburner's city, stamina and actions' max levels. A harness edit, for core's parity tests (#375). */
+    setBladeburnerFigures: (figures: {
+      population?: number;
+      estimate?: number;
+      communities?: number;
+      chaos?: number;
+      stamina?: number;
+      maxLevels?: Record<string, number>;
+    }) => this.rpc.call("diagnostics.setBladeburnerFigures", { figures }),
     /** Gives the player charisma experience, through the game's own gain. A harness edit, for test scenarios (#155). */
     gainCharismaExp: (exp: number) => this.rpc.call("diagnostics.gainCharismaExp", { exp }),
     /** Gives the player each combat stat's experience, through the game's own gains. A harness edit, for tests (#367). */

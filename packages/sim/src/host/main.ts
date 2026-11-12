@@ -242,6 +242,16 @@ async function start(options: HostOptions): Promise<Host> {
       if (!Number.isFinite(rank) || rank < 0) throw new RangeError(`rank must be finite and 0 or more, not ${rank}`);
       engine.setBladeburnerRank(rank);
     },
+    "diagnostics.setBladeburnerFigures": ({ figures }) => {
+      booted();
+      for (const [name, value] of Object.entries({ ...figures, ...(figures.maxLevels ?? {}) })) {
+        if (name === "maxLevels") continue;
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+          throw new RangeError(`${name} must be finite and 0 or more, not ${value}`);
+        }
+      }
+      engine.setBladeburnerFigures(figures);
+    },
     "diagnostics.gainHackingExp": ({ exp }) => {
       booted();
       if (!Number.isFinite(exp) || exp < 0) throw new RangeError(`exp must be finite and 0 or more, not ${exp}`);

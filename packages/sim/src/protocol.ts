@@ -523,6 +523,21 @@ export interface HostMethods {
    */
   "diagnostics.setBladeburnerRank"(params: { rank: number }): void;
   /**
+   * Sets Bladeburner's current city's population, estimate, communities and chaos, the stamina, and contracts' and
+   * operations' max levels by name (each finite and 0 or more; absent, left), for core's parity tests (#375). A harness
+   * edit. Not in the division, or an action of neither kind, throws.
+   */
+  "diagnostics.setBladeburnerFigures"(params: {
+    figures: {
+      population?: number;
+      estimate?: number;
+      communities?: number;
+      chaos?: number;
+      stamina?: number;
+      maxLevels?: Record<string, number>;
+    };
+  }): void;
+  /**
    * Gives the player charisma experience (finite, 0 or more) through the game's own `gainCharismaExp`, which sets the
    * skill from it, for test scenarios that need a job's required charisma (#155). A harness edit.
    */

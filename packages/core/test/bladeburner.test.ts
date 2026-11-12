@@ -82,16 +82,31 @@ describe("the game's facts", () => {
     );
   });
 
-  test("RAM: inBladeburner free, getRank and both joins 4 GB, so the worker is 1.6 + 4 + 4", () => {
+  test("RAM: inBladeburner and getBonusTime free, getCurrentAction 1 GB, the rest 4, so the worker is 1.6 + 10 × 4 + 1", () => {
     const ram = gameSource("Netscript/RamCostGenerator.ts");
     const bladeburner = ram.slice(ram.indexOf("const bladeburner = {"), ram.indexOf("const infiltration = {"));
     expect(bladeburner).toContain("  inBladeburner: 0,");
-    for (const name of ["getRank", "joinBladeburnerFaction", "joinBladeburnerDivision"]) {
+    expect(bladeburner).toContain("  getBonusTime: 0,");
+    expect(bladeburner).toContain("  getCurrentAction: RamCostConstants.BladeburnerApiBase / 4,");
+    // B1's (#367) and B2's (#375): the worker's ten at 4 GB, and the division's join (its own worker).
+    const worker = [
+      "getRank",
+      "joinBladeburnerFaction",
+      "getStamina",
+      "getActionEstimatedSuccessChance",
+      "getActionCountRemaining",
+      "getActionMaxLevel",
+      "getActionCurrentLevel",
+      "startAction",
+      "setActionLevel",
+      "setActionAutolevel",
+    ];
+    for (const name of [...worker, "joinBladeburnerDivision"]) {
       expect(bladeburner).toContain(`  ${name}: RamCostConstants.BladeburnerApiBase,`);
     }
     expect(ram).toContain("BladeburnerApiBase: 4,");
     expect(ram).toContain("  Base: 1.6,");
-    expect(BLADEBURNER_WORKER_RAM_GB).toBe(1.6 + 4 + 4);
+    expect(BLADEBURNER_WORKER_RAM_GB).toBeCloseTo(1.6 + worker.length * 4 + 1, 10);
   });
 
   test("a level and its experience are the game's: ⌊m·(32·ln(exp + 534.6) − 200)⌋, its inverse raised past rounding", () => {
@@ -347,6 +362,39 @@ describe("the training plan", () => {
 
 describe("the worker", () => {
   test("its state: null or absent is none; else joinTheFaction true or false, the rest dropped", () => {
+    // B2 (#375): the action, a contract's or operation's at a whole level from 1, a general action's at none.
+    expect(
+      parseBladeburnerState({ joinTheFaction: false, action: { type: "Contracts", name: "Tracking", level: 3 } }),
+    ).toEqual({
+      ok: true,
+      bladeburner: { joinTheFaction: false, action: { type: "Contracts", name: "Tracking", level: 3 } },
+    });
+    expect(
+      parseBladeburnerState({
+        joinTheFaction: false,
+        action: { type: "General", name: "Field Analysis", level: null },
+      }),
+    ).toEqual({
+      ok: true,
+      bladeburner: { joinTheFaction: false, action: { type: "General", name: "Field Analysis", level: null } },
+    });
+    expect(parseBladeburnerState({ joinTheFaction: true, action: null })).toEqual({
+      ok: true,
+      bladeburner: { joinTheFaction: true },
+    });
+    for (const action of [
+      { type: "Contracts", name: "Tracking", level: 0 },
+      { type: "Contracts", name: "Tracking", level: 1.5 },
+      { type: "Contracts", name: "Tracking", level: null },
+      { type: "General", name: "Training", level: 1 },
+      { type: "Black Operations", name: "Operation Typhoon", level: null },
+      { type: "Operations", name: 3, level: 1 },
+      "Tracking",
+    ]) {
+      expect(parseBladeburnerState({ joinTheFaction: false, action }), JSON.stringify(action)).toMatchObject({
+        ok: false,
+      });
+    }
     expect(parseBladeburnerState(undefined)).toEqual({ ok: true, bladeburner: null });
     expect(parseBladeburnerState(null)).toEqual({ ok: true, bladeburner: null });
     expect(parseBladeburnerState({ joinTheFaction: true, x: 1 })).toEqual({
@@ -357,14 +405,15 @@ describe("the worker", () => {
     expect(parseBladeburnerState("x")).toMatchObject({ ok: false });
   });
 
-  test("it fits home beyond what home keeps: 9.6 GB of room, not less", () => {
+  test("it fits home beyond what home keeps: 42.6 GB of room (B2, #375), not less", () => {
+    expect(BLADEBURNER_WORKER_RAM_GB).toBe(42.6);
+    // At SF4.3 home keeps 65.9 GB: 128 GB holds it, as B1's 9.6 GB worker; 64 GB doesn't.
     expect(bladeburnerWorkerFits({ homeMaxRamGb: 128, homeKeptGb: 65.9 })).toBe(true);
-    expect(bladeburnerWorkerFits({ homeMaxRamGb: 41.6, homeKeptGb: 32 })).toBe(true);
-    expect(bladeburnerWorkerFits({ homeMaxRamGb: 41.5, homeKeptGb: 32 })).toBe(false);
+    expect(bladeburnerWorkerFits({ homeMaxRamGb: 108.4, homeKeptGb: 65.9 })).toBe(false);
     expect(bladeburnerWorkerFits({ homeMaxRamGb: 64, homeKeptGb: 65.9 })).toBe(false);
-    expect(bladeburnerWorkerFits({ homeMaxRamGb: 64, homeKeptGb: 32 })).toBe(true);
-    // Exactly its 9.6 GB beyond the reserve holds it.
-    expect(bladeburnerWorkerFits({ homeMaxRamGb: 10, homeKeptGb: 0.4 })).toBe(true);
-    expect(bladeburnerWorkerFits({ homeMaxRamGb: 10, homeKeptGb: 0.5 })).toBe(false);
+    expect(bladeburnerWorkerFits({ homeMaxRamGb: 64, homeKeptGb: 32 })).toBe(false);
+    // Exactly its 42.6 GB beyond the reserve holds it.
+    expect(bladeburnerWorkerFits({ homeMaxRamGb: 43, homeKeptGb: 0.4 })).toBe(true);
+    expect(bladeburnerWorkerFits({ homeMaxRamGb: 43, homeKeptGb: 0.5 })).toBe(false);
   });
 });

@@ -723,6 +723,12 @@ describe("Bladeburner (#367)", () => {
     expect(bladeburnerOf(null)).toBeUndefined();
     expect(bladeburnerOf({ joinTheFaction: true, extra: 1 })).toEqual({ joinTheFaction: true });
     expect(bladeburnerOf({ joinTheFaction: false })).toEqual({ joinTheFaction: false });
+    // B2 (#375): the action, carried; one that isn't one refused.
+    const action = { type: "Operations", name: "Investigation", level: 4 };
+    expect(bladeburnerOf({ joinTheFaction: false, action })).toEqual({ joinTheFaction: false, action });
+    expect(bladeburnerOf({ joinTheFaction: false, action: { ...action, level: 0 } })).toMatch(
+      /^desiredState's bladeburner's action isn't /,
+    );
   });
 
   test.each([

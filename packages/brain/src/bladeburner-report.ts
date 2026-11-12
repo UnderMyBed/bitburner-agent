@@ -13,6 +13,8 @@
 // - the division joined, home's RAM holding the worker beyond what it keeps, and no reading, for over
 //   `BLADEBURNER_UNREAD_WITHIN_MS`;
 // - the rank at 25 or more with the faction not joined, for over `BLADEBURNER_FACTION_WITHIN_MS`.
+// Then, in the division, the actions (#375, B2): ./bladeburner-actions-report.ts, with their two failures (an action
+// stopped at stamina 0; the rank from the actions run below its forecast's bound).
 import {
   BLADEBURNER_BITNODES,
   BLADEBURNER_FACTION,
@@ -29,6 +31,7 @@ import {
   slowestTrainingSeconds,
 } from "@bitburner-agent/core";
 import { BLADEBURNER_TRAINING_HELD_EVENT_KIND, bladeburnerSnapshotOf, homeMaxRamOf } from "./bladeburner.ts";
+import { BladeburnerActionsFold } from "./bladeburner-actions-report.ts";
 import { bitNodeOfSlow } from "./gang.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 import { homeKeptGbOf, singularityRamMultiplierOf } from "./share.ts";
@@ -136,6 +139,9 @@ export class BladeburnerFold {
   readonly #notJoined = new Stretches();
   readonly #unread = new Stretches();
   readonly #factionWaiting = new Stretches();
+  /** The actions (#375), from the readings in the division. */
+  readonly #actions = new BladeburnerActionsFold();
+  #sawDivision = false;
 
   /** A slow snapshot: the BitNode, home's reserve (with its Singularity worker) and the cycle from then on. */
   addSlow(atMs: number, data: SlowSnapshotData): void {
@@ -241,6 +247,10 @@ export class BladeburnerFold {
     if (inFaction && this.#faction === null) this.#faction = { atMs, before: !this.#sawNoFaction };
     const rank = reading.kind === "read" ? reading.rank : null;
     if (rank !== null) this.#ranks.push({ atMs, rank });
+    if (inDivision) this.#sawDivision = true;
+    if (inDivision && rank !== null && reading.kind === "read" && reading.actions !== null) {
+      this.#actions.add(atMs, data, rank, reading.actions, slow.bitNode);
+    }
     if (reading.kind === "read") {
       for (const problem of reading.problems) if (!this.#problems.has(problem)) this.#problems.set(problem, atMs);
     }
@@ -255,7 +265,8 @@ export class BladeburnerFold {
   /** The section's lines, its failures added to `failures`. */
   section(failures: string[], windowEndMs: number): string[] {
     const lines = [
-      "8. Bladeburner (#367, B1: the training to join, the division, the faction; played in BN6 and BN7 only)",
+      "8. Bladeburner (#367, #375: the training to join, the division, the faction and the actions; played in BN6 and " +
+        "BN7 only)",
     ];
     if (this.#mediumInBitNode === 0) {
       lines.push("  not in BN6 or BN7 in the window: no Bladeburner played");
@@ -339,6 +350,7 @@ export class BladeburnerFold {
         failures.push(line);
       }
     }
+    if (this.#sawDivision) lines.push(...this.#actions.section(failures));
     return lines;
   }
 }

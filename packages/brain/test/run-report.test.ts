@@ -2575,13 +2575,13 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
   const busyWindow = { environment: "E0", sinceMs: T0, untilMs: T0 + BUSY_MS + 30 * SECOND } as const;
   const CLOUD_SERVERS = 20;
   /**
-   * The default report's most lines and characters for `busyRun` (#245): its own are 204 and 14,527 (with #349's
+   * The default report's most lines and characters for `busyRun` (#245): its own are 204 and 14,545 (with #349's
    * intelligence line, and #367's section 8: exactly 3 lines and 161 characters with no Bladeburner played, added to
-   * the bounds as they were, 201 and 14,500, with no slack); --verbose's
+   * the bounds as they were, 201 and 14,500, with no slack; #375's heading 18 characters more, likewise); --verbose's
    * lines (912) are over 4 times the bound.
    */
   const BUSY_REPORT_LINES = 204;
-  const BUSY_REPORT_CHARACTERS = 14_661;
+  const BUSY_REPORT_CHARACTERS = 14_679;
   /**
    * pserv-index's RAM at `offsetMs`, or null where the medium snapshots don't show it: in cycle 1, each bought at 8 GB
    * a minute apart from 1 min, all upgraded to 32 GB at 25 min; the install at 30 min deletes them; in cycle 2, ten
@@ -3056,9 +3056,10 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
           expect(blockOf(brief.text, heading).length, heading).toBeLessThanOrEqual(most(cycles));
         }
         // About 1,350 characters a cycle (2b's block is most of it), and 9,500 besides: 17,549 for 6 cycles at 10 of
-        // each, 17,584 at 40, and 28,483 for 14 over 3 BitNodes (#349's intelligence line in each; #367's section 8, 161
-        // characters with no Bladeburner played, added to 9,065 with no slack). Not how busy each cycle was.
-        expect(brief.text.length).toBeLessThanOrEqual(9_226 + 1_400 * cycles);
+        // each, 17,584 at 40, and 28,483 for 14 over 3 BitNodes (#349's intelligence line in each; #367's section 8,
+        // 161 characters with no Bladeburner played, added to 9,065 with no slack; #375's heading, 18 more). Not how
+        // busy each cycle was.
+        expect(brief.text.length).toBeLessThanOrEqual(9_244 + 1_400 * cycles);
         // What comes again each reset is one line, not one a reset (#245's second round): the backdoors, the joins,
         // and each BitNode's lists.
         const lines = brief.text.split("\n");
