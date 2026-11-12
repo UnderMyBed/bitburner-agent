@@ -2,27 +2,38 @@
 // golden cases from the formulas (#357's design, the designer's figures) and each candidate's edge cases.
 import { describe, expect, test } from "vitest";
 import { hackingExpOfLevel } from "../src/batcher.ts";
+import { favorAfterInstall } from "../src/donations.ts";
 import {
   GANG_MOST_MEMBERS,
   type GangMemberFigures,
   gangMemberAscended,
   gangRespectPerCycle,
+  gangSkillLevel,
   gangTask,
   gangWantedPerCycle,
 } from "../src/gang.ts";
 import {
+  factionRepInstallMultiplier,
   GANG_FORMING_STEPS_MS,
+  GANG_INSTALL_ASCENSION_KEPT,
   GANG_ROUTE_COMMIT_MS,
+  type GangInstallInputs,
   type GangRouteFaction,
+  gangBankReputation,
   gangFormingChoice,
   gangFormingTiming,
+  gangInstallChoice,
+  gangInstallRateKept,
+  gangInstallTiming,
   gangLevelEtaMs,
+  gangMemberAtPoints,
   gangObjectiveChoice,
   gangObjectiveEstimate,
   gangReputationPerSecond,
+  gangRespectOfPlan,
   gangRespectUnder,
 } from "../src/gang-route.ts";
-import { type GangRuleInputs, planGang } from "../src/gang-rule.ts";
+import { type GangPlan, type GangRuleInputs, planGang } from "../src/gang-rule.ts";
 import { levellingInstallMultipliers } from "../src/levelling.ts";
 
 const MINUTE = 60_000;
@@ -267,5 +278,198 @@ describe("(2) the objective at 12 members (#357)", () => {
       respect: { etaMs: Number.POSITIVE_INFINITY },
       money: { etaMs: Number.POSITIVE_INFINITY },
     });
+  });
+});
+
+const HOUR = 60 * MINUTE;
+
+describe("(3) installing with a gang, before The Red Pill (#357)", () => {
+  const N = 2.5e6;
+  /** p at 1/7 territory for members whose levels are their ascensions' (`gangInstallRateKept`): the designer's 0.979. */
+  const P = 0.979;
+  const at = (fields: Partial<GangInstallInputs> = {}) =>
+    gangInstallTiming({
+      needed: N,
+      reputation: 0,
+      favor: 0,
+      rateKept: P,
+      factionRepGain: 1,
+      reputationPerSecond: 5.875,
+      installable: true,
+      ...fields,
+    });
+
+  test("favour (`favor.ts:12-24`): 100k gives 81.27, 238k 118.84, 2.5m 233.06 (G5's simulated 233.1)", () => {
+    expect(favorAfterInstall(0, 100e3)).toBeCloseTo(81.27, 2);
+    expect(favorAfterInstall(0, 238e3)).toBeCloseTo(118.84, 2);
+    expect(favorAfterInstall(0, 2.5e6)).toBeCloseTo(233.06, 2);
+    expect(at({ reputation: 100e3 }).favorAfter).toBeCloseTo(81.27, 2);
+  });
+
+  test("from favour 0: R* 242k (favour 119.65), at 0.562 of keeping: 66 h against 118 h at 5.875 rep/s; bank", () => {
+    const timing = at();
+    expect((timing.bankAt as number) / 1e3).toBeCloseTo(242.3, 0);
+    expect(timing.favorAtBank as number).toBeCloseTo(119.65, 2);
+    expect((timing.bank as number) / timing.keep).toBeCloseTo(0.562, 3);
+    expect((timing.bankMs as number) / HOUR).toBeCloseTo(66.4, 1);
+    expect((timing.keepMs as number) / HOUR).toBeCloseTo(118.2, 1);
+    expect(timing.choice).toBe("bank");
+    expect(timing.toBankMs as number).toBeCloseTo(((timing.bankAt as number) / 5.875) * 1000, -3);
+    // R* is the least: 1% either way costs more.
+    const banked = (bankAt: number) => bankAt + N / ((1 + favorAfterInstall(0, bankAt) / 100) * P);
+    const R = timing.bankAt as number;
+    expect(banked(R)).toBeCloseTo(timing.bank as number, 3);
+    expect(banked(R)).toBeLessThan(banked(R * 0.99));
+    expect(banked(R)).toBeLessThan(banked(R * 1.01));
+    expect(gangBankReputation(N, 0, P)).toBeCloseTo(R, 3);
+  });
+
+  test("installing now beats keeping below r = 1.69m (from favour 0, p 0.979), not above; nor under about 2k", () => {
+    const wins = (reputation: number) => {
+      const timing = at({ reputation });
+      return (timing.installNow as number) < timing.keep;
+    };
+    expect(wins(1.68e6)).toBe(true);
+    expect(wins(1.7e6)).toBe(false);
+    expect(wins(1e3)).toBe(false);
+    expect(wins(3e3)).toBe(true);
+    // Past R* (242k) installing now is the choice, up to there.
+    expect(at({ reputation: 1.68e6 }).choice).toBe("install");
+    expect(at({ reputation: 1.7e6 }).choice).toBe("keep");
+  });
+
+  test("from favour 50 and 100, banking's gain is ×0.76 and ×0.92 of keeping, before p", () => {
+    for (const [favor, gain] of [
+      [50, 0.76],
+      [100, 0.92],
+    ] as const) {
+      const timing = at({ favor, rateKept: 1 });
+      expect((timing.bank as number) / timing.keep, `favour ${favor}`).toBeCloseTo(gain, 2);
+    }
+  });
+
+  test("banking waits, then installs at R*: past it, installing now is the choice, at banking's estimate of the rest", () => {
+    const first = at();
+    const R = first.bankAt as number;
+    const there = at({ reputation: R + 1 });
+    expect(there).toMatchObject({ bankAt: null, bank: null, choice: "install" });
+    expect(there.installNow as number).toBeCloseTo((first.bank as number) - R, -1);
+    // Banking is never more than installing now (installing now is banking at R = r).
+    expect(first.bank as number).toBeLessThan(first.installNow as number);
+  });
+
+  test("the commit and the reading's age: what the gang earns meanwhile is converted too, so banking ends sooner", () => {
+    // 1,150 a second (#357's A/B) over the commit's 2 minutes: 138,000 more at the install.
+    const ahead = { aheadMs: 120_000, reputationPerSecond: 1_150 };
+    const short = at({ reputation: 100e3, ...ahead });
+    expect(short.atInstall).toBeCloseTo(238e3, 3);
+    expect(short).toMatchObject({ choice: "bank" });
+    expect(short.bankAt as number).toBeCloseTo(gangBankReputation(N, 0, P), 3);
+    // At 150k, an install now converts 288k, past R*: installing now, its estimate the commit's 138k and N after.
+    const past = at({ reputation: 150e3, ...ahead });
+    expect(past).toMatchObject({ choice: "install", bankAt: null });
+    expect(past.favorAfter).toBeCloseTo(favorAfterInstall(0, 288e3), 9);
+    expect(past.installNow as number).toBeCloseTo(138e3 + N / ((1 + favorAfterInstall(0, 288e3) / 100) * P), 3);
+    // Without it (aheadMs 0, or the rate unmeasured), r itself.
+    expect(at({ reputation: 150e3 })).toMatchObject({ atInstall: 150e3, choice: "bank" });
+    expect(at({ reputation: 150e3, aheadMs: 120_000, reputationPerSecond: null }).atInstall).toBe(150e3);
+  });
+
+  test("the choice doesn't depend on the rate, only the minutes do; unmeasured, no minutes; none earned, never", () => {
+    const fast = at({ reputationPerSecond: 1_000 });
+    const slow = at({ reputationPerSecond: 1 });
+    const unread = at({ reputationPerSecond: null });
+    expect(fast.choice).toBe(slow.choice);
+    expect(unread.choice).toBe(slow.choice);
+    expect(unread).toMatchObject({ keepMs: null, installNowMs: null, bankMs: null, toBankMs: null });
+    expect((slow.keepMs as number) / (fast.keepMs as number)).toBeCloseTo(1_000, 6);
+    // The rate now is at favour f: the rate at favour 0 is it over g(f).
+    expect(at({ favor: 100, reputationPerSecond: 2 }).keepMs).toBeCloseTo((N / 2) * 1000, -3);
+    expect(at({ reputationPerSecond: 0 }).keepMs).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test("s, the set's `faction_rep`, scales the installs: ×2 lowers R* (143k): at 150k installing now wins over banking", () => {
+    const timing = at({ reputation: 150e3, factionRepGain: 2 });
+    expect(timing.installNow as number).toBeCloseTo(N / ((1 + favorAfterInstall(0, 150e3) / 100) * P * 2), 3);
+    expect(gangBankReputation(N, 0, P * 2) / 1e3).toBeCloseTo(142.7, 0);
+    expect(timing.choice).toBe("install");
+    expect(at({ reputation: 150e3 }).choice).toBe("bank");
+  });
+
+  test("edge cases: nothing to install, p unknown or 0, reached; ties", () => {
+    // Nothing to install now: no install now; banking, a wait, still (at R*, installing needs something then).
+    expect(at({ installable: false })).toMatchObject({ installNow: null, choice: "bank" });
+    expect(at({ installable: false, reputation: 300e3 })).toMatchObject({
+      installNow: null,
+      bankAt: null,
+      choice: "keep",
+    });
+    // p unknown (no respect earned now, or the gang unread): both installs held, keeping.
+    expect(at({ rateKept: null })).toMatchObject({ installNow: null, bank: null, choice: "keep", heldForRate: true });
+    // p 0 (nothing earned after): never an install.
+    expect(at({ rateKept: 0 })).toMatchObject({ choice: "keep", bankAt: null });
+    // p 0.01: R* past N (keeping reaches The Red Pill first), so no banking.
+    expect(gangBankReputation(N, 0, 0.01)).toBeGreaterThan(N);
+    expect(at({ rateKept: 0.01 })).toMatchObject({ choice: "keep", bankAt: null, bank: null });
+    // Reached: keeping's 0, nothing else (A8's endgame installs The Red Pill first).
+    expect(at({ reputation: N })).toMatchObject({ keep: 0, installNow: null, bank: null, choice: "keep" });
+    // Ties: to keeping, then installing now over banking.
+    expect(gangInstallChoice(10, 10, null)).toBe("keep");
+    expect(gangInstallChoice(10, 9, 9)).toBe("install");
+    expect(gangInstallChoice(10, 9, 8)).toBe("bank");
+    expect(gangInstallChoice(10, null, 10)).toBe("keep");
+    expect(gangInstallChoice(10, null, null)).toBe("keep");
+  });
+
+  test("p: members whose levels are their ascensions' keep about 0.979 at 1/7 territory; from experience alone, 1", () => {
+    const gang = { respect: 1e12, wantedLevel: 0, territory: 1 / 7 };
+    /** Hacking `level` from ascension points on 1,000 experience (`gangSkillLevel`, `formulas.ts:79-81`). */
+    const ascended = (name: string, level: number): GangMemberFigures => {
+      const ascMult = level / (32 * Math.log(1_000 + 534.5) - 200);
+      return {
+        ...member(name, 1, 250),
+        hack_exp: 1_000,
+        hack_asc_points: 2_000 * ascMult ** 2,
+        hack_asc_mult: ascMult,
+        hack: gangSkillLevel(1_000, ascMult),
+      };
+    };
+    /** `inputs`' plan with every member on `task`. */
+    const planOf = (inputs: GangRuleInputs, task: string): GangPlan => {
+      const plan = planGang(inputs, "respect");
+      return { ...plan, assignments: plan.assignments.map((each) => ({ ...each, task })) };
+    };
+    // Far grown (7.7 million, the A/B's member-01): √0.95 on the level, to the softcap's exponent 0.8286.
+    const grown = inputsOf([ascended("member-01", 7.7e6)], gang);
+    const grownKept = gangInstallRateKept(grown, planOf(grown, "Cyberterrorism")) as number;
+    expect(grownKept).toBeCloseTo(0.95 ** (0.5 * (0.2 / 7 + 0.8)), 4);
+    expect(grownKept).toBeCloseTo(0.979, 3);
+    // At hacking 1,000 the task's difficulty and charisma's share make the loss larger: by the formula.
+    const thousand = inputsOf([ascended("member-01", 1_000)], gang);
+    const one = thousand.members[0] as GangMemberFigures;
+    const after = gangMemberAtPoints(one, GANG_INSTALL_ASCENSION_KEPT);
+    expect(after.hack).toBe(gangSkillLevel(1_000, Math.sqrt((one.hack_asc_points * 0.95) / 2_000)));
+    const cyber = gangTask("Cyberterrorism");
+    expect(gangInstallRateKept(thousand, planOf(thousand, "Cyberterrorism"))).toBeCloseTo(
+      gangRespectPerCycle(gang, after, cyber, 1) / gangRespectPerCycle(gang, gangMemberAtPoints(one, 1), cyber, 1),
+      9,
+    );
+    // From experience alone (no points): nothing lost.
+    const plain = inputsOf([member("member-01", 1_000, 250)], gang);
+    expect(gangInstallRateKept(plain, planOf(plain, "Cyberterrorism"))).toBeCloseTo(1, 9);
+    // None earned now (training): null.
+    expect(gangInstallRateKept(plain, planOf(plain, "Train Hacking"))).toBeNull();
+  });
+
+  test("s: NeuroFlux Governor's levels and the set's `faction_rep`, by product (`AugmentationHelpers.ts:39-50`)", () => {
+    expect(factionRepInstallMultiplier(0)).toBe(1);
+    expect(factionRepInstallMultiplier(2)).toBeCloseTo(1.01000262 ** 2, 12);
+    expect(factionRepInstallMultiplier(1, ["ADR-V1 Pheromone Gene", "BitWire"])).toBeCloseTo(1.01000262 * 1.1, 12);
+    expect(() => factionRepInstallMultiplier(0, ["no such"])).toThrow(RangeError);
+  });
+
+  test("gangRespectOfPlan is gangRespectUnder's, given the plan", () => {
+    const inputs = inputsOf(twelve());
+    expect(gangRespectOfPlan(inputs, planGang(inputs, "respect"))).toBe(gangRespectUnder(inputs, "respect"));
   });
 });

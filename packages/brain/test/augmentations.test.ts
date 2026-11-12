@@ -11,7 +11,9 @@ import {
   DAEDALUS_COUNT_HOLD_MS,
   donationToReach,
   type FactionState,
+  factionRepInstallMultiplier,
   factionReputationPerSecond,
+  favorAfterInstall,
   hackingExpOfLevel,
   isWorthInstalling,
   levellingInstallMultipliers,
@@ -1438,6 +1440,21 @@ describe("the gang's faction's shop (#334, G5)", () => {
   const bn2 = (fields: Parameters<typeof slow>[0] = {}) =>
     slow({ joined: [{ name: "CyberSec", reputation: 18_750, favor: 0 }], currentNode: 2, ...fields });
   const gang = (reputation: number) => ({ gangShop: { name: "NiteSec", reputation, favor: 0 } });
+  /**
+   * G5's hold and the count rule there are the rules' since #357's (3) (the A/B's baseline, `bn2Route` "rules"): these
+   * tests work them. The planner's are "BN2 with the gang" below; The Red Pill reached is the same for both.
+   */
+  const rulesRoute = () =>
+    new AugmentationRule({
+      store,
+      log: (line) => lines.push(line),
+      emit: (event) => events.push(event),
+      installTiming: "count rule",
+      bn2Route: "rules",
+    });
+  beforeEach(() => {
+    rule = rulesRoute();
+  });
 
   test("The Red Pill reached there: the install chosen for it, the set bought there and The Red Pill last", () => {
     // $1b: what the money covers, CyberSec's and the gang's faction's; NiteSec has the most reputation for each.
@@ -1452,7 +1469,7 @@ describe("the gang's faction's shop (#334, G5)", () => {
     expect(set.some((name) => !augmentationsSoldBy("NiteSec", 2, null).includes(name))).toBe(true);
     // With no money, The Red Pill alone ($0), from the gang's faction, then the install once it shows queued.
     store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
-    rule = newRule();
+    rule = rulesRoute();
     const redPill = update({ slowData: bn2(), mediumData: medium({ money: 0 }), ...gang(2.5e6) });
     expect(redPill.intent).toEqual(purchaseIntent("NiteSec", RED_PILL, 1));
     expect(rule.view().asking).toBe("buying The Red Pill from NiteSec");
@@ -1515,7 +1532,7 @@ describe("the gang's faction's shop (#334, G5)", () => {
     at();
     expect(heldNow()).toBe(false);
     // Never restarted in the cycle, a restarted brain's too (the store keeps its start).
-    rule = newRule();
+    rule = rulesRoute();
     for (let minute = 1; minute <= 5; minute += 1) {
       gameTimeMs += MINUTE;
       at();
@@ -1523,7 +1540,7 @@ describe("the gang's faction's shop (#334, G5)", () => {
     }
     // The next cycle's hold starts afresh, from its own start: held to its minute 19, not at 20.
     store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
-    rule = newRule();
+    rule = rulesRoute();
     const next = gameTimeMs - 7 * HOUR;
     at(next);
     expect(heldNow()).toBe(true);
@@ -1560,7 +1577,7 @@ describe("the gang's faction's shop (#334, G5)", () => {
     // Nothing installed, Daedalus nowhere: short of its count without a gang, so any augmentation would count.
     const set = (withGang: boolean) => {
       store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
-      rule = newRule();
+      rule = rulesRoute();
       update({ slowData: bn2(), mediumData: medium({ money: 1e12 }), ...(withGang ? gang(2e6) : {}) });
       return rule.view().set.map((each) => each.augmentation);
     };
@@ -1592,7 +1609,7 @@ describe("the gang's faction's shop (#334, G5)", () => {
     // A cycle committed for The Red Pill that no seller's reputation reaches now (a stale reading's, as forming a gang
     // resets its faction's to 0): called off, never an install without it, and judged afresh.
     store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0, reason: "The Red Pill" }));
-    rule = newRule();
+    rule = rulesRoute();
     lines.length = 0;
     const forIt = update({ slowData: bn2({ queued: [...FIVE] }), mediumData: medium({ money: 0 }), ...gang(1e6) });
     expect(forIt).toEqual({ intent: null, install: false, committed: false });
@@ -1603,14 +1620,14 @@ describe("the gang's faction's shop (#334, G5)", () => {
     );
     // A brain restarted in BN2 before the gang's first reading (#335's review): no seller seen yet, but no call-off.
     store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0, reason: "The Red Pill" }));
-    rule = newRule();
+    rule = rulesRoute();
     const unread = update({ slowData: bn2({ queued: [...FIVE] }), mediumData: medium({ money: 0 }), gangUnread: true });
     expect(unread).toEqual({ intent: null, install: false, committed: true });
     expect(rule.view().waitingFor).toBe("the gang's first reading, for The Red Pill's seller, before the install");
     expect(readAugmentationCycle(store)).not.toBeNull();
     // Reached there, the same cycle buys it.
     store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0, reason: "The Red Pill" }));
-    rule = newRule();
+    rule = rulesRoute();
     const reached = update({ slowData: bn2({ queued: [...FIVE] }), mediumData: medium({ money: 0 }), ...gang(2.5e6) });
     expect(reached.intent).toEqual(purchaseIntent("NiteSec", RED_PILL, 1));
   });
@@ -3645,5 +3662,217 @@ describe("BN2 before the gang (#357's (1)): wait for the gang, or install now", 
     run(10, { level: 214, fromExp: xp(214) + RATE * 80, required: null });
     expect(timing()?.route).toBeUndefined();
     expect(readInstallWait(store)?.route).toBeUndefined();
+  });
+});
+
+describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R* then install", () => {
+  /** BN2, CyberSec joined (the gang's faction NiteSec left out, as the controller's `withoutGangFaction` has it). */
+  const bn2 = () => slow({ joined: [{ name: "CyberSec", reputation: 18_750, favor: 0 }], currentNode: 2 });
+  /** 5.875 reputation a second at favour 0 and `faction_rep` 1: 88.125 respect a cycle (× 5 a second, / 75). */
+  const RESPECT_PER_CYCLE = (5.875 * 75) / 5;
+  const FIGURES = { rateKept: 0.979, respectPerCycle: RESPECT_PER_CYCLE };
+  /** What the gang earns over the commit's 2 minutes at it: an install converts that too. */
+  const COMMIT_EARNS = 5.875 * 120;
+  /** The gang's faction at `reputation` (favour `favor`), and what the gang rule reads (`gangInstall`). */
+  const withGang = (reputation: number, favor = 0, gangInstall: AugmentationInputs["gangInstall"] = FIGURES) => ({
+    gangShop: { name: "NiteSec", reputation, favor },
+    gangInstall,
+  });
+  const at = (reputation: number, fields: Partial<AugmentationInputs> = {}) =>
+    update({ slowData: bn2(), mediumData: medium({ money: 1e12 }), ...withGang(reputation), ...fields });
+  const chosen = () =>
+    events.filter(
+      (event): event is Extract<AugmentationEvent, { type: "augmentationInstallChosen" }> =>
+        event.type === "augmentationInstallChosen",
+    );
+  const timing = () => rule.view().progress?.timing;
+
+  test("keep: at 2m of 2.5m keeping is shortest; no install, no countdown, no money held, for 30 minutes", () => {
+    rule = newRule("planner");
+    for (let minute = 0; minute <= 30; minute += 1) {
+      gameTimeMs += MINUTE;
+      expect(at(2e6), `minute ${minute}`).toEqual({ intent: null, install: false, committed: false });
+    }
+    expect(timing()).toMatchObject({ route: "gang formed", choice: 2, gangInstall: { choice: "keep", bankAt: null } });
+    const gang = timing()?.gangInstall;
+    // (N − r) / g(f) at the rate at favour 0: 500,000 at 5.875 a second.
+    expect(gang?.keepMs).toBeCloseTo((0.5e6 / 5.875) * 1000, -3);
+    expect(gang?.installNow as number).toBeGreaterThan(gang?.keep as number);
+    // s: the faction_rep of what an install now installs: the set the money covers, and NeuroFlux Governor's levels
+    // (CyberSec's) after it, a whole number of them.
+    const set = rule.view().set.map((each) => each.augmentation);
+    const levels = Math.log((gang?.factionRepGain as number) / factionRepInstallMultiplier(0, set)) / Math.log(1.01000262);
+    expect(Math.round(levels)).toBeGreaterThanOrEqual(1);
+    expect(gang?.factionRepGain).toBeCloseTo(factionRepInstallMultiplier(Math.round(levels), set), 12);
+    expect(factionRepInstallMultiplier(0, set)).toBeGreaterThan(1.1);
+    expect(timing()?.words).toMatch(
+      /^with the gang: NiteSec's 2,000,000 of 2,500,000 reputation, favour 0\.0: keep the cycle 23\.6 h, install now [\d.]+ h \(converting about 2,000,705 with the commit, favour 0\.0 → 221\.\d; the rate ×0\.979 for the members' points, ×[\d.]+ the set's faction_rep\); chosen: keep$/,
+    );
+    expect(rule.view()).toMatchObject({
+      waitingFor: `the planner's time to The Red Pill's reputation: ${timing()?.words}`,
+      reserve: 0,
+      progress: { countdown: null, held: null },
+    });
+    expect(rule.redPillHeldAtGang()).toBe(true);
+    expect(readAugmentationCycle(store)).toBeNull();
+    expect(chosen()).toEqual([]);
+    // Logged once, as the choice was made; never G5's hold.
+    expect(
+      lines.filter((line) => line.startsWith("augmentations: the planner's install timing: with the gang")),
+    ).toHaveLength(1);
+    expect(lines.some((line) => line.includes("held 0 s of at most 20 min"))).toBe(false);
+  });
+
+  test("install now: at 500k, chosen at once for the gang's favour, with its estimates and its cost", () => {
+    rule = newRule("planner");
+    const ask = at(5e5);
+    expect(ask.intent?.action).toBe("purchaseAugmentation");
+    expect(readAugmentationCycle(store)).toMatchObject({ reason: "the gang's favour" });
+    expect(chosen()).toHaveLength(1);
+    const [event] = chosen();
+    if (event === undefined) throw new Error("no install chosen");
+    expect(event.reason).toBe("the gang's favour");
+    expect(event.timing).toMatchObject({ route: "gang formed", choice: 0, gangInstall: { choice: "install" } });
+    const gang = event.timing?.gangInstall;
+    expect(gang?.installNow as number).toBeLessThan(gang?.keep as number);
+    // What the install converts: r and the commit's 2 minutes at 5.875 a second (the slow snapshot's age 0 here).
+    expect(gang?.atInstall).toBeCloseTo(5e5 + COMMIT_EARNS, 6);
+    expect(event.gangCost).toEqual({
+      faction: "NiteSec",
+      reputation: gang?.atInstall,
+      favor: 0,
+      favorAfter: favorAfterInstall(0, gang?.atInstall as number),
+      needed: 2.5e6,
+      redPillMs: gang?.installNowMs,
+      keepMs: gang?.keepMs,
+    });
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        /, the gang's favour: in BN2 with the gang, the planner's shortest time to The Red Pill's reputation is installing now, its reputation turned into favour \(#357\); with the gang: .*; its cost: NiteSec's about 500,705 reputation lost, favour 0\.0 → 153\.8, The Red Pill then in ~[\d.]+ h \(keeping's [\d.]+ h\)$/,
+      ),
+    );
+  });
+
+  test("bank: at 100k it waits for R* (about 242k); past it, the install is chosen", () => {
+    rule = newRule("planner");
+    at(1e5);
+    expect(timing()).toMatchObject({ route: "gang formed", choice: 1, gangInstall: { choice: "bank" } });
+    const bankAt = timing()?.gangInstall?.bankAt as number;
+    expect(bankAt).toBeGreaterThan(1e5);
+    expect(bankAt).toBeLessThanOrEqual(242.3e3);
+    expect(timing()?.words).toMatch(
+      /, bank to [\d,]+ then install [\d.]+ h \(favour \d+\.\d, in [\d.]+ (min|h)\); chosen: bank$/,
+    );
+    expect(timing()?.candidates.map((each) => each.k)).toEqual([0, 1, 2]);
+    expect(chosen()).toEqual([]);
+    expect(rule.redPillHeldAtGang()).toBe(true);
+    // The reputation rising, 5,000 a minute: banking while short of R* (which moves as the set does, its faction_rep
+    // in s), then installing once past it, at once.
+    let reputation = 1e5;
+    let lastBankAt = bankAt;
+    while (chosen().length === 0 && reputation < 2.5e6) {
+      reputation += 5_000;
+      gameTimeMs += MINUTE;
+      at(reputation);
+      if (chosen().length === 0) {
+        expect(timing()?.gangInstall?.choice, `at ${reputation}`).toBe("bank");
+        lastBankAt = timing()?.gangInstall?.bankAt as number;
+        expect(lastBankAt).toBeGreaterThan(reputation + COMMIT_EARNS);
+      }
+    }
+    // Installed once what it converts (r and the commit's 2 minutes' reputation) reaches R*.
+    expect(chosen()).toHaveLength(1);
+    expect(reputation + COMMIT_EARNS).toBeGreaterThanOrEqual(lastBankAt);
+    expect(reputation + COMMIT_EARNS).toBeLessThan(lastBankAt + 5_000);
+    expect(chosen()[0]).toMatchObject({ reason: "the gang's favour" });
+    expect(chosen()[0]?.gangCost?.reputation).toBeCloseTo(reputation + COMMIT_EARNS, 6);
+    expect(chosen()[0]?.timing?.gangInstall).toMatchObject({ choice: "install", bankAt: null });
+  });
+
+  test("p unknown (the gang unread, or no respect earned now): no install, the hold said", () => {
+    rule = newRule("planner");
+    at(5e5, withGang(5e5, 0, null));
+    expect(timing()?.gangInstall).toMatchObject({ choice: "keep", heldForRate: true, installNow: null, keepMs: null });
+    expect(timing()?.words).toContain(
+      "install now (held: the rate after it not known: no respect earned now, or the gang unread)",
+    );
+    expect(chosen()).toEqual([]);
+    at(5e5, withGang(5e5, 0, { rateKept: null, respectPerCycle: 0 }));
+    expect(timing()?.gangInstall).toMatchObject({
+      choice: "keep",
+      heldForRate: true,
+      keepMs: Number.POSITIVE_INFINITY,
+    });
+    expect(chosen()).toEqual([]);
+  });
+
+  test("favour multiplies the rate (`Gang.ts:152-155`): at favour 100 keeping's minutes are half favour 0's", () => {
+    rule = newRule("planner");
+    at(2e6, withGang(2e6, 0));
+    const atZero = timing()?.gangInstall?.keepMs as number;
+    at(2e6, withGang(2e6, 100));
+    // The rate now (at favour 100) is twice favour 0's, and keeping's reputation a half: the same minutes, at twice.
+    expect(timing()?.gangInstall?.keep).toBeCloseTo(0.5e6 / 2, 3);
+    expect(timing()?.gangInstall?.keepMs).toBeCloseTo(atZero / 2, -3);
+  });
+
+  test("The Red Pill reached there: G5's endgame, unchanged: its install, and no cost (the route's end)", () => {
+    rule = newRule("planner");
+    at(2.5e6, { mediumData: medium({ money: 1e9 }) });
+    expect(readAugmentationCycle(store)).toMatchObject({ reason: "The Red Pill" });
+    expect(chosen()).toHaveLength(1);
+    expect(chosen()[0]?.gangCost).toBeUndefined();
+    expect(chosen()[0]?.timing).toBeUndefined();
+  });
+
+  test("the rules (the A/B's baseline): the count rule's install there, its cost recorded too", () => {
+    rule = new AugmentationRule({
+      store,
+      log: (line) => lines.push(line),
+      emit: (event) => events.push(event),
+      installTiming: "planner",
+      bn2Route: "rules",
+    });
+    throughCountdown({ slowData: bn2(), mediumData: medium({ money: 1e12 }), ...withGang(2e6) });
+    expect(chosen()).toHaveLength(1);
+    expect(chosen()[0]?.reason).not.toBe("the gang's favour");
+    expect(chosen()[0]?.timing).toBeUndefined();
+    expect(chosen()[0]?.gangCost).toMatchObject({
+      faction: "NiteSec",
+      reputation: 2e6 + COMMIT_EARNS,
+      favor: 0,
+      favorAfter: favorAfterInstall(0, 2e6 + COMMIT_EARNS),
+      needed: 2.5e6,
+    });
+    expect(lines).toContainEqual(
+      expect.stringMatching(/; its cost: NiteSec's about 2,000,705 reputation lost, favour 0\.0 → 221\.\d, /),
+    );
+  });
+
+  test("no gang (BN2 before it, or BN1): nothing changes, the same decisions as the rules'", () => {
+    const decide = (bn2Route: "planner" | "rules") => {
+      store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+      store.deleteSetting(AUGMENTATION_ONLINE_SETTING);
+      gameTimeMs = 7 * HOUR;
+      events.length = 0;
+      rule = new AugmentationRule({
+        store,
+        emit: (event) => events.push(event),
+        installTiming: "count rule",
+        bn2Route,
+      });
+      const asks = [];
+      for (let minute = 0; minute < 3; minute += 1) {
+        gameTimeMs += MINUTE;
+        asks.push(update({ slowData: bn2(), mediumData: medium({ money: 1e12 }) }));
+      }
+      return { asks, view: rule.view(), events: [...events] };
+    };
+    const planner = decide("planner");
+    const rules = decide("rules");
+    expect(planner.view.progress?.timing ?? null).toBeNull();
+    expect(planner.asks).toEqual(rules.asks);
+    expect(planner.events.map((event) => event.type)).toEqual(rules.events.map((event) => event.type));
+    expect(planner.events.some((event) => "gangCost" in event)).toBe(false);
   });
 });

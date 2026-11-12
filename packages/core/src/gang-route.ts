@@ -50,11 +50,37 @@
  * one reading can flip on the next. A static probe (#368's review) flips it at respect 1,000, wanted 100 and hacking
  * 500 (respect's plan all on Ethical Hacking); dynamic probes at 2 million respect found no flapping in 24 hours, nor
  * in 2 hours from a penalty of 0.89.
+ *
+ * **(3) Installing with a gang** (slice 2), before The Red Pill is reached: keep the cycle, install now, or bank R* and
+ * then install (`gangInstallTiming`), each scored by the time to The Red Pill's reputation at the gang's faction. An
+ * install turns the faction's reputation r into favour (`Faction.ts:77-85`, `addRepToFavor`, `favor.ts:22-24`) and
+ * zeroes it; the gang stays, each member's ascension points × 0.95 (`Prestige.ts:133-146`, `GangMember.ts:287-296`,
+ * `Gang/data/Constants.ts:16`); the faction takes no work or donations, so favour only multiplies the rate (`Gang.ts:
+ * 152-155`). With N The Red Pill's reputation, f the favour, g(x) = 1 + x/100, p the rate the members' points leave
+ * (`gangInstallRateKept`) and s the set's `faction_rep` (`factionRepInstallMultiplier`), in reputation at the rate at
+ * favour 0: keep (N − r) / g(f); install now (r_i − r) / g(f) + N / (g(f(r_i)) · p · s), r_i the reputation it
+ * converts (r and the rate over the commit and the reading's age); bank (R* − r) / g(f) + N / (g(f(R*)) · p · s), R*
+ * the least over R > r_i (`gangBankReputation`). It replaces the count rule (owner decision 51) and G5's 20-minute
+ * hold in BN2 with a gang, the planner's (the brain's `bn2Route`). Its left-out terms are labelled at
+ * `gangInstallTiming`.
  * Pure, so the brain's rules and the run report read the same figures.
  */
+import { AUGMENTATIONS } from "./augmentation-data.ts";
+import { NEUROFLUX_GOVERNOR } from "./augmentations.ts";
 import { hackingExpOfLevel } from "./batcher.ts";
-import { GANG_CYCLE_MS, GANG_MOST_MEMBERS, gangMemberAscended, gangRespectPerCycle, gangTask } from "./gang.ts";
-import { type GangObjective, type GangRuleInputs, gangObjectiveOf, planGang } from "./gang-rule.ts";
+import { favorAfterInstall, favorToRep } from "./donations.ts";
+import {
+  GANG_CYCLE_MS,
+  GANG_MOST_MEMBERS,
+  GANG_STATS,
+  type GangMemberFigures,
+  gangAscensionMult,
+  gangMemberAscended,
+  gangRespectPerCycle,
+  gangSkillLevel,
+  gangTask,
+} from "./gang.ts";
+import { type GangObjective, type GangPlan, type GangRuleInputs, gangObjectiveOf, planGang } from "./gang-rule.ts";
 import type { LevellingMultipliers } from "./levelling.ts";
 
 /**
@@ -220,7 +246,11 @@ export interface GangObjectiveChoice {
  * respect less what it costs), as the plan itself is for the gang after it.
  */
 export function gangRespectUnder(inputs: GangRuleInputs, objective: GangObjective): number {
-  const plan = planGang(inputs, objective);
+  return gangRespectOfPlan(inputs, planGang(inputs, objective));
+}
+
+/** `gangRespectUnder` of a plan made already (the gang rule's, #357's (3)): its ascension first, then its tasks. */
+export function gangRespectOfPlan(inputs: GangRuleInputs, plan: GangPlan): number {
   const ascend = plan.ascend;
   const gang =
     ascend === null
@@ -268,4 +298,239 @@ export function gangObjectiveChoice(inputs: GangRuleInputs, faction: GangRouteFa
   const respect = gangObjectiveEstimate(inputs, "respect", faction);
   const money = gangObjectiveEstimate(inputs, "money", faction);
   return { objective: respect.etaMs < money.etaMs ? "respect" : "money", reason: "estimates", respect, money };
+}
+
+/**
+ * What an install keeps of each member's ascension points (`InstallAscensionPenalty`, `Gang/data/Constants.ts:16`;
+ * `Prestige.ts:133-146`, `GangMember.ts:287-296`).
+ */
+export const GANG_INSTALL_ASCENSION_KEPT = 0.95;
+
+/**
+ * The member with its ascension points × `factor`, each stat's multiplier and level recomputed from them
+ * (`GangMember.ts:70-85`, `formulas.ts:79-81`): at 0.95, the member after an install. Its experience and equipment kept.
+ */
+export function gangMemberAtPoints(member: GangMemberFigures, factor: number): GangMemberFigures {
+  const after: GangMemberFigures = { ...member };
+  for (const stat of GANG_STATS) {
+    const points = member[`${stat}_asc_points`] * factor;
+    const ascMult = gangAscensionMult(points);
+    after[`${stat}_asc_points`] = points;
+    after[`${stat}_asc_mult`] = ascMult;
+    after[stat] = gangSkillLevel(member[`${stat}_exp`], member[`${stat}_mult`] * ascMult);
+  }
+  return after;
+}
+
+/** The members' respect a cycle on `plan`'s tasks (`formulas.ts:15-31`), at the gang's penalty now, as given. */
+function gangRespectOnTasks(inputs: GangRuleInputs, plan: GangPlan, members: readonly GangMemberFigures[]): number {
+  const tasks = new Map(plan.assignments.map((each) => [each.name, each.task]));
+  let respect = 0;
+  for (const member of members) {
+    respect += gangRespectPerCycle(
+      inputs.gang,
+      member,
+      gangTask(tasks.get(member.name) ?? member.task),
+      inputs.softcap,
+    );
+  }
+  return respect;
+}
+
+/**
+ * p (#357's (3)): the rate an install leaves, the members' respect a cycle on `plan`'s tasks with every member's points
+ * × 0.95 (`gangMemberAtPoints`) over it now, both from the formulas (each level recomputed from its experience and
+ * points). About 0.979 at 1/7 territory for a member whose level is its ascension's: √0.95 on its level, to the
+ * softcap's exponent. The plan's tasks now (its ascension left out): either way. Null with no respect earned now.
+ */
+export function gangInstallRateKept(inputs: GangRuleInputs, plan: GangPlan): number | null {
+  const now = gangRespectOnTasks(
+    inputs,
+    plan,
+    inputs.members.map((member) => gangMemberAtPoints(member, 1)),
+  );
+  if (!(now > 0)) return null;
+  const after = gangRespectOnTasks(
+    inputs,
+    plan,
+    inputs.members.map((member) => gangMemberAtPoints(member, GANG_INSTALL_ASCENSION_KEPT)),
+  );
+  return after / now;
+}
+
+/**
+ * s (#357's (3)): the `faction_rep` an install gives, NeuroFlux Governor's `levels` and each of `augmentations` by
+ * product (`applyAugmentation`, `Augmentation/AugmentationHelpers.ts:39-50`), as `levellingInstallMultipliers` does
+ * levelling's. An unknown name throws.
+ */
+export function factionRepInstallMultiplier(levels: number, augmentations: readonly string[] = []): number {
+  const multiplier = (name: string) => {
+    if (!Object.hasOwn(AUGMENTATIONS, name)) throw new RangeError(`no augmentation ${JSON.stringify(name)}`);
+    const { multipliers } = AUGMENTATIONS[name] as { multipliers: Readonly<Record<string, number>> };
+    return multipliers.faction_rep ?? 1;
+  };
+  return augmentations.reduce((product, name) => product * multiplier(name), multiplier(NEUROFLUX_GOVERNOR) ** levels);
+}
+
+/** What (3) reads (#357): The Red Pill's reputation, the gang's faction's now and its favour, p, s and the rate. */
+export interface GangInstallInputs {
+  /** N: The Red Pill's reputation (`augmentationCost`'s, `Augmentations.ts:1946-1952`). */
+  needed: number;
+  /** r: the gang's faction's reputation now, which an install turns into favour (`Faction.ts:77-85`). */
+  reputation: number;
+  /** f: its favour now. */
+  favor: number;
+  /** p: the rate an install leaves (`gangInstallRateKept`), or null (no respect earned now, or the gang unread). */
+  rateKept: number | null;
+  /** s: the `faction_rep` the install gives (`factionRepInstallMultiplier`). */
+  factionRepGain: number;
+  /** The gang's faction's reputation a second now, at favour f (`gangReputationPerSecond`), or null: the minutes. */
+  reputationPerSecond: number | null;
+  /** Whether an install now installs anything (the queue, the set, NeuroFlux Governor's levels): else none now. */
+  installable: boolean;
+  /**
+   * The time, ms, from r's reading to an install chosen now: the commit (`GANG_ROUTE_COMMIT_MS`) and the reading's
+   * age. The gang earns through it, and the install converts that too: r_i = r + the rate × it. Absent, 0.
+   */
+  aheadMs?: number;
+}
+
+/** (3)'s estimates and the choice (#357): each in reputation at the rate at favour 0, and in ms at the rate. */
+export interface GangInstallTiming extends GangInstallInputs {
+  /** r_i: the reputation an install chosen now converts, r and what the rate earns over `aheadMs` (r unmeasured). */
+  atInstall: number;
+  /** f(r_i): the favour an install now gives (`addRepToFavor`, `favor.ts:22-24`). */
+  favorAfter: number;
+  /** R*: the reputation to bank to before installing (the least over R > r, below N), or null: none better. */
+  bankAt: number | null;
+  /** f(R*), or null. */
+  favorAtBank: number | null;
+  /** Keep the cycle: (N − r) / g(f). */
+  keep: number;
+  /** Install now: (r_i − r) / g(f) + N / (g(f(r_i)) · p · s); null with nothing to install, or p unknown. */
+  installNow: number | null;
+  /** Bank R*, then install: (R* − r) / g(f) + N / (g(f(R*)) · p · s); null with no R*, or p unknown. */
+  bank: number | null;
+  /** The same in ms at the rate (Infinity with none earned); null with the rate unmeasured, or no candidate. */
+  keepMs: number | null;
+  installNowMs: number | null;
+  bankMs: number | null;
+  /** The time to R* at the rate now, ms, or null. */
+  toBankMs: number | null;
+  choice: "keep" | "install" | "bank";
+  /** Installing (now or banked) held: p unknown (no respect earned now, or the gang unread). */
+  heldForRate: boolean;
+}
+
+/** g(x) = 1 + x / 100: the gang's reputation's favour multiplier (`Gang.ts:152-155`). */
+const favorGain = (favor: number) => 1 + favor / 100;
+
+/** `log(1.02)` as the game has it (`favor.ts:10`). */
+const LOG_1_POINT_02 = 0.019802627296179712;
+
+/**
+ * R* (#357's (3)): the reputation R ≥ 0 at which to install that minimises R / g(f) + N / (g(f(R)) · ps), the time to
+ * bank it and then The Red Pill's N at the favour it gives, from favour `favor`; independent of the reputation now. Its
+ * derivative is 0 where (25,000 + favorToRep(f) + R) · g(f(R))² = N · g(f) / (100 · log 1.02 · ps) (`favor.ts:12-24`):
+ * the left rises with R, so it's found by bisection; 0 where that's past already.
+ */
+export function gangBankReputation(needed: number, favor: number, rateGain: number): number {
+  const base = favorToRep(favor);
+  const target = (needed * favorGain(favor)) / (100 * LOG_1_POINT_02 * rateGain);
+  const left = (reputation: number) =>
+    (25_000 + base + reputation) * favorGain(favorAfterInstall(favor, reputation)) ** 2;
+  if (!(rateGain > 0) || left(0) >= target) return 0;
+  let low = 0;
+  let high = Math.max(1, needed);
+  while (left(high) < target && high < 1e300) high *= 2;
+  for (let step = 0; step < 200 && high - low > 1e-6 * Math.max(1, high); step += 1) {
+    const middle = (low + high) / 2;
+    if (left(middle) < target) low = middle;
+    else high = middle;
+  }
+  return (low + high) / 2;
+}
+
+/**
+ * (3)'s choice (#357): the least of the three; a tie to keeping (which changes nothing), then to installing now
+ * (sooner than banking); an unknown candidate (null) is none.
+ */
+export function gangInstallChoice(
+  keep: number,
+  installNow: number | null,
+  bank: number | null,
+): "keep" | "install" | "bank" {
+  if (installNow !== null && installNow < keep && (bank === null || installNow <= bank)) return "install";
+  return bank !== null && bank < keep ? "bank" : "keep";
+}
+
+/** What (3) reads of the gang (#357), the gang rule's at each managed decision: p, and its plan's respect a cycle. */
+export interface GangInstallFigures {
+  /** p (`gangInstallRateKept`), or null with no respect earned now. */
+  rateKept: number | null;
+  /** The plan's respect a cycle (`gangRespectOfPlan`): the minutes' rate. */
+  respectPerCycle: number;
+}
+
+/**
+ * (3), installing with a gang before The Red Pill is reached (#357): keep the cycle, install now, or bank R* and then
+ * install, each scored by the time to The Red Pill's reputation at the gang's faction. Every candidate is reputation
+ * over the same rate (the members' respect, × `faction_rep` / 75 at favour 0), so the choice doesn't depend on it, only
+ * its minutes do. The least wins; a tie goes to keeping, then to installing now (sooner than banking). Installing now
+ * only with something to install; either install only with p known (`heldForRate`). Left out, each labelled:
+ * - more than one more install: cautious for installing (the brain decides again each cycle, from its favour then);
+ * - the commit's 2 minutes and the reading's age (`aheadMs`): counted, as the gang earns through them and the install
+ *   converts that too (#357's A/B: banking with them left out chose at 262k, its install converting about 356k);
+ * - the decisions' 10 s apart (a medium snapshot each), banking's install up to that much past R*: either way;
+ * - the money the install resets, so gang equipment and the set's later buys wait for it again, and the ×0.95
+ *   compounding past the next install: optimistic for installing;
+ * - the plan's tasks after the install taken as now's (p's), and the members' growth: either way (the minutes only).
+ */
+export function gangInstallTiming(inputs: GangInstallInputs): GangInstallTiming {
+  const { needed, reputation, favor, rateKept, factionRepGain, reputationPerSecond, installable } = inputs;
+  const ahead = Math.max(0, inputs.aheadMs ?? 0);
+  const atInstall = reputation + (reputationPerSecond === null ? 0 : (reputationPerSecond * ahead) / 1000);
+  const favorAfter = favorAfterInstall(favor, atInstall);
+  const keep = Math.max(0, needed - reputation) / favorGain(favor);
+  const reached = reputation >= needed;
+  const rateGain = rateKept === null ? null : rateKept * factionRepGain;
+  const installNow =
+    reached || rateGain === null || !installable
+      ? null
+      : (atInstall - reputation) / favorGain(favor) + needed / (favorGain(favorAfter) * rateGain);
+  const optimum = reached || rateGain === null ? null : gangBankReputation(needed, favor, rateGain);
+  // Banking while the reputation an install now would convert is short of R*: from there, installing now is it.
+  const bankAt = optimum !== null && optimum > atInstall && optimum < needed ? optimum : null;
+  const favorAtBank = bankAt === null ? null : favorAfterInstall(favor, bankAt);
+  const bank =
+    bankAt === null || favorAtBank === null || rateGain === null
+      ? null
+      : (bankAt - reputation) / favorGain(favor) + needed / (favorGain(favorAtBank) * rateGain);
+  const choice = gangInstallChoice(keep, installNow, bank);
+  // At favour 0, the rate is the rate now over g(f): every candidate's reputation over it.
+  const atFavorZero = reputationPerSecond === null ? null : reputationPerSecond / favorGain(favor);
+  const ms = (units: number | null) =>
+    units === null || atFavorZero === null
+      ? null
+      : units === 0
+        ? 0
+        : atFavorZero > 0
+          ? (units / atFavorZero) * 1000
+          : Number.POSITIVE_INFINITY;
+  return {
+    ...inputs,
+    atInstall,
+    favorAfter,
+    bankAt,
+    favorAtBank,
+    keep,
+    installNow,
+    bank,
+    keepMs: ms(keep),
+    installNowMs: ms(installNow),
+    bankMs: ms(bank),
+    toBankMs: bankAt === null ? null : ms((bankAt - reputation) / favorGain(favor)),
+    choice,
+    heldForRate: rateKept === null && !reached,
+  };
 }

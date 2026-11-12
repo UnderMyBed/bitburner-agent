@@ -28,6 +28,8 @@
 //   player's `faction_rep`), each objective's plan's respect a cycle its rate; money once The Red Pill is bought, queued
 //   or installed. A `gangObjectiveChosen` event at each change, with both estimates; the dashboard's line says it. The
 //   A/B's baseline (`bn2Route` "rules", tests alone) keeps the rule's money at 12.
+// - What installing with a gang reads of it (#357's (3), `installFigures`): p, the rate an install leaves (each
+//   member's ascension points × 0.95, core's `gangInstallRateKept`), and the plan's respect a cycle, for A6.
 // - Its silent stalls (#354, ./gang-stalls.ts): a worker problem in every reading, a member off the rule's task, or
 //   the respect flat with members working, each for over a minute, watched on each new medium snapshot with the
 //   rule's own plan: `stalls`, the dashboard's `gangStalled` alerts (the run report judges the same).
@@ -46,6 +48,7 @@ import {
   GANG_TERRITORY_UPDATE_MS,
   type GangEquipmentPlan,
   type GangInformation,
+  type GangInstallFigures,
   type GangMemberReading,
   type GangObjective,
   type GangObjectiveChoice,
@@ -62,8 +65,10 @@ import {
   gangFactionOf,
   gangFactionToForm,
   gangInBonusTime,
+  gangInstallRateKept,
   gangObjectiveChoice,
   gangObjectiveOf,
+  gangRespectOfPlan,
   gangSoftcapOf,
   gangTrainingTask,
   type Intent,
@@ -600,6 +605,8 @@ export class GangRule {
   #watched: unknown = null;
   /** The BitNode the last slow snapshot said, or null before any (#365's review). */
   #lastBitNode: number | null = null;
+  /** What (3) reads of the gang (#357), the last managed decision's: p and its plan's respect a cycle; null otherwise. */
+  #installFigures: GangInstallFigures | null = null;
 
   /**
    * `store`: where the rule's justice members are kept across a restart; none (the tests), in memory only. `emit`: its
@@ -625,6 +632,15 @@ export class GangRule {
   /** The gang's faction, as the last reading showed it, or null: none formed, or none read. */
   gangFaction(): string | null {
     return this.#faction;
+  }
+
+  /**
+   * What (3), installing with a gang (#357), reads of it at the last managed decision: p, the rate the members' points
+   * leave after an install (core's `gangInstallRateKept`, on the plan's tasks), and the plan's respect a
+   * cycle (`gangRespectOfPlan`), the minutes' rate; null while no gang is managed.
+   */
+  installFigures(): GangInstallFigures | null {
+    return this.#installFigures;
   }
 
   /** In BN2 with no reading yet that says whether there's a gang, or whose (#335's review). */
@@ -759,6 +775,10 @@ export class GangRule {
     const plan = planGang(inputs, choice?.objective ?? gangObjectiveOf(members.length));
     this.#watchObjective(choice, routeFaction, nowMs, gangBitNodeKeyOf(slowData), gang.faction);
     this.#basis = { mediumData, inputs, plan, costMult: gangEquipmentCostMultOf(gang) };
+    this.#installFigures = {
+      rateKept: gangInstallRateKept(inputs, plan),
+      respectPerCycle: gangRespectOfPlan(inputs, plan),
+    };
     this.#setPlaced(plan.assignments.filter((each) => each.role === "justice").map((each) => each.name));
     if (fresh && mediumAtMs !== null) {
       this.#stalls.add({ atMs: mediumAtMs, gang, members, problems: snapshot.problems, plan, softcap: inputs.softcap });
@@ -884,7 +904,10 @@ export class GangRule {
   #decide(view: GangView, intent: Intent | null, gang: GangState | null): GangDecision {
     this.#view = view;
     this.#state = gang;
-    if (view.stage !== "managed") this.#basis = null;
+    if (view.stage !== "managed") {
+      this.#basis = null;
+      this.#installFigures = null;
+    }
     // Logged on a change of stage, recruits or task mix, not each figure.
     const logged =
       view.plan === null

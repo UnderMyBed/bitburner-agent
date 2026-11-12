@@ -31,7 +31,9 @@
 // brain's `gangObjectiveChosen` events; the section's other checks read that objective. It fails on an objective at 12
 // without its estimates; one that differs from core's for over `GANG_OBJECTIVE_DIFFERS_WITHIN_MS`; and none from the
 // brain at 12 members for `GANG_OBJECTIVE_NEVER_MS` online, added up across the BitNode. And (1): an install chosen in
-// BN2 before the gang, with avmnite-02h's level read (a static snapshot), without the planner's estimates for it.
+// BN2 before the gang, with avmnite-02h's level read (a static snapshot), without the planner's estimates for it. And
+// (3), slice 2: each install chosen in BN2 with the gang formed, with its cost (its `gangCost`: the reputation lost,
+// the favour gained, The Red Pill's estimate then); one before The Red Pill without the planner's (3) estimates fails.
 // The ascensions themselves (G2) are seen as a member's ascension points rising between readings (core's
 // `gangAscensionPointsOf`), each with its largest multiplier gain and the respect it had earned, by hour; the
 // equipment bought (G3) as an item new in a member's lists, its cost the discounted one at the reading before; the
@@ -87,8 +89,11 @@ import {
   AUGMENTATION_BOUGHT_EVENT_KIND,
   AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
+  describeGangInstallCost,
   formatEta,
+  GANG_FORMED_ROUTE,
   GANG_FORMING_ROUTE,
+  type GangInstallCost,
 } from "./augmentations.ts";
 import {
   bitNodeOfSlow,
@@ -894,6 +899,41 @@ export class GangFold {
       );
     }
     if (before1 === 0) lines.push("    none");
+    // (3): each install chosen in BN2 with the gang formed, its cost there; one before The Red Pill (not its own, nor
+    // levelling's after it) without the planner's estimates fails.
+    lines.push("  installs chosen in BN2 with the gang (#357's (3)), each one's cost:");
+    let withGang = 0;
+    for (const { atMs, kind, detail } of events) {
+      if (kind !== AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND || this.#bitNodeAt(atMs) !== GANG_BITNODE) continue;
+      if (this.#formedAt.findLast((each) => each.atMs <= atMs)?.formed !== true) continue;
+      withGang += 1;
+      const fields = (detail ?? {}) as { reason?: unknown; timing?: unknown; gangCost?: unknown };
+      const reason = String(fields.reason);
+      const cost = fields.gangCost as GangInstallCost | undefined;
+      const words =
+        cost === undefined
+          ? reason === THE_RED_PILL || reason === "the hacking level"
+            ? "The Red Pill's own, or after it: no cost there"
+            : "its cost not recorded"
+          : describeGangInstallCost(cost);
+      lines.push(`    ${formatIsoTime(atMs)}: ${reason}; ${words}`);
+      const timing = fields.timing as
+        | { route?: unknown; gangInstall?: { installNow?: unknown }; gang?: { installNowMs?: unknown } }
+        | undefined;
+      const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value);
+      // (3)'s; or (1)'s, in the minute after the gang formed before a slow snapshot shows its faction (#368).
+      const estimated =
+        (timing?.route === GANG_FORMED_ROUTE && finite(timing.gangInstall?.installNow)) ||
+        (timing?.route === GANG_FORMING_ROUTE && finite(timing.gang?.installNowMs));
+      const redPillInstalled = Object.hasOwn(this.#slowAt(atMs)?.resetInfo?.ownedAugs ?? {}, THE_RED_PILL);
+      if (reason !== THE_RED_PILL && reason !== "the hacking level" && !redPillInstalled && !estimated) {
+        fail(
+          `install chosen in BN2 with the gang before The Red Pill without the planner's estimates: at ` +
+            `${formatIsoTime(atMs)}, its reason ${reason}`,
+        );
+      }
+    }
+    if (withGang === 0) lines.push("    none");
     return lines;
   }
 }

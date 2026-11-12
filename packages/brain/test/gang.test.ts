@@ -691,6 +691,62 @@ describe("the run report's section", () => {
       expect(judged(3, [owned]).failures).toEqual([]);
     });
 
+    test("(3) each install with the gang, its cost; one before The Red Pill without the planner's estimates fails", () => {
+      const cost = {
+        faction: "NiteSec",
+        reputation: 242_310,
+        favor: 0,
+        favorAfter: 119.65,
+        needed: 2.5e6,
+        redPillMs: 54 * 60_000,
+        keepMs: 96 * 60_000,
+      };
+      const install = (atMs: number, detail: Record<string, unknown>): StoredEvent => ({
+        atMs,
+        kind: "augmentationInstallChosen",
+        detail,
+      });
+      const planned = { route: "gang formed", gangInstall: { installNow: 1.2e6, choice: "install" } };
+      const forming = { route: "gang forming", gang: { installNowMs: 6_000_000 } };
+      const { text, failures } = judged(6, [
+        install(10_000, { reason: "the gang's favour", timing: planned, gangCost: cost }),
+        install(20_000, { reason: "count reached", gangCost: cost }),
+        install(30_000, { reason: "Daedalus's count", timing: forming }),
+        install(40_000, { reason: "The Red Pill" }),
+        install(50_000, {
+          reason: "count reached",
+          timing: { route: "gang formed", gangInstall: { installNow: null } },
+        }),
+      ]);
+      expect(text).toContain(
+        "  installs chosen in BN2 with the gang (#357's (3)), each one's cost:\n" +
+          "    1970-01-01T00:00:10.000Z: the gang's favour; NiteSec's about 242,310 reputation lost, favour 0.0 → 119.7, " +
+          "The Red Pill then in ~54 min (keeping's 1.6 h)\n" +
+          "    1970-01-01T00:00:20.000Z: count reached; NiteSec's about 242,310 reputation lost, favour 0.0 → 119.7, The " +
+          "Red Pill then in ~54 min (keeping's 1.6 h)\n" +
+          "    install chosen in BN2 with the gang before The Red Pill without the planner's estimates: at " +
+          "1970-01-01T00:00:20.000Z, its reason count reached\n" +
+          "    1970-01-01T00:00:30.000Z: Daedalus's count; its cost not recorded\n" +
+          "    1970-01-01T00:00:40.000Z: The Red Pill; The Red Pill's own, or after it: no cost there\n",
+      );
+      expect(failures).toEqual([
+        "install chosen in BN2 with the gang before The Red Pill without the planner's estimates: at " +
+          "1970-01-01T00:00:20.000Z, its reason count reached",
+        "install chosen in BN2 with the gang before The Red Pill without the planner's estimates: at " +
+          "1970-01-01T00:00:50.000Z, its reason count reached",
+      ]);
+      // None in the window: said. The Red Pill installed (a slow snapshot shows it): levelling's or any, no failure.
+      expect(judged(3).text).toContain(
+        "  installs chosen in BN2 with the gang (#357's (3)), each one's cost:\n    none",
+      );
+      const gang = new GangFold();
+      gang.addSlow(0, { ...niteSec, resetInfo: { ...niteSec.resetInfo, ownedAugs: { "The Red Pill": 1 } } });
+      for (let index = 0; index < 3; index += 1) gang.addMedium(index * 10_000, atTwelve(index));
+      const after: string[] = [];
+      gang.section(after, 30_000, [install(10_000, { reason: "count reached" })]);
+      expect(after.filter((line) => line.includes("with the gang before The Red Pill"))).toEqual([]);
+    });
+
     test("(1) an install chosen in BN2 before the gang, avmnite-02h's level read, without the route's estimates fails", () => {
       const install = (atMs: number, timing: unknown = undefined): StoredEvent => ({
         atMs,
@@ -716,9 +772,12 @@ describe("the run report's section", () => {
         "install chosen in BN2 before the gang without the planner's estimates: at 1970-01-01T00:00:30.000Z, " +
           "avmnite-02h's level read, its reason Daedalus's count",
       ]);
-      // With the route's estimates, after the gang, or with the level unread: none.
+      // With the route's estimates, or with the level unread: none. After the gang, (3)'s check instead (#357's slice 2).
       expect(failuresOf(fold(true), [install(30_000, routed)])).toEqual([]);
-      expect(failuresOf(fold(true), [install(65_000)])).toEqual([]);
+      expect(failuresOf(fold(true), [install(65_000)])).toEqual([
+        "install chosen in BN2 with the gang before The Red Pill without the planner's estimates: at " +
+          "1970-01-01T00:01:05.000Z, its reason Daedalus's count",
+      ]);
       expect(failuresOf(fold(false), [install(30_000)])).toEqual([]);
     });
   });
@@ -1328,7 +1387,8 @@ describe("the controller (#325)", () => {
   });
 
   test("A8's hold there (#335's review): the reputation flat near 2.5m, held 20 min online, its stall at 10, the rate said", () => {
-    const { controller, send } = connected();
+    // G5's hold is the rules' since #357's (3) (the A/B's baseline): the planner's own is "BN2 with the gang" below.
+    const { controller, send } = connected("rules");
     const slow = niteSecSlow(2);
     const state = slow.factions?.state;
     if (!state) throw new Error("no faction state");
@@ -1579,6 +1639,137 @@ describe("the controller (#325)", () => {
       expect(last()?.gang?.tasks).toEqual(tasksOf("money"));
       expect(controller.gangView().line).not.toContain("objective at 12");
       expect(events.filter((event) => (event as { type: string }).type === "gangObjectiveChosen")).toEqual([]);
+    });
+  });
+
+  describe("BN2's route (#357's (3)): installing with the gang, at the controller", () => {
+    /** Twelve at hacking 1,000 (no ascension points: p 1), a grown gang earning respect on the planner's tasks. */
+    const twelve = Array.from({ length: 12 }, (_, index) =>
+      member(`member-${String(index + 1).padStart(2, "0")}`, 1_000, "Train Hacking"),
+    );
+    const reading = formed(twelve, { respect: 2e6, wantedLevel: 1, wantedPenalty: 2e6 / (2e6 + 1) });
+    /** NiteSec, the gang's faction, at `reputation`, `queued` bought already. */
+    const niteSecAt = (reputation: number, queued: string[] = []): SlowSnapshotData => {
+      const slow = niteSecSlow(2);
+      return {
+        ...slow,
+        factions: {
+          backend: "sim",
+          state: { joined: [{ name: "NiteSec", reputation, favor: 0 }], invitations: [], queuedAugmentations: queued },
+          problem: null,
+        },
+      };
+    };
+    const INSTALL_ID = intentId("installAugmentations", {});
+    /** `minutes` of a slow and a medium snapshot a minute, NiteSec at `reputation(minute)`, with `money`. */
+    function play(
+      brain: ReturnType<typeof connected>,
+      minutes: number,
+      reputation: (minute: number) => number,
+      { money = 1e12, queued = [] as string[] } = {},
+    ) {
+      let gameTimeMs = 7 * 3_600_000;
+      for (let minute = 0; minute < minutes; minute += 1) {
+        gameTimeMs += 60_000;
+        clock.advance(60_000);
+        brain.send("slow", niteSecAt(reputation(minute), queued), gameTimeMs);
+        const data = niteSecMedium(reading);
+        data.player = { ...data.player, money } as MediumSnapshotData["player"];
+        brain.send("medium", data, gameTimeMs);
+      }
+    }
+    const installAsked = (controller: ReturnType<typeof connected>["controller"]) =>
+      controller.intentsView().some((each) => each.id === INSTALL_ID);
+
+    test("keep: at 2m of 2.5m, 30 minutes with $1t and never an install; the rules' count rule installs", () => {
+      const planner = connected();
+      play(planner, 30, () => 2e6);
+      const view = planner.controller.augmentationsView();
+      expect(view.progress?.timing).toMatchObject({ route: "gang formed", gangInstall: { choice: "keep" } });
+      expect(view.committed).toBe(false);
+      expect(installAsked(planner.controller)).toBe(false);
+      expect(planner.last()?.intents.some((each) => each.action === "purchaseAugmentation")).toBe(false);
+      // The rules on the same: the count rule's countdown (G5's hold not within its 20 minutes), the cycle committed.
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+      directory = mkdtempSync(path.join(os.tmpdir(), "gang-"));
+      store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+      channel = new ControlChannel({ token: TOKEN, clock });
+      channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+      const rules = connected("rules");
+      play(rules, 30, () => 2e6);
+      expect(rules.controller.augmentationsView().committed).toBe(true);
+    });
+
+    test("install now: at 500k with a purchase queued, chosen at once and asked for through the gate (no backup here)", () => {
+      const brain = connected();
+      const events: { type: string; reason?: string; gangCost?: unknown }[] = [];
+      brain.controller.subscribe((event) => events.push(event as (typeof events)[number]));
+      play(brain, 3, () => 5e5, { money: 0, queued: ["BitWire"] });
+      expect(events.filter((event) => event.type === "augmentationInstallChosen")).toEqual([
+        expect.objectContaining({
+          reason: "the gang's favour",
+          gangCost: expect.objectContaining({ faction: "NiteSec", favor: 0 }),
+        }),
+      ]);
+      // What it converts: 500k and what the gang earns over the commit (and the slow snapshot's age).
+      const cost = events.find((event) => event.type === "augmentationInstallChosen")?.gangCost as
+        | { reputation: number }
+        | undefined;
+      expect(cost?.reputation).toBeGreaterThan(5e5);
+      // The irreversible gate (#147): queued, its guard and a save backup first, which this brain takes none of.
+      expect(installAsked(brain.controller)).toBe(true);
+      expect(brain.controller.intentsView().find((each) => each.id === INSTALL_ID)?.waitingFor).toEqual(
+        expect.any(String),
+      );
+      expect(brain.last()?.intents.map((each) => each.id)).not.toContain(INSTALL_ID);
+    });
+
+    test("bank: from 100k, rising 10,000 a minute: no install while short of R*, then the install past it", () => {
+      const brain = connected();
+      const events: { type: string; reason?: string; gangCost?: { reputation: number } }[] = [];
+      brain.controller.subscribe((event) => events.push(event as (typeof events)[number]));
+      play(brain, 5, (minute) => 1e5 + minute * 10_000, { money: 0, queued: ["BitWire"] });
+      expect(brain.controller.augmentationsView().progress?.timing?.gangInstall?.choice).toBe("bank");
+      const bankAt = brain.controller.augmentationsView().progress?.timing?.gangInstall?.bankAt as number;
+      expect(installAsked(brain.controller)).toBe(false);
+      play(brain, 25, (minute) => 1.5e5 + minute * 10_000, { money: 0, queued: ["BitWire"] });
+      const [chosen] = events.filter((event) => event.type === "augmentationInstallChosen");
+      expect(chosen?.reason).toBe("the gang's favour");
+      expect(chosen?.gangCost?.reputation as number).toBeGreaterThanOrEqual(bankAt);
+      expect(chosen?.gangCost?.reputation as number).toBeLessThan(bankAt + 10_000);
+      expect(installAsked(brain.controller)).toBe(true);
+    });
+
+    test("held for The Red Pill there: the World Daemon's stall watches the reputation not rising, as G5's hold had it", () => {
+      const brain = connected();
+      play(brain, 12, () => 2e6);
+      expect(brain.controller.worldDaemonView().stall?.step).toBe("redPillReputation");
+    });
+
+    test("no gang (BN1, NiteSec an ordinary faction): the planner's and the rules' controllers decide the same", () => {
+      const decide = (bn2Route: Bn2Route) => {
+        store.close();
+        rmSync(directory, { recursive: true, force: true });
+        directory = mkdtempSync(path.join(os.tmpdir(), "gang-"));
+        store = TelemetryStore.open(path.join(directory, "telemetry.sqlite"));
+        channel = new ControlChannel({ token: TOKEN, clock });
+        channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+        const brain = connected(bn2Route);
+        let gameTimeMs = 7 * 3_600_000;
+        for (let minute = 0; minute < 5; minute += 1) {
+          gameTimeMs += 60_000;
+          const slow = niteSecAt(5e5);
+          brain.send("slow", { ...slow, resetInfo: { ...slow.resetInfo, currentNode: 1 } }, gameTimeMs);
+          const data = niteSecMedium(undefined);
+          data.player = { ...data.player, money: 1e12 } as MediumSnapshotData["player"];
+          brain.send("medium", data, gameTimeMs);
+        }
+        return { intents: brain.last()?.intents, timing: brain.controller.augmentationsView().progress?.timing };
+      };
+      const planner = decide("planner");
+      expect(planner.timing?.route).not.toBe("gang formed");
+      expect(planner).toEqual(decide("rules"));
     });
   });
 

@@ -77,6 +77,7 @@ export function useFreshStarts() {
     augmentations = true,
     installTiming = "planner",
     bn2Route = "planner",
+    gangRoute = bn2Route,
   }: {
     withDesiredState: boolean;
     beforeAgent?: (fresh: FreshGame) => Promise<void>;
@@ -97,6 +98,8 @@ export function useFreshStarts() {
     installTiming?: InstallTimingPolicy;
     /** BN2's route (#357): the planner's, as on Steam; the rules' for an A/B. */
     bn2Route?: Bn2Route;
+    /** The gang rule's own route (#357's (3) A/B): the planner's objective with the rules' installs. Absent, bn2Route. */
+    gangRoute?: Bn2Route;
   }) {
     const simulation = await start({
       seed,
@@ -113,7 +116,7 @@ export function useFreshStarts() {
     if (!batcher) store.setSetting(BATCHER_ENABLED_SETTING, "false");
     if (!augmentations) writeAugmentationsEnabled(store, false);
     const data = { store, brainRelease: "fresh-start-test", dataDirectory };
-    const brain = startBrainInSimulation(game, { build, data, withDesiredState, installTiming, bn2Route });
+    const brain = startBrainInSimulation(game, { build, data, withDesiredState, installTiming, bn2Route, gangRoute });
     await game.runUntil(() => brain.deployerEvents.length > 0, DEPLOY_WITHIN_MS);
     expect(brain.deployerEvents).toEqual([expect.objectContaining({ type: "deployed" })]);
     await beforeAgent({ simulation, game });
