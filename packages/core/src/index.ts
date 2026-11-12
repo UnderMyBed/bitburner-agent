@@ -549,6 +549,17 @@ export {
   UNASSIGNED_GANG_TASK,
 } from "./gang.ts";
 export {
+  GANG_EARNING_MARGIN_MS,
+  type GangEarningEstimate,
+  type GangMemberEarning,
+  type GangTrainingTime,
+  gangEarningBoundMs,
+  gangJusticeReleaseMs,
+  gangTimeToEarningMs,
+  gangTrainingTimeMs,
+  gangWarfareExitMs,
+} from "./gang-earning.ts";
+export {
   type Bn2Route,
   factionRepInstallMultiplier,
   GANG_FORMING_STEPS_MS,
@@ -604,6 +615,7 @@ export {
   type GangWarfareFigures,
   type GangWarfareMeasure,
   type GangWarfarePlan,
+  gangAscensionAllowed,
   gangAscensionAppraisal,
   gangAscensionConvertsEnough,
   gangAscensionCost,
@@ -612,6 +624,7 @@ export {
   gangCycleSoFarMs,
   gangDeathCost,
   gangEquipmentAppraisal,
+  gangInputsAfterAscension,
   gangLostShare,
   gangLostShareBound,
   gangMemberBestOutputOver,

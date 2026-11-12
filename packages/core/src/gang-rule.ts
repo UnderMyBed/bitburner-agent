@@ -493,23 +493,48 @@ export function gangTimeToAscensionMs(
  * ascended member's level-1 levels while it clashes; it ascends once disengaged.
  */
 export function gangAscensionToMake(inputs: GangRuleInputs, objective: GangObjective): GangAscensionAppraisal | null {
-  const { gang, members } = inputs;
-  const recruitsNow = gangRecruitsAllowed(gang.respect, members.length);
-  const bound = gangLostShareBound(members.length + recruitsNow);
   let best: GangAscensionAppraisal | null = null;
-  for (const member of members) {
-    if (member.name === "" || member.name.length > MAX_GANG_MEMBER_NAME_LENGTH) continue;
-    if (isGangJusticeTask(member.task)) continue;
-    // G4: the crew's power is what the warfare rule weighed; an ascension would reset its levels while it clashes.
-    if (inputs.warfare?.engaged === true && member.task === TERRITORY_WARFARE_TASK) continue;
-    const respect = Math.max(1, gang.respect - member.earnedRespect);
-    if (gangLostShare({ respect, wantedLevel: gang.wantedLevel }) > bound) continue;
-    if (gangRecruitsAllowed(respect, members.length) < recruitsNow) continue;
+  for (const member of inputs.members) {
+    if (!gangAscensionAllowed(inputs, member)) continue;
     const appraisal = gangAscensionAppraisal(inputs, member, objective);
     if (appraisal === null || !appraisal.pays) continue;
     if (best === null || appraisal.gain - appraisal.cost > best.gain - best.cost) best = appraisal;
   }
   return best;
+}
+
+/**
+ * Whether the rule may ascend the member, its pay aside (`gangAscensionToMake`'s conditions, #374): a name the protocol
+ * carries, not on justice, not on an engaged crew (G4), the penalty's share after it within the bound with the
+ * recruits allowed now, and none of them lost.
+ */
+export function gangAscensionAllowed(inputs: GangRuleInputs, member: GangMemberFigures): boolean {
+  const { gang, members } = inputs;
+  if (member.name === "" || member.name.length > MAX_GANG_MEMBER_NAME_LENGTH) return false;
+  if (isGangJusticeTask(member.task)) return false;
+  // G4: the crew's power is what the warfare rule weighed; an ascension would reset its levels while it clashes.
+  if (inputs.warfare?.engaged === true && member.task === TERRITORY_WARFARE_TASK) return false;
+  const recruitsNow = gangRecruitsAllowed(gang.respect, members.length);
+  const respect = Math.max(1, gang.respect - member.earnedRespect);
+  if (gangLostShare({ respect, wantedLevel: gang.wantedLevel }) > gangLostShareBound(members.length + recruitsNow)) {
+    return false;
+  }
+  return gangRecruitsAllowed(respect, members.length) >= recruitsNow;
+}
+
+/** The rule's inputs after `ascend` (G2): the member ascended, its task kept, the gang's respect less what it earned. */
+export function gangInputsAfterAscension(
+  given: GangRuleInputs,
+  ascend: Pick<GangAscensionAppraisal, "name" | "result"> | null,
+): GangRuleInputs {
+  if (ascend === null) return given;
+  return {
+    ...given,
+    gang: { ...given.gang, respect: Math.max(1, given.gang.respect - ascend.result.respect) },
+    members: given.members.map((member) =>
+      member.name === ascend.name ? { ...gangMemberAscended(member), task: member.task } : member,
+    ),
+  };
 }
 
 /** The justice task that lowers the member's wanted most, and by how much a cycle (negative). */
@@ -575,16 +600,7 @@ export function planGang(
 ): GangPlan {
   // The ascension first (G2): the rest of the plan is for the gang after it, the member ascended and the respect less.
   const ascend = gangAscensionToMake(given, objective);
-  const inputs: GangRuleInputs =
-    ascend === null
-      ? given
-      : {
-          ...given,
-          gang: { ...given.gang, respect: Math.max(1, given.gang.respect - ascend.result.respect) },
-          members: given.members.map((member) =>
-            member.name === ascend.name ? { ...gangMemberAscended(member), task: member.task } : member,
-          ),
-        };
+  const inputs = gangInputsAfterAscension(given, ascend);
   const { gang, isHacking, members } = inputs;
   const training = gangTrainingTask(isHacking);
   const assignments: GangAssignment[] = members.map((member) => {
