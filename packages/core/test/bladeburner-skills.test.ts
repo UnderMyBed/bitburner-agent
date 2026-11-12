@@ -209,6 +209,15 @@ describe("costs and effects, worked by hand", () => {
     expect(effectiveLevel(who, "hacking", skills)).toBe(1);
     // Tracking: stealthy, a contract; its stats at 110 (charisma 1): 0.8 × 110^0.91 + 0.1, × 1.06 × 1.2 × 1.055.
     expect(actionSkillCompetence(tracking, who, skills)).toBeCloseTo((0.8 * 110 ** 0.91 + 0.1) * 1.06 * 1.2 * 1.055, 9);
+    // Each type its own: Tracer 5 (×1.2) on a contract, Digital Observer 10 (×1.4) on an operation (Investigation).
+    const investigation = bladeburnerLevelledAction("Operations", "Investigation");
+    if (investigation === null) throw new Error("no Investigation");
+    const byType = bladeburnerSkillMultsOf({ Tracer: 5, "Digital Observer": 10 });
+    expect(actionSkillCompetence(tracking, who, byType) / actionSkillCompetence(tracking, who)).toBeCloseTo(1.2, 12);
+    expect(actionSkillCompetence(investigation, who, byType) / actionSkillCompetence(investigation, who)).toBeCloseTo(
+      1.4,
+      12,
+    );
     // Bounty Hunter kills, isn't stealthy: Cloak's no part of it, Short-Circuit's (none here) would be.
     expect(actionSkillCompetence(bounty, who, skills) / actionSkillCompetence(bounty, who)).toBeCloseTo(
       ((0.8 * 110 ** 0.91 + 0.1 + 0.1 * 0) / (0.8 * 100 ** 0.91 + 0.1)) * 1.06 * 1.2,
@@ -262,6 +271,15 @@ describe("the rule's choice (#379): the levels that add the most rank a second a
     expect(plan.spent).toBe(8);
     expect(plan.rankPerSecond).toBe(1);
     expect(plan.rankPerSecondAfter).toBeCloseTo(1.12, 12);
+    // A point's gain, not a level's: Blade's Intuition gains more (0.03) for 3 points, Cloak less (0.025) for 2, so
+    // more a point (0.0125 against 0.01): Cloak, and the 1 point left buys nothing.
+    const perPoint = planBladeburnerSkills({
+      levels: {},
+      points: 3,
+      costMultiplier: 1,
+      rankPerSecond: (levels) => 1 + 0.03 * (levels["Blade's Intuition"] ?? 0) + 0.025 * (levels.Cloak ?? 0),
+    });
+    expect(perPoint.buys).toEqual([{ skill: "Cloak", from: 0, to: 1, cost: 2 }]);
     // A tie: the first in the game's order.
     const even = planBladeburnerSkills({
       levels: {},
