@@ -71,6 +71,18 @@
 //   installing now held with no rate measured. Waiting is a wait as #343's: no countdown, no money held, kept in the
 //   store (`route` "gang forming"), overdue at twice τ_g and 10 minutes. The A/B's baseline (`bn2Route` "rules", tests
 //   alone) takes #343's candidates there, as before.
+// - BN2 with the gang (#357's second slice, core's `gangInstallTiming`): The Red Pill short at the gang's faction, the
+//   planner chooses (core's endgame `gang`, in place of the count rule and G5's 20-minute hold) keep the cycle, install
+//   now, or bank R* and then install, by the time to The Red Pill's reputation there: p from the gang rule
+//   (`gangInstall`, the members' points × 0.95), s the set's `faction_rep`, the rate the plan's respect. Keeping and
+//   banking are waits as #343's (no countdown, no money held; the World Daemon's stall watches the reputation rise);
+//   installing now is chosen at once (`reason` "the gang's favour"), through the controller's gate. Every install in
+//   BN2 with the gang carries its cost (`gangCost`: the reputation lost, the favour gained, The Red Pill's estimate),
+//   the rules' too. While the plan earns no respect (training, justice, warfare), the cycle's last p decides (kept in
+//   the store, #372's review), the World Daemon's reputation stall as on main: a pause past its 10 minutes fails the
+//   report, falsely in a long justice stretch, until the plan's time to earning is computed; only in a cycle where p was never known
+//   do the rules decide there, as before: nothing banked is growing, and a hold would only stall. The A/B's baseline
+//   (`bn2Route` "rules") keeps the count rule and G5's hold.
 //   Once the count is met (Daedalus inviting or joined), or never short (The Red Pill elsewhere), the count rule times
 //   installs as before (amended #343: until the planner's next slice, the Daedalus/Red Pill stretch), with The Red
 //   Pill's way, Daedalus donations and levelling. The count rule short of the count stays only as the A/B's baseline
@@ -106,10 +118,16 @@ import {
   type FactionState,
   factionReadingKind,
   factionReadingOf,
+  factionRepInstallMultiplier,
   GANG_RED_PILL_HOLD_MS,
+  GANG_ROUTE_COMMIT_MS,
   GANG_ROUTE_SERVER,
   type GangFormingTiming,
+  type GangInstallFigures,
+  type GangInstallTiming,
   gangFormingTiming,
+  gangInstallTiming,
+  gangReputationPerSecond,
   gangSellsRedPill,
   type HoldWork,
   INSTALL_COUNTDOWN_MS,
@@ -272,13 +290,39 @@ export type InstallTimingView = InstallTiming & {
    * BN2 before the gang (#357's (1)): its candidates in place of #343's, install now (k 0) and wait for the gang (k 1),
    * each by the time to the gang formed; absent, #343's.
    */
-  route?: typeof GANG_FORMING_ROUTE;
+  route?: typeof GANG_FORMING_ROUTE | typeof GANG_FORMED_ROUTE;
   /** (1)'s figures (#357): τ_g, R, the level, avmnite-02h's roll, the rate and the install's multipliers. */
   gang?: GangFormingTiming;
+  /**
+   * (3)'s figures (#357, `route` "gang formed"): each candidate in reputation and minutes, R*, p, s and the choice. Its
+   * candidates are k 0 install now, 1 bank R* then install (its τ the time to R*), 2 keep the cycle.
+   */
+  gangInstall?: GangInstallTiming;
 };
 
 /** The planner's route before the gang in BN2 (#357's (1)), as the timing view, the wait and the events name it. */
 export const GANG_FORMING_ROUTE = "gang forming";
+/** The planner's route with the gang in BN2 (#357's (3)), before The Red Pill: keep, install now, or bank R*. */
+export const GANG_FORMED_ROUTE = "gang formed";
+
+/**
+ * An install's cost in BN2 with the gang (#357's (3)), on its `augmentationInstallChosen` event, the rules' too: the
+ * gang's faction's reputation it turns into favour and zeroes (`Faction.ts:77-85`), as estimated at the choice (r and
+ * what the rate earns over the commit and the reading's age, core's `atInstall`), the favour before and after
+ * (`favor.ts:22-24`), and The Red Pill's estimate then: after this install, and keeping instead (ms; null unmeasured
+ * or never, JSON having no Infinity).
+ */
+export interface GangInstallCost {
+  faction: string;
+  reputation: number;
+  favor: number;
+  favorAfter: number;
+  needed: number;
+  redPillMs: number | null;
+  keepMs: number | null;
+  /** p then (the gang rule's), or null: the gang earning no respect there, so the rules' install, as before #357. */
+  rateKept: number | null;
+}
 
 /** The install of the queued augmentations (#164), as the rule asks for it: the owner's has the same id. */
 export const AUGMENTATION_INSTALL_INTENT: Intent = {
@@ -348,6 +392,8 @@ export type AugmentationEvent =
       short?: Pick<DaedalusCount, "installed" | "required">;
       /** The planner's install timing that chose it (#343), short of the count. Absent otherwise. */
       timing?: InstallTimingView;
+      /** In BN2 with the gang, before The Red Pill (#357's (3)): what it costs there. Absent otherwise. */
+      gangCost?: GangInstallCost;
     }
   | {
       type: typeof AUGMENTATION_INCOME_HELD_EVENT_KIND;
@@ -571,6 +617,13 @@ export interface AugmentationInputs {
    * null, #343's.
    */
   gangForming?: { required: number; unread?: boolean } | null;
+  /**
+   * BN2 with the gang (#357's (3)): what the gang rule's managed decision reads (its `installFigures`: p and the plan's
+   * respect a cycle), or null (no gang managed, or unread): p unknown, so no install there. Read with p null (no
+   * respect earned now), the cycle's last p decides (#372's review); never known in the cycle, the rules decide there,
+   * as before #357 (G5's hold, the count rule).
+   */
+  gangInstall?: GangInstallFigures | null;
 }
 
 /** What the rule asks of the controller. */
@@ -861,6 +914,12 @@ export function describeReason(reason: InstallReason | string, figures: Partial<
   if (reason === "Daedalus's count") {
     return "Daedalus's count: the planner's shortest time to it is installing now (#343)";
   }
+  if (reason === "the gang's favour") {
+    return (
+      `the gang's favour: in BN2 with the gang, the planner's shortest time to ${THE_RED_PILL}'s reputation is ` +
+      "installing now, its reputation turned into favour (#357)"
+    );
+  }
   if (reason === "the hacking level") {
     return (
       `the hacking level: the planner's shortest way to w0r1d_d43m0n's is augmentations, then an ` +
@@ -959,6 +1018,32 @@ export function readCountHold(
  * (`lastAugReset`), when it began (time online), its first τ, the n it waits to reach, and whether it's overdue.
  */
 export const AUGMENTATION_INSTALL_WAIT_SETTING = "augmentations.installWait";
+
+/**
+ * The cycle's last p known (#357's (3), #372's review): the rate an install leaves, kept by `lastAugReset` in the store
+ * so a restart keeps it. It's the last earning plan's mix (`gangInstallRateKept` on that plan's tasks), so a pause to
+ * train, a stretch on justice or warfare, keeps it: (3) decides with it then, and only a cycle where it was never
+ * known falls back to the rules (G5's hold, the count rule). Never with the gang unread (#372's re-review): no install
+ * on a stored p alone.
+ */
+export const AUGMENTATION_GANG_RATE_KEPT_SETTING = "augmentations.gangRateKept";
+
+/** The cycle's last p as stored, or null; a value the brain didn't write fails, as the wait's does. */
+export function readGangRateKept(store: TelemetryStore): { lastAugReset: number; rateKept: number } | null {
+  const value = store.getSetting(AUGMENTATION_GANG_RATE_KEPT_SETTING);
+  if (value === null) return null;
+  let kept: { lastAugReset?: unknown; rateKept?: unknown } | null;
+  try {
+    kept = JSON.parse(value) as typeof kept;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_GANG_RATE_KEPT_SETTING} isn't JSON`);
+  }
+  const { lastAugReset, rateKept } = kept ?? {};
+  if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(rateKept) || rateKept < 0) {
+    throw new Error(`the store's ${AUGMENTATION_GANG_RATE_KEPT_SETTING} isn't a p the brain wrote`);
+  }
+  return { lastAugReset, rateKept };
+}
 
 export interface InstallWait {
   lastAugReset: number;
@@ -1124,6 +1209,72 @@ export function describeGangFormingTiming(gang: GangFormingTiming): string {
   );
 }
 
+/** An estimate's minutes in words: "not measured yet" (null), "never" (Infinity), else `formatEta`'s. */
+const etaWords = (ms: number | null) =>
+  ms === null ? "not measured yet" : Number.isFinite(ms) ? formatEta(ms) : "never";
+const wholeNumber = (value: number) => Math.round(value).toLocaleString("en-US");
+
+/**
+ * The planner's choice with the gang in words (#357's (3)), for the log, the dashboard and the report: "with the gang:
+ * NiteSec's 100,000 of 2,500,000 reputation, favour 0.0: keep the cycle 1.6 h, install now 1.1 h (favour 0.0 → 81.3;
+ * the rate ×0.979 for the members' points, ×1.000 the set's faction_rep), bank to 242,310 then install 54 min (favour
+ * 119.7, in 26 min); chosen: bank".
+ */
+export function describeGangInstallTiming(gang: GangInstallTiming, faction: string): string {
+  const rate =
+    gang.rateKept === null
+      ? "the rate after it not known: no respect earned now, or the gang unread"
+      : `the rate ×${gang.rateKept.toFixed(3)} for the members' points, ×${gang.factionRepGain.toFixed(3)} the set's ` +
+        "faction_rep";
+  const install =
+    gang.installNow === null
+      ? gang.heldForRate
+        ? `install now (held: ${rate})`
+        : gang.reputation >= gang.needed
+          ? "install now (The Red Pill reached)"
+          : "install now (nothing new to install)"
+      : `install now ${etaWords(gang.installNowMs)} (converting about ${wholeNumber(gang.atInstall)} with the commit, ` +
+        `favour ${gang.favor.toFixed(1)} → ${gang.favorAfter.toFixed(1)}; ${rate})`;
+  const bank =
+    gang.bankAt === null || gang.bank === null || gang.favorAtBank === null
+      ? ""
+      : `, bank to ${wholeNumber(gang.bankAt)} then install ${etaWords(gang.bankMs)} (favour ` +
+        `${gang.favorAtBank.toFixed(1)}, in ${etaWords(gang.toBankMs)})`;
+  return (
+    `with the gang: ${faction}'s ${wholeNumber(gang.reputation)} of ${wholeNumber(gang.needed)} reputation, favour ` +
+    `${gang.favor.toFixed(1)}: keep the cycle ${etaWords(gang.keepMs)}, ${install}${bank}; chosen: ${gang.choice}`
+  );
+}
+
+/** An install's cost with the gang (#357's (3)), from (3)'s figures then: JSON's null for a time never or unmeasured. */
+export function gangInstallCostOf(gang: GangInstallTiming, faction: string): GangInstallCost {
+  const time = (ms: number | null) => (ms !== null && Number.isFinite(ms) ? ms : null);
+  // After this install, The Red Pill's N again from 0 at the favour it gives (install now's estimate), whatever chose it.
+  const installNowMs =
+    gang.reputationPerSecond === null || gang.rateKept === null
+      ? null
+      : gangInstallTiming({ ...gang, installable: true }).installNowMs;
+  return {
+    faction,
+    reputation: gang.atInstall,
+    favor: gang.favor,
+    favorAfter: gang.favorAfter,
+    needed: gang.needed,
+    redPillMs: time(installNowMs),
+    keepMs: time(gang.keepMs),
+    rateKept: gang.rateKept,
+  };
+}
+
+/** "NiteSec's about 242,310 reputation lost, favour 0.0 → 119.7, The Red Pill then in ~54 min (keeping's 1.6 h)". */
+export function describeGangInstallCost(cost: GangInstallCost): string {
+  return (
+    `${cost.faction}'s about ${wholeNumber(cost.reputation)} reputation lost, favour ${cost.favor.toFixed(1)} → ` +
+    `${cost.favorAfter.toFixed(1)}, The Red Pill then in ~${etaWords(cost.redPillMs)} (keeping's ` +
+    `${etaWords(cost.keepMs)})`
+  );
+}
+
 /** The intent buying `augmentation` from `faction` (`level` 1 but for NeuroFlux Governor). */
 export function purchaseIntent(faction: string, augmentation: string, level: number): Intent {
   const args = { faction, augmentation, level };
@@ -1136,6 +1287,8 @@ type Endgame =
   | { kind: "redPill"; donation: Donation | null }
   | { kind: "daedalusDonations" }
   | { kind: "hold"; why: HoldReason; waitingFor: string; reserve: number }
+  /** The Red Pill short at the gang's faction, the planner's turn (#357's (3)): core's `gang`. */
+  | { kind: "gang"; faction: string; reputation: number; needed: number }
   | { kind: "none" };
 
 /**
@@ -1513,6 +1666,7 @@ export class AugmentationRule {
         invitationHold: inputs.invitationHold ?? 0,
         shareBonus: shareBonusMean(this.#shareSamples.map((sample) => sample.bonus)),
         gangForming: inputs.gangForming ?? null,
+        gangInstall: inputs.gangInstall ?? null,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -1608,7 +1762,9 @@ export class AugmentationRule {
     onlineMs: number,
     atMs: number,
   ): void {
-    const { choice, adding, route } = timing;
+    const { choice, adding } = timing;
+    // Only #343's and the gang forming's waits are kept (#357's (3) decides afresh from the reputation each update).
+    const route = timing.route === GANG_FORMING_ROUTE ? GANG_FORMING_ROUTE : undefined;
     let wait = current === null || choice === 0 ? null : { ...current };
     if (wait === null && choice !== null && choice > 0) {
       const firstTauMs = timing.candidates.find((candidate) => candidate.k === choice)?.tauMs ?? 0;
@@ -1871,6 +2027,7 @@ export class AugmentationRule {
     invitationHold,
     shareBonus,
     gangForming,
+    gangInstall,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -1890,6 +2047,7 @@ export class AugmentationRule {
     invitationHold: number;
     shareBonus: number;
     gangForming: { required: number; unread?: boolean } | null;
+    gangInstall: GangInstallFigures | null;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -1955,6 +2113,17 @@ export class AugmentationRule {
     // ask replaces it and its done would never be.
     this.#recordDonationShown(reputationOf, slowGameTimeMs, atMs);
 
+    // The cycle's last p known (#372's review): this reading's, else the store's for this cycle; written on a change.
+    const storedRate = readGangRateKept(this.#store);
+    let cycleRateKept = storedRate?.lastAugReset === resetInfo.lastAugReset ? storedRate.rateKept : null;
+    const readRateKept = gangInstall?.rateKept ?? null;
+    if (readRateKept !== null && readRateKept !== cycleRateKept) {
+      this.#store.setSetting(
+        AUGMENTATION_GANG_RATE_KEPT_SETTING,
+        JSON.stringify({ lastAugReset: resetInfo.lastAugReset, rateKept: readRateKept }),
+      );
+    }
+    if (readRateKept !== null) cycleRateKept = readRateKept;
     if (cycle === null) {
       const endgame0 = this.#endgame({
         resetInfo,
@@ -1967,6 +2136,8 @@ export class AugmentationRule {
         // The game's time since the last install (#334): the gang's faction's rate.
         sinceResetMs: slowGameTimeMs === null ? null : Math.max(0, slowGameTimeMs - resetInfo.lastAugReset),
         onlineMs: this.#onlineClock?.lastAugReset === resetInfo.lastAugReset ? this.#onlineClock.onlineMs : 0,
+        // p never known this cycle with the gang earning none (#372's review: G3's grown gang training): the rules.
+        gangEarning: gangInstall === null || cycleRateKept !== null,
       });
       // The Red Pill's donation first (#225 review): the counts are budgeted without its money.
       const redPillAmount = endgame0.kind === "redPill" ? (endgame0.donation?.amount ?? 0) : 0;
@@ -2104,9 +2275,39 @@ export class AugmentationRule {
       // has reached Daedalus's hacking or combat requirement (#243 review), so the count is what's missing.
       const setNames = set.purchases.map((purchase) => purchase.name);
       const installing = [...installable, ...setNames, ...(counts.neuroFluxLevels > 0 ? [NEUROFLUX_GOVERNOR] : [])];
+      // BN2 with the gang, The Red Pill short there (#357's (3)): its figures, the planner's candidates (core's endgame
+      // `gang`) and every install's cost there, the rules' too. N The Red Pill's reputation, r and f the faction's, p
+      // the gang rule's, s the `faction_rep` of what an install now would install, the rate the plan's respect's.
+      const gangFaction = shopsView.gangFaction;
+      const gangFavor = gangShop?.name === gangFaction ? (gangShop?.favor ?? 0) : 0;
+      const gangTiming =
+        gangFaction !== null &&
+        gangSellsRedPill(gangFaction, currentNode) &&
+        !Object.hasOwn(ownedAugs, THE_RED_PILL) &&
+        !queue.includes(THE_RED_PILL)
+          ? gangInstallTiming({
+              needed: augmentationCost(THE_RED_PILL, purchaseState).reputation,
+              reputation: reputationOf(gangFaction),
+              favor: gangFavor,
+              // The cycle's last p, only with the gang read (#372's re-review): unread, p unknown, no install.
+              rateKept: gangInstall === null ? null : cycleRateKept,
+              factionRepGain: factionRepInstallMultiplier(
+                installable.filter((name) => name === NEUROFLUX_GOVERNOR).length + counts.neuroFluxLevels,
+                [...installable, ...setNames].filter((name) => name !== NEUROFLUX_GOVERNOR),
+              ),
+              reputationPerSecond:
+                gangInstall === null
+                  ? null
+                  : gangReputationPerSecond(gangInstall.respectPerCycle, player.person.mults.faction_rep, gangFavor),
+              installable: anything,
+              // The commit, and the slow snapshot's age: the reputation the gang earns meanwhile is converted too.
+              aheadMs: GANG_ROUTE_COMMIT_MS + Math.max(0, gameNowMs - (slowGameTimeMs ?? gameNowMs)),
+            })
+          : null;
+      const gangPlanned = endgame.kind === "gang" && gangTiming !== null;
       // Short of Daedalus's count, the planner times installs (#343): install now, or wait for the next k countables,
-      // the least estimated time to the count chosen, decided again at every update.
-      const planned = this.#timingPolicy === "planner" && short && endgame.kind === "none";
+      // the least estimated time to the count chosen, decided again at every update. With the gang, (3) (#357).
+      const planned = gangPlanned || (this.#timingPolicy === "planner" && short && endgame.kind === "none");
       let timing: InstallTimingView | null = null;
       if (!planned) {
         if (readInstallWait(this.#store) !== null) writeInstallWait(this.#store, null);
@@ -2133,7 +2334,33 @@ export class AugmentationRule {
         // BN2 before the gang (#357's (1)): wait for the gang or install now, in place of #343's candidates.
         const gangRoute = this.#bn2Route === "planner" && gangForming !== null ? gangForming : null;
         let next: NextCountable[] = [];
-        if (gangRoute !== null) {
+        if (gangPlanned && gangTiming !== null && gangFaction !== null) {
+          // With the gang (#357's (3)): keep, install now, or bank R*, decided again at every update from the
+          // reputation, so no wait is kept (a stalled reputation is the World Daemon's stall to raise).
+          if (stored !== null) writeInstallWait(this.#store, null);
+          const candidate = (k: number, tauMs: number | null, estimateMs: number | null) =>
+            estimateMs === null ? [] : [{ k, tauMs: tauMs ?? 0, estimateMs }];
+          const figures: Omit<InstallTimingView, "words"> = {
+            needed,
+            adding,
+            onlineMs: cycleMs,
+            candidates: [
+              ...candidate(0, 0, gangTiming.installNowMs),
+              ...candidate(1, gangTiming.toBankMs, gangTiming.bankMs),
+              ...candidate(2, gangTiming.keepMs, gangTiming.keepMs),
+            ],
+            choice: gangTiming.choice === "install" ? 0 : gangTiming.choice === "bank" ? 1 : 2,
+            heldForIncome: false,
+            heldForInvitation: false,
+            tauScale: 1,
+            next: [],
+            timeOnlineMs: onlineMs,
+            route: GANG_FORMED_ROUTE,
+            gangInstall: gangTiming,
+          };
+          timing = { ...figures, words: describeGangInstallTiming(gangTiming, gangFaction) };
+          this.#incomeHeld = null;
+        } else if (gangRoute !== null) {
           // Its wait under way (the store's, a restart keeps it), and once overdue its measured error on τ_g.
           const wait =
             stored?.lastAugReset === resetInfo.lastAugReset && stored.route === GANG_FORMING_ROUTE ? stored : null;
@@ -2234,8 +2461,15 @@ export class AugmentationRule {
           this.#cancelCountdown(
             timing.route === GANG_FORMING_ROUTE
               ? "the planner waits for the gang"
-              : "the planner times installs short of Daedalus's count",
+              : timing.route === GANG_FORMED_ROUTE
+                ? "the planner times installs with the gang"
+                : "the planner times installs short of Daedalus's count",
           );
+          // Keeping or banking with the gang (#357's (3)): installs held for The Red Pill there, the World Daemon's
+          // stall to watch (its reputation not rising), as on main, a pause to train included (#372's re-review): no
+          // computed bound exists for the plan's time to earning, so a pause past the stall's 10 minutes fails the
+          // report, falsely in a long justice stretch, until that time is computed (the issue filed for it).
+          if (timing.route === GANG_FORMED_ROUTE) this.#redPillHeldAtGang = true;
           const waitedFor = timing.choice === null ? [] : next.slice(0, timing.choice);
           this.#waitedFor = waitedFor;
           const last = waitedFor.at(-1);
@@ -2252,12 +2486,14 @@ export class AugmentationRule {
             waitingFor:
               timing.route === GANG_FORMING_ROUTE
                 ? `the planner's time to the gang formed: ${timing.words}`
-                : `the planner's time to Daedalus's count: ${timing.words}`,
+                : timing.route === GANG_FORMED_ROUTE
+                  ? `the planner's time to ${THE_RED_PILL}'s reputation: ${timing.words}`
+                  : `the planner's time to Daedalus's count: ${timing.words}`,
           });
         }
         // Installing now: the progress it's chosen on, for the run report (the counts and donations, as a countdown's).
         this.#recordProgress(
-          progress(null, "Daedalus's count", null, timing),
+          progress(null, timing.route === GANG_FORMED_ROUTE ? "the gang's favour" : "Daedalus's count", null, timing),
           `timing: ${timing.route ?? "count"} ${timing.choice}`,
           atMs,
         );
@@ -2351,9 +2587,13 @@ export class AugmentationRule {
         this.#cancelCountdown("the planner's levelling install, at once");
         reason = "the hacking level";
       } else if (planned) {
-        // The planner's install for Daedalus's count (#343): at once, as levelling's; never with nothing new to it.
-        this.#cancelCountdown("the planner's install for Daedalus's count, at once");
-        reason = "Daedalus's count";
+        // The planner's install for Daedalus's count (#343): at once, as levelling's; never with nothing new to it. With
+        // the gang (#357's (3)), for its favour, at once too.
+        const forFavour = timing?.route === GANG_FORMED_ROUTE;
+        this.#cancelCountdown(
+          `the planner's install for ${forFavour ? "the gang's favour" : "Daedalus's count"}, at once`,
+        );
+        reason = forFavour ? "the gang's favour" : "Daedalus's count";
       } else if (countdownReason === null) {
         this.#cancelCountdown(`the rule no longer says install: ${describeCounts(rule)}`);
         // Held back from cloud servers only for an install the rule would choose with A2's payback limit's more income:
@@ -2436,6 +2676,11 @@ export class AugmentationRule {
         reason = ruleReason;
       }
       const donations = withDonation(counts.donations, redPillDonation);
+      // Its cost with the gang (#357's (3)), the rules' too; none for The Red Pill's own install, the route's end.
+      const gangCost =
+        gangTiming === null || gangFaction === null || reason === "The Red Pill"
+          ? null
+          : gangInstallCostOf(gangTiming, gangFaction);
       // Short (#238): what counts within reach beyond the set, whatever `isWorthInstalling` says, and the money left
       // after the set and its donations (#238 review: not the levels', which stop short of the next one).
       const countFacts: CountFacts | undefined = short
@@ -2475,6 +2720,7 @@ export class AugmentationRule {
         donations,
         ...(short ? { short: { installed: count.installed, required: count.required } } : {}),
         ...(timing === null ? {} : { timing }),
+        ...(gangCost === null ? {} : { gangCost }),
       });
       this.#log(
         `augmentations: install chosen, ${formatEta(onlineMs)} online this cycle: buying ` +
@@ -2483,7 +2729,8 @@ export class AugmentationRule {
           (timing?.route === GANG_FORMING_ROUTE
             ? "BN2 before the gang: installing now is the planner's shortest time to the gang formed (#357)"
             : describeReason(reason, rule)) +
-          (timing === null ? "" : `; ${timing.words}`),
+          (timing === null ? "" : `; ${timing.words}`) +
+          (gangCost === null ? "" : `; its cost: ${describeGangInstallCost(gangCost)}`),
       );
     }
 
@@ -2698,6 +2945,7 @@ export class AugmentationRule {
    *   its missing reputation; short of it, `hold`, that money held back (`redPillHold`).
    * - `daedalusDonations` (#225): Daedalus joined, its donations not unlocked, its reputation this cycle at what
    *   unlocks them at the next install (`redPillTarget`'s donations target: not once 90% of The Red Pill's is earned).
+   * - `gang` (#357's (3)): The Red Pill short at the gang's faction, with the planner's BN2 route: its turn, no hold.
    * - `none`: installed already (the destroy not wanted), not sold in this BitNode (BN15), or Daedalus's count not
    *   reached.
    */
@@ -2711,6 +2959,7 @@ export class AugmentationRule {
     destroyWanted,
     sinceResetMs,
     onlineMs,
+    gangEarning,
   }: {
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
     player: NonNullable<ReturnType<typeof playerOf>>;
@@ -2723,6 +2972,11 @@ export class AugmentationRule {
     sinceResetMs: number | null;
     /** The game's time online this cycle (the bars' clock): the hold's window at the gang's faction, from its start. */
     onlineMs: number;
+    /**
+     * The gang earns its faction no respect now (#357's (3): p unknown, the gang rule's `installFigures` read, its
+     * plan's respect 0, members training): false; else true (earning, or the gang unread, whose reputation still rises).
+     */
+    gangEarning: boolean;
   }): Endgame {
     const { currentNode, ownedAugs, ownedSF, lastAugReset } = resetInfo;
     // The hold at the gang's faction (#335's review): from its first start in the cycle, at most its window, never
@@ -2744,6 +2998,10 @@ export class AugmentationRule {
       destroyWanted,
       sinceResetMs,
       gangHoldOver: heldSince !== null && onlineMs >= heldSince + GANG_RED_PILL_HOLD_MS,
+      // The planner times installs there (#357's (3)), in place of G5's hold; the rules (the A/B's baseline) hold. With
+      // the gang earning nothing there now (members training), the rules as before: (3) has no rate after an install,
+      // and an install loses only what's banked, which isn't growing (held, the World Daemon's stall would fire).
+      gangPlanned: this.#bn2Route === "planner" && gangEarning,
     });
     const atGang = endgame.kind === "hold" && "seller" in endgame && endgame.seller.faction === shops.gangFaction;
     this.#redPillHeldAtGang = atGang;

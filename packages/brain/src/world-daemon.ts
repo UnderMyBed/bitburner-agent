@@ -893,8 +893,10 @@ export class WorldDaemonRule {
       steps.set("redPill", { detail: `${THE_RED_PILL} ${redPill.queued ? "queued" : "reached"}, not installed` });
     }
     // Short at a joined Daedalus, A6 holds every install: its reputation not rising is loud (#215 review). At the gang's
-    // faction (#334) only while A6 holds for it (at most 20 min a cycle, #335's review): a gang's respect pauses while
-    // its members train, which holds nothing otherwise.
+    // faction (#334) only while A6 holds for it: G5's hold, at most 20 min a cycle (#335's review, the rules'), or the
+    // planner's keeping or banking (#357's (3)), with no limit, a pause to train included (#372's re-review: no computed
+    // bound for the plan's time to earning yet, so a long pause fails loudly, falsely in a long justice stretch). A
+    // gang's respect pauses while its members train, which holds nothing otherwise.
     if (
       redPill !== null &&
       !redPill.installed &&

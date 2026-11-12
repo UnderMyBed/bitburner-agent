@@ -146,6 +146,11 @@ export type Endgame =
   | { kind: "redPill"; donation: Donation | null }
   | { kind: "daedalusDonations" }
   | ({ kind: "hold"; reserve: number } & EndgameHold)
+  /**
+   * The Red Pill short at the gang's faction, the planner timing installs there (#357's (3), `gangPlanned`): no hold,
+   * the planner's turn, in place of the hold and the count rule.
+   */
+  | { kind: "gang"; faction: string; reputation: number; needed: number }
   | { kind: "none" };
 
 /**
@@ -159,7 +164,7 @@ export type Endgame =
  *   reputation or invitation; the gang's faction short, a hold only while its reputation reaches The Red Pill's within
  *   `GANG_RED_PILL_HOLD_MS` at the cycle's rate (`gangRedPillEtaMs`, `sinceResetMs` the game's time since the last
  *   install, null unread: no hold) and the cycle's hold there isn't over (`gangHoldOver`, the brain's: the window from
- *   its first start, passed); else none;
+ *   its first start, passed); else none. With `gangPlanned` (#357's (3)), `gang` there instead: the planner's turn;
  * - a seller joined, its reputation short: a hold (an install would lose it);
  * - Daedalus's invitation missing nothing but its money: a hold reserving the money;
  * - else none.
@@ -178,6 +183,7 @@ export function augmentationEndgame({
   destroyWanted,
   sinceResetMs = null,
   gangHoldOver = false,
+  gangPlanned = false,
 }: {
   installed: Readonly<Record<string, number>>;
   /** What an install would install, and the queue the plan counts. */
@@ -196,6 +202,11 @@ export function augmentationEndgame({
   sinceResetMs?: number | null;
   /** The cycle's hold at the gang's faction is over (#334): its window from its first start passed. Absent, not. */
   gangHoldOver?: boolean;
+  /**
+   * The planner times installs at the gang's faction (#357's (3), the brain's `bn2Route` "planner"): The Red Pill short
+   * there is `gang`, the planner's turn, not G5's hold. Absent, the hold (the A/B's baseline, and the fast model).
+   */
+  gangPlanned?: boolean;
 }): Endgame {
   if (Object.hasOwn(installed, THE_RED_PILL)) {
     return destroyWanted ? { kind: "hold", why: "destroy", reserve: 0 } : { kind: "none" };
@@ -220,6 +231,8 @@ export function augmentationEndgame({
   const gang = shops.gangFaction;
   if (gang !== null && sellers.includes(gang)) {
     const reputation = shops.reputationOf(gang);
+    // The planner's (#357's (3)): it times installs here, in place of the hold and the count rule.
+    if (gangPlanned) return { kind: "gang", faction: gang, reputation, needed };
     const etaMs = gangRedPillEtaMs(reputation, needed, sinceResetMs);
     if (gangHoldOver || !(etaMs <= GANG_RED_PILL_HOLD_MS)) return { kind: "none" };
     return { kind: "hold", why: "redPill", reserve: 0, seller: { faction: gang, reputation, needed, etaMs } };
