@@ -73,6 +73,21 @@ describe("Simulation (host environment, no game booted)", () => {
     expect(ra?.windowCryptoBytes).not.toEqual(rc?.windowCryptoBytes);
   });
 
+  test("reseedRandom (#341): both streams start again from the seed, whatever was drawn before; a seed out of range is refused", async () => {
+    const [a, b] = await Promise.all([start(7), start(7)]);
+    // One draws more before the reseed than the other: from it on, the same draws, Math.random's from sfc32's start.
+    await a.diagnostics.random(5);
+    await Promise.all([a, b].map((sim) => sim.diagnostics.reseedRandom(9)));
+    const [ra, rb] = await Promise.all([a, b].map((sim) => sim.diagnostics.random(8)));
+    expect(ra).toEqual(rb);
+    const stream = sfc32(9);
+    expect(ra?.math).toEqual(Array.from({ length: 8 }, () => stream()));
+    // The range `Simulation.start` takes: an integer in [0, 2^32), nothing that wraps.
+    for (const bad of [1.5, -1, 2 ** 32]) {
+      await expect(a.diagnostics.reseedRandom(bad)).rejects.toThrow("seed must be an integer in [0, 2^32)");
+    }
+  });
+
   test("rejects invalid seeds, epochs and advances before reaching the host", async () => {
     await expect(Simulation.start({ seed: 2 ** 32, epochMs: EPOCH })).rejects.toThrow(/seed/);
     await expect(Simulation.start({ seed: -1, epochMs: EPOCH })).rejects.toThrow(/seed/);
