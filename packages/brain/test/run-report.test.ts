@@ -27,6 +27,7 @@ import { formatDuration } from "../src/gap-report.ts";
 import { describeCeiling, type HackingCeiling, hackingCeiling } from "../src/hacking-ceiling.ts";
 import {
   findIncomeStalls,
+  gangObjectivesBefore,
   inferHackTargets,
   RELOAD_LAG_MS,
   RELOAD_LEAD_MS,
@@ -2288,6 +2289,30 @@ describe("augmentations and the reset (#210)", () => {
       // Section 3's decisions, section 4's, and the failures' list.
       expect(report.text.split("\n").filter((each) => each.endsWith(line))).toHaveLength(3);
     });
+
+    test("fails a wait for the gang the brain found overdue (#357's (1)), in its own words", () => {
+      const words = "no gang yet: wait for the gang (avmnite-02h's 217 at 216, 25 min) against install now (2.0 h)";
+      const report = augmentationRun({
+        events: [
+          [
+            10 * MINUTE,
+            "augmentationWaitOverdue",
+            {
+              onlineMs: 33 * MINUTE,
+              sinceOnlineMs: 1 * MINUTE,
+              firstTauMs: 6 * MINUTE,
+              untilAdding: 4,
+              route: "gang forming",
+              timing: timing({ choice: 1, adding: 4, words: `${words}; chosen: wait` }),
+            },
+          ],
+        ],
+      });
+      const line =
+        "wait overdue: the planner's wait for the gang from 1 min online, in ~6 min, still none at 33 min online: " +
+        `${words}; chosen: wait`;
+      expect(failuresOf(report)).toEqual([line]);
+    });
   });
 });
 
@@ -2551,11 +2576,12 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
   const CLOUD_SERVERS = 20;
   /**
    * The default report's most lines and characters for `busyRun` (#245): its own are 204 and 14,527 (with #349's
-   * intelligence line, and #367's section 8, three lines and 161 characters with no Bladeburner played); --verbose's
+   * intelligence line, and #367's section 8: exactly 3 lines and 161 characters with no Bladeburner played, added to
+   * the bounds as they were, 201 and 14,500, with no slack); --verbose's
    * lines (912) are over 4 times the bound.
    */
   const BUSY_REPORT_LINES = 204;
-  const BUSY_REPORT_CHARACTERS = 14_700;
+  const BUSY_REPORT_CHARACTERS = 14_661;
   /**
    * pserv-index's RAM at `offsetMs`, or null where the medium snapshots don't show it: in cycle 1, each bought at 8 GB
    * a minute apart from 1 min, all upgraded to 32 GB at 25 min; the install at 30 min deletes them; in cycle 2, ten
@@ -3031,8 +3057,8 @@ describe("summaries by default, --verbose for the detail (#245)", () => {
         }
         // About 1,350 characters a cycle (2b's block is most of it), and 9,500 besides: 17,549 for 6 cycles at 10 of
         // each, 17,584 at 40, and 28,483 for 14 over 3 BitNodes (#349's intelligence line in each; #367's section 8, 161
-        // characters with no Bladeburner played). Not how busy each cycle was.
-        expect(brief.text.length).toBeLessThanOrEqual(9_230 + 1_400 * cycles);
+        // characters with no Bladeburner played, added to 9,065 with no slack). Not how busy each cycle was.
+        expect(brief.text.length).toBeLessThanOrEqual(9_226 + 1_400 * cycles);
         // What comes again each reset is one line, not one a reset (#245's second round): the backdoors, the joins,
         // and each BitNode's lists.
         const lines = brief.text.split("\n");
@@ -5330,5 +5356,21 @@ describe("the time to the destroy (#360)", () => {
     const { failures, warnings } = report();
     expect(failures).toEqual([]);
     expect(warnings).toContainEqual(expect.stringMatching(/^destroy estimate never at .* so a warning\)$/));
+  });
+});
+
+describe("the gang's objective before the window (#357, #368's re-review)", () => {
+  test("the last of each BitNode, however long before: an event 25 h before the window is carried in", () => {
+    const chosen = (offsetMs: number, bitNode: string, objective: string) =>
+      event(offsetMs, "gangObjectiveChosen", { objective, reason: "estimates", bitNode, members: 12 });
+    chosen(-30 * 3_600_000, "2:0", "money");
+    chosen(-25 * 3_600_000, "2:0", "respect");
+    chosen(-26 * 3_600_000, "2:-5000", "respect");
+    chosen(60_000, "2:0", "money");
+    const before = gangObjectivesBefore(store, { environment: "E0", sinceMs: T0, untilMs: T0 + 3_600_000 });
+    expect(before.map((each) => [each.atMs - T0, (each.detail as { bitNode: string }).bitNode])).toEqual([
+      [-26 * 3_600_000, "2:-5000"],
+      [-25 * 3_600_000, "2:0"],
+    ]);
   });
 });

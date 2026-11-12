@@ -12,7 +12,9 @@ import {
   donationToReach,
   type FactionState,
   factionReputationPerSecond,
+  hackingExpOfLevel,
   isWorthInstalling,
+  levellingInstallMultipliers,
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
   type SlowSnapshotData,
@@ -3427,5 +3429,221 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     expect(rule.view().progress).toMatchObject({ short: null, reason: "count reached" });
     expect(rule.view().progress?.timing).toBeUndefined();
     expect(rule.view().progress?.countdown).not.toBeNull();
+  });
+});
+
+describe("BN2 before the gang (#357's (1)): wait for the gang, or install now", () => {
+  /** SF1.3's ×1.28 at BN2's `HackingLevelMultiplier` 0.8 (`mults.hacking` read 1.28). */
+  const LEVEL_MULT = 1.28 * 0.8;
+  const xp = (level: number, mult = LEVEL_MULT) => hackingExpOfLevel(level, mult);
+  /** #363's seed 1's mean rate from 201 to 212 (24 min 31 s). */
+  const RATE = (xp(212) - xp(201)) / (24 * 60 + 31);
+  /** BN2, CyberSec joined at the reputation for its five. */
+  const bn2Slow = (lastAugReset = 0) => slow({ reputation: 18_750, currentNode: 2, lastAugReset });
+  /** Hacking `level`, its experience `exp`, the money for CyberSec's five and no NeuroFlux Governor level after. */
+  const bn2Medium = (level: number, exp: number): MediumSnapshotData => {
+    const data = medium({ hacking: level, money: FIVE_COST + 1e6 });
+    const player = { ...(data.player as object), exp: { hacking: exp }, mults: { faction_rep: 1, hacking: 1.28 } };
+    return { ...data, player } as MediumSnapshotData;
+  };
+  let mediumMs = 0;
+  beforeEach(() => {
+    mediumMs = 7 * HOUR;
+  });
+  /**
+   * `seconds` more of medium snapshots every 10 s at hacking `level`, the experience from `fromExp` at `rate`, a slow
+   * snapshot a minute; avmnite-02h's level `required`, or null (no gang forming).
+   */
+  const run = (
+    seconds: number,
+    {
+      level,
+      fromExp,
+      rate = RATE,
+      required = 218,
+    }: { level: number; fromExp: number; rate?: number; required?: number | null },
+  ) => {
+    let ask: ReturnType<typeof update> | null = null;
+    for (let t = 0; t <= seconds; t += 10) {
+      mediumMs += 10_000;
+      if (t % 60 === 0) gameTimeMs += MINUTE;
+      ask = update({
+        slowData: bn2Slow(),
+        mediumData: bn2Medium(level, fromExp + rate * t),
+        mediumGameTimeMs: mediumMs,
+        fastGameTimeMs: mediumMs,
+        gangForming: required === null ? null : { required },
+      });
+    }
+    return ask;
+  };
+  const timing = () => rule.view().progress?.timing;
+  const chosen = () => events.filter((event) => event.type === "augmentationInstallChosen");
+  const overdue = () => events.filter((event) => event.type === "augmentationWaitOverdue");
+
+  test("seed 3's case, 214 of 218: wait for the gang (12 min) against install now (34 min); no install, no money held", () => {
+    rule = newRule("planner");
+    const ask = run(70, { level: 214, fromExp: xp(214) });
+    expect(ask).toEqual({ intent: null, install: false, committed: false });
+    const gang = timing()?.gang;
+    expect(timing()).toMatchObject({ route: "gang forming", choice: 1, next: [], adding: 5 });
+    // τ_g from the experience now (70 s of it at the rate); R from 0 at the five's multipliers.
+    expect(gang?.gain).toEqual(levellingInstallMultipliers(0, FIVE));
+    const expNow = xp(214) + RATE * 70;
+    expect(gang?.waitMs).toBeCloseTo(((xp(218) - expNow) / RATE) * 1000 + 70_000, -2);
+    const gain = gang?.gain ?? levellingInstallMultipliers(0);
+    const rate = RATE * gain.hackingExp * gain.hackingSpeed;
+    expect(gang?.rebuildMs).toBeCloseTo((xp(218, LEVEL_MULT * gain.hacking) / rate) * 1000, -2);
+    expect(gang?.installNowMs).toBeCloseTo(120_000 + (gang?.rebuildMs as number), 3);
+    expect(gang).toMatchObject({ required: 218, level: 214, heldForRate: false, choice: "wait" });
+    expect(timing()?.words).toMatch(
+      /^no gang yet: wait for the gang \(avmnite-02h's 218 at 214, 12 min\) against install now \(34 min: the commit and 32 min from 0 at 75\.6 experience a second \(64\.8 now, at the install's multipliers\)\); chosen: wait$/,
+    );
+    expect(rule.view().waitingFor).toBe(`the planner's time to the gang formed: ${timing()?.words}`);
+    // No money held for it, no countdown, nothing for A5 to work for; the wait kept in the store.
+    expect(rule.countdownReserve()).toBe(0);
+    expect(rule.reserve()).toBe(0);
+    expect(rule.view().progress?.countdown).toBeNull();
+    expect(rule.countHoldTarget()).toBeNull();
+    expect(readInstallWait(store)).toEqual({
+      lastAugReset: 0,
+      sinceOnlineMs: expect.any(Number),
+      firstTauMs: expect.any(Number),
+      untilAdding: 5,
+      overdue: false,
+      route: "gang forming",
+    });
+    expect(lines).toContainEqual(expect.stringMatching(/^augmentations: the planner's install timing: no gang yet: /));
+    expect(chosen()).toEqual([]);
+  });
+
+  test("the rules (`bn2Route` rules, the A/B's baseline): #343's candidates there, nothing to come, so it installs", () => {
+    rule = new AugmentationRule({
+      store,
+      log: (line) => lines.push(line),
+      emit: (event) => events.push(event),
+      installTiming: "planner",
+      bn2Route: "rules",
+    });
+    // Eleven minutes: the income measured (nothing earned), so the five's install is #343's only candidate.
+    run(11 * 60, { level: 214, fromExp: xp(214), rate: 1 });
+    expect(timing()?.route).toBeUndefined();
+    expect(chosen()).toHaveLength(1);
+    expect(chosen()[0]).toMatchObject({ reason: "Daedalus's count" });
+  });
+
+  test("install now wins from level 1 at a slow rate, with the five's multipliers: chosen at once, with its estimates", () => {
+    rule = newRule("planner");
+    run(70, { level: 1, fromExp: 0, rate: 1 });
+    expect(chosen()).toHaveLength(1);
+    const event = chosen()[0] as Extract<AugmentationEvent, { type: "augmentationInstallChosen" }>;
+    const gang = event.timing?.gang;
+    expect(gang?.installNowMs as number).toBeLessThan(gang?.waitMs as number);
+    expect(event.reason).toBe("Daedalus's count");
+    expect(event.timing).toMatchObject({ route: "gang forming", choice: 0, gang: { choice: "install" } });
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        /, BN2 before the gang: installing now is the planner's shortest time to the gang formed \(#357\); no gang yet: /,
+      ),
+    );
+    expect(readAugmentationCycle(store)).not.toBeNull();
+    expect(readInstallWait(store)).toBeNull();
+  });
+
+  test("an invitation's money held (#228): installing now held where it'd win, as #343's", () => {
+    rule = newRule("planner");
+    for (let t = 0; t <= 70; t += 10) {
+      mediumMs += 10_000;
+      if (t % 60 === 0) gameTimeMs += MINUTE;
+      update({
+        slowData: bn2Slow(),
+        mediumData: bn2Medium(1, t),
+        mediumGameTimeMs: mediumMs,
+        fastGameTimeMs: mediumMs,
+        gangForming: { required: 218 },
+        invitationHold: 1e6,
+      });
+    }
+    expect(timing()?.gang).toMatchObject({ heldForInvitation: true, choice: "wait" });
+    expect(timing()?.gang?.installNowMs as number).toBeLessThan(timing()?.gang?.waitMs as number);
+    expect(timing()?.words).toContain("; install now held: the money held for an invitation (#228); chosen: wait");
+    expect(chosen()).toEqual([]);
+  });
+
+  test("the gang's reading unread, no gang known (#368's review): installing now held where it'd win", () => {
+    rule = newRule("planner");
+    for (let t = 0; t <= 70; t += 10) {
+      mediumMs += 10_000;
+      if (t % 60 === 0) gameTimeMs += MINUTE;
+      update({
+        slowData: bn2Slow(),
+        mediumData: bn2Medium(1, t),
+        mediumGameTimeMs: mediumMs,
+        fastGameTimeMs: mediumMs,
+        gangForming: { required: 218, unread: true },
+      });
+    }
+    expect(timing()?.gang).toMatchObject({ heldForGangUnread: true, choice: "wait" });
+    expect(timing()?.gang?.installNowMs as number).toBeLessThan(timing()?.gang?.waitMs as number);
+    expect(timing()?.words).toContain(
+      "; install now held: the gang's reading unread, so whether there's a gang isn't known",
+    );
+    expect(chosen()).toEqual([]);
+  });
+
+  test("no rate measured: installing now held where it'd win, the wait unrecorded; a minute of snapshots measures it", () => {
+    rule = newRule("planner");
+    run(30, { level: 1, fromExp: 0, rate: 1 });
+    expect(timing()?.gang).toMatchObject({ heldForRate: true, waitMs: null, installNowMs: null, choice: "wait" });
+    expect(timing()?.candidates).toEqual([]);
+    expect(timing()?.words).toContain("install now (held: the experience rate not measured yet");
+    expect(readInstallWait(store)).toBeNull();
+    expect(chosen()).toEqual([]);
+    // Measured, it's chosen.
+    run(40, { level: 1, fromExp: 40, rate: 1 });
+    expect(chosen()).toHaveLength(1);
+  });
+
+  test("overdue: still no gang at twice τ_g and 10 minutes online, once; τ_g scaled by the measured error from then", () => {
+    rule = newRule("planner");
+    run(70, { level: 216, fromExp: xp(216) });
+    const first = readInstallWait(store);
+    expect(first?.route).toBe("gang forming");
+    const firstTauMs = first?.firstTauMs as number;
+    // The experience then barely rises (the level never comes); online time runs a minute a slow snapshot.
+    const dueMs = 2 * firstTauMs + 10 * MINUTE;
+    run(Math.ceil(dueMs / 1000) + 120, { level: 216, fromExp: xp(216) + RATE * 70, rate: 0.001 });
+    expect(overdue()).toHaveLength(1);
+    expect(overdue()[0]).toMatchObject({ route: "gang forming", firstTauMs });
+    expect(lines).toContainEqual(
+      expect.stringMatching(/^augmentations: WAIT OVERDUE: the planner's wait for the gang, from /),
+    );
+    expect(readInstallWait(store)?.overdue).toBe(true);
+    // From then on τ_g scaled by its measured error, growing as the wait does: it gives way to installing now.
+    run(Math.ceil((4 * dueMs) / 1000), { level: 216, fromExp: xp(216) + RATE * 70, rate: 0.001 });
+    expect(overdue()).toHaveLength(1);
+    expect(chosen()).toHaveLength(1);
+    const event = chosen()[0] as Extract<AugmentationEvent, { type: "augmentationInstallChosen" }>;
+    expect(event.timing?.tauScale).toBeGreaterThan(1);
+    expect(event.timing?.words).toMatch(/; τ_g ×\d+\.\d, the overdue wait's measured error; chosen: install$/);
+  });
+
+  test("the wait kept in the store: a restarted brain carries on its start and first τ_g", () => {
+    rule = newRule("planner");
+    run(70, { level: 214, fromExp: xp(214) });
+    const wait = readInstallWait(store);
+    expect(wait?.route).toBe("gang forming");
+    rule = newRule("planner");
+    run(70, { level: 214, fromExp: xp(214) + RATE * 80 });
+    expect(readInstallWait(store)).toEqual(wait);
+  });
+
+  test("no gang forming (none read, or the gang formed): #343's candidates, and the gang's wait gone", () => {
+    rule = newRule("planner");
+    run(70, { level: 214, fromExp: xp(214) });
+    expect(readInstallWait(store)?.route).toBe("gang forming");
+    run(10, { level: 214, fromExp: xp(214) + RATE * 80, required: null });
+    expect(timing()?.route).toBeUndefined();
+    expect(readInstallWait(store)?.route).toBeUndefined();
   });
 });

@@ -26,6 +26,12 @@
 // events), and The Red Pill's route there in BN2, with its estimate at the cycle's rate (core's `gangRedPillEtaMs`).
 // Its stalls (reached there, not installed within 15 minutes; not rising while A6 holds for it) are the World
 // Daemon's, section 3's path and failures.
+// BN2's route (#357, slice 1): (2), the objective at 12 members, recomputed from the snapshots (core's
+// `gangObjectiveChoice` with the gang's faction as the slow snapshot then shows it, `gangRouteFactionOf`), against the
+// brain's `gangObjectiveChosen` events; the section's other checks read that objective. It fails on an objective at 12
+// without its estimates; one that differs from core's for over `GANG_OBJECTIVE_DIFFERS_WITHIN_MS`; and none from the
+// brain at 12 members for `GANG_OBJECTIVE_NEVER_MS` online, added up across the BitNode. And (1): an install chosen in
+// BN2 before the gang, with avmnite-02h's level read (a static snapshot), without the planner's estimates for it.
 // The ascensions themselves (G2) are seen as a member's ascension points rising between readings (core's
 // `gangAscensionPointsOf`), each with its largest multiplier gain and the respect it had earned, by hour; the
 // equipment bought (G3) as an item new in a member's lists, its cost the discounted one at the reading before; the
@@ -38,11 +44,15 @@ import {
   GANG_CYCLE_MS,
   GANG_EQUIPMENT,
   GANG_FACTIONS,
+  GANG_MOST_MEMBERS,
+  GANG_ROUTE_SERVER,
   GANG_STATS,
   GANG_WANTED_RECOVERY_MS,
   type GangAscensionAppraisal,
   type GangEquipmentAppraisal,
   type GangMemberReading,
+  type GangObjective,
+  type GangObjectiveChoice,
   type GangPlan,
   type GangRuleInputs,
   type GangWarfareMeasure,
@@ -55,6 +65,7 @@ import {
   gangInBonusTime,
   gangLostShare,
   gangLostShareBound,
+  gangObjectiveChoice,
   gangObjectiveOf,
   gangRecruitsAllowed,
   gangRedPillEtaMs,
@@ -68,15 +79,26 @@ import {
   planGang,
   planGangEquipment,
   type SlowSnapshotData,
+  type StaticSnapshotData,
   TERRITORY_WARFARE_TASK,
   THE_RED_PILL,
 } from "@bitburner-agent/core";
-import { AUGMENTATION_BOUGHT_EVENT_KIND } from "./augmentations.ts";
+import {
+  AUGMENTATION_BOUGHT_EVENT_KIND,
+  AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+  AUGMENTATION_NOT_QUEUED_EVENT_KIND,
+  formatEta,
+  GANG_FORMING_ROUTE,
+} from "./augmentations.ts";
 import {
   bitNodeOfSlow,
+  describeObjective,
   describeTaskMix,
   GANG_BITNODE,
+  GANG_OBJECTIVE_CHOSEN_EVENT_KIND,
+  gangBitNodeKeyOf,
   gangDeathsBetween,
+  gangRouteFactionOf,
   gangShopOf,
   gangSnapshotOf,
   gangWarfareFiguresOf,
@@ -85,6 +107,7 @@ import {
 import { GANG_STALL_KINDS, type GangStallStretch, GangStallWatch } from "./gang-stalls.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
+import { HACKING_EXP_GAP_MS } from "./world-daemon.ts";
 
 /**
  * How long a gang faction may be joined with no gang formed: 5 minutes. The gate holds the intent for 2 medium
@@ -128,6 +151,34 @@ export const GANG_EQUIP_WITHIN_MS = GANG_RECRUIT_WITHIN_MS;
  */
 export const GANG_WARFARE_WITHIN_MS = GANG_RECRUIT_WITHIN_MS;
 
+/**
+ * How long the brain's objective at 12 members may differ from core's recomputed from the snapshots (#357): a minute,
+ * as a recruit's (`GANG_RECRUIT_WITHIN_MS`): the brain chooses on each medium snapshot, the report on the slow snapshot
+ * of the time, a minute apart at most.
+ */
+export const GANG_OBJECTIVE_DIFFERS_WITHIN_MS = GANG_RECRUIT_WITHIN_MS;
+/**
+ * How long the gang may be at 12 members with no objective from the brain (#357's (2)): 10 minutes online, added up
+ * across the BitNode as #361's level-only time is (each interval between two readings that both show it, up to the
+ * hacking experience's gap, `HACKING_EXP_GAP_MS`: the brain down longer counts none).
+ */
+export const GANG_OBJECTIVE_NEVER_MS = 10 * 60_000;
+
+/** A reading at 12 members (#357): its BitNode, and core's choice from the snapshots then. */
+interface AtTwelve {
+  atMs: number;
+  bitNode: string;
+  choice: GangObjectiveChoice;
+}
+
+/** Whether an estimate as the event carries it is whole (#357): its rates numbers, its time a number or null (never). */
+function estimateWhole(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const { respectPerCycle, reputationPerSecond, etaMs } = value as Record<string, unknown>;
+  const finite = (each: unknown) => typeof each === "number" && Number.isFinite(each);
+  return finite(respectPerCycle) && finite(reputationPerSecond) && (etaMs === null || finite(etaMs));
+}
+
 /** A death seen (G4): a member on Territory Warfare at the reading before, gone. */
 interface Death {
   atMs: number;
@@ -169,10 +220,12 @@ interface GangPoint {
   engaged: boolean | null;
   /** What the rule read: the plan, for the task mix, is worked out only for an hour's last reading. */
   inputs: GangRuleInputs;
+  /** The objective then (#357): core's choice at 12, the rule's under it. */
+  objective: GangObjective;
 }
 
-/** The rule's plan at a reading (core's `planGang`). */
-const planAt = (point: GangPoint): GangPlan => planGang(point.inputs);
+/** The rule's plan at a reading (core's `planGang`), with the objective then (#357). */
+const planAt = (point: GangPoint): GangPlan => planGang(point.inputs, point.objective);
 
 /** A stretch a condition held, from its first medium snapshot to its last (or the window's end). */
 interface Stretch {
@@ -245,6 +298,34 @@ export class GangFold {
   #lastSlowGameTimeMs: number | null = null;
   /** The gang's faction's reputation at each BN2 slow snapshot showing it (#335's review), for the hours. */
   readonly #reputations: { atMs: number; reputation: number }[] = [];
+  /** When a static snapshot first showed avmnite-02h's level (#357's (1)), or null: its estimates are due from then. */
+  #routeLevelReadAtMs: number | null = null;
+  /** The BN2 slow snapshots in order (#357): the one of a medium reading's time, for (2)'s choice then. */
+  readonly #slows: { atMs: number; data: SlowSnapshotData }[] = [];
+  /** Each BN2 gang reading (#357): whether a gang was formed then, for an install before it. */
+  readonly #formedAt: { atMs: number; formed: boolean }[] = [];
+  /** The readings at 12 members (#357), with core's choice. */
+  readonly #atTwelve: AtTwelve[] = [];
+  /** Core's last choice (#357), and the slow snapshot and members it's from: worked out again as either changes. */
+  #lastChoice: { slow: SlowSnapshotData | null; members: number; choice: GangObjectiveChoice } | null = null;
+
+  /** A static snapshot (#357): avmnite-02h's level read, (1)'s estimates due from then. */
+  addStatic(atMs: number, data: StaticSnapshotData): void {
+    if (this.#routeLevelReadAtMs !== null) return;
+    const servers = Array.isArray(data?.servers) ? data.servers : [];
+    const level = servers.find((each) => each?.hostname === GANG_ROUTE_SERVER)?.requiredHackingSkill;
+    if (typeof level === "number" && Number.isFinite(level)) this.#routeLevelReadAtMs = atMs;
+  }
+
+  /** The BN2 slow snapshot last taken by `atMs` (#357), or null. */
+  #slowAt(atMs: number): SlowSnapshotData | null {
+    let found: SlowSnapshotData | null = null;
+    for (const each of this.#slows) {
+      if (each.atMs > atMs) break;
+      found = each.data;
+    }
+    return found;
+  }
 
   /**
    * A slow snapshot, taken at the game's `gameTimeMs`: the BitNode from then on; in BN2, the last, for the gang's
@@ -254,6 +335,7 @@ export class GangFold {
     const bitNode = bitNodeOfSlow(data);
     if (bitNode !== null) this.#bitNodes.push({ atMs, bitNode });
     if (bitNode !== GANG_BITNODE) return;
+    this.#slows.push({ atMs, data });
     this.#lastSlow = data;
     this.#lastSlowGameTimeMs = gameTimeMs;
     const shop = gangShopOf(data, gangFactionOf(data));
@@ -306,6 +388,9 @@ export class GangFold {
     );
     this.#notFormed.add(atMs, snapshot.kind === "none" && joined.length > 0 ? `${joined.join(", ")} joined` : null);
     if (snapshot.kind === "none") this.#sawNone = true;
+    if (snapshot.kind === "none" || snapshot.kind === "gang") {
+      this.#formedAt.push({ atMs, formed: snapshot.kind === "gang" });
+    }
     if (snapshot.kind !== "gang") {
       this.#recruitWaiting.add(atMs, null);
       this.#overBound.add(atMs, null);
@@ -363,13 +448,20 @@ export class GangFold {
       softcap: gangSoftcapOf(GANG_BITNODE),
       ...(warfare === undefined ? {} : { warfare }),
     };
-    // The silent stalls (#354), on the rule's plan as the brain has it: its justice members and bonus time too.
-    const plan = planGang({
-      ...inputs,
-      placedOnJustice:
-        this.#placed ?? members.filter((member) => isGangJusticeTask(member.task)).map((each) => each.name),
-      bonusTime: gangInBonusTime(gang.bonusTimeMs),
-    });
+    // The objective (#357): at 12 core's choice from the slow snapshot of the time (worked out again as it or the
+    // members change: the brain's, every 10 s, follows it within a minute), else the rule's.
+    const objective = this.#objectiveAt(atMs, inputs, gang.faction, data);
+    // The silent stalls (#354), on the rule's plan as the brain has it: its justice members and bonus time too, and
+    // (#357) the objective.
+    const plan = planGang(
+      {
+        ...inputs,
+        placedOnJustice:
+          this.#placed ?? members.filter((member) => isGangJusticeTask(member.task)).map((each) => each.name),
+        bonusTime: gangInBonusTime(gang.bonusTimeMs),
+      },
+      objective,
+    );
     this.#placed = plan.assignments.filter((each) => each.role === "justice").map((each) => each.name);
     this.#stalls.add({ atMs, gang, members, problems, plan, softcap: inputs.softcap });
     // Territory warfare (G4): the rule's measure with the crew as read, against the flag. The measure's worth only
@@ -380,10 +472,7 @@ export class GangFold {
     } else {
       const crew = members.filter((member) => member.task === TERRITORY_WARFARE_TASK).map((member) => member.name);
       const expected = gangTerritoryPerUpdate(warfare.power, gang.territory, warfare.others);
-      const measure =
-        expected > 0
-          ? gangWarfareMeasure(inputs, gangWarfareBasis(inputs, gangObjectiveOf(members.length)), crew)
-          : null;
+      const measure = expected > 0 ? gangWarfareMeasure(inputs, gangWarfareBasis(inputs, objective), crew) : null;
       const detail = describeMeasure(measure, expected, crew.length);
       this.#warfareLosing.add(atMs, warfare.engaged && measure?.pays !== true ? detail : null);
       this.#warfarePaying.add(atMs, !warfare.engaged && measure?.pays === true ? detail : null);
@@ -418,7 +507,7 @@ export class GangFold {
       this.#ascensions.push({ atMs, name: member.name, gain: topAscensionGain(gains), respect: before.earnedRespect });
     }
     this.#lastMembers = new Map(members.map((member) => [member.name, member]));
-    const due = ascended ? null : gangAscensionToMake(inputs, gangObjectiveOf(members.length));
+    const due = ascended ? null : gangAscensionToMake(inputs, objective);
     this.#ascensionWaiting.add(
       atMs,
       due === null
@@ -432,7 +521,9 @@ export class GangFold {
     const keepMoney = (data.gang as { keepMoney?: unknown } | null | undefined)?.keepMoney;
     const free = typeof money === "number" && typeof keepMoney === "number" ? money - keepMoney : 0;
     const top =
-      this.#purchases.length > boughtBefore || ascended ? null : gangEquipmentDue(inputs, due, free, costMult);
+      this.#purchases.length > boughtBefore || ascended
+        ? null
+        : gangEquipmentDue(inputs, due, free, costMult, objective);
     this.#equipmentWaiting.add(
       atMs,
       top === null
@@ -452,7 +543,25 @@ export class GangFold {
       power: gang.power,
       engaged: warfare === undefined ? null : warfare.engaged,
       inputs,
+      objective,
     });
+  }
+
+  /**
+   * The objective at a reading (#357): under 12 the rule's; with 12, core's choice from the slow snapshot of the time
+   * (`gangRouteFactionOf`, `gangObjectiveChoice`), kept with the reading for the section's checks.
+   */
+  #objectiveAt(atMs: number, inputs: GangRuleInputs, faction: string, data: MediumSnapshotData): GangObjective {
+    const members = inputs.members.length;
+    if (members < GANG_MOST_MEMBERS) return gangObjectiveOf(members);
+    const slow = this.#slowAt(atMs);
+    let last = this.#lastChoice;
+    if (last === null || last.slow !== slow || last.members !== members) {
+      last = { slow, members, choice: gangObjectiveChoice(inputs, gangRouteFactionOf(slow, faction, data)) };
+      this.#lastChoice = last;
+    }
+    this.#atTwelve.push({ atMs, bitNode: gangBitNodeKeyOf(slow), choice: last.choice });
+    return last.choice.objective;
   }
 
   /**
@@ -525,8 +634,16 @@ export class GangFold {
     ];
   }
 
-  /** The section's lines, its failures added to `failures`; `events` the window's, for the gang's faction (#334). */
-  section(failures: string[], windowEndMs: number, events: readonly StoredEvent[] = []): string[] {
+  /**
+   * The section's lines, its failures added to `failures`; `events` the window's, for the gang's faction (#334) and BN2's
+   * route (#357); `before`, the brain's objective chosen before the window (#357), its last `gangObjectiveChosen`.
+   */
+  section(
+    failures: string[],
+    windowEndMs: number,
+    events: readonly StoredEvent[] = [],
+    before: readonly StoredEvent[] = [],
+  ): string[] {
     const lines = [
       "7. The gang (#325, ascension G2, equipment G3, territory G4, its faction's shop G5; played in BN2 only for now)",
     ];
@@ -656,6 +773,127 @@ export class GangFold {
         failures.push(line);
       }
     }
+    lines.push(...this.#routeLines(events, before, endMs, failures));
+    return lines;
+  }
+
+  /**
+   * BN2's route (#357, slice 1), its lines and failures: (2)'s objective at 12, the brain's (its events) against core's
+   * from the snapshots, and (1)'s estimates on an install before the gang.
+   */
+  #routeLines(events: readonly StoredEvent[], before: readonly StoredEvent[], endMs: number, failures: string[]) {
+    const lines: string[] = [];
+    const fail = (line: string) => {
+      lines.push(`    ${line}`);
+      failures.push(line);
+    };
+    const chosen = [...before, ...events].filter((event) => event.kind === GANG_OBJECTIVE_CHOSEN_EVENT_KIND);
+    lines.push("  the objective at 12 members (#357), the brain's as chosen:");
+    const inWindow = events.filter((event) => event.kind === GANG_OBJECTIVE_CHOSEN_EVENT_KIND);
+    if (inWindow.length === 0) lines.push("    none chosen in the window");
+    for (const { atMs, detail } of inWindow) {
+      const fields = detail as Record<string, unknown>;
+      const estimates = fields.reason !== "estimates" || (estimateWhole(fields.respect) && estimateWhole(fields.money));
+      const eta = (value: unknown) => formatEta((value as { etaMs?: number | null } | null)?.etaMs ?? null);
+      const words =
+        fields.reason === "estimates"
+          ? `${String(fields.objective)}, The Red Pill in respect's ${eta(fields.respect)}, money's ${eta(fields.money)}`
+          : `${String(fields.objective)} (${String(fields.reason)})`;
+      if (estimates) lines.push(`    ${formatIsoTime(atMs)}: ${words}`);
+      else fail(`the objective at 12 without its estimates: ${String(fields.objective)} at ${formatIsoTime(atMs)}`);
+    }
+    // At each reading at 12: the brain's objective then (its last event by then, of the same BitNode, the event's
+    // `bitNode`, #368's review), against core's. Core's is money from The Red Pill's `augmentationBought` in the
+    // BitNode on (#368's review): A6's queue has it before a slow snapshot shows it queued, and the brain's choice with it.
+    // Bought until a purchase reported done shows never queued (`augmentationNotQueued`, #368's re-review): the brain's
+    // queue drops it then, and so its owned (that alert's own failure, not this one's).
+    const redPillEvents = events
+      .filter(
+        (event) =>
+          (event.kind === AUGMENTATION_BOUGHT_EVENT_KIND || event.kind === AUGMENTATION_NOT_QUEUED_EVENT_KIND) &&
+          (event.detail as { augmentation?: unknown } | null)?.augmentation === THE_RED_PILL,
+      )
+      .map((event) => ({
+        atMs: event.atMs,
+        bought: event.kind === AUGMENTATION_BOUGHT_EVENT_KIND,
+        bitNode: gangBitNodeKeyOf(this.#slowAt(event.atMs)),
+      }));
+    /** The Red Pill bought by `atMs` in `bitNode`: the last of its events there by then a purchase. */
+    const boughtAt = (atMs: number, bitNode: string) =>
+      redPillEvents.findLast((each) => each.atMs <= atMs && each.bitNode === bitNode)?.bought === true;
+    const owned: GangObjectiveChoice = { objective: "money", reason: "The Red Pill owned", respect: null, money: null };
+    const differs = new Stretches();
+    let neverMs = 0;
+    let lastNever: { atMs: number; bitNode: string } | null = null;
+    const latest = new Map<string, StoredEvent>();
+    let index = 0;
+    for (const { atMs, bitNode, choice: read } of this.#atTwelve) {
+      for (; index < chosen.length && (chosen[index] as StoredEvent).atMs <= atMs; index += 1) {
+        const event = chosen[index] as StoredEvent;
+        latest.set(String((event.detail as { bitNode?: unknown } | null)?.bitNode), event);
+      }
+      const choice = boughtAt(atMs, bitNode) ? owned : read;
+      const brains = latest.get(bitNode);
+      const brainObjective = (brains?.detail as { objective?: unknown } | undefined)?.objective;
+      if (brainObjective === undefined) {
+        if (lastNever !== null && lastNever.bitNode === bitNode && atMs - lastNever.atMs <= HACKING_EXP_GAP_MS) {
+          neverMs += atMs - lastNever.atMs;
+        }
+        lastNever = { atMs, bitNode };
+        differs.add(atMs, null);
+        continue;
+      }
+      lastNever = null;
+      differs.add(
+        atMs,
+        choice.reason !== "unread" && brainObjective !== choice.objective
+          ? `the brain's ${String(brainObjective)}, core's ${describeObjective(choice)}`
+          : null,
+      );
+    }
+    lines.push(
+      `  the objective at 12 differing from core's (from the snapshots) for ${formatDuration(GANG_OBJECTIVE_DIFFERS_WITHIN_MS)} or more:`,
+    );
+    const long = differs.all(endMs).filter((each) => each.toMs - each.fromMs >= GANG_OBJECTIVE_DIFFERS_WITHIN_MS);
+    if (long.length === 0) lines.push("    none");
+    for (const { fromMs, toMs, detail } of long) {
+      fail(
+        `the objective at 12 differing from core's for ${formatDuration(toMs - fromMs)}, from ${formatIsoTime(fromMs)} ` +
+          `to ${formatIsoTime(toMs)} (${detail})`,
+      );
+    }
+    lines.push(
+      `  at 12 members with no objective from the brain, added up, for ${formatDuration(GANG_OBJECTIVE_NEVER_MS)} or more:`,
+    );
+    if (neverMs >= GANG_OBJECTIVE_NEVER_MS) {
+      fail(
+        `at 12 members with no objective from the brain for ${formatDuration(neverMs)} online, added up (#357's (2))`,
+      );
+    } else {
+      lines.push("    none");
+    }
+    // (1): an install chosen in BN2 before the gang, with avmnite-02h's level read, without its estimates.
+    lines.push(
+      "  installs chosen in BN2 before the gang, avmnite-02h's level read, without the planner's estimates (#357):",
+    );
+    let before1 = 0;
+    for (const { atMs, kind, detail } of events) {
+      if (kind !== AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND || this.#bitNodeAt(atMs) !== GANG_BITNODE) continue;
+      if (this.#routeLevelReadAtMs === null || this.#routeLevelReadAtMs > atMs) continue;
+      const reading = this.#formedAt.findLast((each) => each.atMs <= atMs);
+      if (reading === undefined || reading.formed) continue;
+      const timing = (detail as { timing?: { route?: unknown; gang?: { installNowMs?: unknown } } } | null)?.timing;
+      const installNowMs = timing?.gang?.installNowMs;
+      if (timing?.route === GANG_FORMING_ROUTE && typeof installNowMs === "number" && Number.isFinite(installNowMs)) {
+        continue;
+      }
+      before1 += 1;
+      fail(
+        `install chosen in BN2 before the gang without the planner's estimates: at ${formatIsoTime(atMs)}, ` +
+          `${GANG_ROUTE_SERVER}'s level read, its reason ${String((detail as { reason?: unknown } | null)?.reason)}`,
+      );
+    }
+    if (before1 === 0) lines.push("    none");
     return lines;
   }
 }
@@ -688,8 +926,10 @@ function gangEquipmentDue(
   due: GangAscensionAppraisal | null,
   free: number,
   costMult: number,
+  objective: GangObjective,
 ): GangEquipmentAppraisal | null {
   const cheapest = Math.min(...GANG_EQUIPMENT.map((each) => each.cost)) * costMult;
   if (!(free >= cheapest)) return null;
-  return planGangEquipment(inputs, { assignments: [], ascend: due }, { budget: free, costMult }).buy[0] ?? null;
+  const plan = { assignments: [], ascend: due, objective };
+  return planGangEquipment(inputs, plan, { budget: free, costMult }).buy[0] ?? null;
 }

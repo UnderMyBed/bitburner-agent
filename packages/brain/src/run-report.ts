@@ -74,7 +74,7 @@ import {
   FactionWorkTimeline,
   SLOW_SNAPSHOT_GAP_MS,
 } from "./factions.ts";
-import { GangFactionCarry } from "./gang.ts";
+import { GANG_OBJECTIVE_CHOSEN_EVENT_KIND, GangFactionCarry } from "./gang.ts";
 import { GangFold } from "./gang-report.ts";
 import {
   countsOf,
@@ -613,11 +613,29 @@ interface ProgressSegment {
   factionState: FactionStateFolding;
 }
 
+/**
+ * The brain's last `gangObjectiveChosen` (#357) of each BitNode (its `bitNode`) before `window`, however long before:
+ * it's sent only on a change, so a window opening a day after it would see none (#368's re-review). In their order.
+ */
+export function gangObjectivesBefore(store: TelemetryStore, window: RunWindow): StoredEvent[] {
+  const events = store.eventsInWindow({
+    environment: window.environment,
+    sinceMs: Number.MIN_SAFE_INTEGER,
+    untilMs: window.sinceMs - 1,
+    kinds: [GANG_OBJECTIVE_CHOSEN_EVENT_KIND],
+  });
+  const last = new Map<string, StoredEvent>();
+  for (const event of events) last.set(String(fieldsOf(event.detail).bitNode), event);
+  return [...last.values()].sort((a, b) => a.atMs - b.atMs);
+}
+
 /** What the report reads from the store for a window, folded as it's read. */
 interface RunFacts extends RunWindow {
   events: StoredEvent[];
   /** The reloads' events in the `RELOAD_LEAD_MS` before the window (#240): one can explain a gap at its start. */
   reloadsBefore: StoredEvent[];
+  /** The brain's last objective at 12 of each BitNode before the window (#357), for the gang section's checks. */
+  gangObjectiveBefore: StoredEvent[];
   /** Every fast snapshot's times, thinned or not (#283): the time checks. */
   fastTimes: FastTime[];
   /** The whole fast snapshots, each what it says: the content checks. */
@@ -711,7 +729,11 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const weakenTimes = new WeakenTimes();
     // w0r1d_d43m0n's requirement by then, for its readiness (#308).
     const worldDaemon = new WorldDaemonFold();
+    // The gang (#325); avmnite-02h's level from the static snapshots, for BN2's route (#357).
+    const gang = new GangFold();
+    const bladeburner = new BladeburnerFold();
     if (isObject(staticBefore?.data)) {
+      gang.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
       hacking.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
       weakenTimes.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
       worldDaemon.addStatic(staticBefore.receivedAtMs, staticBefore.data as StaticSnapshotData);
@@ -726,6 +748,7 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       weakenTimes.addStatic(atMs, data);
       worldDaemon.addStatic(atMs, data);
       backdoors.addStatic(atMs, data);
+      gang.addStatic(atMs, data);
       for (const server of Array.isArray(data.servers) ? data.servers : []) {
         if (server?.purchasedByPlayer === true) playersServers.add(server.hostname);
       }
@@ -758,8 +781,6 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
     const cloudServers = new Set<string>();
     const factionState = new FactionStateFolding();
     const augmentations = new AugmentationTimeline();
-    const gang = new GangFold();
-    const bladeburner = new BladeburnerFold();
     // The gang's faction carried within each BitNode (#325): an Agent's first slow snapshot comes before its reading.
     const gangFactions = new GangFactionCarry();
     for (const { atMs, gameTimeMs, data: slowAsSent } of ofTier<SlowSnapshotData>("slow")) {
@@ -884,6 +905,9 @@ function readFacts(store: TelemetryStore, window: RunWindow): RunFacts {
       ...window,
       events,
       reloadsBefore,
+      // The brain's last objective at 12 of each BitNode before the window, however long before (#368's re-review: it's
+      // sent only on a change, so a window opening a day after it would see none).
+      gangObjectiveBefore: gangObjectivesBefore(store, window),
       fastTimes,
       fast,
       thinned,
@@ -1025,7 +1049,7 @@ export function runReport(
         : undefined,
     ),
     "",
-    ...facts.gang.section(failures, window.untilMs, facts.events),
+    ...facts.gang.section(failures, window.untilMs, facts.events, facts.gangObjectiveBefore),
     "",
     ...facts.bladeburner.section(failures, window.untilMs),
     "",
@@ -1129,6 +1153,8 @@ function windowSection(facts: RunFacts): string[] {
     INVITATION_TRAVEL_EVENT_KIND,
     CITY_GROUP_CHOSEN_EVENT_KIND,
     INVITATION_WAITING_EVENT_KIND,
+    // The objective at 12 (#357): section 7 lists each, in words (#368's review: not raw here).
+    GANG_OBJECTIVE_CHOSEN_EVENT_KIND,
   ];
   const timeline = facts.events.filter((event) => !actions.includes(event.kind));
   for (const event of timeline) lines.push(`  ${formatIsoTime(event.atMs)}  ${describeEvent(event, facts.sinceMs)}`);

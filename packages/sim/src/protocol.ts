@@ -457,6 +457,12 @@ export interface HostMethods {
   "diagnostics.homePeak"(params: Record<string, never>): HomePeak;
   "diagnostics.random"(params: { count: number }): RandomSample;
   /**
+   * Starts the seeded Math.random and Web Crypto streams again from `seed`, as at boot (#341): the draws from here on
+   * don't depend on how many came before. A harness edit, for suites whose seeded path shouldn't move with the deploy's
+   * length (the brain's `useFreshStarts`'s `fixedAgentStart`).
+   */
+  "diagnostics.reseedRandom"(params: { seed: number }): void;
+  /**
    * Navigates as game code does (`Router.toPage`): a simple page by its `Page` value, or "BitVerse" (only then is
    * `flume` used). Test-only: it changes game state (going to the BitVerse kills every script), and scenarios must not
    * use it.
@@ -579,11 +585,16 @@ export type HostMessage =
   | { type: "response"; id: number; ok: true; result: unknown }
   | { type: "response"; id: number; ok: false; error: { message: string; stack?: string } };
 
-export function validateHostOptions(options: HostOptions): void {
-  const { seed, epochMs } = options;
+/** A seed as the host takes one, at its start and in `diagnostics.reseedRandom` (#341): an integer in [0, 2^32). */
+export function validateSeed(seed: number): void {
   if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) {
     throw new RangeError(`seed must be an integer in [0, 2^32), got ${seed}`);
   }
+}
+
+export function validateHostOptions(options: HostOptions): void {
+  const { seed, epochMs } = options;
+  validateSeed(seed);
   if (!Number.isSafeInteger(epochMs) || epochMs < 0) {
     throw new RangeError(`epochMs must be a non-negative integer, got ${epochMs}`);
   }
