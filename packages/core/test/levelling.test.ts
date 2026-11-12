@@ -14,6 +14,7 @@ import {
   levelLoopThreads,
   levellingEstimates,
   levellingExpPerThreadSecond,
+  levellingInstallMultipliers,
   levellingPreparationMs,
   neuroFluxMultipliers,
   secondsToHackingLevel,
@@ -279,6 +280,50 @@ describe("the candidates and the choice (#336), on BN4.1's last snapshot", () =>
     // At this multiplier each level cuts the experience 9,000 needs by about 22% (#336).
     const cut = hackingExpOfLevel(9000, BN4_LEVEL_MULT * neuroFlux.hacking) / hackingExpOfLevel(9000, BN4_LEVEL_MULT);
     expect(cut).toBeCloseTo(0.78, 2);
+  });
+
+  test("(c) with A6's set (#355): the set's multipliers times NeuroFlux Governor's levels; the set alone on offer", () => {
+    // QLink's level ×1.75 and speed ×2 alone; then with BitRunners Neurolink's ×1.15, ×1.2 and ×1.05
+    // (`Augmentation/Augmentations.ts`): each of the three a product, as the game merges them.
+    expect(levellingInstallMultipliers(0, ["QLink"])).toEqual({ hacking: 1.75, hackingExp: 1, hackingSpeed: 2 });
+    const set = ["QLink", "BitRunners Neurolink"];
+    const product = levellingInstallMultipliers(0, set);
+    expect(product.hacking).toBeCloseTo(1.75 * 1.15, 12);
+    expect(product.hackingExp).toBeCloseTo(1.2, 12);
+    expect(product.hackingSpeed).toBeCloseTo(2 * 1.05, 12);
+    // NeuroFlux Governor's levels on top.
+    const neuroFlux = neuroFluxMultipliers();
+    const both = levellingInstallMultipliers(17, set);
+    expect(both.hacking).toBeCloseTo(1.75 * 1.15 * neuroFlux.hacking ** 17, 12);
+    expect(both.hackingExp).toBeCloseTo(1.2 * neuroFlux.hackingExp ** 17, 12);
+    expect(both.hackingSpeed).toBeCloseTo(2 * 1.05 * neuroFlux.hackingSpeed ** 17, 12);
+    expect(levellingInstallMultipliers(17)).toEqual(levellingInstallMultipliers(17, []));
+    expect(levellingInstallMultipliers(17).hacking).toBeCloseTo(neuroFlux.hacking ** 17, 12);
+    // An augmentation core doesn't know throws: the set is A6's, from the game's names.
+    expect(() => levellingInstallMultipliers(0, ["no such augmentation"])).toThrow(/no such augmentation/);
+    // The set alone, no level to buy: (c) on offer at the set's multipliers.
+    const alone = { ...inputs.install, levels: 0, augmentations: set };
+    const estimate = levellingEstimates({ ...inputs, install: alone }).install;
+    const expected =
+      (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS + inputs.install.preparationMs) / 1000 +
+      secondsToHackingLevel(0, BN4_REQUIRED, BN4_LEVEL_MULT * 1.75 * 1.15, {
+        expPerSecond: joesgunsRate * homeThreads * 1.2 * 2 * 1.05,
+        atLevel: 6779,
+      });
+    expect(estimate).toBeCloseTo(expected, 6);
+    // With the levels too: shorter than either alone.
+    const withLevels = levellingEstimates({ ...inputs, install: { ...inputs.install, augmentations: set } }).install;
+    expect(withLevels as number).toBeLessThan(estimate as number);
+    expect(withLevels as number).toBeLessThan(levellingEstimates(inputs).install as number);
+    // A set that adds nothing to the level, its experience or its speed (Combat Rib I: strength and defence), and no
+    // level: nothing to install for, none on offer.
+    const nothing = levellingInstallMultipliers(0, ["Combat Rib I"]);
+    expect(nothing).toEqual({ hacking: 1, hackingExp: 1, hackingSpeed: 1 });
+    expect(
+      levellingEstimates({ ...inputs, install: { ...inputs.install, levels: 0, augmentations: ["Combat Rib I"] } })
+        .install,
+    ).toBeNull();
+    expect(levellingEstimates({ ...inputs, install: { ...alone, homeThreads: 0 } }).install).toBeNull();
   });
 
   test("hysteresis: a move only once the shortest is 1.25 times shorter; money unmeasured waits for it", () => {

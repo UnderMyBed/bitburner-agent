@@ -1759,6 +1759,8 @@ export class DesiredStateController {
       // The BitNode's, unlogged here: the hack loop's and the batcher's plans log what's taken as BN1's (#321).
       hacking: bitNodeHackingOf(this.#slowData?.resetInfo?.currentNode).multipliers,
       neuroFluxLevels: this.#augmentations.neuroFluxOffer(),
+      // And (#355) its set that adds to levelling.
+      installAugmentations: this.#augmentations.installAugmentationsOffer(),
       installCommitted: augmentations.committed,
       batcherTarget: batcherConfig === null ? null : { hostname: batcherConfig.target, figures: batcherConfig.figures },
       levelLoop: this.#levelLoopRunning(),
