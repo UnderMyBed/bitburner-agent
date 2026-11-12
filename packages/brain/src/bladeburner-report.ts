@@ -249,7 +249,7 @@ export class BladeburnerFold {
     if (rank !== null) this.#ranks.push({ atMs, rank });
     if (inDivision) this.#sawDivision = true;
     if (inDivision && rank !== null && reading.kind === "read" && reading.actions !== null) {
-      this.#actions.add(atMs, data, rank, reading.actions, slow.bitNode);
+      this.#actions.add(atMs, data, rank, reading.actions, slow.bitNode, slow.lastAugReset);
     }
     if (reading.kind === "read") {
       for (const problem of reading.problems) if (!this.#problems.has(problem)) this.#problems.set(problem, atMs);

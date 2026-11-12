@@ -22,12 +22,15 @@
 // - **Stuck resting** (#377's review): the rule's plan with work (core's `chooseBladeburnerAction` on each reading)
 //   and a rest under way, for longer than twice the rule's own time to rest to the max ((max − stamina) over the rest's
 //   stamina a second, at the stretch's first reading) and `BLADEBURNER_REST_SLACK_MS`, as #343's waits are bounded: a
-//   failure. Idle (the owner's work, or a stop) isn't resting.
+//   failure. Idle (the owner's work, or a stop) isn't resting. A gap in the readings or an install ends it (#377's
+//   re-review): what ran meanwhile isn't known.
 // - **The hospital** (#377's review): HP isn't in the rule's choice (money against rank is the planner's, #375). A
 //   visit is the HP back at its max from under it, with no Regeneration Chamber's 2 under way (`Bladeburner.ts:983-991`,
 //   `PersonObjects/Player/PlayerObjectGeneralMethods.ts:266-290`); its bill is min(10% of the money, (max − HP) ×
 //   $100k) with the HP at 0 or under (`Hospital/Hospital.ts:4-17`, `Constants.ts:47`), so at least
-//   min(10% of the money, max × $100k). Two visits between readings count as one.
+//   min(10% of the money, max × $100k), the money the smaller of the two readings' (a purchase between them doesn't
+//   raise it). Two visits between readings count as one; none across a gap or an install, which refills the HP
+//   (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:135`).
 // - **The focus** (#377's review): A5's faction work waits all the actions' time, the rests' too, Field Analysis's rank
 //   all it gains then; the time and that rank are shown, the trade the planner's.
 // - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings): its cycle's rank a
@@ -75,7 +78,10 @@ const HOSPITAL_COST_PER_HP = 100e3;
  * Bernstein's inequality's margin (Boucheron, Lugosi and Massart, "Concentration Inequalities", 2013, Corollary 2.11;
  * Bernstein, 1924): for independent attempts whose rank is at most `below` under its mean (here an attempt's mean and a
  * failure's loss at 110%) and whose variances sum to `variance`, P(sum < mean − t) ≤ exp(−t² / (2(variance +
- * below·t/3))). Set to `alpha` and solved: t = L·below/3 + √((L·below/3)² + 2·L·variance), L = ln(1/alpha).
+ * below·t/3))). Set to `alpha` and solved: t = L·below/3 + √((L·below/3)² + 2·L·variance), L = ln(1/alpha). The
+ * attempts aren't independent (#377's re-review): successes open levels, which the rule follows. Each attempt's figures
+ * are fixed by what came before, so the sum less its forecast is a martingale, and Freedman's inequality (Freedman,
+ * "On tail probabilities for martingales", 1975) gives the same tail with the variances summed as they came.
  */
 export function bernsteinMargin(variance: number, below: number, alpha: number): number {
   const logs = Math.log(1 / alpha);
@@ -92,6 +98,8 @@ interface Kept {
   rankMultiplier: number;
   money: number | null;
   hp: { current: number; max: number } | null;
+  /** The cycle's install (the slow snapshot's `lastAugReset`), or null. */
+  lastAugReset: number | null;
 }
 
 /** The action under way at `kept`, as the forecast takes it: an attempt's figures, or a rest's rank a second. */
@@ -195,7 +203,14 @@ export class BladeburnerActionsFold {
   #firstPlan: BladeburnerActionPlan | null = null;
 
   /** A medium snapshot in the division with B2's reading (`reading`), in BN6 or BN7 (`bitNode`). */
-  add(atMs: number, data: MediumSnapshotData, rank: number, reading: BladeburnerActionsReading, bitNode: number): void {
+  add(
+    atMs: number,
+    data: MediumSnapshotData,
+    rank: number,
+    reading: BladeburnerActionsReading,
+    bitNode: number,
+    lastAugReset: number | null = null,
+  ): void {
     const person = bladeburnerPersonOf(data.player);
     const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
     if (person === null || rankMultiplier === null) return;
@@ -209,6 +224,7 @@ export class BladeburnerActionsFold {
       rankMultiplier,
       money: isNumber(player?.money) ? player.money : null,
       hp: isNumber(hp?.current) && isNumber(hp?.max) ? { current: hp.current, max: hp.max } : null,
+      lastAugReset,
     };
     this.#readings += 1;
     const plan = this.#plan(kept);
@@ -221,10 +237,13 @@ export class BladeburnerActionsFold {
       this.#lowestStamina = { atMs, stamina: reading.stamina, max: reading.maxStamina };
     }
     const running = runningOf(kept);
-    this.#watchResting(atMs, kept, plan, running);
     const previous = this.#last;
     this.#last = kept;
-    if (previous === null || atMs - previous.atMs > BLADEBURNER_GAP_MS) {
+    // A gap in the readings, or an install between them: what ran meanwhile isn't known.
+    const broken =
+      previous === null || atMs - previous.atMs > BLADEBURNER_GAP_MS || previous.lastAugReset !== lastAugReset;
+    this.#watchResting(atMs, kept, plan, running, broken);
+    if (broken) {
       // A stretch begins: the last one's end cut (the window's last, in `section`), and none to place yet here.
       if (previous !== null) this.#allowance += runningOf(previous)?.cut ?? 0;
       this.#stretches += 1;
@@ -288,19 +307,19 @@ export class BladeburnerActionsFold {
     if (was !== null && now !== null && was.current < was.max && now.current >= now.max) {
       const chamber = previous.reading.current?.name === REGENERATION_CHAMBER;
       if (!chamber || now.current - was.current > 2) {
-        const money = previous.money ?? 0;
+        const money = Math.min(previous.money ?? 0, kept.money ?? previous.money ?? 0);
         this.#visits.push({ atMs, leastBill: Math.min(0.1 * Math.max(0, money), now.max * HOSPITAL_COST_PER_HP) });
       }
     }
   }
 
   /** Stuck resting: the plan has work and a rest is under way; each stretch's bound from its first reading. */
-  #watchResting(atMs: number, kept: Kept, plan: BladeburnerActionPlan, running: Running | null): void {
+  #watchResting(atMs: number, kept: Kept, plan: BladeburnerActionPlan, running: Running | null, broken: boolean): void {
     const stuck = plan.work !== null && running?.resting === true;
-    if (!stuck) {
+    if (!stuck || broken) {
       if (this.#restingOpen !== null) this.#resting.push(this.#restingOpen);
       this.#restingOpen = null;
-      return;
+      if (!stuck) return;
     }
     if (this.#restingOpen !== null) {
       this.#restingOpen.toMs = atMs;

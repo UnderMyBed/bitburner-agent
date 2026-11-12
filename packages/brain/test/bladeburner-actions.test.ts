@@ -1,8 +1,9 @@
 // Bladeburner B2 (#375): the brain's rule on the worker's readings in the division (the work or the rest at ½ stamina,
 // the plan's action and level, the owner's work holding it, the bonus time, BN7's rank), the controller sending it as
 // the worker's action with A5's work held for it and nothing outside BN6 and BN7, home's RAM kept for the worker beside
-// the batches (#377's review), and the run report's actions with each of their failures. The rule against the real engine is bn6-actions-simulation.test.ts's; core's formulas
-// against the engine's are bladeburner-parity.test.ts's.
+// the batches, the share and levelling mode (#377's review), and the run report's actions with each of their
+// failures. The rule against the real engine is bn6-actions-simulation.test.ts's; core's formulas against the
+// engine's are bladeburner-parity.test.ts's.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -85,7 +86,7 @@ function reading({
 /** A medium snapshot in the division with `reading`, home 128 GB, the player's figures as `getPlayer()` has them. */
 function medium(
   bladeburner: unknown,
-  { factions = ["CyberSec"] as string[], inBladeburner = true, hp = { current: 20, max: 20 } } = {},
+  { factions = ["CyberSec"] as string[], inBladeburner = true, hp = { current: 20, max: 20 }, money = 1e6 } = {},
 ) {
   return {
     player: {
@@ -107,7 +108,7 @@ function medium(
         charisma: 1,
         charisma_exp: 1,
       },
-      money: 1e6,
+      money,
       city: "Sector-12",
       factions,
       hp,
@@ -364,9 +365,14 @@ describe("the run report's actions (#375)", () => {
       }),
     ]);
   }
-  function fold(mediums: [number, MediumSnapshotData][]) {
+  /** The fold over `mediums`, BN6's slow snapshot at T0, and an install (a new `lastAugReset`) at each of `installs`. */
+  function fold(mediums: [number, MediumSnapshotData][], installs: number[] = []) {
     const folded = new BladeburnerFold();
     folded.addSlow(T0, slow(6));
+    for (const [index, atMs] of installs.entries()) {
+      const data = slow(6);
+      folded.addSlow(atMs, { ...data, resetInfo: { ...data.resetInfo, lastAugReset: atMs + index } });
+    }
     for (const [atMs, data] of mediums) folded.addMedium(atMs, data);
     const failures: string[] = [];
     const text = folded.section(failures, T0 + 24 * 60 * MINUTE).join("\n");
@@ -514,6 +520,15 @@ describe("the run report's actions (#375)", () => {
     // One visit (5 → 20 under Tracking), $100,000 at least (10% of $1m, under 20 × $100k); the Chamber's +2 none.
     expect(text).toContain(": 1 visit seen, at least $100,000; the failures' HP ");
     expect(failures).toEqual([]);
+    // The smaller of the two readings' money (#377's re-review): $100,000 spent between them, 10% of $900,000.
+    const spent = mediums.map(([atMs, data], index) =>
+      index === 2
+        ? ([atMs, { ...data, player: { ...data.player, money: 9e5 } }] as [number, MediumSnapshotData])
+        : [atMs, data],
+    ) as [number, MediumSnapshotData][];
+    expect(fold(spent).text).toContain(": 1 visit seen, at least $90,000; the failures' HP ");
+    // An install between the readings refills the HP: no visit.
+    expect(fold(mediums, [T0 + 15 * SECOND]).text).toContain(": 0 visits seen, at least $0; ");
   });
 
   test("stuck resting: the plan's work waiting past twice the rule's time to the max and 10 min fails; at it passes", () => {
@@ -521,20 +536,36 @@ describe("the run report's actions (#375)", () => {
     const regain = (0.0085 + MAX_STAMINA / 70_000) * 100 ** 0.17;
     const boundMs = Math.ceil(2 * (0.5 / regain) * 1000) + BLADEBURNER_REST_SLACK_MS;
     const field = { type: "General", name: "Field Analysis" };
-    const resting = (count: number, offsets: number[]) =>
+    const resting = (count: number, offsets: number[], installs: number[] = []) =>
       fold(
         offsets.map(
           (offsetMs) =>
             [
               T0 + offsetMs,
-              medium(reading({ stamina: MAX_STAMINA - 0.5, found: field, current: field, actions: tracking(count) }), {
-                factions: [],
-              }),
+              // Field Analysis's rank as it comes, 0.1 each 30 s: the rank's check holds.
+              medium(
+                reading({
+                  rank: (offsetMs / 1000) * (0.1 / 30),
+                  stamina: MAX_STAMINA - 0.5,
+                  found: field,
+                  current: field,
+                  actions: tracking(count),
+                }),
+                {
+                  factions: [],
+                },
+              ),
             ] as [number, MediumSnapshotData],
         ),
+        installs.map((offsetMs) => T0 + offsetMs),
       );
-    expect(resting(100, [0, boundMs]).failures).toEqual([]);
-    const late = resting(100, [0, boundMs + 1]);
+    /** Readings 10 s apart from `fromMs` up to `toMs`, and `toMs` itself. */
+    const every10s = (fromMs: number, toMs: number) => [
+      ...Array.from({ length: Math.ceil((toMs - fromMs) / 10_000) }, (_, index) => fromMs + index * 10_000),
+      toMs,
+    ];
+    expect(resting(100, every10s(0, boundMs)).failures).toEqual([]);
+    const late = resting(100, every10s(0, boundMs + 1));
     expect(late.failures).toEqual([
       `resting with the plan's work waiting from ${new Date(T0).toISOString()} to ` +
         `${new Date(T0 + boundMs + 1).toISOString()}, for ${formatDuration(boundMs + 1)}, past its bound ` +
@@ -542,8 +573,19 @@ describe("the run report's actions (#375)", () => {
         `the rule's time to the max ${formatDuration((0.5 / regain) * 1000)} with Field Analysis; the plan's work ` +
         "Tracking level 1)",
     ]);
+    // A gap in the readings over `BLADEBURNER_GAP_MS` ends the stretch (#377's re-review): each side under the bound.
+    const half = Math.floor(boundMs / 2);
+    const resumed = half + BLADEBURNER_GAP_MS + 1;
+    expect(resting(100, [...every10s(0, half), ...every10s(resumed, resumed + half)]).failures).toEqual([]);
+    // At the gap's edge, no gap: one stretch, past its bound.
+    expect(
+      resting(100, [...every10s(0, half), ...every10s(half + BLADEBURNER_GAP_MS, half + BLADEBURNER_GAP_MS + half)])
+        .failures,
+    ).toHaveLength(1);
+    // An install between readings 10 s apart ends it too.
+    expect(resting(100, every10s(0, boundMs + 10_000), [half + 5_000]).failures).toEqual([]);
     // No work in the plan (the counts out): resting is the plan, however long.
-    expect(resting(0.5, [0, 10 * boundMs]).failures).toEqual([]);
+    expect(resting(0.5, every10s(0, 2 * boundMs)).failures).toEqual([]);
   });
 
   test("in the division with no B2 reading: said; not in it: no actions' lines", () => {

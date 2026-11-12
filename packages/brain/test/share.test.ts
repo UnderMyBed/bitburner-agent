@@ -9,6 +9,7 @@ import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-help
 import {
   type BatcherConfig,
   type BatcherHealth,
+  BLADEBURNER_WORKER_RAM_GB,
   batchPlan,
   batchRamGb,
   CONTROL_PROTOCOL_VERSION,
@@ -355,6 +356,50 @@ test("home among the batcher's hosts (#340): the share keeps on home what the ba
   expect(kept).toBeGreaterThan(SHARE_HOME_KEPT_GB);
   expect(config.homeKeptGb).toBe(kept);
   expect(config.sharing?.homeKeptGb).toBe(kept);
+});
+
+test("beside Bladeburner's reading worker (#377's re-review): the share keeps its 42.6 GB too, in the division", () => {
+  const channel = new ControlChannel({ token: "the-token", clock: new ManualClock() });
+  channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
+  const controller = new DesiredStateController({ channel, store });
+  const agent = connectedAgent(channel);
+  const rooted = { n00dles: true, foodnstuff: true };
+  agent.send("static", network);
+  agent.send("slow", slowData(6));
+  // Your faction work (the actions held for it): faction work goes on, so the batcher shares.
+  expect(controller.setWork({ faction: "CyberSec", workType: "hacking" })).toEqual({ ok: true });
+  agent.send("fast", fast({ converged: true, problem: null, backend: "sim" }));
+  const base = medium(50, rooted, [], 4_096);
+  const combat = { strength: 100, defense: 100, dexterity: 100, agility: 100 };
+  const inDivision = (joined: boolean): MediumSnapshotData => ({
+    ...base,
+    player: {
+      ...base.player,
+      skills: { ...(base.player as { skills: object }).skills, ...combat },
+      exp: { strength: 1e4, defense: 1e4, dexterity: 1e4, agility: 1e4 },
+      mults: {
+        ...MULTS,
+        faction_rep: 1,
+        ...Object.fromEntries(
+          Object.keys(combat).flatMap((stat) => [
+            [stat, 1],
+            [`${stat}_exp`, 1],
+          ]),
+        ),
+      },
+      money: 1e6,
+      city: "Sector-12",
+    },
+    inBladeburner: joined,
+  });
+  const kept = homeKeptGbOf(singularityRamMultiplierOf(slowData(6)));
+  agent.send("medium", inDivision(true));
+  expect(agent.lastSent()?.bladeburner).toEqual({ joinTheFaction: false });
+  expect(agent.lastSent()?.batcher?.config.sharing?.homeKeptGb).toBeCloseTo(kept + BLADEBURNER_WORKER_RAM_GB, 9);
+  // Out of it (trained, not joined): no worker, nothing more kept.
+  agent.send("medium", inDivision(false));
+  expect(agent.lastSent()?.bladeburner).toBeUndefined();
+  expect(agent.lastSent()?.batcher?.config.sharing?.homeKeptGb).toBe(kept);
 });
 
 describe("home's batches against its share while sharing is asked (#340's review, a placeholder)", () => {

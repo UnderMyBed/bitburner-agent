@@ -1610,7 +1610,7 @@ export class DesiredStateController {
   }
 
   /**
-   * What home keeps beside `homeKeptGbOf` for the batches, the share and levelling mode (#375's review): Bladeburner's
+   * What home keeps beside `homeKeptGbOf` for the batches, the share and levelling mode (#377's review): Bladeburner's
    * reading worker's `BLADEBURNER_WORKER_RAM_GB` while the rule asks for it (in the division, the RAM gate open: the
    * gate counts home's RAM beyond `homeKeptGbOf` alone, so this doesn't close it), else nothing.
    */

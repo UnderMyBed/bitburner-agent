@@ -345,11 +345,6 @@ export function setGangRespect(respect: number) {
 }
 
 /**
- * Gives the player `exp` experience in each combat stat (strength, defense, dexterity and agility) through the game's
- * own gains (`PersonObjects/Person.ts:66-140`), which set each skill from it: a harness edit for test scenarios (#367,
- * the gym's hours), not something a player can do.
- */
-/**
  * Gives the player `exp` intelligence experience through the game's own `gainIntelligenceExp`
  * (`PersonObjects/Person.ts:176-190`: only with SF5 or in BN5), which sets the skill from it: a harness edit for core's
  * parity tests (#377's review), not something a player can do.
@@ -358,6 +353,11 @@ export function gainIntelligenceExp(exp: number) {
   Player.gainIntelligenceExp(exp);
 }
 
+/**
+ * Gives the player `exp` experience in each combat stat (strength, defense, dexterity and agility) through the game's
+ * own gains (`PersonObjects/Person.ts:66-140`), which set each skill from it: a harness edit for test scenarios (#367,
+ * the gym's hours), not something a player can do.
+ */
 export function gainCombatExp(exp: number) {
   Player.gainStrengthExp(exp);
   Player.gainDefenseExp(exp);

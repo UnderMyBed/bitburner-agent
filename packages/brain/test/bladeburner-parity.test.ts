@@ -1,9 +1,9 @@
-// Bladeburner B2 (#375): core's formulas against the engine's own figures, in the simulator. In BN6 with SF1.3 and
-// SF7.1 (Bladeburner's multipliers at 1.08, `SourceFile/applySourceFile.ts:110-122`), the combat stats, hacking and charisma
-// moved off 1. Harness edits set the city (the true population, its estimate, communities and chaos), the stamina and
-// the max levels, which a script can't: the game's range needs the true population.
+// Bladeburner B2 (#375): core's formulas against the engine's own figures, in the simulator. In BN6 with SF1.3, SF5.1
+// and SF7.1 (Bladeburner's multipliers at 1.08, `SourceFile/applySourceFile.ts:110-122`), the combat stats, hacking,
+// charisma and intelligence moved off 1. Harness edits set the city (the true population, its estimate, communities
+// and chaos), the stamina and the max levels, which a script can't: the game's range needs the true population.
 // - Every contract and operation's estimate's range (`getActionEstimatedSuccessChance`), time (`getActionTime`), rank
-//   gained and lost (`getActionRankGain`, `getActionRankLoss`), over four cities and stamina at full and a quarter, at
+//   gained and lost (`getActionRankGain`, `getActionRankLoss`), over five cities and stamina at full and a quarter, at
 //   levels 1 to 5; Raid at 0 with no communities.
 // - The max stamina, and its regain over a tick (`nextUpdate`'s seconds).
 // - Attempts: each tick an attempt lands in, its stamina (the regain less the cost), its rank (a success's gain within
