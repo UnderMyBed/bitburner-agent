@@ -8,10 +8,13 @@ import {
   bestWorkRate,
   countablesToCome,
   type FactionState,
+  hackingExpOfLevel,
   hacknetSetupPlan,
   INVITATION_CHECK_MS,
+  levelRiseOf,
   NO_HACKNET_COST_MULTIPLIERS,
   type WorkingPerson,
+  workSecondsAlong,
 } from "@bitburner-agent/core";
 import { describe, expect, test } from "vitest";
 import {
@@ -145,6 +148,24 @@ describe("Netburners' countables in install timing's (core's countablesToCome)",
     income: 1_000,
   } satisfies Parameters<typeof countablesToCome>[0];
   const route = { sold: augmentationsSoldBy("Netburners", 1, null), setupMoney: SETUP, invited: false };
+
+  test("along the level's rise (#401): each from the invitation on, at the level then; flat, as before", () => {
+    const flat = countablesToCome({ ...base, netburners: route });
+    const rise = levelRiseOf({ exp: hackingExpOfLevel(300, 1), level: 300, levelMult: 1, expPerSecond: 500 });
+    expect(countablesToCome({ ...base, netburners: route, rise: { ...rise, kappa: 0 } })).toEqual(flat);
+    const along = countablesToCome({ ...base, netburners: route, rise });
+    expect(along).toHaveLength(flat.length);
+    for (const each of along) {
+      const before = flat.find((one) => one.augmentation === each.augmentation);
+      const beforeJoinMs = before?.beforeJoinMs as number;
+      expect(each.beforeJoinMs).toBe(beforeJoinMs);
+      // Its reputation, from the flat time: hacking work's rate is linear in the level (`reputation.ts:16-24`).
+      const reputation = (((before?.workMs as number) - beforeJoinMs) * rate) / 1000;
+      const expected = workSecondsAlong(rise, (level) => rate * (level / 300), reputation, beforeJoinMs / 1000) * 1000;
+      expect(each.workMs).toBeCloseTo(expected, -1);
+      expect(each.workMs).toBeLessThan(before?.workMs as number);
+    }
+  });
 
   test("each by A5's work there: the setup's money at the income, the game's check, then its reputation at the rate", () => {
     expect(rate).toBeGreaterThan(0);

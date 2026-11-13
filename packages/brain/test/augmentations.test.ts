@@ -22,6 +22,7 @@ import {
   type SlowSnapshotData,
   TOR_ROUTER,
   type WorkingPerson,
+  workSecondsAlong,
 } from "@bitburner-agent/core";
 import * as model from "@bitburner-agent/model";
 import { type Countdown, countHoldOf, holdsOf, installClock, installDecision } from "@bitburner-agent/model";
@@ -33,6 +34,8 @@ import {
   AUGMENTATION_INCOME_WINDOW_MS,
   AUGMENTATION_INSTALL_INTENT,
   AUGMENTATION_INSTALL_WAIT_SETTING,
+  AUGMENTATION_LEVEL_RAMP_SETTING,
+  AUGMENTATION_LEVEL_RISE_SETTING,
   AUGMENTATION_ONLINE_SETTING,
   AUGMENTATION_PROGRESS_COUNTS_EVERY_MS,
   AUGMENTATION_RESERVE_LOOKAHEAD_MS,
@@ -50,11 +53,13 @@ import {
   purchaseIntent,
   readAugmentationCycle,
   readAugmentationsEnabled,
+  readCarriedLevelRise,
   readCountHold,
   readCycleSeen,
   readGangRateKept,
   readGangRedPillHold,
   readInstallWait,
+  readLevelRamp,
   readOnlineClock,
   shareBonusMean,
 } from "../src/augmentations.ts";
@@ -64,7 +69,7 @@ import { bestWorkRate, workConditionsOf, workingPersonOf } from "../src/factions
 import { PURCHASE_PRICES } from "../src/programs.ts";
 import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
-import { HACKING_EXP_WINDOW_MS } from "../src/world-daemon.ts";
+import { HACKING_EXP_WINDOW_MS, HackingExpRate } from "../src/world-daemon.ts";
 
 const GEN_I = "Cranial Signal Processors - Gen I";
 const GEN_II = "Cranial Signal Processors - Gen II";
@@ -755,6 +760,99 @@ function committed(money = 1e9) {
   throughCountdown({ slowData: slow(fields), mediumData: medium({ money, homeRam: 1024 }) });
   return fields;
 }
+
+describe("the level's rise carried over an install (#401)", () => {
+  /** Medium snapshots a minute apart, hacking 300 + the minute, A6 off (it samples the experience all the same). */
+  const measure = (minutes: number) => {
+    const rate = new HackingExpRate();
+    for (let minute = 0; minute < minutes; minute += 1) {
+      const mediumData = medium({ hacking: 300 + minute });
+      update({ enabled: false, mediumData, mediumGameTimeMs: minute * MINUTE, fastGameTimeMs: minute * MINUTE });
+      rate.add(minute * MINUTE, hackingExpOfLevel(300 + minute, 1));
+    }
+    return rate;
+  };
+  /** Committed (the note), all five queued, nothing more to buy: the install, at `minute`. */
+  const install = (minute: number) => {
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    return update({
+      slowData: slow({ reputation: 18_750, queued: [...FIVE] }),
+      mediumData: medium({ hacking: 300 + minute }),
+      mediumGameTimeMs: minute * MINUTE,
+      fastGameTimeMs: minute * MINUTE,
+    });
+  };
+
+  test("asked for with the rate measured over its whole window: κ over the level + 50, × the install's gains", () => {
+    const rate = measure(11);
+    rate.add(11 * MINUTE, hackingExpOfLevel(311, 1));
+    expect(install(11)).toEqual({ intent: null, install: true, committed: true });
+    const gain = levellingInstallMultipliers(0, FIVE);
+    expect(gain.hackingExp * gain.hackingSpeed).toBeGreaterThan(1);
+    expect(readCarriedLevelRise(store)).toEqual({
+      lastNodeReset: 0,
+      lastAugReset: 0,
+      kappa: expect.closeTo(((rate.perSecond() as number) / (311 + 50)) * gain.hackingExp * gain.hackingSpeed, 9),
+      // No ramp measured this cycle, none carried in: none yet (#405's review).
+      deadMs: null,
+    });
+  });
+
+  test("its dead time (#405's review): this cycle's ramp measured; else the one carried in; else none", () => {
+    // This cycle's ramp, stored: carried as the next cycle's dead time.
+    store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, JSON.stringify({ lastAugReset: 0, rampMs: 4 * MINUTE }));
+    measure(11);
+    install(11);
+    expect(readCarriedLevelRise(store)).toMatchObject({ lastAugReset: 0, deadMs: 4 * MINUTE });
+    // None this cycle (another cycle's ramp), one carried in from the cycle before: the last measured, kept.
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    for (const ramp of [null, { lastAugReset: -5, rampMs: MINUTE }, { lastAugReset: 0, rampMs: null }]) {
+      rule = newRule();
+      if (ramp === null) store.deleteSetting(AUGMENTATION_LEVEL_RAMP_SETTING);
+      else store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, JSON.stringify(ramp));
+      store.setSetting(
+        AUGMENTATION_LEVEL_RISE_SETTING,
+        // A κ this cycle's rate never reaches: no ramp of its own measured.
+        JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 1e12, deadMs: 7 * MINUTE }),
+      );
+      measure(11);
+      install(11);
+      expect(readCarriedLevelRise(store)).toMatchObject({ lastAugReset: 0, deadMs: 7 * MINUTE });
+    }
+    // An older setting with no dead time reads as none measured; a bad ramp fails.
+    store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 1 }));
+    expect(readCarriedLevelRise(store)?.deadMs).toBeNull();
+    for (const bad of ["{", JSON.stringify({ lastAugReset: 0, rampMs: -1 }), JSON.stringify({ rampMs: 1 })]) {
+      store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, bad);
+      expect(() => readLevelRamp(store)).toThrow(/augmentations\.levelRamp/);
+    }
+    store.setSetting(
+      AUGMENTATION_LEVEL_RISE_SETTING,
+      JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 1, deadMs: -1 }),
+    );
+    expect(() => readCarriedLevelRise(store)).toThrow(/augmentations\.levelRise/);
+  });
+
+  test("the window not whole (5 minutes): nothing carried, the one stored kept", () => {
+    const kept = { lastNodeReset: 0, lastAugReset: -1, kappa: 2 };
+    store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify(kept));
+    measure(5);
+    expect(install(5)).toEqual({ intent: null, install: true, committed: true });
+    expect(readCarriedLevelRise(store)).toEqual({ ...kept, deadMs: null });
+  });
+
+  test("a setting the brain didn't write fails: A6 waits, saying why", () => {
+    const bad = ["{", JSON.stringify({ lastNodeReset: 0, lastAugReset: 0, kappa: 0 }), JSON.stringify({ kappa: 1 })];
+    for (const value of bad) {
+      store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, value);
+      expect(() => readCarriedLevelRise(store)).toThrow(/augmentations\.levelRise/);
+    }
+    update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: 1e9 }) });
+    expect(rule.view().waitingFor).toMatch(
+      /^the snapshots as core knows the game \(the store's augmentations\.levelRise/,
+    );
+  });
+});
 
 describe("committed", () => {
   test("the set in buy order, each once reported done; then home's RAM, NeuroFlux Governor, the install", () => {
@@ -2441,6 +2539,39 @@ describe("held for Daedalus's count (#243)", () => {
     expect(rule.view().progress?.countHold).toMatchObject({ way: "work", etaMs: expect.closeTo(5 * MINUTE, -3) });
   });
 
+  test("the level's rise (#401): The Black Hand 21 min off isn't held flat (20 min); along the last cycle's κ, held", () => {
+    const reputation = reputationFor(21 * MINUTE);
+    online();
+    minuteOn({ reputation });
+    expect(rule.view().progress).toMatchObject({ countHold: null, reason: "count reached" });
+    // The last cycle's rate carried over its install: the level rises over the work.
+    const exp = hackingExpOfLevel(HACKING, 1);
+    const kappa = (1_000 * exp) / 600 / (HACKING + 50);
+    store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa }));
+    const along =
+      workSecondsAlong(
+        { exp, level: HACKING, levelMult: 1, kappa },
+        (level) => RATE * (level / HACKING),
+        RATE * 21 * 60,
+      ) * 1000;
+    expect(along).toBeLessThan(20 * MINUTE);
+    online();
+    minuteOn({ reputation });
+    expect(rule.view().progress?.countHold).toMatchObject({
+      augmentation: TBH,
+      way: "work",
+      workMs: expect.closeTo(along, -3),
+    });
+    // The owner's field work there: along the rise too, shorter than at the level now (5 min).
+    const there = { kind: "faction", faction: TBH, workType: "field" } as const;
+    const conditions = workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow());
+    const person = workingPersonOf(playerWith(0)) as WorkingPerson;
+    const fieldRate = factionReputationPerSecond(person, "field", { favor: 0, ...conditions });
+    online();
+    minuteOn({ reputation: 100_000 - fieldRate * 300 }, MONEY, { holdWork: { owners: there, brainWorks: false } });
+    expect(rule.view().progress?.countHold?.etaMs).toBeLessThan(5 * MINUTE - 1_000);
+  });
+
   test("the work counts only where someone works: A5 under the hold, or the owner's faction work there", () => {
     const fiveOff = reputationFor(5 * MINUTE);
     // A5's switch off, no owner's work: nobody earns The Black Hand's reputation, so no hold.
@@ -3205,6 +3336,215 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     // The mean: 1 with no samples.
     expect(shareBonusMean([])).toBe(1);
     expect(shareBonusMean([1.6, 1.6, 1])).toBeCloseTo(1.4, 12);
+  });
+
+  /** The medium snapshot at the next minute, its hacking experience `exp` (the level held at 2,500). */
+  const withExp = (exp: number): Partial<AugmentationInputs> => {
+    const data = playerWith(MONEY);
+    return {
+      mediumData: { ...data, player: { ...(data.player as object), exp: { hacking: exp } } },
+      mediumGameTimeMs: gameTimeMs + MINUTE,
+    };
+  };
+  const E0 = hackingExpOfLevel(2_500, 1);
+  /** τ by work for The Black Hand 42 min off at the level now, along the level's path at `kappa` (core's). */
+  const along = (exp: number, kappa: number) =>
+    workSecondsAlong({ exp, level: 2_500, levelMult: 1, kappa }, (level) => RATE * (level / 2_500), RATE * 42 * 60) *
+    1000;
+
+  test("the level's rise (#401): flat over the window, today's τ (42 min); rising, τ falls with it", () => {
+    const reputation = reputationFor(42 * MINUTE);
+    plannerAt(60);
+    for (let minute = 0; minute < 11; minute += 1) minuteOn({ reputation }, MONEY, withExp(E0));
+    expect(rule.view().progress?.timing?.candidates[1]).toMatchObject({ tauMs: expect.closeTo(42 * MINUTE, -3) });
+    expect(rule.view().progress?.timing?.levelRise).toBeUndefined();
+    // T 71 min: waiting for it (42) is the choice, as at the level now before #401.
+    expect(rule.view().progress?.timing?.choice).toBe(1);
+    expect(rule.view().progress?.timing?.words).not.toMatch(/level's rise/);
+    // Rising, ×2 and ×10 over the window: τ along the level's path, shorter; the faster, the shorter still.
+    const taus: number[] = [];
+    for (const growth of [1, 9]) {
+      plannerAt(60);
+      let exp = E0;
+      for (let minute = 0; minute < 11; minute += 1) {
+        minuteOn({ reputation }, MONEY, withExp(exp));
+        if (minute < 10) exp += (growth * E0) / 10;
+      }
+      const perSecond = (growth * E0) / 600;
+      const timing = rule.view().progress?.timing;
+      expect(timing?.candidates[1]?.tauMs).toBeCloseTo(along(exp, perSecond / 2_550), -3);
+      expect(timing?.levelRise?.from).toBe("measured now");
+      expect((timing?.levelRise?.expPerSecond as number) / perSecond).toBeCloseTo(1, 9);
+      expect(timing?.words).toMatch(/; τ by work along the level's rise, [\d,]+ exp\/s now \(measured now\); chosen:/);
+      taus.push(timing?.candidates[1]?.tauMs as number);
+    }
+    expect(taus[0]).toBeLessThan(42 * MINUTE - 10_000);
+    expect(taus[1]).toBeLessThan(taus[0] as number);
+    // The window not whole yet (5 minutes): not measured, the level now.
+    plannerAt(60);
+    let exp = E0;
+    for (let minute = 0; minute < 6; minute += 1) {
+      minuteOn({ reputation }, MONEY, withExp(exp));
+      exp += (9 * E0) / 10;
+    }
+    expect(rule.view().progress?.timing?.levelRise).toBeUndefined();
+    expect(rule.view().progress?.timing?.candidates[1]).toMatchObject({ tauMs: expect.closeTo(42 * MINUTE, -3) });
+  });
+
+  test("the dead time (#405's review): early in a cycle the carried κ rises only after it, measured or the fallback", () => {
+    const reputation = reputationFor(10 * MINUTE);
+    const kappa = (9 * E0) / 600 / 2_550;
+    for (const deadMs of [30 * MINUTE, undefined]) {
+      store.setSetting(
+        AUGMENTATION_LEVEL_RISE_SETTING,
+        JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa, ...(deadMs === undefined ? {} : { deadMs }) }),
+      );
+      plannerAt(1);
+      for (let minute = 0; minute < 3; minute += 1) minuteOn({ reputation }, MONEY, withExp(E0));
+      const timing = rule.view().progress?.timing;
+      const dead = deadMs ?? 10 * MINUTE;
+      const left = Math.max(0, dead - (timing?.timeOnlineMs as number)) / 1000;
+      expect(left).toBeGreaterThan(0);
+      const expected =
+        workSecondsAlong(
+          { exp: E0, level: 2_500, levelMult: 1, kappa, delaySeconds: left },
+          (level) => RATE * (level / 2_500),
+          RATE * 10 * 60,
+        ) * 1000;
+      expect(timing?.candidates[1]?.tauMs).toBeCloseTo(expected, -3);
+      // Later than with none, as the dead time holds the level meanwhile.
+      const undelayed =
+        workSecondsAlong(
+          { exp: E0, level: 2_500, levelMult: 1, kappa },
+          (level) => RATE * (level / 2_500),
+          RATE * 600,
+        ) * 1000;
+      expect(timing?.candidates[1]?.tauMs).toBeGreaterThan(undelayed + 1_000);
+      expect(timing?.levelRise).toMatchObject({
+        from: "the last cycle's",
+        deadMs: dead,
+        deadMeasured: deadMs !== undefined,
+      });
+      expect(timing?.words).toMatch(
+        deadMs === undefined
+          ? /\(the last cycle's, after 10 min: no ramp measured yet, the rate's window\)/
+          : /\(the last cycle's, after its ramp of 30 min measured\)/,
+      );
+    }
+  });
+
+  /**
+   * A cycle installed at `installMs` (the game's time): the online clock and the brain's look from then, κ carried over
+   * the install before it; a new rule. The ramp's κ: the rate over the samples, per level + 50, at E0 a minute.
+   */
+  const RAMP_KAPPA = E0 / 60 / 2_550;
+  const cycleFrom = (installMs: number) => {
+    store.setSetting(
+      AUGMENTATION_LEVEL_RISE_SETTING,
+      JSON.stringify({ lastNodeReset: 0, lastAugReset: installMs - 1, kappa: RAMP_KAPPA }),
+    );
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: installMs, onlineMs: 0, lastGameTimeMs: installMs }),
+    );
+    store.setSetting(
+      AUGMENTATION_CYCLE_SEEN_SETTING,
+      JSON.stringify({ lastAugReset: installMs, gameTimeMs: installMs }),
+    );
+    rule = newRule("planner");
+  };
+  /** `minutes` minutes on, the experience rising by `perMinute` × E0 each, from `exp`; returns the experience then. */
+  const rampOn = (installMs: number, minutes: number, perMinute: number, exp: number) => {
+    const reputation = reputationFor(42 * MINUTE);
+    let now = exp;
+    for (let minute = 0; minute < minutes; minute += 1) {
+      minuteOn({ reputation, lastAugReset: installMs }, MONEY, withExp(now));
+      now += perMinute * E0;
+    }
+    return now;
+  };
+
+  test("this cycle's ramp (#405's review): watched from its install, the time online its rate reaches the carried κ, once", () => {
+    const installMs = gameTimeMs;
+    cycleFrom(installMs);
+    // E0/2 in the first minute, then 2·E0 a minute: over two minutes, 1.25 times the κ.
+    let exp = rampOn(installMs, 1, 0.5, E0);
+    expect(readLevelRamp(store)).toBeNull();
+    const onlineAt: number[] = [];
+    for (let minute = 0; minute < 4; minute += 1) {
+      exp = rampOn(installMs, 1, 2, exp);
+      onlineAt.push(rule.view().progress?.timing?.timeOnlineMs as number);
+    }
+    const ramp = readLevelRamp(store);
+    expect(ramp?.lastAugReset).toBe(installMs);
+    expect(ramp?.rampMs).toBeGreaterThan(0);
+    expect(onlineAt).toContain(ramp?.rampMs);
+    // Stored once: kept as the rate goes on.
+    const first = ramp?.rampMs;
+    rampOn(installMs, 1, 10, exp);
+    expect(readLevelRamp(store)?.rampMs).toBe(first);
+  });
+
+  test("the ramp's guard (#405's second review): a restart mid-ramp, the rate reached after it: not measured", () => {
+    const installMs = gameTimeMs;
+    cycleFrom(installMs);
+    // Four minutes under the κ (a tenth of it), then a restart, then 4·E0 a minute: reached, by a brain that didn't
+    // watch the ramp from the install.
+    const exp = rampOn(installMs, 4, 0.1, E0);
+    rule = newRule("planner");
+    rampOn(installMs, 4, 4, exp);
+    expect(readLevelRamp(store)).toEqual({ lastAugReset: installMs, rampMs: null });
+  });
+
+  test("the ramp's guard (#405's second review): a cycle first seen 30 minutes past its install: not measured", () => {
+    const installMs = gameTimeMs - 30 * MINUTE;
+    cycleFrom(installMs);
+    rampOn(installMs, 4, 4, E0);
+    expect(readLevelRamp(store)).toEqual({ lastAugReset: installMs, rampMs: null });
+  });
+
+  test("the ramp's guard (#405's second review): a gap over 3 minutes in the experience mid-ramp: not measured", () => {
+    const installMs = gameTimeMs;
+    cycleFrom(installMs);
+    const exp = rampOn(installMs, 2, 0.1, E0);
+    expect(readLevelRamp(store)).toBeNull();
+    // Four minutes with no snapshot (the game closed): the rate starts again, the ramp unwatched.
+    gameTimeMs += 4 * MINUTE;
+    rampOn(installMs, 4, 4, exp);
+    expect(readLevelRamp(store)).toEqual({ lastAugReset: installMs, rampMs: null });
+  });
+
+  test("the level's rise (#401): the last cycle's κ carried over the install, where it's more than the window's", () => {
+    const reputation = reputationFor(42 * MINUTE);
+    const kappa = (9 * E0) / 600 / 2_550;
+    const carry = (fields: object) =>
+      store.setSetting(
+        AUGMENTATION_LEVEL_RISE_SETTING,
+        JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa, ...fields }),
+      );
+    carry({});
+    plannerAt(60);
+    for (let minute = 0; minute < 11; minute += 1) minuteOn({ reputation }, MONEY, withExp(E0));
+    expect(rule.view().progress?.timing?.candidates[1]?.tauMs).toBeCloseTo(along(E0, kappa), -3);
+    expect(rule.view().progress?.timing?.candidates[1]?.tauMs).toBeLessThan(42 * MINUTE - 30_000);
+    expect(rule.view().progress?.timing?.levelRise).toMatchObject({ from: "the last cycle's" });
+    // Its own cycle's, or another BitNode's: not carried, flat.
+    for (const fields of [{ lastAugReset: 0 }, { lastNodeReset: 5 }]) {
+      carry(fields);
+      minuteOn({ reputation }, MONEY, withExp(E0));
+      expect(rule.view().progress?.timing?.candidates[1]).toMatchObject({ tauMs: expect.closeTo(42 * MINUTE, -3) });
+      expect(rule.view().progress?.timing?.levelRise).toBeUndefined();
+    }
+    // The window's more: it's taken.
+    carry({ kappa: kappa / 100 });
+    plannerAt(60);
+    let exp = E0;
+    for (let minute = 0; minute < 11; minute += 1) {
+      minuteOn({ reputation }, MONEY, withExp(exp));
+      if (minute < 10) exp += E0 / 10;
+    }
+    expect(rule.view().progress?.timing?.levelRise).toMatchObject({ from: "measured now" });
+    expect(rule.view().progress?.timing?.candidates[1]?.tauMs).toBeCloseTo(along(exp, E0 / 600 / 2_550), -3);
   });
 
   test("its reputation reached: the set meets the count (n ≥ N), installed at once with all five, 30 of 30", () => {
