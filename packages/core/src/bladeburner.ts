@@ -29,6 +29,7 @@
  *   whether the player has joined; `getRank`, `joinBladeburnerFaction` and `joinBladeburnerDivision` 4 GB each.
  */
 import type { BladeburnerActionReading } from "./bladeburner-actions.ts";
+import type { BladeburnerBlackOpReading } from "./bladeburner-black-ops.ts";
 import { type BladeburnerCityReading, isBladeburnerCity } from "./bladeburner-cities.ts";
 import {
   CLASS_LOCATION_NAMES,
@@ -109,11 +110,14 @@ export const BLADEBURNER_SKILL_WORKER_RAM_GB = 9.6;
  * the reading would be 70.6 GB: 65.9 + 70.6 = 136.5 GB at SF4.3, past a 128 GB home.
  */
 export const BLADEBURNER_CITY_WORKER_RAM_GB = 21.6;
-/** An action the brain asks `bladeburner.js` to run (#375): its type and name as the NS API has them, and its level. */
+/**
+ * An action the brain asks `bladeburner.js` to run (#375): its type and name as the NS API has them, and its level;
+ * or (#392) the next Black Op, `Black Operations` (`Bladeburner/Enums.ts:5`), at no level.
+ */
 export interface BladeburnerActionOrder {
-  type: "Contracts" | "Operations" | "General";
+  type: "Contracts" | "Operations" | "General" | "Black Operations";
   name: string;
-  /** A contract's or operation's level, held (auto-level off); null for a general action. */
+  /** A contract's or operation's level, held (auto-level off); null for a general action or a Black Op. */
   level: number | null;
 }
 
@@ -144,7 +148,8 @@ export interface BladeburnerCityWorkerReading {
  * operation, in core's order; and B3's (#379, absent from a B2 Agent): the skill points unspent (`getSkillPoints`) and
  * each skill's level (`getSkillLevel`), by core's `BLADEBURNER_SKILL_NAMES`. And B4's (#383), which the Agent adds
  * from `bladeburner-city.js`, run just before (absent from a B3 Agent, or with no city asked for): the division's city
- * and the six cities' population estimates, communities and chaos.
+ * and the six cities' population estimates, communities and chaos. And B5's (#392, absent from a B4 Agent): the next
+ * Black Op in order and the game's estimate's range for it (`getActionEstimatedSuccessChance`), null once all 21 are done.
  */
 export interface BladeburnerReading {
   rank: number | null;
@@ -159,9 +164,13 @@ export interface BladeburnerReading {
   skillLevels?: Record<string, number>;
   city?: string | null;
   cities?: BladeburnerCityReading[];
+  /** B5's (#392, absent from a B4 Agent): the next Black Op in order and the game's range for it, or null: all done. */
+  blackOp?: BladeburnerBlackOpReading | null;
 }
 
-const ORDER_TYPES = ["Contracts", "Operations", "General"];
+const ORDER_TYPES = ["Contracts", "Operations", "General", "Black Operations"];
+/** The order types at no level: a general action's, a Black Op's. */
+const UNLEVELLED_TYPES = ["General", "Black Operations"];
 
 /** The desired state's `bladeburner`, checked: null (none managed), or one to do. */
 export function parseBladeburnerState(
@@ -179,13 +188,15 @@ export function parseBladeburnerState(
   if (action === undefined || action === null) return { ok: true, bladeburner: { joinTheFaction, ...withCity } };
   const { type, name, level } = action as Partial<Record<keyof BladeburnerActionOrder, unknown>>;
   const levelOk =
-    type === "General" ? level === null : typeof level === "number" && Number.isInteger(level) && level >= 1;
+    typeof type === "string" && UNLEVELLED_TYPES.includes(type)
+      ? level === null
+      : typeof level === "number" && Number.isInteger(level) && level >= 1;
   if (typeof action !== "object" || !ORDER_TYPES.includes(type as string) || typeof name !== "string" || !levelOk) {
     return {
       ok: false,
       reason:
-        "bladeburner's action isn't { type: Contracts, Operations or General, name, level: a whole level from 1 " +
-        "(null for General) }",
+        "bladeburner's action isn't { type: Contracts, Operations, General or Black Operations, name, level: a whole " +
+        "level from 1 (null for General and Black Operations) }",
     };
   }
   return {

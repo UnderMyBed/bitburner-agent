@@ -17,7 +17,9 @@ import {
 } from "../src/bladeburner-actions.ts";
 import {
   BLADEBURNER_TARGET_CELLS,
+  BLADEBURNER_TARGET_CELLS_A_DISTANCE,
   BLADEBURNER_TARGET_CELLS_A_STEP,
+  BLADEBURNER_TARGET_CELLS_MOST,
   type BladeburnerRankStep,
   bladeburnerAttemptsInCount,
   bladeburnerCycleStep,
@@ -25,7 +27,8 @@ import {
   bladeburnerRestStep,
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
-  bladeburnerTargetCells,
+  bladeburnerStepRise,
+  bladeburnerTargetGrid,
 } from "../src/bladeburner-targets.ts";
 
 const gameSource = (file: string) =>
@@ -74,7 +77,7 @@ function simulate(first: BladeburnerRankStep, rank: number, target: number, runs
 }
 
 describe("the targets", () => {
-  test("the faction's 25 while it isn't joined, then the next Black Op's (B5's hook); met, none", () => {
+  test("the faction's 25 while it isn't joined, then the next Black Op's (B5's, #392); met, none", () => {
     // The game's: `RankNeededForFaction: 25` and the join's check against the rank as it is; a Black Op's `reqdRank`.
     expect(gameSource("Bladeburner/data/Constants.ts")).toContain("RankNeededForFaction: 25,");
     expect(gameSource("Bladeburner/Bladeburner.ts")).toContain(
@@ -181,39 +184,98 @@ describe("the expected time to a target", () => {
     expect(Math.abs(model - mean)).toBeLessThanOrEqual(4 * standardError + grid);
   });
 
-  // A far target, B5's first Black Op's 2,500 (#390's review): the grid's points scale with the target over the largest
-  // step, so the spacing stays within it.
-  const far: { name: string; step: BladeburnerRankStep }[] = [
-    { name: "Raid-like", step: { chance: 0.055, gain: 55, loss: 2.5, rest: 0.14, seconds: 116 } },
-    { name: "steady", step: { chance: 0.4, gain: 0.9, loss: 0.05, rest: 0.05, seconds: 30 } },
-    { name: "floored, rising", step: { chance: 0.5, gain: 3, loss: 2.5, rest: 0, seconds: 40 } },
+  // A far target, B5's first Black Op's 2,500 (#390's review, #392): from 0, and from near it (a Black Op's loss
+  // rebuilt, Raid a single success from it, a count's sequence), the window and the spacing by the grid's rules.
+  const steadyFar = { chance: 0.4, gain: 0.9, loss: 0.05, rest: 0.05, seconds: 30 };
+  const tracking = { chance: 0.87, gain: 0.3, loss: 0, rest: 0, seconds: 7 };
+  const far: { name: string; step: BladeburnerRankStep; rank: number; runs: number }[] = [
+    {
+      name: "Raid-like from 0",
+      step: { chance: 0.055, gain: 55, loss: 2.5, rest: 0.14, seconds: 116 },
+      rank: 0,
+      runs: 2_000,
+    },
+    { name: "steady from 0", step: steadyFar, rank: 0, runs: 2_000 },
+    {
+      name: "floored, rising, from 0",
+      step: { chance: 0.5, gain: 3, loss: 2.5, rest: 0, seconds: 40 },
+      rank: 0,
+      runs: 2_000,
+    },
+    { name: "Tracking-like from 0", step: tracking, rank: 0, runs: 1_000 },
+    { name: "Tracking-like from 2,400", step: tracking, rank: 2400, runs: 40_000 },
+    { name: "steady from 2,490 (a Black Op's 10 rebuilt)", step: steadyFar, rank: 2490, runs: 40_000 },
+    {
+      name: "lossless with a rest's share, from 2,490",
+      step: { chance: 0.7, gain: 1.5, loss: 0, rest: 0.1, seconds: 20 },
+      rank: 2490,
+      runs: 40_000,
+    },
+    {
+      name: "Raid-like from 2,440: a success reaches it",
+      step: { chance: 0.1, gain: 73, loss: 3.3, rest: 0, seconds: 60 },
+      rank: 2440,
+      runs: 40_000,
+    },
+    {
+      name: "Raid-like for 12 attempts, then steady, from 2,440",
+      step: { chance: 0.1, gain: 73, loss: 3.3, rest: 0, seconds: 60, attempts: 12, next: steadyFar },
+      rank: 2440,
+      runs: 40_000,
+    },
+    {
+      name: "Raid-like for 30 attempts, then Tracking-like, from 1,000",
+      step: { chance: 0.1, gain: 73, loss: 3.3, rest: 0, seconds: 60, attempts: 30, next: tracking },
+      rank: 1000,
+      runs: 1_000,
+    },
   ];
-  test.each(far)("$name to 2,500 from 0: the chain's against a simulated walk of 2,000 runs, within 1%", ({ step }) => {
+  test.each(far)("$name to 2,500: the chain's against a simulated walk, within 1%", ({ step, rank, runs }) => {
     const target = 2500;
-    const cells = bladeburnerTargetCells([step], target);
-    expect(cells).toBe(
-      Math.max(200, Math.ceil((8 * target) / Math.max(step.gain * (1 + 0.1 / Math.sqrt(3)) + step.rest, step.loss))),
-    );
-    const model = bladeburnerSecondsToRank(step, 0, target);
-    const { mean, standardError } = simulate(step, 0, target, 2_000, 2500);
+    const grid = bladeburnerTargetGrid(step.next === undefined ? [step] : [step, step.next], rank, target);
+    const model = bladeburnerSecondsToRank(step, rank, target);
+    const { mean, standardError } = simulate(step, rank, target, runs, 2500);
     console.log(
-      `0 → ${target} (${cells} points): the chain ${model.toFixed(0)} s, the walk ${mean.toFixed(0)} ± ` +
-        `${standardError.toFixed(0)}`,
+      `${rank} → ${target} (from ${grid.low.toFixed(0)}, ${grid.cells.join(" and ")} points): the chain ` +
+        `${model.toFixed(1)} s, the walk ${mean.toFixed(1)} ± ${standardError.toFixed(1)}`,
     );
     expect(Math.abs(model - mean)).toBeLessThanOrEqual(4 * standardError + 0.01 * mean);
   });
 
-  test("the grid's points: 200 at least, 8 for the largest step of each walk of a sequence", () => {
+  test("the grid: 200 points at least, 4,000 at most; 8 a largest step, finer near the target; the window", () => {
     const raid = { chance: 0.055, gain: 55, loss: 2.5, rest: 0.14, seconds: 116 };
     const steady = { chance: 0.4, gain: 0.9, loss: 0.05, rest: 0.05, seconds: 30 };
-    expect(BLADEBURNER_TARGET_CELLS_A_STEP).toBe(8);
-    expect(bladeburnerTargetCells([raid], 25)).toBe(200);
-    expect(bladeburnerTargetCells([steady], 25)).toBe(200);
     const top = 1 + 0.1 / Math.sqrt(3);
-    expect(bladeburnerTargetCells([steady], 2500)).toBe(Math.ceil(20_000 / (0.9 * top + 0.05)));
-    expect(bladeburnerTargetCells([raid, steady], 2500)).toBe(bladeburnerTargetCells([steady], 2500));
-    expect(bladeburnerTargetCells([raid], 2500)).toBe(Math.ceil(20_000 / (55 * top + 0.14)));
-    expect(bladeburnerTargetCells([{ ...raid, gain: 0, rest: 0, loss: 0 }], 2500)).toBe(200);
+    const spread = 0.2 / Math.sqrt(3);
+    expect([BLADEBURNER_TARGET_CELLS, BLADEBURNER_TARGET_CELLS_A_STEP]).toEqual([200, 8]);
+    expect([BLADEBURNER_TARGET_CELLS_A_DISTANCE, BLADEBURNER_TARGET_CELLS_MOST]).toEqual([200, 4000]);
+    // To 25 from 0, as #386's: 200 points over [0, 25).
+    expect(bladeburnerTargetGrid([raid], 0, 25)).toEqual({ low: 0, cells: [200] });
+    expect(bladeburnerTargetGrid([steady], 0, 25)).toEqual({ low: 0, cells: [200] });
+    // Near 25: the distance's 200th, no finer than an eighth of the nodes' spread of the larger landing; the window from
+    // 4 distances and 8 largest steps under the start (Raid's reach under 0: from 0).
+    const steadyNear = bladeburnerTargetGrid([steady], 24, 25);
+    expect(steadyNear.low).toBeCloseTo(24 - (4 + 8 * (0.9 * top + 0.05)), 12);
+    expect(steadyNear.cells).toEqual([Math.ceil((25 - steadyNear.low) / Math.max((0.9 * spread) / 8, 1 / 200))]);
+    expect(bladeburnerTargetGrid([raid], 24, 25)).toEqual({ low: 0, cells: [200] });
+    // To 2,500 from 0: 8 a largest step, at most 4,000.
+    expect(bladeburnerTargetGrid([raid], 0, 2500).cells).toEqual([Math.ceil(2500 / ((55 * top + 0.14) / 8))]);
+    expect(bladeburnerTargetGrid([steady], 0, 2500).cells).toEqual([4000]);
+    // From near 2,500: the window from 4 distances and 8 of the largest step under the start.
+    const near = bladeburnerTargetGrid([steady, raid], 2440, 2500);
+    expect(near.low).toBeCloseTo(2440 - (4 * 60 + 8 * (55 * top + 0.14)), 9);
+    expect(near.cells).toEqual([
+      Math.min(
+        4000,
+        Math.ceil((2500 - near.low) / Math.min((0.9 * top + 0.05) / 8, Math.max((0.9 * spread) / 8, 60 / 200))),
+      ),
+      Math.ceil((2500 - near.low) / Math.min((55 * top + 0.14) / 8, Math.max((55 * spread) / 8, 60 / 200))),
+    ]);
+    // A walk that doesn't rise without the floor keeps it.
+    const sinking = { chance: 0.01, gain: 55, loss: 2.5, rest: 0, seconds: 116 };
+    expect(bladeburnerStepRise(sinking)).toBeLessThan(0);
+    expect(bladeburnerTargetGrid([sinking], 2440, 2500).low).toBe(0);
+    expect(bladeburnerTargetGrid([{ ...raid, gain: 0, rest: 0, loss: 0 }], 0, 2500).cells).toEqual([200]);
   });
 
   test("Wald's bound: the distance over a step's most mean, chance × gain + rest; under the chain's", () => {

@@ -46,7 +46,8 @@
  *   Cyber's Edge on the max stamina and its regain; each at 1 with no levels (`getSkillMult`'s default, `:755-757`).
  * - **The city** (B4, #383; ./bladeburner-cities.ts): its population and chaos are in the range read; the forecast in
  *   another city, or at another chaos, scales it (`chooseBladeburnerAction`'s `city`).
- * Left out, and labelled: Black Ops (B5), teams (an operation's team bonus at 0 members: 1) and random events.
+ * The Black Ops are B5's (#392, ./bladeburner-black-ops.ts). Left out, and labelled: teams (an operation's team bonus at
+ * 0 members: 1) and random events.
  */
 import {
   type BladeburnerSkillLevels,
@@ -408,11 +409,12 @@ export function effectiveLevel(
 /**
  * The part of an action's competence the skills move (`Actions/Action.ts:174-187`): the stats' weighted levels, at
  * their effective levels, times the success skills' multipliers that apply to it (all; its type's, `Actions/
- * Contract.ts:30-32`, `Actions/Operation.ts:92-94`; stealth's; killing's). The rest (intelligence, stamina, team,
+ * Contract.ts:30-32`, `Actions/Operation.ts:92-94`, a Black Op's the operations', `Actions/BlackOperation.ts:69`;
+ * stealth's; killing's). The rest (intelligence, stamina, team,
  * population, augmentations) is the same at any skill levels.
  */
 export function actionSkillCompetence(
-  action: BladeburnerLevelledAction,
+  action: Pick<BladeburnerLevelledAction, "weights" | "decays" | "isStealth" | "isKill"> & { type: string },
   person: BladeburnerPerson,
   skills: BladeburnerSkillMults = NO_BLADEBURNER_SKILLS,
 ): number {
@@ -471,7 +473,7 @@ export function actionSuccessRange(real: number, est: number, population: number
 }
 
 /** statFac: ½(agi^0.04 + dex^0.035 + agi/10,000 + dex/10,000), at the effective levels (`Actions/Action.ts:110-117`). */
-function actionStatFactor(person: BladeburnerPerson, skills: BladeburnerSkillMults): number {
+export function actionStatFactor(person: BladeburnerPerson, skills: BladeburnerSkillMults): number {
   const c = BLADEBURNER_CONSTANTS;
   const agility = effectiveLevel(person, "agility", skills);
   const dexterity = effectiveLevel(person, "dexterity", skills);
@@ -993,6 +995,25 @@ function fastestToTarget(
   };
   const solved = search(pool, true, secondsOf, !prune);
   return solved.map(({ candidate, seconds }) => ({ ...candidate.plan, toTarget: { target, seconds } }));
+}
+
+/**
+ * `chooseBladeburnerAction` with each input solved once (#392, #390's review: the run report solved the same reading's
+ * plan in each of its folds, a far target's hundreds of milliseconds each time): keyed by the input, the city read
+ * (ratio 1, Raid there) the same as none. One a reading: its figures are that reading's.
+ */
+export function memoizedBladeburnerChoice(): typeof chooseBladeburnerAction {
+  const solved = new Map<string, BladeburnerActionPlan>();
+  return (input) => {
+    const { city, ...rest } = input;
+    const key = JSON.stringify(city === undefined || (city.ratio === 1 && city.raid) ? rest : input);
+    let plan = solved.get(key);
+    if (plan === undefined) {
+      plan = chooseBladeburnerAction(input);
+      solved.set(key, plan);
+    }
+    return plan;
+  };
 }
 
 /** What the rule's forecast reads (#375): `chooseBladeburnerAction`'s figures but the skills. */

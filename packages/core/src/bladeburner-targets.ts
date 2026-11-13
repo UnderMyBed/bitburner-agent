@@ -3,7 +3,7 @@
  * `vendor/bitburner-src/src/`'s (v3.0.1), under `Bladeburner/` unless named.
  * - **The targets** are what the game checks against the rank as it is, not the most rank ever held: the Bladeburners
  *   faction at rank 25 (`joinFaction`, `Bladeburner.ts:268`, `data/Constants.ts:42`), and each Black Op at its own
- *   (`Actions/BlackOperation.ts:44-49`: 2,500 for the first, `data/BlackOperations.ts:11`), B5's to read. The rank
+ *   (`Actions/BlackOperation.ts:44-49`: 2,500 for the first, `data/BlackOperations.ts:11`), B5's (#392). The rank
  *   floors at 0 (`changeRank`, `Bladeburner.ts:1273`), so a failure below its loss loses only what's there.
  * - **The goal under a target** is the expected time to reach it (`bladeburnerSecondsToRank`), not rank a second:
  *   B2's rule weighs only the mean, and a rare, rich action (Raid at a 5.5% low end, 55 a success and 2.5 a failure)
@@ -16,7 +16,7 @@ const FACTION_RANK = 25;
 
 /**
  * The next current-rank target over `rank`, or null when none: the faction's 25 while it's not joined, then the next
- * Black Op's rank (`blackOpRank`, B5's hook: null until B5 reads it). A target met (the rank at it or over) is no
+ * Black Op's rank (`blackOpRank`, B5's, #392: null with none read). A target met (the rank at it or over) is no
  * target: the rule goes back to rank a second.
  */
 export function bladeburnerRankTarget({
@@ -33,33 +33,94 @@ export function bladeburnerRankTarget({
 }
 
 /**
- * The grid's least points over [0, target) for `bladeburnerSecondsToRank`: 200. Each landing is split between the
- * two points around it in the shares that keep its mean, so the drift is exact; what's left is the grid's smoothing,
- * under 0.8% of the time in the core test's walks to 25 (400 points halve it, for about 8 times the work: the rule
- * solves a walk for each plan at each reading).
+ * The grid's least points for `bladeburnerSecondsToRank`: 200. Each landing is split between the two points around it
+ * in the shares that keep its mean, so the drift is exact; what's left is the grid's smoothing, under 0.8% of the time
+ * in the core test's walks to 25 (400 points halve it, for about 8 times the work: the rule solves a walk for each plan
+ * at each reading).
  */
 export const BLADEBURNER_TARGET_CELLS = 200;
 
 /**
  * The grid's points a walk's largest step spans at least (#390's review): 8, as 200 points do over 25 for a step of
- * about 1 (Bounty Hunter's 0.9 and a rest's share). So a far target (B5's Black Ops, 2,500 and over) keeps the spacing
- * within the step: at 2,500 and Field Analysis's 0.1, 200,000 points (`bladeburnerTargetCells`).
+ * about 1 (Bounty Hunter's 0.9 and a rest's share). Near the target (#392) the spacing is finer still, down to the
+ * distance's hundredth (`BLADEBURNER_TARGET_CELLS_A_DISTANCE`), though no finer than an eighth of the ±10%'s two nodes'
+ * spread (`bladeburnerTargetGrid`).
  */
 export const BLADEBURNER_TARGET_CELLS_A_STEP = 8;
 
 /**
- * The grid's points for walks of `steps` to `target` (each walk of a sequence its own): `BLADEBURNER_TARGET_CELLS`,
- * or more, so each walk's largest step (a gain and its rest, or a loss, at the ±10%'s upper node) spans
- * `BLADEBURNER_TARGET_CELLS_A_STEP` of them.
+ * The points the distance to the target spans at least, where a step's own spread allows (#392): 100. At a far target a
+ * walk that starts near it (B5's rebuild of a Black Op's loss, 10 rank under 2,500) is decided by where each landing
+ * falls against the target, which 8 points a step left 4% off the simulated walk (Raid-like from 2,440).
  */
-export function bladeburnerTargetCells(steps: readonly BladeburnerRankStep[], target: number): number {
+export const BLADEBURNER_TARGET_CELLS_A_DISTANCE = 200;
+
+/**
+ * The grid's most points (#392): 4,000. A far target's small steps (Tracking's 0.3 at 2,500) asked for 63,000 at 8 a
+ * step, and the rule solves a walk for each plan at each reading, in each city (B4). Far from the target the spacing
+ * doesn't decide the time, the drift does: the core test's walks to 2,500 from 0 at 4,000 points are within 1% of the
+ * simulated ones, as at 63,000.
+ */
+export const BLADEBURNER_TARGET_CELLS_MOST = 4000;
+
+/**
+ * How far under the start the grid reaches, at least (#392): 4 times the distance to the target and 8 of the largest
+ * step (`bladeburnerTargetGrid`).
+ */
+export const BLADEBURNER_TARGET_WINDOW_DISTANCES = 4;
+export const BLADEBURNER_TARGET_WINDOW_STEPS = 8;
+
+/** The ±10%'s two nodes' spread over a step: 2 × 0.1/√3 (`BLADEBURNER_OFFSET_POINTS`). */
+const NODES_SPREAD = 0.2 / Math.sqrt(3);
+
+/**
+ * A step's mean rise, unfloored: chance × gain − (1 − chance) × loss + rest (Wald's identity's drift: Durrett,
+ * "Probability: Theory and Examples", 5th ed., 2019, Theorem 4.8.6).
+ */
+export function bladeburnerStepRise(step: BladeburnerRankStep): number {
+  const chance = Math.min(1, step.chance);
+  return chance * step.gain - (1 - chance) * step.loss + step.rest;
+}
+
+/**
+ * The grid for walks of `steps` from `rank` to `target` (#392; each walk of a sequence its own points, over one
+ * window):
+ * - **The window** `[low, target)`: from 0, the floor (`Bladeburner.ts:1273`), unless the start is far over it: then
+ *   from `BLADEBURNER_TARGET_WINDOW_DISTANCES` times the distance and `BLADEBURNER_TARGET_WINDOW_STEPS` of the largest
+ *   step under the start, where every walk's mean rise is over 0 (one that isn't needs the floor to get anywhere). A
+ *   landing under the window is taken back up to its floor at Wald's time, the distance over the step's mean rise
+ *   (`bladeburnerStepRise`): exact far from the target but for the overshoot past the floor, which a window this wide
+ *   reaches rarely. So a far target's walk from near it isn't spread over the rank from 0.
+ * - **The points**: the window over a spacing of an eighth of the walk's largest step (a gain and its rest, or a loss,
+ *   at the ±10%'s upper node, `BLADEBURNER_TARGET_CELLS_A_STEP`), or finer near the target: down to the distance's
+ *   hundredth (`BLADEBURNER_TARGET_CELLS_A_DISTANCE`), no finer than an eighth of the ±10%'s nodes' spread of its gain
+ *   or loss. At least `BLADEBURNER_TARGET_CELLS`, at most `BLADEBURNER_TARGET_CELLS_MOST`.
+ */
+export function bladeburnerTargetGrid(
+  steps: readonly BladeburnerRankStep[],
+  rank: number,
+  target: number,
+): { low: number; cells: number[] } {
   const top = BLADEBURNER_OFFSET_POINTS[BLADEBURNER_OFFSET_POINTS.length - 1] as number;
-  const largest = steps
-    .map((step) => Math.max(step.gain * top + step.rest, step.loss * top, step.rest))
-    .filter((each) => each > 0);
-  if (largest.length === 0) return BLADEBURNER_TARGET_CELLS;
-  const span = Math.min(...largest);
-  return Math.max(BLADEBURNER_TARGET_CELLS, Math.ceil((BLADEBURNER_TARGET_CELLS_A_STEP * target) / span));
+  const from = Math.max(0, rank);
+  const distance = Math.max(0, target - from);
+  const largestOf = (step: BladeburnerRankStep) => Math.max(step.gain * top + step.rest, step.loss * top, step.rest);
+  const largest = Math.max(0, ...steps.map(largestOf));
+  const reach = BLADEBURNER_TARGET_WINDOW_DISTANCES * distance + BLADEBURNER_TARGET_WINDOW_STEPS * largest;
+  const low = steps.every((step) => bladeburnerStepRise(step) > 0) && from - reach > 0 ? from - reach : 0;
+  const cells = steps.map((step) => {
+    const span = largestOf(step);
+    if (!(span > 0)) return BLADEBURNER_TARGET_CELLS;
+    // The larger landing's spread (the gain's, or the loss's): a finer spacing for the smaller would widen the band.
+    const spread = (Math.max(step.gain, step.loss) || span) * NODES_SPREAD;
+    const spacing = Math.min(
+      span / BLADEBURNER_TARGET_CELLS_A_STEP,
+      Math.max(spread / BLADEBURNER_TARGET_CELLS_A_STEP, distance / BLADEBURNER_TARGET_CELLS_A_DISTANCE),
+    );
+    const wanted = Math.ceil((target - low) / spacing);
+    return Math.min(BLADEBURNER_TARGET_CELLS_MOST, Math.max(BLADEBURNER_TARGET_CELLS, wanted));
+  });
+  return { low, cells };
 }
 
 /**
@@ -146,10 +207,10 @@ export function bladeburnerSecondsToRankAtLeast(step: BladeburnerRankStep, rank:
  * Markov chain over the rank under the target, and its expected cost to absorption t solves (I − Q)·t = c, Q the
  * moves among the ranks under the target and c a step's seconds (Grinstead and Snell, "Introduction to Probability",
  * 2nd ed., 1997, §11.2, Theorem 11.5, there with c = 1: the expected steps). Here the ranks are
- * `bladeburnerTargetCells` grid points over [0, target) (200, or 8 a largest step: #390's review), each landing split
- * between the two points around it in the shares that keep its mean (at or over the target absorbed, the target
- * itself a point), each gain and loss its ±10% (`BLADEBURNER_OFFSET_POINTS`); from `rank` itself, its own step, then
- * the grid's.
+ * `bladeburnerTargetGrid`'s points over its window (from 0, or far under the start, a landing under it taken back up
+ * at Wald's time: #392), each landing split between the two points around it in the shares that keep its mean (at or
+ * over the target absorbed, the target itself a point), each gain and loss its ±10% (`BLADEBURNER_OFFSET_POINTS`);
+ * from `rank` itself, its own step, then the grid's.
  * I − Q is banded (a step moves at most loss down and gain + rest up) and an M-matrix, so Gaussian elimination needs
  * no pivoting (Golub and Van Loan, "Matrix Computations", 4th ed., 2013, §4.3.5). Infinity when the walk can't rise
  * (no success and no rest's rank). A diffusion's formula (drift and variance, a reflecting floor) won't do: Raid's
@@ -172,136 +233,210 @@ export function bladeburnerSecondsToRankAtLeast(step: BladeburnerRankStep, rank:
 export function bladeburnerSecondsToRank(step: BladeburnerRankStep, rank: number, target: number): number {
   if (rank >= target) return 0;
   const attempts = step.attempts ?? Number.POSITIVE_INFINITY;
-  // Each walk on its own grid, its points by its own largest step (the next-best's taken onto the first's).
-  const cells = bladeburnerTargetCells([step], target);
-  const chain = chainOf(step, target, !(attempts < Number.POSITIVE_INFINITY), cells);
-  const start = chain.landings(Math.max(0, rank));
-  if (!(attempts < Number.POSITIVE_INFINITY))
-    return chain.seconds === null ? Number.POSITIVE_INFINITY : chain.from(start);
   if (attempts < 1) {
     return step.next === undefined ? Number.POSITIVE_INFINITY : bladeburnerSecondsToRank(step.next, rank, target);
   }
+  // Each walk on its own grid, by its own steps, over the one window (the next-best's taken onto the first's).
+  const bounded = attempts < Number.POSITIVE_INFINITY;
+  const grid = bladeburnerTargetGrid(bounded && step.next !== undefined ? [step, step.next] : [step], rank, target);
+  const cells = grid.cells[0] as number;
+  const chain = chainOf(step, target, !bounded, cells, grid.low);
+  const from = Math.max(0, rank);
+  const start = chain.landings(from);
+  const startExtra = chain.extraOf(from);
+  if (!bounded) return chain.seconds === null ? Number.POSITIVE_INFINITY : chain.from(start) + startExtra;
   // Its attempts, the walk run forward a step at a time over the grid (what isn't absorbed), two buffers in turn.
-  const { offsets, columns, shares } = chain;
+  const { offsets, columns, shares, extras } = chain;
   let distribution = new Float64Array(cells);
   let next = new Float64Array(cells);
-  for (const [k, probability] of start) distribution[k] = (distribution[k] as number) + probability;
-  let seconds = step.seconds;
-  const aliveOf = (each: Float64Array) => each.reduce((total, mass) => total + mass, 0);
+  // Only the points the walk can be at are visited (#392: a far target's grid is thousands of points, and a count's
+  // attempts ran over every one): `low` to `high`, the rest 0.
+  let low = cells;
+  let high = -1;
+  for (const [k, probability] of start) {
+    distribution[k] = (distribution[k] as number) + probability;
+    low = Math.min(low, k);
+    high = Math.max(high, k);
+  }
+  let seconds = step.seconds + startExtra;
+  const aliveOf = (each: Float64Array) => {
+    let total = 0;
+    for (let i = low; i <= high; i++) total += each[i] as number;
+    return total;
+  };
   for (let n = 1; n < attempts; n++) {
-    const alive = aliveOf(distribution);
-    if (!(alive > 1e-12)) return seconds;
-    seconds += alive * step.seconds;
-    next.fill(0);
-    for (let i = 0; i < cells; i++) {
+    // What isn't absorbed, summed as it's moved on: none left, done.
+    let alive = 0;
+    let extra = 0;
+    let nextLow = cells;
+    let nextHigh = -1;
+    for (let i = low; i <= high; i++) {
       const mass = distribution[i] as number;
       if (mass === 0) continue;
+      alive += mass;
+      extra += mass * (extras[i] as number);
       for (let at = offsets[i] as number; at < (offsets[i + 1] as number); at++) {
         const k = columns[at] as number;
         next[k] = (next[k] as number) + mass * (shares[at] as number);
+        if (k < nextLow) nextLow = k;
+        if (k > nextHigh) nextHigh = k;
       }
     }
+    if (!(alive > 1e-12)) return seconds;
+    seconds += alive * step.seconds + extra;
+    // This step's buffer cleared where it held mass, for its turn as the next.
+    if (high >= low) distribution.fill(0, low, high + 1);
     [distribution, next] = [next, distribution];
+    low = nextLow;
+    high = nextHigh;
   }
   if (!(aliveOf(distribution) > 1e-12)) return seconds;
   // Then the next-best's from wherever the walk is.
-  const nextCells = step.next === undefined ? cells : bladeburnerTargetCells([step.next], target);
-  const nextSeconds = step.next === undefined ? null : solvedNext(step.next, target, nextCells);
+  if (step.next === undefined) return Number.POSITIVE_INFINITY;
+  const nextCells = grid.cells[1] as number;
+  const nextSeconds = solvedNext(step.next, target, nextCells, grid.low);
   if (nextSeconds === null) return Number.POSITIVE_INFINITY;
   // The next-best's seconds at each of the first's points, between its own two around it (its last's to the target's
   // 0 past it).
   const nextAt = (x: number) => {
-    const cell = (x / target) * nextCells;
+    const cell = ((x - grid.low) / (target - grid.low)) * nextCells;
     const k = Math.min(nextCells - 1, Math.floor(cell));
     const share = cell - k;
     const upper = k + 1 < nextCells ? (nextSeconds[k + 1] as number) : 0;
     return (1 - share) * (nextSeconds[k] as number) + share * upper;
   };
   let after = 0;
-  distribution.forEach((mass, i) => {
-    if (mass !== 0) after += mass * nextAt((i / cells) * target);
-  });
+  for (let i = low; i <= high; i++) {
+    const mass = distribution[i] as number;
+    if (mass !== 0) after += mass * nextAt(grid.low + (i / cells) * (target - grid.low));
+  }
   return seconds + after;
 }
 
-/** The next-best's seconds from each grid point, solved once a step and target (the rule weighs many before it). */
-const solvedNexts = new WeakMap<BladeburnerRankStep, { target: number; cells: number; seconds: Float64Array | null }>();
-function solvedNext(step: BladeburnerRankStep, target: number, cells: number): Float64Array | null {
+/** The next-best's seconds from each grid point, solved once a step, target and grid (the rule weighs many before it). */
+const solvedNexts = new WeakMap<
+  BladeburnerRankStep,
+  { target: number; cells: number; low: number; seconds: Float64Array | null }
+>();
+function solvedNext(step: BladeburnerRankStep, target: number, cells: number, low: number): Float64Array | null {
   const known = solvedNexts.get(step);
-  if (known !== undefined && known.target === target && known.cells === cells) return known.seconds;
-  const { seconds } = chainOf(step, target, true, cells);
-  solvedNexts.set(step, { target, cells, seconds });
+  if (known !== undefined && known.target === target && known.cells === cells && known.low === low) {
+    return known.seconds;
+  }
+  const { seconds } = chainOf(step, target, true, cells, low);
+  solvedNexts.set(step, { target, cells, low, seconds });
   return seconds;
 }
 
 /**
- * The chain of `step` under `target` (`bladeburnerSecondsToRank`): where a step from x lands (`landings`), each grid
- * point's landings flat (`offsets`, `columns`, `shares`), and, `solve`d, the expected seconds to the target from each
- * point (null: not solved, or the walk can't rise) and from a first step's landings (`from`).
+ * The chain of `step` under `target` (`bladeburnerSecondsToRank`) over the grid's window from `low`: where a step from
+ * x lands (`landings`, and the time a landing under `low` adds, `extraOf`), each grid point's landings flat
+ * (`offsets`, `columns`, `shares`) and the time its landings under `low` add (`extras`), and, `solve`d, the expected
+ * seconds to the target from each point (null: not solved, or the walk can't rise) and from a first step's landings
+ * (`from`).
  */
 function chainOf(
   step: BladeburnerRankStep,
   target: number,
   /** Whether to solve for the seconds: a walk run forward only needs its rows. */
   solve: boolean,
-  /** The grid's points (`bladeburnerTargetCells`). */
+  /** The grid's points and its window's floor (`bladeburnerTargetGrid`). */
   cells: number,
+  low = 0,
 ): {
   cells: number;
   landings: (x: number) => [number, number][];
+  extraOf: (x: number) => number;
   offsets: Int32Array;
   columns: Int32Array;
   shares: Float64Array;
+  extras: Float64Array;
   seconds: Float64Array | null;
   from: (start: readonly [number, number][]) => number;
 } {
-  const h = target / cells;
+  const h = (target - low) / cells;
   const success = Math.min(1, step.chance);
   const each = 1 / BLADEBURNER_OFFSET_POINTS.length;
-  // Where a step from x lands, as [cell, probability] pairs: at or over the target, absorbed; else split between the
-  // points around it, the target's own point (absorbed) among them past the last.
-  const landings = (x: number): [number, number][] => {
-    const out: [number, number][] = [];
+  // Under the window (`bladeburnerTargetGrid`), Wald's time back up to it: the distance over a step's mean rise.
+  const rise = bladeburnerStepRise(step);
+  // Where a step from x lands: at or over the target, absorbed; else split between the points around it, the target's
+  // own point (absorbed) among them past the last; under the window, at its floor, the time back up to it returned.
+  // Each landing handed to `out` as (cell, probability), in the same order for every use.
+  const landingsOf = (x: number, out: (k: number, probability: number) => void): number => {
+    let extra = 0;
     const put = (y: number, probability: number) => {
       if (!(probability > 0) || y >= target) return;
-      const cell = y / h;
+      if (y < low) {
+        extra += (probability * (low - y) * step.seconds) / rise;
+        out(0, probability);
+        return;
+      }
+      const cell = (y - low) / h;
       const k = Math.min(cells - 1, Math.floor(cell));
       const share = cell - k;
       // Past the last point, the target's share absorbed.
-      if (!(share > 0)) out.push([k, probability]);
-      else if (k + 1 >= cells) out.push([k, probability * (1 - share)]);
-      else out.push([k, probability * (1 - share)], [k + 1, probability * share]);
+      if (!(share > 0)) out(k, probability);
+      else if (k + 1 >= cells) out(k, probability * (1 - share));
+      else {
+        out(k, probability * (1 - share));
+        out(k + 1, probability * share);
+      }
     };
     for (const offset of BLADEBURNER_OFFSET_POINTS) {
       put(x + step.gain * offset + step.rest, success * each);
       put(Math.max(0, x - step.loss * offset) + step.rest, (1 - success) * each);
     }
+    return extra;
+  };
+  const landings = (x: number): [number, number][] => {
+    const out: [number, number][] = [];
+    landingsOf(x, (k, probability) => out.push([k, probability]));
     return out;
   };
-  const rows = Array.from({ length: cells }, (_, i) => landings(i * h));
+  const extraOf = (x: number) => landingsOf(x, () => {});
+  // The rows written straight into the flat arrays (#392: a far target's tens of thousands of points made the rows'
+  // own arrays most of a solve's time): at most two landings for each of a success's and a failure's two nodes.
+  const most = 4 * BLADEBURNER_OFFSET_POINTS.length;
   const offsets = new Int32Array(cells + 1);
-  rows.forEach((row, i) => {
-    offsets[i + 1] = (offsets[i] as number) + row.length;
-  });
-  const columns = new Int32Array(offsets[cells] as number);
-  const shares = new Float64Array(columns.length);
+  const extras = new Float64Array(cells);
+  let columns = new Int32Array(cells * most);
+  let shares = new Float64Array(cells * most);
   let down = 0;
   let up = 0;
-  rows.forEach((row, i) => {
-    row.forEach(([k, probability], index) => {
-      columns[(offsets[i] as number) + index] = k;
-      shares[(offsets[i] as number) + index] = probability;
-      down = Math.max(down, i - k);
-      up = Math.max(up, k - i);
-    });
-  });
-  const unsolved = { cells, landings, offsets, columns, shares, seconds: null, from: () => Number.POSITIVE_INFINITY };
+  let written = 0;
+  let row = 0;
+  const write = (k: number, probability: number) => {
+    columns[written] = k;
+    shares[written] = probability;
+    written += 1;
+    if (row - k > down) down = row - k;
+    if (k - row > up) up = k - row;
+  };
+  for (row = 0; row < cells; row++) {
+    extras[row] = landingsOf(low + row * h, write);
+    offsets[row + 1] = written;
+  }
+  columns = columns.slice(0, written);
+  shares = shares.slice(0, written);
+  const unsolved = {
+    cells,
+    landings,
+    extraOf,
+    offsets,
+    columns,
+    shares,
+    extras,
+    seconds: null,
+    from: () => Number.POSITIVE_INFINITY,
+  };
   const rises = (step.chance > 0 && step.gain + step.rest > 0) || step.rest > step.loss;
   if (!solve || !rises) return unsolved;
   const width = down + up + 1;
-  // Row i's column j at i·width + (j − i + down): I − Q in a band, and the right-hand side a step's seconds.
+  // Row i's column j at i·width + (j − i + down): I − Q in a band, and the right-hand side a step's seconds (and the
+  // time back up to the window's floor from its landings under it).
   const band = new Float64Array(cells * width);
-  const seconds = new Float64Array(cells).fill(step.seconds);
+  const seconds = new Float64Array(cells);
+  for (let i = 0; i < cells; i++) seconds[i] = step.seconds + (extras[i] as number);
   const at = (i: number, j: number) => i * width + (j - i + down);
   for (let i = 0; i < cells; i++) {
     band[at(i, i)] = 1;
@@ -337,5 +472,5 @@ function chainOf(
   // From `rank` itself: its own step, then the grid's.
   const from = (start: readonly [number, number][]) =>
     start.reduce((total, [k, probability]) => total + probability * (seconds[k] as number), step.seconds);
-  return { cells, landings, offsets, columns, shares, seconds, from };
+  return { cells, landings, extraOf, offsets, columns, shares, extras, seconds, from };
 }
