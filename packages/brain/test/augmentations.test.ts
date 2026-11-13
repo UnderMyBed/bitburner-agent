@@ -41,6 +41,7 @@ import {
   AugmentationRule,
   advanceOnlineClock,
   countablesToCome,
+  cycleUnseenMs,
   describeProgress,
   describeReason,
   earnedOf,
@@ -3372,9 +3373,35 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     expect(rule.view().progress?.onlineMs).toBe(0);
     expect(rule.view().progress?.timing).toMatchObject({
       onlineMs: 7 * HOUR,
+      timeOnlineMs: 0,
+      unseenMs: 7 * HOUR,
       candidates: [{ k: 0, estimateMs: 7 * HOUR }, { k: 1 }],
       choice: 1,
     });
+    // Labelled (#388): the game's time, its time online not known, leaning towards waiting.
+    expect(rule.view().progress?.timing?.words).toMatch(
+      /, 7\.0 h this cycle \(T; 0 s online, and 7\.0 h before the brain first saw the cycle, counted whole: cautious, leaning towards waiting\); /,
+    );
+  });
+
+  test("T: first seen 3 min after its install, within the gap, the bars' clock alone (#388); a second more, all of it", () => {
+    // Seen within the gap: the store's slow snapshots aren't read (an install the brain watched).
+    const asked: number[] = [];
+    rule = new AugmentationRule({
+      store,
+      installTiming: "planner",
+      cycleLooks: (lastAugReset) => {
+        asked.push(lastAugReset);
+        return [MINUTE];
+      },
+    });
+    gameTimeMs = 3 * MINUTE;
+    update({ slowData: slowWith({ reputation: reputationFor(30 * MINUTE) }), mediumData: playerWith(MONEY) });
+    expect(asked).toEqual([]);
+    expect(rule.view().progress?.timing).toMatchObject({ onlineMs: 0, timeOnlineMs: 0 });
+    expect(rule.view().progress?.timing?.unseenMs).toBeUndefined();
+    expect(cycleUnseenMs({ lastAugReset: 0, gameTimeMs: 3 * MINUTE })).toBe(0);
+    expect(cycleUnseenMs({ lastAugReset: 0, gameTimeMs: 3 * MINUTE + 1_000 })).toBe(3 * MINUTE + 1_000);
   });
 
   test("an invitation's money held (#228): installing now held unless the set meets the count; then installed", () => {
@@ -3429,7 +3456,7 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     expect(chosen()).toEqual([]);
   });
 
-  test("a store from before #343, its clock for the cycle and no record of its start: seeded from the clock", () => {
+  test("a store from before #343, its clock for the cycle and no record of its start, none of its slow snapshots stored: the game's time, labelled", () => {
     // 27 min online, its last slow snapshot at the game's 7 h: the brain first saw the cycle about 6 h 33 min in.
     store.setSetting(
       AUGMENTATION_ONLINE_SETTING,
@@ -3437,9 +3464,44 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     );
     rule = newRule("planner");
     minuteOn({ reputation: reputationFor(17 * MINUTE) });
-    expect(readCycleSeen(store)).toEqual({ lastAugReset: 0, gameTimeMs: 7 * HOUR - 27 * MINUTE });
-    expect(rule.view().progress?.timing).toMatchObject({ onlineMs: 7 * HOUR + MINUTE, timeOnlineMs: 28 * MINUTE });
-    expect(rule.view().progress?.timing?.words).toMatch(/, 7\.0 h this cycle \(T; 28 min online\); /);
+    expect(readCycleSeen(store)).toEqual({ lastAugReset: 0, gameTimeMs: 7 * HOUR - 27 * MINUTE, fromClock: true });
+    // T the game's time since the install (#388: no slow snapshot says when the clock began), labelled.
+    expect(rule.view().progress?.timing).toMatchObject({
+      onlineMs: 7 * HOUR + MINUTE,
+      timeOnlineMs: 28 * MINUTE,
+      unseenMs: 7 * HOUR - 27 * MINUTE,
+      unseenGaps: true,
+    });
+    // Mostly the gaps the clock left out, not time before the brain saw the cycle (#397's review): said so.
+    expect(rule.view().progress?.timing?.words).toMatch(
+      /, 7\.0 h this cycle \(T; 28 min online, and 6\.5 h of the game's time not known online \(a store from before #343: mostly its clock's gaps\), counted whole: cautious, leaning towards waiting\); /,
+    );
+  });
+
+  test("a store from before #343, a 5 h gap in its clock (BN4.2's first cycle, #388): its first slow snapshot stored is its start", () => {
+    // The clock, 27 min online at the game's 7 h; the cycle's first slow snapshot in the store at its install's 1 min.
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: 0, onlineMs: 27 * MINUTE, lastGameTimeMs: gameTimeMs }),
+    );
+    const asked: number[] = [];
+    rule = new AugmentationRule({
+      store,
+      log: (line) => lines.push(line),
+      emit: (event) => events.push(event),
+      installTiming: "planner",
+      cycleLooks: (lastAugReset) => {
+        asked.push(lastAugReset);
+        return [MINUTE, 2 * MINUTE, 7 * HOUR + 5 * MINUTE];
+      },
+    });
+    minuteOn({ reputation: reputationFor(17 * MINUTE) });
+    expect(asked).toEqual([0]);
+    expect(readCycleSeen(store)).toEqual({ lastAugReset: 0, gameTimeMs: MINUTE });
+    // Not 7 h 1 min, as the seed from the clock had it: the gap it left out isn't online.
+    expect(rule.view().progress?.timing).toMatchObject({ onlineMs: 28 * MINUTE, timeOnlineMs: 28 * MINUTE });
+    expect(rule.view().progress?.timing?.unseenMs).toBeUndefined();
+    expect(rule.view().progress?.timing?.words).toMatch(/, 28 min this cycle \(T\); /);
   });
 
   test("Daedalus inviting (the count met): the count rule times installs, as before; the planner doesn't", () => {
@@ -3521,7 +3583,8 @@ describe("BN2 before the gang (#357's (1)): wait for the gang, or install now", 
     expect(gang?.installNowMs).toBeCloseTo(120_000 + (gang?.rebuildMs as number), 3);
     expect(gang).toMatchObject({ required: 218, level: 214, heldForRate: false, choice: "wait" });
     expect(timing()?.words).toMatch(
-      /^no gang yet: wait for the gang \(avmnite-02h's 218 at 214, 12 min\) against install now \(34 min: the commit and 32 min from 0 at 75\.6 experience a second \(64\.8 now, at the install's multipliers\)\); chosen: wait$/,
+      // T's label on the gang's route too (#397's review): the cycle first seen 7 h in.
+      /^no gang yet: wait for the gang \(avmnite-02h's 218 at 214, 12 min\) against install now \(34 min: the commit and 32 min from 0 at 75\.6 experience a second \(64\.8 now, at the install's multipliers\)\); chosen: wait; T 7\.2 h \(11 min online, and 7\.0 h before the brain first saw the cycle, counted whole: cautious, leaning towards waiting\)$/,
     );
     expect(rule.view().waitingFor).toBe(`the planner's time to the gang formed: ${timing()?.words}`);
     // No money held for it, no countdown, nothing for A5 to work for; the wait kept in the store.
@@ -3649,7 +3712,10 @@ describe("BN2 before the gang (#357's (1)): wait for the gang, or install now", 
     expect(chosen()).toHaveLength(1);
     const event = chosen()[0] as Extract<AugmentationEvent, { type: "augmentationInstallChosen" }>;
     expect(event.timing?.tauScale).toBeGreaterThan(1);
-    expect(event.timing?.words).toMatch(/; τ_g ×\d+\.\d, the overdue wait's measured error; chosen: install$/);
+    // The cycle first seen 7 h in: T's label after the route's words (#397's review).
+    expect(event.timing?.words).toMatch(
+      /; τ_g ×\d+\.\d, the overdue wait's measured error; chosen: install; T [\d.]+ h \([^)]*before the brain first saw the cycle, counted whole: cautious, leaning towards waiting\)$/,
+    );
   });
 
   test("the wait kept in the store: a restarted brain carries on its start and first τ_g", () => {
@@ -3715,7 +3781,7 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     expect(gang?.factionRepGain).toBeCloseTo(factionRepInstallMultiplier(Math.round(levels), set), 12);
     expect(factionRepInstallMultiplier(0, set)).toBeGreaterThan(1.1);
     expect(timing()?.words).toMatch(
-      /^with the gang: NiteSec's 2,000,000 of 2,500,000 reputation, favour 0\.0: keep the cycle 23\.6 h, install now [\d.]+ h \(converting about 2,000,705 with the commit, favour 0\.0 → 221\.\d; the rate ×0\.979 for the members' points, ×[\d.]+ the set's faction_rep\); chosen: keep$/,
+      /^with the gang: NiteSec's 2,000,000 of 2,500,000 reputation, favour 0\.0: keep the cycle 23\.6 h, install now [\d.]+ h \(converting about 2,000,705 with the commit, favour 0\.0 → 221\.\d; the rate ×0\.979 for the members' points, ×[\d.]+ the set's faction_rep\); chosen: keep; T [\d.]+ h \([^)]*before the brain first saw the cycle, counted whole: cautious, leaning towards waiting\)$/,
     );
     expect(rule.view()).toMatchObject({
       waitingFor: `the planner's time to The Red Pill's reputation: ${timing()?.words}`,
@@ -3771,7 +3837,7 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     expect(bankAt).toBeGreaterThan(1e5);
     expect(bankAt).toBeLessThanOrEqual(242.3e3);
     expect(timing()?.words).toMatch(
-      /, bank to [\d,]+ then install [\d.]+ h \(favour \d+\.\d, in [\d.]+ (min|h)\); chosen: bank$/,
+      /, bank to [\d,]+ then install [\d.]+ h \(favour \d+\.\d, in [\d.]+ (min|h)\); chosen: bank; T [\d.]+ h \([^)]*before the brain first saw the cycle, counted whole: cautious, leaning towards waiting\)$/,
     );
     expect(timing()?.candidates.map((each) => each.k)).toEqual([0, 1, 2]);
     expect(chosen()).toEqual([]);
