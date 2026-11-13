@@ -99,6 +99,8 @@ const OWNER_INTENTS: Intent[] = [
   intentOf({ action: "joinBladeburnerDivision", args: {} }),
   // A Bladeburner skill to a level (#379): reversible, not gated.
   intentOf({ action: "upgradeBladeburnerSkill", args: { skill: "Overclock", level: 3 } }),
+  // Hacknet to Netburners' invitation's totals (#387): reversible, not gated.
+  intentOf({ action: "buyHacknetSetup", args: {} }),
 ];
 const OWNER_INTENTS_BY_ID = new Map(OWNER_INTENTS.map((each) => [each.id, each]));
 /** Whether `id` is an install's or a destroy's: the brain's own resets, when not the owner's (#210, #215). */

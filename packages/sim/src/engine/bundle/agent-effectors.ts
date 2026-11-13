@@ -46,6 +46,14 @@ import {
   favorNeededToDonate,
 } from "../../../../../vendor/bitburner-src/src/Faction/formulas/donation";
 import { canCreateGang } from "../../../../../vendor/bitburner-src/src/Gang/helpers";
+import {
+  hasHacknetServers,
+  purchaseCoreUpgrade,
+  purchaseHacknet,
+  purchaseLevelUpgrade,
+  purchaseRamUpgrade,
+} from "../../../../../vendor/bitburner-src/src/Hacknet/HacknetHelpers";
+import { HacknetNode } from "../../../../../vendor/bitburner-src/src/Hacknet/HacknetNode";
 import { Locations } from "../../../../../vendor/bitburner-src/src/Locations/Locations";
 import { purchaseTorRouter } from "../../../../../vendor/bitburner-src/src/Locations/ui/TorButton";
 import { startWorkerScript } from "../../../../../vendor/bitburner-src/src/NetscriptWorker";
@@ -800,6 +808,78 @@ const effectors = {
     return result(
       bladeburner.getSkillLevel(name) >= level,
       `the game didn't raise ${skill} from level ${before} to ${level}: too few skill points, or past its max`,
+    );
+  },
+  /**
+   * The player's Hacknet nodes and cost multipliers (#387), as `ns.hacknet.getNodeStats` and `getHacknetMultipliers`
+   * read them (`NetscriptFunctions/Hacknet.ts:73-94`, `NetscriptFunctions.ts:905-913`), for core's plan: Hacknet
+   * servers here (BN9, SF9: `Hacknet/HacknetHelpers.tsx:34-36`) are a problem, as the worker says.
+   */
+  readHacknetNodes():
+    | { nodes: { level: number; ram: number; cores: number }[]; mults: Record<string, number> }
+    | { problem: string } {
+    if (hasHacknetServers()) return { problem: "Hacknet servers here (BN9 or SF9): the brain buys no Hacknet there" };
+    const nodes = Player.hacknetNodes.flatMap((node) =>
+      node instanceof HacknetNode ? [{ level: node.level, ram: node.ram, cores: node.cores }] : [],
+    );
+    const { mults } = Player;
+    return {
+      nodes,
+      mults: {
+        purchaseCost: mults.hacknet_node_purchase_cost,
+        levelCost: mults.hacknet_node_level_cost,
+        ramCost: mults.hacknet_node_ram_cost,
+        coreCost: mults.hacknet_node_core_cost,
+      },
+    };
+  },
+  /**
+   * Core's plan's steps for Netburners' Hacknet totals (#387), each as the Hacknet page's buttons buy it
+   * (`Hacknet/ui/HacknetRoot.tsx:55`, `HacknetNodeElem.tsx:81`, through `Hacknet/HacknetHelpers.tsx:38-83`,
+   * `:238-337`), each refused without the money: stopped there, as the worker stops. Done once the totals are the
+   * invitation's (levels 100, RAM 8 GB, cores 4, `Faction/FactionInfo.tsx:675`). Not named `purchaseNode` or
+   * `upgradeLevel`, NS functions.
+   */
+  buildHacknetSetup(
+    steps: { kind: "node" | "level" | "ram" | "core"; node: number; count?: number; cost: number }[],
+  ): EffectorResult {
+    if (hasHacknetServers()) return result(false, "Hacknet servers here (BN9 or SF9): the brain buys no Hacknet there");
+    // As the worker words its money: "$6,332", up to the dollar.
+    const dollarsUp = (amount: number) => `$${Math.ceil(amount).toLocaleString("en-US")}`;
+    const setup = steps.reduce((sum, step) => sum + step.cost, 0);
+    for (const step of steps) {
+      const node = Player.hacknetNodes[step.node];
+      const count = step.count ?? 1;
+      const bought =
+        step.kind === "node"
+          ? purchaseHacknet() === step.node
+          : !(node instanceof HacknetNode)
+            ? false
+            : step.kind === "level"
+              ? purchaseLevelUpgrade(node, count)
+              : step.kind === "ram"
+                ? purchaseRamUpgrade(node, count)
+                : purchaseCoreUpgrade(node, count);
+      if (!bought) {
+        const what = step.kind === "node" ? `node ${step.node}` : `${count} ${step.kind} on node ${step.node}`;
+        return result(
+          false,
+          `the game refused ${what} (${dollarsUp(step.cost)}; the setup ${dollarsUp(setup)}): not enough money`,
+        );
+      }
+    }
+    let levels = 0;
+    let ram = 0;
+    let cores = 0;
+    for (const node of Player.hacknetNodes) {
+      if (!(node instanceof HacknetNode)) continue;
+      levels += node.level;
+      ram += node.ram;
+      cores += node.cores;
+    }
+    return result(
+      levels >= 100 && ram >= 8 && cores >= 4,
+      "every purchase went through, but the totals aren't Netburners' invitation's",
     );
   },
 };

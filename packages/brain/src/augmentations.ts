@@ -142,7 +142,9 @@ import {
   type JoinedFaction,
   levellingInstallMultipliers,
   type MediumSnapshotData,
+  NETBURNERS,
   NEUROFLUX_GOVERNOR,
+  type NetburnersRoute,
   type NextCountable,
   neuroFluxLadder,
   nextCountables,
@@ -627,6 +629,12 @@ export interface AugmentationInputs {
    * as before #357 (G5's hold, the count rule).
    */
   gangInstall?: GangInstallFigures | null;
+  /**
+   * Netburners before it's joined (#387, the controller's from ./hacknet.ts's `netburnersRoute`): the planner's
+   * countables count its five, by A5's work there after its Hacknet setup's money and its invitation. Absent or null,
+   * none of them (it's joined, invited and joined next, hacking under 80, or Hacknet servers in the BitNode).
+   */
+  netburners?: NetburnersRoute | null;
 }
 
 /** What the rule asks of the controller. */
@@ -1503,8 +1511,20 @@ export class AugmentationRule {
    * The planner's wait for the count (#343) likewise: the first of the countables it waits for by work.
    */
   countHoldTarget(): { faction: string; augmentation: string } | null {
-    const held = this.#countHeld ?? this.#waitedFor.find((each) => each.way === "work") ?? null;
+    // Not one of a faction not joined yet (Netburners', #387): A5 works for the next meanwhile.
+    const held =
+      this.#countHeld ?? this.#waitedFor.find((each) => each.way === "work" && each.beforeJoinMs === undefined) ?? null;
     return held?.way === "work" ? { faction: held.faction, augmentation: held.augmentation } : null;
+  }
+
+  /**
+   * Whether the planner's wait (#343) waits for one of Netburners' countables before it's joined (#387): the Hacknet
+   * rule's go-ahead for its setup, with their time to its invitation (τ's part). Null while installing now, or with
+   * none of them among the k.
+   */
+  netburnersWaitedFor(): { beforeJoinMs: number } | null {
+    const first = this.#waitedFor.find((each) => each.faction === NETBURNERS && each.beforeJoinMs !== undefined);
+    return this.#enabled && first?.beforeJoinMs !== undefined ? { beforeJoinMs: first.beforeJoinMs } : null;
   }
 
   /**
@@ -1685,6 +1705,7 @@ export class AugmentationRule {
         shareBonus: shareBonusMean(this.#shareSamples.map((sample) => sample.bonus)),
         gangForming: inputs.gangForming ?? null,
         gangInstall: inputs.gangInstall ?? null,
+        netburners: inputs.netburners ?? null,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -2046,6 +2067,7 @@ export class AugmentationRule {
     shareBonus,
     gangForming,
     gangInstall,
+    netburners,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -2066,6 +2088,7 @@ export class AugmentationRule {
     shareBonus: number;
     gangForming: { required: number; unread?: boolean } | null;
     gangInstall: GangInstallFigures | null;
+    netburners: NetburnersRoute | null;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -2448,6 +2471,8 @@ export class AugmentationRule {
             work: holdWork,
             money: budget,
             income,
+            // Netburners' five before it's joined (#387): the Hacknet rule buys its setup once one is waited for.
+            netburners,
           });
           next = nextCountables({
             toCome,

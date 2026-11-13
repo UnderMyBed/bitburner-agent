@@ -4,9 +4,10 @@
  * traveller's (#141), the Singularity backend's (#145), the faction joiner's (#147), the augmentation buyer's (#149),
  * the donor's (#225), the faction, company, crime and class workers' (#151, #153, #156, #158), the cloud server buyer's
  * (#159) and upgrader's (#194), the backdoor's (#162), the installer's (#164), the destroyer's (#175), the faction
- * state's reader (#197), the game's closer (#303), the gang's (#325), and Bladeburner's (#367). A fresh save's home must hold the Agent plus
- * the largest of those it can run (`freshSaveHomeWorkerFileNames`), so the RAM budget test and the simulator and E2
- * suites read these lists. Functions, not constants, so in-game bundles that don't use them leave them out.
+ * state's reader (#197), the game's closer (#303), the Hacknet buyer's (#387), the gang's (#325), and Bladeburner's
+ * (#367). A fresh save's home must hold the Agent plus the largest of those it can run (`freshSaveHomeWorkerFileNames`),
+ * so the RAM budget test and the simulator and E2 suites read these lists. Functions, not constants, so in-game bundles
+ * that don't use them leave them out.
  */
 import { BUY_AUGMENTATION_WORKER_NAME, INSTALL_AUGMENTATIONS_WORKER_NAME } from "./augmentations.ts";
 import { BACKDOOR_WORKER_NAME } from "./backdoors.ts";
@@ -22,6 +23,7 @@ import { FACTION_STATE_WORKER_NAME } from "./faction-state.ts";
 import { JOIN_FACTION_WORKER_NAME } from "./factions.ts";
 import { gangWorkerFileNames } from "./gang.ts";
 import { HACK_LOOP_DEPLOY_WORKER_NAME, HACK_LOOP_ROOT_WORKER_NAME } from "./hack-loop.ts";
+import { HACKNET_SETUP_WORKER_NAME } from "./hacknet.ts";
 import { UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 import { TRAVEL_WORKER_NAME } from "./locations.ts";
 import { BUY_PROGRAM_WORKER_NAME } from "./programs.ts";
@@ -56,6 +58,7 @@ export function homeWorkerFileNames(): string[] {
     DESTROY_BITNODE_WORKER_NAME,
     CLOSE_GAME_WORKER_NAME,
     FACTION_STATE_WORKER_NAME,
+    HACKNET_SETUP_WORKER_NAME,
     ...gangWorkerFileNames(),
     ...bladeburnerWorkerFileNames(),
     ...singularityWorkerFileNames(),

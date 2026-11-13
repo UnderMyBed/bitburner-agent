@@ -23,6 +23,7 @@ import { acceptsDonations, donationsUnlocked, donationToReach } from "./donation
 import type { JoinedFaction } from "./faction-state.ts";
 import { factionReputationPerSecond, type WorkingPerson } from "./faction-work.ts";
 import { bestWorkRate, type WorkConditions } from "./faction-work-choice.ts";
+import { INVITATION_CHECK_MS, NETBURNERS } from "./hacknet.ts";
 import type { Work } from "./work.ts";
 
 /** `Omit` over each member of a union, not over their common fields. */
@@ -65,9 +66,22 @@ export function donationTermsOf(
 /**
  * One to come for Daedalus's count (#243), with its money: what it adds to the set's, and any donation. By work, its
  * work's time alone (`workMs`, #343: its reputation at the rate, the money aside), as the work at one faction at a time
- * adds up.
+ * adds up. `beforeJoinMs` (#387): sold by a faction not joined yet, the time to its invitation, in `workMs` too.
  */
-export type CountableWithMoney = CountableToCome & { money: number; workMs?: number };
+export type CountableWithMoney = CountableToCome & { money: number; workMs?: number; beforeJoinMs?: number };
+
+/**
+ * Netburners before it's joined (#387): its Hacknet setup's money (0 once bought) and whether it has invited. Its
+ * countables come by A5's work there once it's joined, after the setup's money at the income and the game's check for
+ * invitations (`INVITATION_CHECK_MS`); none before hacking 80, its invitation's other need, as the time to that isn't
+ * known (the caller passes none then: cautious for waiting).
+ */
+export interface NetburnersRoute {
+  /** What Netburners sells in the BitNode (core's `augmentationsSoldBy`). */
+  sold: readonly string[];
+  setupMoney: number;
+  invited: boolean;
+}
 
 /**
  * Who works for a faction while an install is held (#243): the owner's work wins (only faction work at the seller
@@ -96,6 +110,12 @@ export interface HoldWork {
  *   and its own, beyond `money`, at `income` a second. With no income measured, only what `money` covers, unless
  *   `assumeMoney` (a hold's window already open: a restart or a gap lost the income for 10 minutes), when the money
  *   is taken as coming until the income is measured or the window ends.
+ * And with `netburners` (#387), Netburners' countables before it's joined, by A5's work there once it is (only with
+ * A5's switch on and no owner's work: theirs can't be at a faction not joined), from no reputation and no favour (never
+ * joined, as #387's runs had it; cautious for waiting where it has some), each `beforeJoinMs` later: the setup's money
+ * after the set's at the income (`setupMoney`, 0 once bought), then the game's check (`INVITATION_CHECK_MS`); none once
+ * invited. Left out, labelled: the setup's money from the next k's (`nextCountables` adds each one's price alone, so
+ * about $170k short: optimistic for waiting); the faction state's reading of the invitation, up to a minute.
  */
 export function countablesToCome({
   sold,
@@ -110,6 +130,7 @@ export function countablesToCome({
   money,
   income,
   assumeMoney = false,
+  netburners = null,
 }: {
   sold: readonly string[];
   state: AugmentationPurchaseState;
@@ -123,6 +144,7 @@ export function countablesToCome({
   money: number;
   income: number | null;
   assumeMoney?: boolean;
+  netburners?: NetburnersRoute | null;
 }): CountableWithMoney[] {
   const setNames = set.purchases.map((purchase) => purchase.name);
   const afterSet = { ...state, queued: [...state.queued, ...setNames] };
@@ -205,6 +227,28 @@ export function countablesToCome({
       undefined,
     );
     if (soonest !== undefined) toCome.push(soonest);
+  }
+  if (netburners === null || joined.some((faction) => faction.name === NETBURNERS)) return toCome;
+  if (work.owners !== null || !work.brainWorks) return toCome;
+  const perSecond = bestWorkRate(person, { name: NETBURNERS, reputation: 0, favor: 0 }, conditions)?.perSecond;
+  const beforeJoinMs = netburners.invited ? 0 : moneyMsFor(netburners.setupMoney) + INVITATION_CHECK_MS;
+  if (perSecond === undefined || !Number.isFinite(beforeJoinMs)) return toCome;
+  for (const name of netburners.sold) {
+    if (name === NEUROFLUX_GOVERNOR || name === THE_RED_PILL || sold.includes(name)) continue;
+    if (Object.hasOwn(afterSet.installed, name) || afterSet.queued.includes(name)) continue;
+    if (missingPrerequisites(name, afterSet).length > 0) continue;
+    const { reputation } = augmentationCost(name, afterSet);
+    const priceAdded = purchaseSequenceCost(augmentationBuyOrder([...setNames, name]), state).money - set.money;
+    const workMs = beforeJoinMs + (reputation / perSecond) * 1000;
+    toCome.push({
+      augmentation: name,
+      faction: NETBURNERS,
+      way: "work",
+      etaMs: Math.max(workMs, moneyMsFor(priceAdded)),
+      money: priceAdded,
+      workMs,
+      beforeJoinMs,
+    });
   }
   return toCome;
 }

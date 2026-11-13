@@ -82,7 +82,7 @@
     <form>
       <select name="action" aria-label="Action">
         <option>travel</option><option>buyTor</option><option>buyProgram</option><option>upgradeHomeRam</option>
-        <option>joinFaction</option><option>purchaseAugmentation</option><option>donateToFaction</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option><option>createGang</option><option>joinBladeburnerDivision</option><option>upgradeBladeburnerSkill</option>
+        <option>joinFaction</option><option>purchaseAugmentation</option><option>donateToFaction</option><option>buyServer</option><option>upgradeServer</option><option>backdoor</option><option>installAugmentations</option><option>destroyBitNode</option><option>createGang</option><option>joinBladeburnerDivision</option><option>upgradeBladeburnerSkill</option><option>buyHacknetSetup</option>
       </select>
       <input name="args" aria-label="Arguments (JSON)" size="40" value='{"city": "Aevum"}'>
       <button type="submit">Queue it</button>
@@ -783,12 +783,24 @@ function render(status) {
         ? `$${Math.round(view.hold).toLocaleString()} held${view.holdIn ? ` in ${view.holdIn}` : ""} for an invitation` +
           (view.waitingFor ? `; waiting for ${view.waitingFor}` : "")
         : `waiting for ${view.waitingFor ?? "nothing"}`;
+  // Netburners' Hacknet setup (#387): buying it, bought, the invitation, or why not.
+  const hacknetText = (view) =>
+    view.invited
+      ? "Netburners invited"
+      : view.bought
+        ? "the setup bought; waiting for Netburners' invitation"
+        : view.buying
+          ? `buying the setup for Netburners' invitation ($${Math.round(view.cost ?? 0).toLocaleString()})`
+          : `waiting for ${view.waitingFor ?? "nothing"}`;
   document.querySelector("#faction-rule").replaceChildren(
     element("div", `The brain's faction work: ${rule.enabled ? workLine : "off"}`, rule.enabled && rule.sent ? "ok" : "muted"),
     element("div", `Joining: ${rule.joining ?? "none"}${rule.joiningAlongside ? `; ${rule.joiningAlongside} beside it, a join with enemies` : ""}`),
     element("div", `City factions: ${rule.cityGroup ?? "not chosen yet"}`),
     ...(rule.invitations
       ? [element("div", `Invitations: ${invitationText(rule.invitations)}`, rule.invitations.travel || rule.invitations.hold ? "ok" : "muted")]
+      : []),
+    ...(rule.hacknet
+      ? [element("div", `Netburners' Hacknet: ${hacknetText(rule.hacknet)}`, rule.hacknet.buying || rule.hacknet.invited ? "ok" : "muted")]
       : []),
     ...rule.passedOver.map((passed) =>
       element("div", `${passed.faction}'s invitation not joined: another city group's (it would ban ${passed.bans.join(", ")})`, "muted"),

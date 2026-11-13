@@ -584,6 +584,32 @@ describe("the brain's joins and faction work (#203)", () => {
     expect((await rule({ waiting: true }))[0]).toBe("The brain's faction work: waiting for the Agent's snapshots");
   });
 
+  test("Netburners' Hacknet setup (#387): buying it, bought, invited, or why not", async () => {
+    const hacknet = { wanted: true, cost: 170_000, buying: false, bought: false, invited: false, waitingFor: null };
+    const line = async (view: Partial<typeof hacknet> & { waitingFor?: string | null }) => {
+      const { document } = await openPage(() => ({
+        status: 200,
+        body: withRule({ hacknet: { ...hacknet, ...view } }),
+      }));
+      return [...document.querySelectorAll("#faction-rule div")]
+        .map((each) => [each.textContent, each.className])
+        .find(([text]) => text?.startsWith("Netburners' Hacknet: "));
+    };
+    expect(await line({ buying: true })).toEqual([
+      "Netburners' Hacknet: buying the setup for Netburners' invitation ($170,000)",
+      "ok",
+    ]);
+    expect(await line({ buying: true, bought: true })).toEqual([
+      "Netburners' Hacknet: the setup bought; waiting for Netburners' invitation",
+      "ok",
+    ]);
+    expect(await line({ invited: true })).toEqual(["Netburners' Hacknet: Netburners invited", "ok"]);
+    expect(await line({ wanted: false, waitingFor: "the planner's wait to reach Netburners' countables" })).toEqual([
+      "Netburners' Hacknet: waiting for the planner's wait to reach Netburners' countables",
+      "muted",
+    ]);
+  });
+
   test("its switch sends the other way from the status, to its own path", async () => {
     const { document, requests } = await openPage(() => ({ status: 200, body: withRule({ enabled: true }) }));
     (document.querySelector("#factions button") as HTMLButtonElement).click();

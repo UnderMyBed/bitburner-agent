@@ -1591,6 +1591,221 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         expect(controller.intentsView().map((each) => each.id)).toContain(INSTALL.id);
         expect(sentIds()).toContain(INSTALL.id);
       });
+
+      describe("Netburners' Hacknet setup (#387)", () => {
+        const HACKNET = intent({ action: "buyHacknetSetup", args: {} });
+        const JOIN_NETBURNERS = intent({ action: "joinFaction", args: { faction: "Netburners" } });
+        const NETBURNERS_FIVE = augmentationsSoldBy("Netburners", 1, null).filter((name) => name !== NFG);
+        /** Netburners' cheapest, 1,875 reputation. */
+        const NIC = "Hacknet Node NIC Architecture Neural-Upload";
+        /** `getPlayer().mults`' Hacknet cost multipliers, at 1: the Agent's snapshots carry them. */
+        const HACKNET_MULTS = {
+          hacknet_node_purchase_cost: 1,
+          hacknet_node_level_cost: 1,
+          hacknet_node_ram_cost: 1,
+          hacknet_node_core_cost: 1,
+        };
+        const hacknetMedium = (money: number) => {
+          const data = richMedium(money);
+          return { ...data, player: { ...data.player, mults: { ...data.player.mults, ...HACKNET_MULTS } } };
+        };
+        /** As `minuteAt`, the medium with the Hacknet multipliers; Netburners inviting or joined; another cycle. */
+        const hacknetMinute = (
+          connection: MemoryConnection,
+          minute: number,
+          money: number,
+          {
+            netburners = "none",
+            ownedSF = {},
+            lastAugReset = 0,
+            ...fields
+          }: Omit<Parameters<typeof plannerSlow>[0], "minute"> & {
+            netburners?: "none" | "invited" | "joined";
+            ownedSF?: Record<string, number>;
+            lastAugReset?: number;
+          } = {},
+          agentSessionId = "session-1",
+        ) => {
+          const slow = plannerSlow({ minute, ...fields });
+          const state = slow.factions.state;
+          const data = {
+            ...slow,
+            resetInfo: { ...slow.resetInfo, ownedSF, lastAugReset },
+            factions: {
+              ...slow.factions,
+              state: {
+                ...state,
+                invitations: [...state.invitations, ...(netburners === "invited" ? ["Netburners"] : [])],
+                joined: [
+                  ...state.joined,
+                  ...(netburners === "joined" ? [{ name: "Netburners", reputation: 0, favor: 0 }] : []),
+                ],
+              },
+            },
+          };
+          for (const [tier, snapshot] of [
+            ["slow", data],
+            ["medium", hacknetMedium(money)],
+          ] as const) {
+            connection.receive(
+              encodeControlMessage({
+                protocolVersion: CONTROL_PROTOCOL_VERSION,
+                type: "snapshot",
+                agentSessionId,
+                tier,
+                sequenceNumber: ++sequenceNumber,
+                gameTimeMs: 10 * 3_600_000 + minute * MINUTE,
+                data: snapshot,
+              }),
+            );
+          }
+        };
+        const hacknetDone = (connection: MemoryConnection) =>
+          send(connection, "fast", {
+            degradedTiers: [],
+            pageHeapUsedBytes: null,
+            game: null,
+            intents: [{ id: HACKNET.id, done: true, tries: 1, problem: null, backend: "sim" }],
+          });
+        /** Programs and home RAM off: the purchase order's first two aside. */
+        const onlyHacknet = () => {
+          store.setSetting("programs.enabled", "false");
+          store.setSetting("homeRam.enabled", "false");
+        };
+        const hacknetEvents = (events: unknown[]) =>
+          events.filter((event) => (event as { type: string }).type === "hacknetSetup") as {
+            phase: string;
+            estimateMs: number | null;
+          }[];
+
+        test("The Black Hand far off: the planner waits for Netburners' five; the setup, the invitation, the join, and the setup again after an install", () => {
+          onlyHacknet();
+          const { controller, connection, sentIds } = connectedWithLoopOff("planner");
+          const events: unknown[] = [];
+          controller.subscribe((event) => events.push(event));
+          // 29 of 30 at an install, The Black Hand 100,000 off. Netburners' first, 1,875 by A5's work after the setup
+          // (the money in hand) and the game's check: the planner waits for it, and the setup goes out.
+          hacknetMinute(connection, 0, 1e12, { blackHand: 0 });
+          const timing = controller.augmentationsView().progress?.timing;
+          expect(timing?.next[0]).toMatchObject({
+            augmentation: NIC,
+            faction: "Netburners",
+            way: "work",
+          });
+          expect(timing?.choice).toBeGreaterThanOrEqual(1);
+          expect(sentIds()).toContain(HACKNET.id);
+          expect(controller.intentsView().find((view) => view.id === HACKNET.id)?.source).toBe("purchase");
+          expect(controller.hacknetView()).toMatchObject({ wanted: true, buying: true, bought: false, invited: false });
+          expect(controller.hacknetView().cost).toBeGreaterThan(160_000);
+          expect(controller.hacknetView().cost).toBeLessThan(180_000);
+          expect(controller.factionsView().hacknet).toEqual(controller.hacknetView());
+          // The estimate to the invitation: the money in hand, so the game's check alone.
+          expect(hacknetEvents(events)).toEqual([expect.objectContaining({ phase: "wanted", estimateMs: 2_000 })]);
+          // A5 works for a countable at a joined faction meanwhile, never Netburners' before it's joined.
+          expect(controller.factionsView().choice?.faction).not.toBe("Netburners");
+          // Bought: still asked for (the Agent holds it done) until the invitation shows.
+          hacknetDone(connection);
+          hacknetMinute(connection, 1, 1e12, { blackHand: 0 });
+          expect(controller.hacknetView()).toMatchObject({ bought: true, buying: true });
+          expect(sentIds()).toContain(HACKNET.id);
+          // Invited: the setup no longer asked for; A5 joins Netburners (no enemies).
+          hacknetMinute(connection, 2, 1e12, { blackHand: 0, netburners: "invited" });
+          expect(sentIds()).not.toContain(HACKNET.id);
+          expect(sentIds()).toContain(JOIN_NETBURNERS.id);
+          expect(controller.hacknetView()).toMatchObject({ wanted: false, invited: true });
+          // Joined: A5 and A6 treat it as any other faction; its countables come by the joined path.
+          hacknetMinute(connection, 3, 1e12, { blackHand: 0, netburners: "joined" });
+          expect(controller.augmentationsView().progress?.timing?.next[0]).toMatchObject({
+            augmentation: NIC,
+            faction: "Netburners",
+          });
+          expect(controller.hacknetView().waitingFor).toBe("nothing: Netburners joined (A5 and A6 have it)");
+          expect(hacknetEvents(events).map((event) => event.phase)).toEqual(["wanted", "bought", "invited"]);
+          // An install later (another cycle, a new Agent): Hacknet and the join are lost, the five not yet installed,
+          // so the setup goes out again.
+          const again = connectAgent("session-2");
+          send(again, "static", network, "session-2");
+          hacknetMinute(again, 30, 1e12, { blackHand: 0, lastAugReset: 1 }, "session-2");
+          expect(
+            desiredStates(again)
+              .at(-1)
+              ?.intents.map((each) => each.id),
+          ).toContain(HACKNET.id);
+          expect(hacknetEvents(events).at(-1)).toMatchObject({ phase: "wanted" });
+        });
+
+        test("nothing once Netburners' five are installed, or queued; nothing with Hacknet servers (SF9)", () => {
+          onlyHacknet();
+          const { controller, connection, sentIds } = connectedWithLoopOff("planner");
+          const withFive = Object.fromEntries([
+            ...Object.entries(OWNED).slice(0, 20),
+            ...NETBURNERS_FIVE.map((name) => [name, 1] as const),
+          ]);
+          hacknetMinute(connection, 0, 1e12, { blackHand: 0, ownedAugs: withFive });
+          expect(sentIds()).not.toContain(HACKNET.id);
+          expect(controller.hacknetView()).toMatchObject({
+            wanted: false,
+            waitingFor: "nothing: Netburners' augmentations installed or queued",
+          });
+          expect(
+            controller.augmentationsView().progress?.timing?.next.some((each) => each.faction === "Netburners"),
+          ).toBe(false);
+          hacknetMinute(connection, 1, 1e12, { blackHand: 0, queued: ["Neural Wit Amplifier", ...NETBURNERS_FIVE] });
+          expect(sentIds()).not.toContain(HACKNET.id);
+          expect(controller.hacknetView().waitingFor).toBe("nothing: Netburners' augmentations installed or queued");
+          hacknetMinute(connection, 2, 1e12, { blackHand: 0, ownedSF: { 9: 1 } });
+          expect(sentIds()).not.toContain(HACKNET.id);
+          expect(controller.hacknetView().waitingFor).toBe("nothing: Hacknet servers here (BN9 or SF9), left out");
+          expect(
+            (controller.augmentationsView().progress?.timing?.next ?? []).some((each) => each.faction === "Netburners"),
+          ).toBe(false);
+        });
+
+        test("not worth its τ: The Black Hand's money 5 min off goes first, and the wait for 1 doesn't reach Netburners'", () => {
+          onlyHacknet();
+          const { controller, connection, sentIds } = connectedWithLoopOff("planner");
+          // The income measured over ten minutes, then the Hacknet multipliers: Netburners' five among the countables.
+          for (let minute = 0; minute <= 10; minute += 1) minuteAt(connection, minute, SHORT_OF_IT);
+          hacknetMinute(connection, 11, SHORT_OF_IT);
+          const timing = controller.augmentationsView().progress?.timing;
+          expect(timing).toMatchObject({ needed: 5, adding: 4, choice: 1 });
+          expect(timing?.next[0]).toMatchObject({ augmentation: TBH, way: "money" });
+          expect(sentIds()).not.toContain(HACKNET.id);
+          expect(controller.hacknetView()).toMatchObject({
+            wanted: false,
+            waitingFor: "the planner's wait to reach Netburners' countables",
+          });
+        });
+
+        test("a program first, then the setup; short of the money above the holds, it waits", () => {
+          store.setSetting("homeRam.enabled", "false");
+          const { controller, connection, sentIds } = connectedWithLoopOff("planner");
+          hacknetMinute(connection, 0, 1e12, { blackHand: 0 });
+          expect(sentIds().some((id) => id.startsWith("buyProgram("))).toBe(true);
+          expect(sentIds()).not.toContain(HACKNET.id);
+          expect(controller.hacknetView().waitingFor).toBe("BruteSSH.exe first");
+          store.setSetting("programs.enabled", "false");
+          // $100k, short of the set's money and the setup's: with no income measured, its money never comes, so
+          // Netburners' are no candidates.
+          hacknetMinute(connection, 1, 100_000, { blackHand: 0 });
+          expect(sentIds()).not.toContain(HACKNET.id);
+          expect(controller.hacknetView().waitingFor).toBe("the planner's wait to reach Netburners' countables");
+          // The income measured ($1m a second): the set's money and the setup's come within a minute, the planner waits
+          // for Netburners', and the setup waits for its money.
+          for (let minute = 2; minute <= 11; minute += 1) hacknetMinute(connection, minute, 100_000, { blackHand: 0 });
+          // CyberSec's three by the money first, then Netburners'.
+          const next = controller.augmentationsView().progress?.timing?.next ?? [];
+          expect(next.slice(0, 3).map((each) => each.faction)).toEqual(["CyberSec", "CyberSec", "CyberSec"]);
+          expect(next[3]).toMatchObject({ augmentation: NIC, faction: "Netburners" });
+          expect(controller.hacknetView().wanted).toBe(true);
+          expect(sentIds()).not.toContain(HACKNET.id);
+          // The money above the holds: here the city group's trip, which the invitations rule holds (#228).
+          // A city group's trip's $20.2m, with $100k: the setup's $169,660 at ×1 waits.
+          expect(controller.hacknetView().waitingFor).toBe(
+            "money above the $20,200,000 held for an invitation travelled for (#228) ($169,660 the setup)",
+          );
+        });
+      });
     });
 
     test("purchases reported done after the medium snapshot: their money taken off it (#213 re-review)", () => {
