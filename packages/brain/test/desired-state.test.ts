@@ -35,6 +35,7 @@ import {
   type InstallTimingPolicy,
   readCycleSeen,
   readInstallWait,
+  readOnlineClock,
 } from "../src/augmentations.ts";
 import { HACKING_MULTIPLIERS_UNREAD } from "../src/batcher.ts";
 import { readCloudServersEnabled } from "../src/cloud-servers.ts";
@@ -953,11 +954,11 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
   }
 
   /** A new brain on the same store (and so the same queue): its own channel and controller, with stand-in backups. */
-  function restartedBrain() {
+  function restartedBrain(environment: Environment | null = null) {
     channel = new ControlChannel({ token: TOKEN, clock: new ManualClock() });
     channel.setDeploymentState({ deployedId: "deployment-a", hold: false, deployFailed: false });
     const backups = standInBackups();
-    const restarted = new DesiredStateController({ channel, store, saveBackups: backups.saveBackups });
+    const restarted = new DesiredStateController({ channel, store, saveBackups: backups.saveBackups, environment });
     return { restarted, ...backups };
   }
 
@@ -1698,10 +1699,45 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           const { controller, connection } = connectedWithLoopOff("planner", "E1");
           for (let minute = 0; minute <= 10; minute += 1) cycleMinute(connection, minute, installed);
           const timing = timingOf(controller);
-          expect(timing).toMatchObject({ onlineMs: 30 * MINUTE, timeOnlineMs: 30 * MINUTE });
+          // T counts the stored 20 min; the bars' clock starts from 0 as before (#397's review), at 10 min.
+          expect(timing).toMatchObject({
+            onlineMs: 30 * MINUTE,
+            timeOnlineMs: 10 * MINUTE,
+            onlineBeforeMs: 20 * MINUTE,
+          });
+          expect(controller.augmentationsView().progress?.onlineMs).toBe(10 * MINUTE);
           expect(timing?.unseenMs).toBeUndefined();
           expect(timing?.candidates[0]).toEqual({ k: 0, tauMs: 0, estimateMs: 30 * MINUTE });
-          expect(readCycleSeen(store)).toEqual({ lastAugReset: installed, gameTimeMs: installed + 30_000 });
+          expect(timing?.words).toMatch(
+            /, 30 min this cycle \(T; 10 min online since the brain saw the cycle again, and 20 min online before it, in its slow snapshots stored\); /,
+          );
+          expect(readCycleSeen(store)).toEqual({
+            lastAugReset: installed,
+            gameTimeMs: installed + 30_000,
+            onlineBeforeMs: 20 * MINUTE,
+          });
+        });
+
+        test("a brain restarted 5 h into a cycle, its clock gone, the cycle's first 20 min stored: T counts them, the bars start from 0", () => {
+          const installed = TEN_HOURS - 5 * HOUR;
+          storedSlow(installed, installed, 20);
+          const { controller, connection } = connectedWithLoopOff("planner", "E1");
+          for (let minute = 0; minute <= 10; minute += 1) cycleMinute(connection, minute, installed);
+          expect(timingOf(controller)).toMatchObject({ onlineMs: 30 * MINUTE, timeOnlineMs: 10 * MINUTE });
+          // The bars' clock, and the online time they fall by: 10 min, not 30.
+          expect(controller.augmentationsView().progress?.onlineMs).toBe(10 * MINUTE);
+          expect(readOnlineClock(store)).toMatchObject({ lastAugReset: installed, onlineMs: 10 * MINUTE });
+          // Restarted again: the record keeps T's 20 min, the clock carries on.
+          const { restarted } = restartedBrain("E1");
+          const again = connectAgent();
+          send(again, "static", network);
+          cycleMinute(again, 11, installed);
+          expect(restarted.augmentationsView().progress?.timing).toMatchObject({
+            onlineMs: 31 * MINUTE,
+            timeOnlineMs: 11 * MINUTE,
+            onlineBeforeMs: 20 * MINUTE,
+          });
+          expect(restarted.augmentationsView().progress?.onlineMs).toBe(11 * MINUTE);
         });
 
         test("BN4.2's first cycle: a store from before #343, its clock for the cycle, no record of its start, a 5 h gap: T its time online", () => {
