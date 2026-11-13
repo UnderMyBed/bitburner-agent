@@ -145,6 +145,19 @@ export interface BladeburnerRankStep {
    */
   attempts?: number;
   next?: BladeburnerRankStep;
+  /**
+   * After its attempts with no `next` (#392's decision): the rest of the walk at this rank a second, the sustainable
+   * rate (`bladeburnerSustainableRate`), (target − x)/rate from where the stock left it (Wald's identity: Durrett,
+   * Theorem 4.8.6, a far target's first passage the distance over the drift).
+   */
+  tailRate?: number;
+}
+
+/** The analytic tail's seconds from `x` (#392): the rank still needed over the sustainable rate; Infinity at none. */
+function tailSeconds(step: BladeburnerRankStep, x: number, target: number): number {
+  const rate = step.tailRate;
+  if (rate === undefined || !(rate > 0)) return x >= target ? 0 : Number.POSITIVE_INFINITY;
+  return Math.max(0, target - x) / rate;
 }
 
 /**
@@ -157,6 +170,39 @@ export function bladeburnerAttemptsInCount(count: number, growthPerSecond: numbe
   const net = 1 - growthPerSecond * stepSeconds;
   if (!(net > 0)) return Number.POSITIVE_INFINITY;
   return count < 1 ? 0 : Math.floor(1 + (count - 1) / net);
+}
+
+/** An action's long-run supply (#392): its best plan's rank a second of cycle time, an attempt's cycle seconds, and its
+ * count's mean growth a second. */
+export interface BladeburnerRankSource {
+  rankPerSecond: number;
+  seconds: number;
+  growthPerSecond: number;
+}
+
+/**
+ * The sustainable rank a second once the counts are spent (#392's decision): each action's count regrows its mean
+ * growth a second (`Bladeburner.ts:1388-1393`, `growthFunction`'s range over 10 each 480 s, core's
+ * `countGrowthPerSecond`), so in the long run it can be attempted that often, each attempt its plan's cycle seconds
+ * (the attempt and its share of the rests: the stamina's). The second's budget is filled greedily by rank a second of
+ * that time, the most first (a fractional knapsack, which the greedy order solves: Dantzig, "Discrete-variable extremum
+ * problems", Operations Research 5, 1957), each action up to its growth × its cycle seconds, what's left resting alone
+ * (`restRankPerSecond`, Field Analysis's). Left out, and labelled: the regrowth's randomness (a tenth of a random
+ * integer a second, its mean taken) and the chances' change over the tail (the levels opened, the skills bought).
+ */
+export function bladeburnerSustainableRate(
+  sources: readonly BladeburnerRankSource[],
+  restRankPerSecond: number,
+): number {
+  let budget = 1;
+  let rate = 0;
+  for (const source of [...sources].sort((a, b) => b.rankPerSecond - a.rankPerSecond)) {
+    if (!(source.rankPerSecond > restRankPerSecond) || !(budget > 0)) break;
+    const share = Math.min(budget, source.growthPerSecond * source.seconds);
+    rate += share * source.rankPerSecond;
+    budget -= share;
+  }
+  return rate + Math.max(0, budget) * Math.max(0, restRankPerSecond);
 }
 
 /** Resting alone at `rankPerSecond` (Field Analysis's) as a walk's step: 30 s of it, no attempt. */
@@ -223,11 +269,13 @@ export function bladeburnerSecondsToRankAtLeast(step: BladeburnerRankStep, rank:
  * each step the first with chance w, else the second, w = attempts/n (n the first's own expected steps from `rank`),
  * set once more at attempts over the mixed walk's expected steps; 3,523 s against the simulated sequence's 3,068
  * (+15%) for Raid's 12 then a steady action from rank 3 in the core test. **The second's own count** (#392) is
- * bounded too, with its own `next` after it (the rule's: resting alone), by backward induction (`boundedNext`): left
- * unbounded, at a far target a plan with a count of 4 handed the whole walk to a next-best it could only run for its
- * own count, and the rule chose it for that (bn6-skills' hour at Typhoon's 2,500). Left out, and labelled: the counts'
- * growth while another action runs (only their own steps' growth is in their attempts), so a far target's time errs
- * long. With no `next`, a count short of the walk is never. The next-best is the one fastest from the rank now (#390's review),
+ * bounded too, by backward induction (`boundedNext`): left unbounded, at a far target a plan with a count of 4 handed
+ * the whole walk to a next-best it could only run for its own count, and the rule chose it for that (bn6-skills' hour
+ * at Typhoon's 2,500). **The tail** (#392's decision): once the stock (the counts now, in the plan's order) is spent,
+ * the rest of the walk is analytic, the rank still needed over the sustainable rate (`tailRate`,
+ * `bladeburnerSustainableRate`: the counts' regrowth), common to every plan; so far from the target the plans differ
+ * by their stock alone, and near it (the stock covering the target) the chain alone decides. With neither a `next` nor
+ * a `tailRate`, a count short of the walk is never. The next-best is the one fastest from the rank now (#390's review),
  * not from where the count runs out: labelled.
  * Left out, and labelled: the skill points the max rank earns (B3's), either way, as both routes earn them about in
  * proportion to the rank they make; the stamina's own path (a cycle's rest spread over its attempts,
@@ -238,7 +286,9 @@ export function bladeburnerSecondsToRank(step: BladeburnerRankStep, rank: number
   if (rank >= target) return 0;
   const attempts = step.attempts ?? Number.POSITIVE_INFINITY;
   if (attempts < 1) {
-    return step.next === undefined ? Number.POSITIVE_INFINITY : bladeburnerSecondsToRank(step.next, rank, target);
+    return step.next === undefined
+      ? tailSeconds(step, rank, target)
+      : bladeburnerSecondsToRank(step.next, rank, target);
   }
   // Each walk on its own grid, by its own steps, over the one window (the next-best's taken onto the first's).
   const bounded = attempts < Number.POSITIVE_INFINITY;
@@ -304,7 +354,16 @@ export function bladeburnerSecondsToRank(step: BladeburnerRankStep, rank: number
   }
   if (!(aliveOf(distribution) > 1e-12)) return seconds;
   // Then the next-best's from wherever the walk is.
-  if (step.next === undefined) return Number.POSITIVE_INFINITY;
+  if (step.next === undefined) {
+    // The analytic tail (#392) from wherever the stock left the walk.
+    if (step.tailRate === undefined) return Number.POSITIVE_INFINITY;
+    let tail = 0;
+    for (let i = low; i <= high; i++) {
+      const mass = distribution[i] as number;
+      if (mass !== 0) tail += mass * tailSeconds(step, grid.low + (i / cells) * (target - grid.low), target);
+    }
+    return seconds + tail;
+  }
   // The next-best on its own grid (#392: by its own steps, so solved once for every plan it follows).
   const following = step.next;
   const nextBounded = (following.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY;
@@ -379,11 +438,16 @@ function boundedNext(
     return seconds;
   };
   const tail = step.next === undefined ? null : solvedNext(step.next, target, tailCells, low);
-  if (tail === null) return remember(null);
+  if (tail === null && step.tailRate === undefined) return remember(null);
   const { offsets, columns, shares, extras } = chainOf(step, target, false, cells, low);
-  // V_0: the tail's at each point, between its own two around it (its last's to the target's 0 past it).
+  // V_0: the analytic tail's (#392), or the next's at each point, between its own two around it (its last's to the
+  // target's 0 past it).
   let values = new Float64Array(cells);
   for (let i = 0; i < cells; i++) {
+    if (tail === null) {
+      values[i] = tailSeconds(step, low + (i / cells) * (target - low), target);
+      continue;
+    }
     const cell = (i / cells) * tailCells;
     const k = Math.min(tailCells - 1, Math.floor(cell));
     const share = cell - k;

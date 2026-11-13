@@ -391,6 +391,7 @@ export {
   BLADEBURNER_TARGET_CELLS_MOST,
   BLADEBURNER_TARGET_WINDOW_DISTANCES,
   BLADEBURNER_TARGET_WINDOW_STEPS,
+  type BladeburnerRankSource,
   type BladeburnerRankStep,
   bladeburnerAttemptsInCount,
   bladeburnerCycleStep,
@@ -399,6 +400,7 @@ export {
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
   bladeburnerStepRise,
+  bladeburnerSustainableRate,
   bladeburnerTargetGrid,
 } from "./bladeburner-targets.ts";
 export {

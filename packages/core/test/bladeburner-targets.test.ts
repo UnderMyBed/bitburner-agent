@@ -22,6 +22,7 @@ import {
   BLADEBURNER_TARGET_CELLS_A_DISTANCE,
   BLADEBURNER_TARGET_CELLS_A_STEP,
   BLADEBURNER_TARGET_CELLS_MOST,
+  type BladeburnerRankSource,
   type BladeburnerRankStep,
   bladeburnerAttemptsInCount,
   bladeburnerCycleStep,
@@ -30,6 +31,7 @@ import {
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
   bladeburnerStepRise,
+  bladeburnerSustainableRate,
   bladeburnerTargetGrid,
 } from "../src/bladeburner-targets.ts";
 
@@ -584,38 +586,149 @@ describe("a far target's counts (#392)", () => {
     skills: { read: levels },
   };
 
-  test("a count of 4 doesn't take the next-best's whole walk: the next-best runs its own count, then the rest", () => {
-    const target = { rank: 174.7, target: 2500 };
+  const target = { rank: 174.7, target: 2500 };
+  const distance = 2500 - 174.7;
+  /** The sustainable rate from every plan the rule weighs: each action's best rank a second, its cycle, its growth. */
+  function sustainable(every: ReturnType<typeof bladeburnerPlansToTarget>) {
+    const best = new Map<string, BladeburnerRankSource>();
+    for (const plan of every) {
+      if (plan.work === null) continue;
+      const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === plan.work?.name);
+      if (action === undefined) continue;
+      const known = best.get(action.name);
+      if (known === undefined || plan.rankPerSecond > known.rankPerSecond) {
+        best.set(action.name, {
+          rankPerSecond: plan.rankPerSecond,
+          seconds: plan.work.seconds / plan.duty,
+          growthPerSecond: countGrowthPerSecond(action),
+        });
+      }
+    }
+    const alone = every.find((plan) => plan.work === null);
+    return bladeburnerSustainableRate([...best.values()], alone?.rankPerSecond ?? 0);
+  }
+
+  test("the choice is the stock's best rank a second (#392's decision): the tail common to every plan", () => {
     const every = bladeburnerPlansToTarget({ ...input, target });
     const chosen = chooseBladeburnerAction({ ...input, target });
     expect(chosen).toEqual(every[0]);
-    const tracking = every.filter((plan) => plan.work?.name === "Tracking");
-    expect(tracking.length).toBeGreaterThan(0);
-    expect(chosen.work?.name).not.toBe("Tracking");
-    expect(chosen.rankPerSecond).toBeGreaterThan(Math.max(...tracking.map((plan) => plan.rankPerSecond)));
-    // Every plan's walk is at least the distance over the fastest rate weighed (Wald's), none handed a faster one.
+    // The best rank a second of every plan the rule weighs: Raid's here, a count of 34.7.
     const fastest = Math.max(...every.map((plan) => plan.rankPerSecond));
-    for (const plan of every) expect(plan.toTarget?.seconds ?? 0).toBeGreaterThanOrEqual((2500 - 174.7) / fastest);
-    // And at least the rest's: once the counts are spent (Wald: each attempt expects at most its chance × its gain, at
-    // its best level; a tenth more for the counts' growth over their own steps), resting alone covers what's left at
-    // Field Analysis's 0.1 a 30 s. A next-best run past its own count (#386's, unbounded) went under it.
+    expect(chosen.rankPerSecond).toBe(fastest);
+    expect(chosen.work?.name).toBe("Raid");
+    // Wald: no plan's walk under the distance over the fastest rate; and none under what the counts can't cover at
+    // the sustainable rate (each attempt at most its chance × gain at its best level, a tenth more for the growth over
+    // its own steps). A next-best run past its own count (#386's, unbounded) went under it.
+    const rate = sustainable(every);
     const counted = readings.reduce((total, read) => {
       const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === read.name);
       if (action === undefined) return total;
-      let best = 0;
+      let most = 0;
       for (let level = 1; level <= read.maxLevel; level++) {
         const chance = Math.min(1, read.chance[0] * action.difficultyFac ** (1 - level));
-        best = Math.max(best, chance * actionRankGain(action, level, 1));
+        most = Math.max(most, chance * actionRankGain(action, level, 1));
       }
-      return total + 1.1 * read.count * best;
+      return total + 1.1 * read.count * most;
     }, 0);
-    const resting = (2500 - 174.7 - counted) / (0.1 / 30);
-    expect(resting).toBeGreaterThan(0);
-    for (const plan of every) expect(plan.toTarget?.seconds ?? 0).toBeGreaterThanOrEqual(resting);
+    expect(distance - counted).toBeGreaterThan(0);
+    for (const plan of every) {
+      const seconds = plan.toTarget?.seconds ?? 0;
+      expect(seconds).toBeGreaterThanOrEqual(distance / fastest);
+      expect(seconds).toBeGreaterThanOrEqual((distance - counted) / rate);
+    }
     console.log(
       `at 174.7 → 2,500: ${chosen.work?.name} level ${chosen.work?.level} at ${(60 * chosen.rankPerSecond).toFixed(3)} ` +
-        `rank/min, ${((chosen.toTarget?.seconds ?? 0) / 3600).toFixed(1)} h; the best Tracking ` +
-        `${((tracking[0]?.toTarget?.seconds ?? 0) / 3600).toFixed(1)} h`,
+        `rank/min, ${((chosen.toTarget?.seconds ?? 0) / 3600).toFixed(2)} h; the sustainable rate ` +
+        `${(60 * rate).toFixed(3)} rank/min`,
     );
+  });
+});
+
+describe("the sustainable rate (#392's decision)", () => {
+  test("each action to its count's growth, the most rank a second first, the rest resting alone", () => {
+    // By hand: 0.01 a second for a share of 100 s × 0.001 = 0.1, 0.005 for 0.2, the rest (0.7) at 0.001.
+    expect(
+      bladeburnerSustainableRate(
+        [
+          { rankPerSecond: 0.005, seconds: 50, growthPerSecond: 0.004 },
+          { rankPerSecond: 0.01, seconds: 100, growthPerSecond: 0.001 },
+        ],
+        0.001,
+      ),
+    ).toBeCloseTo(0.1 * 0.01 + 0.2 * 0.005 + 0.7 * 0.001, 15);
+    // One whose growth keeps up takes the whole second; one under resting alone isn't worked.
+    expect(bladeburnerSustainableRate([{ rankPerSecond: 0.01, seconds: 100, growthPerSecond: 0.05 }], 0.001)).toBe(
+      0.01,
+    );
+    expect(bladeburnerSustainableRate([{ rankPerSecond: 0.0005, seconds: 10, growthPerSecond: 0.1 }], 0.001)).toBe(
+      0.001,
+    );
+    expect(gameSource("Bladeburner/Bladeburner.ts")).toContain(
+      "contract.count += (seconds * contract.growthFunction()) / BladeburnerConstants.ActionCountGrowthPeriod;",
+    );
+  });
+
+  test("against a long walk with the counts regrowing as the game's: within 4 standard errors and 1%", () => {
+    // Raid-, Bounty Hunter- and Tracking-like, each worked whenever its count allows, the best first, else resting.
+    const actions = [
+      { chance: 0.1, gain: 55, loss: 2.5, seconds: 70, growth: [2, 40] as const },
+      { chance: 0.45, gain: 1.4, loss: 0, seconds: 30, growth: [5, 75] as const },
+      { chance: 0.7, gain: 0.35, loss: 0, seconds: 12, growth: [5, 75] as const },
+    ];
+    const restRate = 0.1 / 30;
+    const mean = (action: (typeof actions)[number]) => action.chance * action.gain - (1 - action.chance) * action.loss;
+    const rate = bladeburnerSustainableRate(
+      actions.map((action) => ({
+        rankPerSecond: mean(action) / action.seconds,
+        seconds: action.seconds,
+        growthPerSecond: (action.growth[0] + action.growth[1]) / 2 / 10 / 480,
+      })),
+      restRate,
+    );
+    const random = seeded(392);
+    const counts = actions.map(() => 0);
+    const order = actions
+      .map((action, index) => ({ index, rate: mean(action) / action.seconds }))
+      .sort((x, y) => y.rate - x.rate)
+      .map((each) => each.index);
+    // Each second, each count grows a random integer in its range, a tenth of it over 480 (`Bladeburner.ts:1388-1393`).
+    const grow = (seconds: number) => {
+      actions.forEach((action, index) => {
+        for (let second = 0; second < seconds; second++) {
+          const growth = action.growth[0] + Math.floor(random() * (action.growth[1] - action.growth[0] + 1));
+          counts[index] = (counts[index] as number) + growth / 10 / 480;
+        }
+      });
+    };
+    const batches: number[] = [];
+    for (let batch = 0; batch < 20; batch++) {
+      let time = 0;
+      let rank = 0;
+      while (time < 1e6) {
+        const index = order.find((each) => (counts[each] as number) >= 1);
+        if (index === undefined) {
+          grow(30);
+          time += 30;
+          rank += restRate * 30;
+          continue;
+        }
+        const action = actions[index] as (typeof actions)[number];
+        counts[index] = (counts[index] as number) - 1;
+        grow(action.seconds);
+        time += action.seconds;
+        const offset = 0.9 + 0.2 * random();
+        rank += random() < action.chance ? action.gain * offset : -action.loss * offset;
+      }
+      batches.push(rank / time);
+    }
+    const walked = batches.reduce((total, each) => total + each, 0) / batches.length;
+    const standardError = Math.sqrt(
+      batches.reduce((total, each) => total + (each - walked) ** 2, 0) / (batches.length - 1) / batches.length,
+    );
+    console.log(
+      `the sustainable rate ${(3600 * rate).toFixed(2)} rank/h; the walk's ${(3600 * walked).toFixed(2)} ± ` +
+        `${(3600 * standardError).toFixed(2)}`,
+    );
+    expect(Math.abs(walked - rate)).toBeLessThanOrEqual(4 * standardError + 0.01 * rate);
   });
 });
