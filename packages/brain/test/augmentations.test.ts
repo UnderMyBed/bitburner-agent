@@ -15,6 +15,7 @@ import {
   factionReputationPerSecond,
   favorAfterInstall,
   hackingExpOfLevel,
+  type InstallTimingCandidate,
   isWorthInstalling,
   LATER_CYCLE_FACTIONS,
   levellingInstallMultipliers,
@@ -52,6 +53,7 @@ import {
   earnedOf,
   formatEta,
   type InstallTimingPolicy,
+  type InstallTimingView,
   purchaseIntent,
   readAugmentationCycle,
   readAugmentationsEnabled,
@@ -4152,6 +4154,144 @@ describe("the planner's later cycles priced from the countables left (#389)", ()
     gameTimeMs += MINUTE;
     update({ slowData: slowWith({ cyberSec: 0 }), mediumData: medium({ money: MONEY }), factionWorking: true });
     expect(readCycleRebuild(store)).toEqual({ lastAugReset: 0, rebuildMs: null });
+  });
+});
+
+describe("the margin (#406): install now only by more than the best wait's τ error; the wait under way kept", () => {
+  const POOL = ["CyberSec", "NiteSec", ...LATER_CYCLE_FACTIONS];
+  /** Every countable the pool's factions sell under 10,000 reputation, installed; fillers sold elsewhere. */
+  const CHEAP = [
+    "Neurotrainer I",
+    "Wired Reflexes",
+    "Synaptic Enhancement Implant",
+    "Speech Enhancement",
+    "BitWire",
+    "ADR-V1 Pheromone Gene",
+    "Augmented Targeting I",
+    "Nuoptimal Nootropic Injector Implant",
+    "NutriGen Implant",
+    "Social Negotiation Assistant (S.N.A)",
+    "Combat Rib I",
+    "Speech Processor Implant",
+    "INFRARET Enhancement",
+    "Augmented Targeting II",
+    "Artificial Synaptic Potentiation",
+  ];
+  const ELSEWHERE = AUGMENTATION_NAMES.filter(
+    (name) =>
+      name !== NFG &&
+      name !== "The Red Pill" &&
+      ![...POOL, "Netburners"].some((faction) => augmentationsSoldBy(faction, 1, null).includes(name)),
+  );
+  const ownedOf = (fillers: number): Record<string, number> =>
+    Object.fromEntries([...CHEAP, NFG, ...ELSEWHERE.slice(0, fillers)].map((name) => [name, name === NFG ? 3 : 1]));
+  /** 28 installed: 2 to go; 27: 3 to go. Gen I queued: 1 new at an install. */
+  const OWNED_28 = ownedOf(12);
+  const OWNED_27 = ownedOf(11);
+  const MONEY = 1e15;
+  let earned = 0;
+  let minute = 0;
+  /**
+   * `count` readings, a minute apart, the share alternating 1 and 1.2 (so its mean has a measured error); first
+   * (`fresh`) the rule anew at `minutes` online this cycle (no κ carried: the first cycle, this one's shape).
+   */
+  const readings = (
+    joined: { name: string; reputation: number; favor: number }[],
+    owned: Record<string, number>,
+    { fresh = false, minutes = 19, count = 1 } = {},
+  ) => {
+    if (fresh) {
+      // A fresh rule: no install chosen, committed or waited for from before.
+      events = [];
+      store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+      store.deleteSetting(AUGMENTATION_INSTALL_WAIT_SETTING);
+      earned = 0;
+      store.setSetting(
+        AUGMENTATION_ONLINE_SETTING,
+        JSON.stringify({ lastAugReset: 0, onlineMs: minutes * MINUTE, lastGameTimeMs: gameTimeMs }),
+      );
+      store.setSetting(AUGMENTATION_CYCLE_SEEN_SETTING, JSON.stringify({ lastAugReset: 0, gameTimeMs: 0 }));
+      rule = newRule("planner");
+    }
+    for (let each = 0; each < count; each++) {
+      gameTimeMs += MINUTE;
+      earned += 60e6;
+      minute += 1;
+      update({
+        slowData: slow({ joined, queued: [GEN_I], ownedAugs: owned, earned, lastAugReset: 0 }),
+        mediumData: medium({ money: MONEY }),
+        shareBonus: minute % 2 === 0 ? 1 : 1.2,
+      });
+    }
+    const chosen = events.filter((event) => event.type === "augmentationInstallChosen").at(-1) as
+      | { timing?: InstallTimingView }
+      | undefined;
+    return chosen?.timing ?? (rule.view().progress?.timing as InstallTimingView);
+  };
+  const minutesOf = (ms: number | undefined) => (ms as number) / MINUTE;
+
+  test("a near tie within the error waits; a clear install-now win installs", () => {
+    // 2 to go, 1 new: install now T, 30 min; waiting for Gen II, its τ. Gen II's reputation set so its τ is 30.5 min,
+    // half a minute over T: install now wins by that, within the error: the wait.
+    const probe = readings([{ name: "CyberSec", reputation: 0, favor: 0 }], OWNED_28, { fresh: true, count: 11 });
+    const perMinute = 18_750 / minutesOf(probe.candidates[1]?.tauMs);
+    const at = (tauMinutes: number) => [{ name: "CyberSec", reputation: 18_750 - perMinute * tauMinutes, favor: 0 }];
+    const nearTie = readings(at(30.5), OWNED_28, { fresh: true, count: 11 });
+    expect(nearTie.tauError).toBeGreaterThan(0.02);
+    expect(minutesOf(nearTie.candidates[0]?.estimateMs)).toBeCloseTo(30, 6);
+    const tau = minutesOf(nearTie.candidates[1]?.tauMs);
+    expect(tau - 30).toBeGreaterThan(0);
+    expect(tau - 30).toBeLessThan(nearTie.tauError * tau);
+    expect(nearTie).toMatchObject({ choice: 1, kept: "margin" });
+    expect(nearTie.words).toMatch(
+      /; install now not shorter than the best wait by more than its τ's error \(±[\d.]+% of a τ\): the wait$/,
+    );
+    expect(events.filter((event) => event.type === "augmentationInstallChosen")).toEqual([]);
+    // Gen II 40 min off: install now wins by 10, past the error: it installs.
+    const clear = readings(at(40), OWNED_28, { fresh: true, count: 11 });
+    expect(clear).toMatchObject({ choice: 0, kept: null });
+  });
+
+  test("a held choice doesn't flap within the error: the wait under way kept against a rival shorter by less", () => {
+    // 3 to go, 1 new. Waiting for 1 (Gen II, τ1 10 min): τ1 + (T + τ1). For 2 (NiteSec's Neurotrainer II after it, one
+    // faction at a time): τ2, meeting the count. NiteSec far off first: the wait for 1 chosen, kept in the store.
+    const cyberSec = (minutes: number, perMinute: number) => ({
+      name: "CyberSec",
+      reputation: 18_750 - perMinute * minutes,
+      favor: 0,
+    });
+    // Each faction's rate at the share's mean, from its first τ from none (Gen II's 18,750; Neurotrainer II's 10,000).
+    const tauFromNone = (faction: string) =>
+      minutesOf(
+        readings([{ name: faction, reputation: 0, favor: 0 }], OWNED_27, { fresh: true, count: 11 }).candidates[1]
+          ?.tauMs,
+      );
+    const cyberPerMinute = 18_750 / tauFromNone("CyberSec");
+    const nitePerMinute = 10_000 / tauFromNone("NiteSec");
+    const joined = (niteMinutes: number) => [
+      cyberSec(10, cyberPerMinute),
+      { name: "NiteSec", reputation: 10_000 - nitePerMinute * niteMinutes, favor: 0 },
+    ];
+    const first = readings(joined(90), OWNED_27, { fresh: true, count: 11 });
+    expect(first).toMatchObject({ needed: 3, choice: 1, kept: null });
+    // The next reading: NiteSec's work set so τ2 is a minute under the wait for 1's estimate, within the error of the
+    // larger τ: the wait for 1 kept.
+    const waitFor1 = minutesOf(first.candidates.find((each) => each.k === 1)?.estimateMs) + 1;
+    const tau1 = minutesOf(first.candidates.find((each) => each.k === 1)?.tauMs);
+    /** NiteSec's work, minutes, for τ2 (CyberSec's τ1 first, then NiteSec's) to be `target`. */
+    const nite = (target: number) => target - tau1;
+    const held = readings(joined(nite(waitFor1 - 1)), OWNED_27);
+    const one = held.candidates.find((each) => each.k === 1) as InstallTimingCandidate;
+    const two = held.candidates.find((each) => each.k === 2) as InstallTimingCandidate;
+    expect(two.estimateMs).toBeLessThan(one.estimateMs);
+    expect(one.estimateMs - two.estimateMs).toBeLessThan(held.tauError * Math.max(one.tauMs, two.tauMs));
+    expect(held).toMatchObject({ choice: 1, kept: "held" });
+    expect(held.words).toMatch(
+      /; the wait under way kept: no rival shorter by more than the error \(±[\d.]+% of a τ\)/,
+    );
+    // Past the error (τ2 10 min under): the rival taken.
+    const taken = readings(joined(nite(waitFor1 + 1 - 10)), OWNED_27);
+    expect(taken).toMatchObject({ choice: 2, kept: null });
   });
 });
 

@@ -2946,6 +2946,8 @@ export class AugmentationRule {
             heldForIncome: false,
             heldForInvitation: false,
             tauScale: 1,
+            tauError: 0,
+            kept: null,
             next: [],
             timeOnlineMs: onlineMs,
             ...unseen,
