@@ -9,16 +9,32 @@
  *   by work, by a donation or by the money at the income), the k-th's time τ_k.
  * With N the countables still needed and T this cycle's time online so far (the brain's bars' clock, gaps over 3
  * minutes left out, #388; a cycle it first saw past its start counts the game's time before whole, which leans towards
- * waiting, as T weighs more on installing now's estimate than on any wait's), the next cycles are taken to be of this
- * one's shape, n countables in T (`installNowEstimateMs`, `waitEstimateMs`). The ceiling makes the last one worth
- * waiting for: at 29 of 30, the last 17 minutes off, waiting wins (decision 56's case, with no rule of its own). T
- * holds this cycle's rebuild, so a BitNode whose rebuild is long (BN4's, about 3 times BN1's) gets longer cycles by
- * itself.
+ * waiting, as T weighs more on installing now's estimate than on any wait's), the next cycles bring n countables each
+ * (n + k after a wait for k), ⌈(N − n) / n⌉ of them (`installNowEstimateMs`, `waitEstimateMs`). The ceiling makes the
+ * last one worth waiting for: at 29 of 30, the last 17 minutes off, waiting wins (decision 56's case, with no rule of
+ * its own).
+ * Each later cycle is priced from the countables left (#389; before it, each was this one's shape, T, and ran 2.8-3.1
+ * times optimistic at BN4.2's c6 and c7, 46 min against 128 and 31 against 96): the rebuild R, then the work for its
+ * own countables at this cycle's rate, R + (T − R) · W_j / W_0 (`laterCyclesMs`):
+ * - **R, the rebuild:** measured, this cycle's own: its time online before reputation was first earned at a joined
+ *   faction (the brain's, `CycleWork`), the invitations, the hacking level and A5's start in it (BN4.2's c2-c9: 4-5
+ *   min);
+ * - **W_0, the rate's measure:** the reputation this install's countables needed, one faction at a time
+ *   (`reputationOneFactionAtATime`: each faction's dearest, added up), over T − R: this cycle's rate, measured (decision
+ *   67's rates fitted online), taken as the rate after the install;
+ * - **W_j, the countables:** `countablesLeft`, cheapest first (the A5 hook works for the first countable it waits for,
+ *   #344, and BN4.2's c7-c9 bought the 4 cheapest left after c6 in that order), n a cycle as this one: the factions
+ *   joined, and Tian Di Hui's and the city factions' (#228: a city and money), each cycle's one faction at a time.
+ * With the same W in each later cycle as this one's, each is T again, the estimate before #389. Unpriced (no R
+ * measured, a cycle first seen past its first reputation; W_0 0, its countables bought by no work; or T ≤ R), and a
+ * cycle past the countables known, it's this one's shape (T, or T + τ_k after a wait), labelled.
  * Left out, each labelled:
- * - the next cycles as long as this one, though the install's multipliers, the favour and home's RAM make them faster:
- *   cautious for "install now";
- * - the next cycles' countables as easy as this one's, though the cheapest and nearest are bought first, so later ones
- *   are dearer or further off: optimistic for "install now";
+ * - the install's multipliers and the favour gained, which make the later cycles' rate faster than this one's: cautious
+ *   for "install now";
+ * - the city groups' exclusion (`CITY_FACTION_GROUPS`: one group a cycle), so a cycle may take two groups' countables:
+ *   optimistic; the cities' and Tian Di Hui's invitations' money and travel: optimistic; the hacking factions not
+ *   joined yet: cautious;
+ * - NeuroFlux Governor's reputation in W_0 (500 at its first level, `Augmentation/Augmentations.ts:1160`): left out;
  * - the factions joined later this cycle, and invitations from factions not joined yet (`countablesToCome` looks at
  *   the joined alone): their countables aren't among the k, cautious for waiting;
  * - restarts and time offline: optimistic for both;
@@ -46,7 +62,16 @@
 import { AUGMENTATIONS } from "./augmentation-data.ts";
 import { type AugmentationSet, augmentationBuyOrder } from "./augmentation-plan.ts";
 import type { CountableWithMoney } from "./augmentation-reach.ts";
-import { type AugmentationPurchaseState, purchaseSequenceCost } from "./augmentations.ts";
+import {
+  type AugmentationPurchaseState,
+  augmentationCost,
+  augmentationsSoldBy,
+  missingPrerequisites,
+  NEUROFLUX_GOVERNOR,
+  purchaseSequenceCost,
+} from "./augmentations.ts";
+import { THE_RED_PILL } from "./bitnodes.ts";
+import { CITY_FACTION_GROUPS, TIAN_DI_HUI } from "./factions.ts";
 
 /** One of the next countables (`nextCountables`), with the time and money of it and those before it together. */
 export type NextCountable = CountableWithMoney & {
@@ -119,19 +144,162 @@ export function nextCountables({
   return next;
 }
 
+/** A countable left after an install (#389): its reputation, and who sells it among the factions counted. */
+export interface CountableLeft {
+  augmentation: string;
+  reputation: number;
+  sellers: readonly string[];
+}
+
 /**
- * Install now's estimated time to the count, ms (#343): 0 once the set meets it (`adding` ≥ `needed`); else this
- * cycle's shape again, ⌈(N − n) / n⌉ more cycles of `onlineMs` each. Null with nothing new to the count (no install).
+ * The factions the later cycles are taken to join besides those joined now (#389): Tian Di Hui and the city factions,
+ * whose invitations need a city and money (#228, `Faction/FactionInfo.tsx:680-692`), so any cycle can have them (one
+ * city group a cycle, left out: optimistic).
  */
-export function installNowEstimateMs(needed: number, adding: number, onlineMs: number): number | null {
+export const LATER_CYCLE_FACTIONS: readonly string[] = [
+  TIAN_DI_HUI,
+  ...CITY_FACTION_GROUPS.flatMap((group) => group.factions),
+];
+
+/**
+ * The countables left after an install (#389), the cheapest first (ties to the game's order): those `factions` sell
+ * (never NeuroFlux Governor or The Red Pill), not installed, queued or in `set`, each with its prerequisites installed,
+ * queued, in the set or cheaper here (bought in an earlier cycle; a prerequisite dearer than it leaves it out, cautious),
+ * at its reputation after them (`augmentationCost`: the BitNode's `AugmentationRepCost`).
+ */
+export function countablesLeft({
+  factions,
+  bitNode,
+  state,
+  set,
+}: {
+  factions: readonly string[];
+  bitNode: number;
+  state: AugmentationPurchaseState;
+  set: readonly string[];
+}): CountableLeft[] {
+  const after = { ...state, queued: [...state.queued, ...set] };
+  const sellers = new Map<string, string[]>();
+  for (const faction of new Set(factions)) {
+    for (const name of augmentationsSoldBy(faction, bitNode, null)) {
+      if (name === NEUROFLUX_GOVERNOR || name === THE_RED_PILL) continue;
+      if (Object.hasOwn(after.installed, name) || after.queued.includes(name)) continue;
+      sellers.set(name, [...(sellers.get(name) ?? []), faction]);
+    }
+  }
+  const sorted = [...sellers].map(([augmentation, each]) => ({
+    augmentation,
+    reputation: augmentationCost(augmentation, after).reputation,
+    sellers: each,
+  }));
+  sorted.sort((a, b) => a.reputation - b.reputation || gameOrder(a.augmentation) - gameOrder(b.augmentation));
+  const left: CountableLeft[] = [];
+  const queued = [...after.queued];
+  for (const each of sorted) {
+    if (missingPrerequisites(each.augmentation, { installed: after.installed, queued }).length > 0) continue;
+    left.push(each);
+    queued.push(each.augmentation);
+  }
+  return left;
+}
+
+/**
+ * The reputation `countables` need, one faction at a time (#389, as `nextCountables` has the work: the reputation at
+ * one faction serves all it sells, `PersonObjects/Player/PlayerObject.ts:76`): the dearest first, each at a seller
+ * already worked for, else at the seller of the most of them (ties to the first listed), whose reputation it adds.
+ * One with no seller adds nothing.
+ */
+export function reputationOneFactionAtATime(
+  countables: readonly { reputation: number; sellers: readonly string[] }[],
+): number {
+  const dearest = [...countables].sort((a, b) => b.reputation - a.reputation);
+  const sells = (faction: string) => countables.filter((each) => each.sellers.includes(faction)).length;
+  const worked = new Set<string>();
+  let reputation = 0;
+  for (const each of dearest) {
+    if (each.sellers.length === 0 || each.sellers.some((faction) => worked.has(faction))) continue;
+    const seller = each.sellers.reduce((best, faction) => (sells(faction) > sells(best) ? faction : best));
+    worked.add(seller);
+    reputation += each.reputation;
+  }
+  return reputation;
+}
+
+/**
+ * This cycle's work (#389), what the later cycles are priced at: R, its time online before reputation was first earned
+ * at a joined faction (the rebuild), and W_0, the reputation its countables needed (`reputationOneFactionAtATime`).
+ */
+export interface CycleWork {
+  rebuildMs: number;
+  reputation: number;
+}
+
+/** What prices the later cycles (#389): the countables left (`countablesLeft`) and this cycle's work. */
+export interface LaterCycles {
+  left: readonly CountableLeft[];
+  work: CycleWork | null;
+}
+
+/** Whether `work` prices the later cycles (#389): R measured, W_0 above 0 and T past R. */
+function pricedBy(work: CycleWork | null | undefined, onlineMs: number): work is CycleWork {
+  return work != null && work.reputation > 0 && onlineMs > work.rebuildMs;
+}
+
+/**
+ * The later cycles' lengths, ms (#389): ⌈`count` / `perCycle`⌉ cycles, each the next `perCycle` of `left` (the last
+ * one the rest), R + (T − R) · W_j / W_0 at `work` (`onlineMs` T); unpriced, or past the countables known, `shapeMs`
+ * (this one's shape).
+ */
+export function laterCyclesMs({
+  count,
+  perCycle,
+  onlineMs,
+  shapeMs,
+  later,
+}: {
+  count: number;
+  perCycle: number;
+  onlineMs: number;
+  shapeMs: number;
+  later?: { left: readonly CountableLeft[]; work: CycleWork | null } | undefined;
+}): number[] {
+  const cycles: number[] = [];
+  const work = later?.work;
+  for (let start = 0; start < count; start += perCycle) {
+    const size = Math.min(perCycle, count - start);
+    const group = later?.left.slice(start, start + size) ?? [];
+    if (!pricedBy(work, onlineMs) || group.length < size) {
+      cycles.push(shapeMs);
+      continue;
+    }
+    const share = reputationOneFactionAtATime(group) / work.reputation;
+    cycles.push(work.rebuildMs + (onlineMs - work.rebuildMs) * share);
+  }
+  return cycles;
+}
+
+const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
+
+/**
+ * Install now's estimated time to the count, ms (#343): 0 once the set meets it (`adding` ≥ `needed`); else
+ * ⌈(N − n) / n⌉ more cycles, each priced from the countables left (`later`, #389: `laterCyclesMs`), or this one's
+ * shape, `onlineMs`, unpriced. Null with nothing new to the count (no install).
+ */
+export function installNowEstimateMs(
+  needed: number,
+  adding: number,
+  onlineMs: number,
+  later?: LaterCycles,
+): number | null {
   if (adding >= needed) return 0;
   if (!(adding > 0)) return null;
-  return Math.ceil((needed - adding) / adding) * onlineMs;
+  return sum(laterCyclesMs({ count: needed - adding, perCycle: adding, onlineMs, shapeMs: onlineMs, later }));
 }
 
 /**
  * Waiting for the next `k`'s estimated time to the count, ms (#343): τ_k once the set and they meet it; else τ_k and
- * ⌈(N − n − k) / (n + k)⌉ more cycles of this one's shape, each `onlineMs` + τ_k long. Null where τ_k is never.
+ * ⌈(N − n − k) / (n + k)⌉ more cycles, each priced from the countables left after the k (`later`, #389, at this
+ * cycle's work), or this one's shape, `onlineMs` + τ_k, unpriced. Null where τ_k is never.
  */
 export function waitEstimateMs(
   needed: number,
@@ -139,10 +307,18 @@ export function waitEstimateMs(
   k: number,
   tauMs: number,
   onlineMs: number,
+  later?: LaterCycles,
 ): number | null {
   if (!Number.isFinite(tauMs)) return null;
   if (adding + k >= needed) return tauMs;
-  return tauMs + Math.ceil((needed - adding - k) / (adding + k)) * (onlineMs + tauMs);
+  const cycles = laterCyclesMs({
+    count: needed - adding - k,
+    perCycle: adding + k,
+    onlineMs,
+    shapeMs: onlineMs + tauMs,
+    later,
+  });
+  return tauMs + sum(cycles);
 }
 
 /** A candidate: k 0 installs now, k ≥ 1 waits for the next k (their τ); its estimated time to the count, ms. */
@@ -150,6 +326,8 @@ export interface InstallTimingCandidate {
   k: number;
   tauMs: number;
   estimateMs: number;
+  /** Its later cycles' lengths, ms, where they're priced from the countables left (#389); absent, this one's shape. */
+  cyclesMs?: number[];
 }
 
 /** The planner's install timing (#343): N, n and T, the candidates with an estimate, and the choice (k), or null. */
@@ -166,6 +344,8 @@ export interface InstallTiming {
   heldForInvitation: boolean;
   /** The factor each wait's τ was scaled by (an overdue wait's measured error), 1 for none. */
   tauScale: number;
+  /** This cycle's work, where it priced the later cycles from the countables left (#389); absent, unpriced. */
+  work?: CycleWork;
 }
 
 /**
@@ -174,7 +354,8 @@ export interface InstallTiming {
  * to install (irreversible, it still passes the controller's gate), then to the fewer to wait for. With no income
  * measured (`incomeMeasured` false), installing now is chosen only once the set meets the count; else the least wait,
  * or none (`heldForIncome` says so); likewise while an invitation's money is held (`invitationHeld`,
- * `heldForInvitation`).
+ * `heldForInvitation`). With `later` (#389), each candidate's later cycles are priced from the countables left (a
+ * wait's without the k it waits for, by name), at this cycle's work, its `cyclesMs` given.
  */
 export function installTiming({
   needed,
@@ -184,22 +365,39 @@ export function installTiming({
   incomeMeasured = true,
   invitationHeld = false,
   tauScale = 1,
+  later,
 }: {
   needed: number;
   adding: number;
   onlineMs: number;
-  next: readonly { tauMs: number }[];
+  next: readonly { tauMs: number; augmentation?: string }[];
   incomeMeasured?: boolean;
   invitationHeld?: boolean;
   tauScale?: number;
+  later?: LaterCycles;
 }): InstallTiming {
+  const priced = pricedBy(later?.work, onlineMs);
+  /** A candidate's later cycles, where they're priced and there are any: `cyclesMs`. */
+  const cyclesOf = (count: number, perCycle: number, shapeMs: number, left: readonly CountableLeft[]) =>
+    priced && count > 0
+      ? { cyclesMs: laterCyclesMs({ count, perCycle, onlineMs, shapeMs, later: { left, work: later?.work ?? null } }) }
+      : {};
   const candidates: InstallTimingCandidate[] = [];
-  const now = installNowEstimateMs(needed, adding, onlineMs);
-  if (now !== null) candidates.push({ k: 0, tauMs: 0, estimateMs: now });
+  const now = installNowEstimateMs(needed, adding, onlineMs, later);
+  if (now !== null) {
+    const cycles = cyclesOf(needed - adding, adding, onlineMs, later?.left ?? []);
+    candidates.push({ k: 0, tauMs: 0, estimateMs: now, ...cycles });
+  }
   for (const [index, each] of next.entries()) {
+    const k = index + 1;
     const tauMs = each.tauMs === 0 ? 0 : each.tauMs * tauScale;
-    const estimateMs = waitEstimateMs(needed, adding, index + 1, tauMs, onlineMs);
-    if (estimateMs !== null) candidates.push({ k: index + 1, tauMs, estimateMs });
+    const waitedFor = next.slice(0, k).map((one) => one.augmentation);
+    const left = (later?.left ?? []).filter((one) => !waitedFor.includes(one.augmentation));
+    const afterWait = later === undefined ? undefined : { left, work: later.work };
+    const estimateMs = waitEstimateMs(needed, adding, k, tauMs, onlineMs, afterWait);
+    if (estimateMs !== null) {
+      candidates.push({ k, tauMs, estimateMs, ...cyclesOf(needed - adding - k, adding + k, onlineMs + tauMs, left) });
+    }
   }
   const least = (allowed: (candidate: InstallTimingCandidate) => boolean) => {
     let best: InstallTimingCandidate | null = null;
@@ -214,5 +412,6 @@ export function installTiming({
   const heldForInvitation = held && invitationHeld;
   const choice =
     heldForIncome || heldForInvitation ? (least((candidate) => candidate.k > 0)?.k ?? null) : (best?.k ?? null);
-  return { needed, adding, onlineMs, candidates, choice, heldForIncome, heldForInvitation, tauScale };
+  const work = priced && later?.work != null ? { work: later.work } : {};
+  return { needed, adding, onlineMs, candidates, choice, heldForIncome, heldForInvitation, tauScale, ...work };
 }

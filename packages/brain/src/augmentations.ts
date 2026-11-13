@@ -63,7 +63,12 @@
 //   wait never exceeds T; the overdue failure reports it. With no income measured (after a restart or a gap), or while
 //   an invitation's money is held (#228's hold), installing now is held unless the set meets the count; held for the
 //   income past two of its windows it's `augmentationIncomeHeld` (an event, a run report failure). T counts the
-//   cycle's time before the brain first saw it.
+//   cycle's time before the brain first saw it. Each later cycle is priced from the countables left (#389, core's
+//   `countablesLeft` and `laterCyclesMs`): R, this cycle's time online at its first look with reputation earned at a
+//   joined faction (kept in the store, `AUGMENTATION_CYCLE_REBUILD_SETTING`), and W_0, the reputation this install's
+//   countables needed at their joined sellers, one faction at a time; the countables left are the joined factions',
+//   Tian Di Hui's, the city factions' and (its route open, #387) Netburners'. Unpriced (R not measured, W_0 0), this
+//   cycle's shape, as before #389; the words say which.
 // - BN2 before the gang (#357's first slice, core's gang-route.ts): with no gang read and avmnite-02h's level in the
 //   static snapshot (`gangForming`), the planned branch's candidates are wait for the gang (τ_g: avmnite-02h's level at
 //   the measured experience rate, `#expRate`, and 70 s for the backdoor, the join and the forming) or install now (the
@@ -98,12 +103,14 @@ import {
   augmentationCost,
   augmentationEndgame,
   augmentationShops,
+  BLADEBURNER_FACTION,
   type Bn2Route,
   bitNodeHackingMultipliers,
   type CountableToCome,
   type CountableWithinReach,
   chooseAugmentationsToBuy,
   countAfterInstall,
+  countablesLeft,
   countablesToCome,
   countablesWithinReach,
   countdownExtensionMs,
@@ -140,6 +147,7 @@ import {
   installTiming,
   intentId,
   type JoinedFaction,
+  LATER_CYCLE_FACTIONS,
   levellingInstallMultipliers,
   type MediumSnapshotData,
   NETBURNERS,
@@ -151,6 +159,7 @@ import {
   purchaseSequenceCost,
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
+  reputationOneFactionAtATime,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
@@ -299,6 +308,11 @@ export type InstallTimingView = InstallTiming & {
   unseenGaps?: true;
   /** The time online in the store's slow snapshots of the cycle before the bars' clock began (#388): T counts it. */
   onlineBeforeMs?: number;
+  /**
+   * What prices the later cycles (#389, #343's route alone): R (null, not measured: `why`), W_0, and how many countables
+   * left are known. Priced, core's `work` and each candidate's `cyclesMs` are given; unpriced, this cycle's shape.
+   */
+  laterCycles?: { rebuildMs: number | null; reputation: number; left: number; why?: string };
   words: string;
   /**
    * BN2 before the gang (#357's (1)): its candidates in place of #343's, install now (k 0) and wait for the gang (k 1),
@@ -1158,6 +1172,52 @@ export interface CycleSeen {
   fromClock?: true;
 }
 
+/**
+ * This cycle's rebuild as the planner measures it (#389), kept in the store so a restart keeps it: R, T at the cycle's
+ * first look with reputation earned at a joined faction (A5's or the owner's work; never Bladeburners', which its rank
+ * earns, `Bladeburner/Bladeburner.ts:1278-1280`); `waiting` while it's seen with none; null where its first look
+ * already had some (first seen past it), so R isn't known and the later cycles stay unpriced.
+ */
+export const AUGMENTATION_CYCLE_REBUILD_SETTING = "augmentations.cycleRebuild";
+
+/** This cycle's rebuild (`AUGMENTATION_CYCLE_REBUILD_SETTING`): measured (or not, null), or still waiting for it. */
+export type CycleRebuild = { lastAugReset: number; rebuildMs: number | null } | { lastAugReset: number; waiting: true };
+
+/** The rebuild as stored, or null for none; a value the brain didn't write fails. */
+export function readCycleRebuild(store: TelemetryStore): CycleRebuild | null {
+  const value = store.getSetting(AUGMENTATION_CYCLE_REBUILD_SETTING);
+  if (value === null) return null;
+  let stored: Record<string, unknown> | null;
+  try {
+    stored = JSON.parse(value) as typeof stored;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_CYCLE_REBUILD_SETTING} isn't JSON`);
+  }
+  const { lastAugReset, rebuildMs, waiting } = stored ?? {};
+  if (isFiniteNumber(lastAugReset) && waiting === true && rebuildMs === undefined) return { lastAugReset, waiting };
+  if (isFiniteNumber(lastAugReset) && waiting === undefined && (rebuildMs === null || isFiniteNumber(rebuildMs))) {
+    return { lastAugReset, rebuildMs: rebuildMs as number | null };
+  }
+  throw new Error(`the store's ${AUGMENTATION_CYCLE_REBUILD_SETTING} isn't one the brain wrote`);
+}
+
+/**
+ * The rebuild after a look at the cycle `lastAugReset` (#389), `earned` whether a joined faction has reputation, at T
+ * `cycleMs`: a measured (or unmeasured) one kept; a wait measured at the first look with reputation; a new cycle
+ * waiting, or unmeasured where its first look already has reputation. The same object where nothing changes.
+ */
+export function nextCycleRebuild(
+  stored: CycleRebuild | null,
+  lastAugReset: number,
+  earned: boolean,
+  cycleMs: number,
+): CycleRebuild {
+  if (stored?.lastAugReset === lastAugReset) {
+    return "waiting" in stored && earned ? { lastAugReset, rebuildMs: cycleMs } : stored;
+  }
+  return earned ? { lastAugReset, rebuildMs: null } : { lastAugReset, waiting: true };
+}
+
 export function readCycleSeen(store: TelemetryStore): CycleSeen | null {
   const value = store.getSetting(AUGMENTATION_CYCLE_SEEN_SETTING);
   if (value === null) return null;
@@ -1217,13 +1277,17 @@ export function describeInstallTiming(
 ): string {
   const how = ({ way, faction }: { way: string; faction: string }) =>
     way === "work" ? `by work at ${faction}` : way === "donation" ? `by a donation to ${faction}` : `at ${faction}`;
-  const candidates = timing.candidates.map(({ k, tauMs, estimateMs }) => {
-    if (k === 0) return `install now ${formatEta(estimateMs)}`;
+  const candidates = timing.candidates.map(({ k, tauMs, estimateMs, cyclesMs }) => {
+    // Priced from the countables left (#389): each later cycle's length.
+    const then = cyclesMs === undefined ? "" : ` (then ${cyclesMs.map(formatEta).join(", ")})`;
+    if (k === 0) return `install now ${formatEta(estimateMs)}${then}`;
     const kth = timing.next[k - 1];
     const which =
       kth === undefined ? `the next ${k}` : k === 1 ? kth.augmentation : `the next ${k}, to ${kth.augmentation}`;
-    return `wait for ${which} (${formatEta(tauMs)}${kth === undefined ? "" : `, ${how(kth)}`}) ${formatEta(estimateMs)}`;
+    const tau = `${formatEta(tauMs)}${kth === undefined ? "" : `, ${how(kth)}`}`;
+    return `wait for ${which} (${tau}) ${formatEta(estimateMs)}${then}`;
   });
+  const later = describeLaterCycles(timing);
   const chosen =
     timing.choice === null
       ? timing.heldForIncome || timing.heldForInvitation
@@ -1244,8 +1308,34 @@ export function describeInstallTiming(
   return (
     `${count.installed} of ${count.required} installed, ${timing.adding} new at an install, ` +
     `${formatEta(timing.onlineMs)} this cycle (T${online}); to Daedalus's count: ` +
-    `${candidates.join(", ") || "no estimate"}${scaled}; chosen: ${chosen}${held}`
+    `${candidates.join(", ") || "no estimate"}${later}${scaled}; chosen: ${chosen}${held}`
   );
+}
+
+/**
+ * How the later cycles are priced, in words (#389), or "" with none (no `laterCycles`, or no candidate with a cycle
+ * after its install): "; later cycles from the 12 countables left, cheapest first: R 4 min, this cycle's 12,500
+ * reputation in 19 min"; unpriced, "; later cycles this one's shape: R not measured (no reputation earned yet)".
+ */
+function describeLaterCycles(timing: Omit<InstallTimingView, "words">): string {
+  const later = timing.laterCycles;
+  if (later === undefined) return "";
+  const { needed, adding } = timing;
+  if (!timing.candidates.some(({ k }) => adding + k < needed)) return "";
+  const reputation = Math.round(later.reputation).toLocaleString("en-US");
+  if (timing.work !== undefined) {
+    return (
+      `; later cycles from the ${later.left} countables left, cheapest first: R ${formatEta(timing.work.rebuildMs)}, ` +
+      `this cycle's ${reputation} reputation in ${formatEta(timing.onlineMs - timing.work.rebuildMs)}`
+    );
+  }
+  const why =
+    later.rebuildMs === null
+      ? `R not measured (${later.why ?? "unknown"})`
+      : later.reputation > 0
+        ? `no time worked yet past R ${formatEta(later.rebuildMs)}`
+        : "this install's countables needed no reputation at a joined seller";
+  return `; later cycles this one's shape: ${why}`;
 }
 
 /**
@@ -1985,6 +2075,15 @@ export class AugmentationRule {
    * Installing now held for the income (#343), without a break, `INCOME_HELD_TOO_LONG_MS` online: once,
    * `augmentationIncomeHeld` and a log line (a run report failure). In memory: a restart measures the income afresh.
    */
+  /** This cycle's rebuild (#389), R or null: the store's, moved on by this look (`nextCycleRebuild`) and kept. */
+  #cycleRebuild(lastAugReset: number, joined: readonly JoinedFaction[], cycleMs: number): CycleRebuild {
+    const stored = readCycleRebuild(this.#store);
+    const earned = joined.some((each) => each.name !== BLADEBURNER_FACTION && each.reputation > 0);
+    const next = nextCycleRebuild(stored, lastAugReset, earned, cycleMs);
+    if (next !== stored) this.#store.setSetting(AUGMENTATION_CYCLE_REBUILD_SETTING, JSON.stringify(next));
+    return next;
+  }
+
   #watchIncomeHold(timing: InstallTimingView, lastAugReset: number, onlineMs: number, atMs: number): void {
     if (!timing.heldForIncome) {
       this.#incomeHeld = null;
@@ -2647,6 +2746,35 @@ export class AugmentationRule {
               ? stored
               : null;
           const tauScale = wait?.overdue === true ? Math.max(1, (onlineMs - wait.sinceOnlineMs) / wait.firstTauMs) : 1;
+          // The later cycles priced from the countables left (#389): R, this cycle's rebuild (kept in the store), and
+          // W_0, what this install's countables needed at their joined sellers, one faction at a time.
+          const rebuild = this.#cycleRebuild(resetInfo.lastAugReset, joined, cycleMs);
+          const reputation = reputationOneFactionAtATime(
+            [...installable, ...setNames]
+              .filter((name) => name !== NEUROFLUX_GOVERNOR)
+              .map((name) => ({
+                reputation: augmentationCost(name, purchaseState).reputation,
+                sellers: joined.filter((each) => shops.get(each.name)?.includes(name)).map((each) => each.name),
+              })),
+          );
+          const left = countablesLeft({
+            factions: [
+              ...joined.map((each) => each.name),
+              ...LATER_CYCLE_FACTIONS,
+              ...(netburners ? [NETBURNERS] : []),
+            ],
+            bitNode: currentNode,
+            state: purchaseState,
+            set: setNames,
+          });
+          const rebuildMs = "rebuildMs" in rebuild ? rebuild.rebuildMs : null;
+          const why =
+            rebuildMs !== null
+              ? {}
+              : {
+                  why:
+                    "waiting" in rebuild ? "no reputation earned yet" : "the cycle first seen with reputation earned",
+                };
           const figures = {
             ...installTiming({
               needed,
@@ -2656,10 +2784,12 @@ export class AugmentationRule {
               incomeMeasured: income !== null,
               invitationHeld: invitationHold > 0,
               tauScale,
+              later: { left, work: rebuildMs === null ? null : { rebuildMs, reputation } },
             }),
             next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
             timeOnlineMs: onlineMs,
             ...unseen,
+            laterCycles: { rebuildMs, reputation, left: left.length, ...why },
           };
           timing = { ...figures, words: describeInstallTiming(figures, count) };
           this.#watchIncomeHold(timing, resetInfo.lastAugReset, onlineMs, atMs);

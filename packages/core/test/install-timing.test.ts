@@ -3,8 +3,22 @@
 import { describe, expect, test } from "vitest";
 import { type AugmentationSet, installRule } from "../src/augmentation-plan.ts";
 import type { CountableWithMoney } from "../src/augmentation-reach.ts";
-import { type AugmentationPurchaseState, purchaseSequenceCost } from "../src/augmentations.ts";
-import { installNowEstimateMs, installTiming, nextCountables, waitEstimateMs } from "../src/install-timing.ts";
+import {
+  type AugmentationPurchaseState,
+  augmentationBitNodeMultipliers,
+  purchaseSequenceCost,
+} from "../src/augmentations.ts";
+import {
+  type CountableLeft,
+  countablesLeft,
+  installNowEstimateMs,
+  installTiming,
+  LATER_CYCLE_FACTIONS,
+  laterCyclesMs,
+  nextCountables,
+  reputationOneFactionAtATime,
+  waitEstimateMs,
+} from "../src/install-timing.ts";
 
 const MINUTE = 60_000;
 const STATE: AugmentationPurchaseState = {
@@ -294,5 +308,256 @@ describe("the next countables (#343)", () => {
         upTo: 0,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("the later cycles priced from the countables left (#389)", () => {
+  const left = (augmentation: string, reputation: number, ...sellers: string[]): CountableLeft => ({
+    augmentation,
+    reputation,
+    sellers,
+  });
+
+  test("the countables left: the cheapest first, ties to the game's order, none owned, queued, in the set or special", () => {
+    const names = (each: CountableLeft[]) => each.map((one) => [one.augmentation, one.reputation]);
+    expect(names(countablesLeft({ factions: ["Volhaven"], bitNode: 1, state: STATE, set: [] }))).toEqual([
+      ["Wired Reflexes", 1250],
+      ["Nuoptimal Nootropic Injector Implant", 5000],
+      ["Combat Rib I", 7500],
+      ["Speech Processor Implant", 7500],
+      ["DermaForce Particle Barrier", 15000],
+      ["Combat Rib II", 18750],
+      ["Neuralstimulator", 50000],
+    ]);
+    // Installed, queued or in the set: not left. Combat Rib II's prerequisite in the set: it's still left.
+    const after = countablesLeft({
+      factions: ["Volhaven", "Volhaven"],
+      bitNode: 1,
+      state: { ...STATE, installed: { "Wired Reflexes": 1 }, queued: ["Speech Processor Implant"] },
+      set: ["Combat Rib I"],
+    });
+    expect(after.map((one) => one.augmentation)).toEqual([
+      "Nuoptimal Nootropic Injector Implant",
+      "DermaForce Particle Barrier",
+      "Combat Rib II",
+      "Neuralstimulator",
+    ]);
+    // Each seller among the factions counted; a faction listed twice, once.
+    expect(after.at(-1)?.sellers).toEqual(["Volhaven"]);
+    const two = countablesLeft({ factions: ["Volhaven", "Sector-12"], bitNode: 1, state: STATE, set: [] });
+    expect(two.find((one) => one.augmentation === "Neuralstimulator")?.sellers).toEqual(["Volhaven", "Sector-12"]);
+    // Daedalus: never The Red Pill or NeuroFlux Governor; the Netburner Module's upgrades need it, sold elsewhere.
+    const daedalus = countablesLeft({ factions: ["Daedalus"], bitNode: 1, state: STATE, set: [] });
+    expect(daedalus.map((one) => one.augmentation)).toEqual([
+      "Synfibril Muscle",
+      "Synthetic Heart",
+      "NEMEAN Subdermal Weave",
+    ]);
+    // Tian Di Hui and the six city factions: the later cycles' (a city and money).
+    expect(LATER_CYCLE_FACTIONS).toEqual([
+      "Tian Di Hui",
+      "Sector-12",
+      "Aevum",
+      "Chongqing",
+      "New Tokyo",
+      "Ishima",
+      "Volhaven",
+    ]);
+  });
+
+  test("the reputation one faction at a time: each faction's dearest, added up; a shared seller where it serves more", () => {
+    expect(reputationOneFactionAtATime([])).toBe(0);
+    expect(reputationOneFactionAtATime([left("D", 15_000, "Volhaven"), left("C", 18_750, "Volhaven")])).toBe(18_750);
+    expect(reputationOneFactionAtATime([left("N", 37_500, "Tian Di Hui"), left("G", 37_500, "Chongqing")])).toBe(
+      75_000,
+    );
+    // Neuralstimulator at Chongqing, which sells the other too: one faction's work serves both.
+    expect(
+      reputationOneFactionAtATime([left("S", 50_000, "The Black Hand", "Chongqing"), left("G", 37_500, "Chongqing")]),
+    ).toBe(50_000);
+    // The dearest first: a cheaper one at a faction already worked for adds nothing; one with no seller, nothing.
+    expect(
+      reputationOneFactionAtATime([left("A", 5_000, "Volhaven"), left("B", 20_000, "Volhaven"), left("X", 9)]),
+    ).toBe(20_000);
+  });
+
+  test("each later cycle R + (T − R) · W_j / W_0; the same W, T again; unpriced or past those known, this one's shape", () => {
+    const work = { rebuildMs: 4 * MINUTE, reputation: 12_500 };
+    const cheap = [left("A", 12_500, "Sector-12"), left("B", 12_500, "Volhaven"), left("C", 25_000, "Volhaven")];
+    const at = (
+      count: number,
+      perCycle: number,
+      shapeMs: number,
+      later: Parameters<typeof laterCyclesMs>[0]["later"],
+    ) => laterCyclesMs({ count, perCycle, onlineMs: 23 * MINUTE, shapeMs, later });
+    // 3 countables at 1 a cycle: 12,500 each, then 25,000 (twice the work).
+    expect(at(3, 1, 23 * MINUTE, { left: cheap, work })).toEqual([23 * MINUTE, 23 * MINUTE, 42 * MINUTE]);
+    // 2 a cycle: A and B (two factions, 25,000), then C alone.
+    expect(at(3, 2, 23 * MINUTE, { left: cheap, work })).toEqual([42 * MINUTE, 42 * MINUTE]);
+    // Past the countables known: this one's shape (`shapeMs`) for each cycle short of them.
+    expect(at(5, 2, 30 * MINUTE, { left: cheap, work })).toEqual([42 * MINUTE, 30 * MINUTE, 30 * MINUTE]);
+    // Unpriced: no work (R not measured), W_0 0, or T not past R: each cycle this one's shape.
+    for (const unpriced of [null, { ...work, reputation: 0 }, { ...work, rebuildMs: 23 * MINUTE }]) {
+      expect(at(3, 1, 30 * MINUTE, { left: cheap, work: unpriced })).toEqual([30 * MINUTE, 30 * MINUTE, 30 * MINUTE]);
+    }
+    expect(at(2, 1, MINUTE, undefined)).toEqual([MINUTE, MINUTE]);
+    // A wait's later cycles bring n + k each: 6 to go, 2 new, waiting for 1 at 10 min, then 3 at three factions
+    // (30,000) in one cycle, 4 + 20 · 3; never the 2 a cycle installing now has.
+    const four = ["F0", "F1", "F2", "F3"].map((faction) => left(faction, 10_000, faction));
+    const at24 = { rebuildMs: 4 * MINUTE, reputation: 10_000 };
+    expect(waitEstimateMs(6, 2, 1, 10 * MINUTE, 24 * MINUTE, { left: four, work: at24 })).toBe(74 * MINUTE);
+    expect(installNowEstimateMs(6, 2, 24 * MINUTE, { left: four, work: at24 })).toBe(88 * MINUTE);
+  });
+
+  test("the countables left costing as this cycle's: install now's estimate is the one before #389, ⌈(N − n) / n⌉ · T", () => {
+    for (const [needed, adding] of [
+      [13, 4],
+      [6, 2],
+      [30, 16],
+      [9, 1],
+    ] as const) {
+      const work = { rebuildMs: 5 * MINUTE, reputation: 10_000 };
+      // n a cycle, all at one faction of its own at 10,000: W_0 again in every cycle.
+      const same = Array.from({ length: needed }, (_, index) =>
+        left(`L${index}`, 10_000, `F${Math.floor(index / adding)}`),
+      );
+      const old = installNowEstimateMs(needed, adding, 44 * MINUTE);
+      expect(old).toBe(Math.ceil((needed - adding) / adding) * 44 * MINUTE);
+      expect(installNowEstimateMs(needed, adding, 44 * MINUTE, { left: same, work })).toBeCloseTo(old as number, 6);
+    }
+  });
+
+  test("dearer countables left: install now's estimate rises, and the choice moves from install to wait", () => {
+    const work = { rebuildMs: 4 * MINUTE, reputation: 10_000 };
+    // 4 to go, 2 new: before #389, install now T 24, wait for 1 at 20 min 20 + 44 = 64. Install.
+    const base = { needed: 4, adding: 2, onlineMs: 24 * MINUTE, next: [{ tauMs: 20 * MINUTE, augmentation: "N" }] };
+    expect(installTiming(base)).toMatchObject({
+      candidates: [{ estimateMs: 24 * MINUTE }, { estimateMs: 64 * MINUTE }],
+      choice: 0,
+    });
+    // Left as this cycle's (10,000 at one faction): the same estimate to install now, each cycle's length given.
+    const same = [left("N", 10_000, "Tian Di Hui"), left("M", 10_000, "Tian Di Hui")];
+    expect(installTiming({ ...base, later: { left: same, work } })).toMatchObject({
+      candidates: [
+        { k: 0, estimateMs: 24 * MINUTE, cyclesMs: [24 * MINUTE] },
+        // After the wait, M alone at 10,000: R + (T − R) · 1, 24; not 44, its shape.
+        { k: 1, estimateMs: 44 * MINUTE, cyclesMs: [24 * MINUTE] },
+      ],
+      choice: 0,
+      work,
+    });
+    // Left dearer, 50,000 at Chongqing: install now's next cycle (N and M, two factions) 4 + 20 · 6 = 124 min; the
+    // wait's, M alone, 4 + 20 · 5 = 104 after 20. A tie, to install; 1 minute less of τ moves the choice to the wait.
+    const dear = [left("N", 10_000, "Tian Di Hui"), left("M", 50_000, "Chongqing")];
+    const priced = installTiming({ ...base, later: { left: dear, work } });
+    expect(priced.candidates).toEqual([
+      { k: 0, tauMs: 0, estimateMs: 124 * MINUTE, cyclesMs: [124 * MINUTE] },
+      { k: 1, tauMs: 20 * MINUTE, estimateMs: 124 * MINUTE, cyclesMs: [104 * MINUTE] },
+    ]);
+    expect(priced.choice).toBe(0);
+    const sooner = { ...base, next: [{ tauMs: 19 * MINUTE, augmentation: "N" }] };
+    expect(installTiming({ ...sooner, later: { left: dear, work } }).choice).toBe(1);
+    expect(installTiming(sooner).choice).toBe(0);
+    // Unpriced (no R measured): as before #389, no `cyclesMs` and no `work`.
+    expect(installTiming({ ...base, later: { left: dear, work: null } })).toEqual(installTiming(base));
+  });
+
+  test("BN4.2's c6 and c7 hindcast: 46 and 31 min against 128 and 96 before #389; within ×2 priced from those left", () => {
+    // From scratchpad/m4/predaedalus (the read-only store copy of 2026-11-12: cycles2-BN4.2.txt, augs.txt): the 24
+    // installed at c6's choice (c1-c5's purchases, NeuroFlux Governor once), each choice's set and joined factions,
+    // N, n and T (its install timing line), R (its "first work", 4 min), and the time online from the choice to the
+    // count met.
+    const C1_TO_C5 = [
+      "Artificial Synaptic Potentiation",
+      "Cranial Signal Processors - Gen I",
+      "Speech Processor Implant",
+      "Neurotrainer II",
+      "INFRARET Enhancement",
+      "Social Negotiation Assistant (S.N.A)",
+      "Combat Rib I",
+      "Nuoptimal Nootropic Injector Implant",
+      "ADR-V1 Pheromone Gene",
+      "Augmented Targeting I",
+      "Speech Enhancement",
+      "BitWire",
+      "Synaptic Enhancement Implant",
+      "Neurotrainer I",
+      "Wired Reflexes",
+      "NeuroFlux Governor",
+      "NutriGen Implant",
+      "Neural-Retention Enhancement",
+      "Embedded Netburner Module",
+      "Cranial Signal Processors - Gen II",
+      "Neural Wit Amplifier",
+      "Magnetism Amplifier",
+      "Cranial Signal Processors - Gen III",
+      "CRTX42-AA Gene Modification",
+    ];
+    const C6_SET = ["CashRoot Starter Kit", "Augmented Targeting II"];
+    const C7_SET = ["Combat Rib II", "DermaForce Particle Barrier"];
+    const HACKERS = ["BitRunners", "The Black Hand", "NiteSec", "Tian Di Hui", "CyberSec"];
+    const bn42 = (installed: string[]): AugmentationPurchaseState => ({
+      ...STATE,
+      installed: Object.fromEntries(installed.map((name) => [name, 1])),
+      bitNodeMultipliers: augmentationBitNodeMultipliers(4, { 4: 1 }),
+    });
+    const hindcast = [
+      {
+        installed: C1_TO_C5,
+        set: C6_SET,
+        joined: [...HACKERS, "Aevum", "Sector-12"],
+        needed: 6,
+        onlineMs: 23 * MINUTE,
+        oldMs: 46 * MINUTE,
+        actualMs: 128 * MINUTE,
+      },
+      {
+        installed: [...C1_TO_C5, ...C6_SET],
+        set: C7_SET,
+        joined: [...HACKERS, "Volhaven"],
+        needed: 4,
+        onlineMs: 31 * MINUTE,
+        oldMs: 31 * MINUTE,
+        actualMs: 96 * MINUTE,
+      },
+    ];
+    const results = hindcast.map(({ installed, set, joined, needed, onlineMs, oldMs, actualMs }) => {
+      expect(installed).toHaveLength(30 - needed);
+      const state = bn42(installed);
+      // W_0: the set's reputation, one faction at a time at its joined sellers (BN4's AugmentationRepCost 1).
+      const setLeft = countablesLeft({ factions: joined, bitNode: 4, state, set: [] }).filter((one) =>
+        set.includes(one.augmentation),
+      );
+      expect(setLeft).toHaveLength(2);
+      const work = { rebuildMs: 4 * MINUTE, reputation: reputationOneFactionAtATime(setLeft) };
+      const left = countablesLeft({ factions: [...joined, ...LATER_CYCLE_FACTIONS], bitNode: 4, state, set });
+      const old = installNowEstimateMs(needed, set.length, onlineMs) as number;
+      const priced = installNowEstimateMs(needed, set.length, onlineMs, { left, work }) as number;
+      return { work, left: left.slice(0, needed - set.length), old, priced, oldMs, actualMs };
+    });
+    const [c6, c7] = results;
+    // c6: W_0 Sector-12's 12,500 (CashRoot); left, the 4 cheapest, as c7-c9 bought them: Volhaven's two (18,750),
+    // then Nanofiber Weave and Neuregen Gene Modification, two factions (75,000). 4 + 19 · 1.5, then 4 + 19 · 6.
+    expect(c6?.work.reputation).toBe(12_500);
+    expect(c6?.left.map((one) => one.augmentation)).toEqual([
+      "DermaForce Particle Barrier",
+      "Combat Rib II",
+      "Nanofiber Weave",
+      "Neuregen Gene Modification",
+    ]);
+    expect((c6?.priced as number) / MINUTE).toBeCloseTo(4 + 28.5 + 4 + 114, 6);
+    // c7: W_0 Volhaven's 18,750; left, Nanofiber Weave and Neuregen Gene Modification (75,000): 4 + 27 · 4.
+    expect(c7?.work.reputation).toBe(18_750);
+    expect(c7?.left.map((one) => one.augmentation)).toEqual(["Nanofiber Weave", "Neuregen Gene Modification"]);
+    expect((c7?.priced as number) / MINUTE).toBeCloseTo(112, 6);
+    for (const { old, priced, oldMs, actualMs } of results) {
+      // Before #389: the store's figures again, 0.32-0.36 of the actual. Priced: within ×2 (owner decision 68).
+      expect(old).toBe(oldMs);
+      expect(old / actualMs).toBeLessThan(0.5);
+      expect(priced / actualMs).toBeGreaterThan(0.5);
+      expect(priced / actualMs).toBeLessThan(2);
+    }
+    // The ratios, for the report: c6 150.5 / 128 = 1.18, c7 112 / 96 = 1.17.
+    expect(results.map(({ priced, actualMs }) => Number((priced / actualMs).toFixed(2)))).toEqual([1.18, 1.17]);
   });
 });

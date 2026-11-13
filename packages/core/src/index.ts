@@ -841,12 +841,19 @@ export {
 export { HOME_RAM_LIMIT, homeRamUpgradePrice, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";
 export {
+  type CountableLeft,
+  type CycleWork,
+  countablesLeft,
   type InstallTiming,
   type InstallTimingCandidate,
   installNowEstimateMs,
   installTiming,
+  LATER_CYCLE_FACTIONS,
+  type LaterCycles,
+  laterCyclesMs,
   type NextCountable,
   nextCountables,
+  reputationOneFactionAtATime,
   waitEstimateMs,
 } from "./install-timing.ts";
 export {

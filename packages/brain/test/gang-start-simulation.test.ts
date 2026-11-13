@@ -59,10 +59,12 @@ const NEW_GAME_MONEY = 1_000;
 const FORMED_WITHIN_MS: Record<number, number> = { 1: 40 * 60_000, 3: 45 * 60_000, 5: 40 * 60_000 };
 const formedWithinMs = (seed: number) => FORMED_WITHIN_MS[seed] ?? 40 * 60_000;
 /**
- * The rules' arm (#357's A/B): from the edit, 90 virtual minutes at most for the gang, the rules installing first (as
- * before #357, seed 5's gang formed 78 min in, seed 3's not by 90 min).
+ * The rules' arm (#357's A/B): from the edit, 90 virtual minutes at most for the gang (before #389 the rules installed
+ * first: seed 5's gang formed 78 min in, seed 3's not by 90 min).
  */
 const RULES_WITHIN_MS = 90 * 60_000;
+/** The planner's arm's gang, from the edit, by seed (the suite above, measured 2026-11-11): the rules' never sooner. */
+const PLANNER_FORMED_MS: Record<number, number> = { 3: (34 * 60 + 41) * 1000, 5: (28 * 60 + 41) * 1000 };
 /** A minute more: the gang's first readings, the report's checks on them. */
 const AFTER_MS = 60_000;
 
@@ -312,12 +314,14 @@ test.each(SEEDS)(
 );
 
 /**
- * #357's A/B, the rules' arm (`bn2Route` "rules": #343's install timing before the gang, as before #357): on seeds 3 and
- * 5 the install comes before the gang, the level reset and the servers re-rolled (`Prestige.ts:69`, `:74`, `:98`). The
- * planner's arm is the suite above, on the same seeds: no install, the gang at 34 min 41 s and 28 min 41 s.
+ * #357's A/B, the rules' arm (`bn2Route` "rules": #343's install timing before the gang, as before #357). Before #389, on
+ * seeds 3 and 5 the install came before the gang, the level reset and the servers re-rolled (`Prestige.ts:69`, `:74`,
+ * `:98`). Since #389 the rules' estimate prices the later cycles from the countables left, and it waits: no install
+ * before the gang. The planner's arm is the suite above, on the same seeds: no install, the gang at 34 min 41 s and 28
+ * min 41 s; the rules' gang is never sooner.
  */
 test.each([3, 5])(
-  "seed %i, the rules (#357's A/B baseline): an install before the gang, short of avmnite-02h's level; the gang later or never",
+  "seed %i, the rules (#357's A/B baseline, #389): no install before the gang; the gang no sooner than the planner's",
   { timeout: 120_000 },
   async (seed) => {
     let editedAtMs = Number.NaN;
@@ -359,13 +363,13 @@ test.each([3, 5])(
       `seed ${seed}, the rules: installed at ${minutes(installed?.atMs ?? null)}, hacking ${installed?.hacking} of ` +
         `${installed?.required}; the gang formed at ${minutes(formedAtMs)} (90 min at most)`,
     );
-    // The install, before the gang, short of the roll: what #357's planner doesn't do on these seeds.
-    expect(installed).not.toBeNull();
-    expect(installed?.hacking as number).toBeLessThan(installed?.required as number);
-    expect(formedAtMs === null || formedAtMs > (installed?.atMs as number)).toBe(true);
-    // Measured on 2026-11-11: seed 3 installed at 30 min 26 s, at 214 of 218, and had no gang by 90 min; seed 5 at
-    // 28 min 26 s, at 216 of 217, its gang at 78 min 6 s. Either way past the planner's bound for the seed (45 and 40
-    // min; its gang at 34 min 41 s and 28 min 41 s).
-    expect(formedAtMs === null || formedAtMs > formedWithinMs(seed)).toBe(true);
+    // #389: the rules arm's early install (main: 30:26, hacking 214 of 218) was the cycles' shape repeated; priced from
+    // the countables left, it waits. #357's A/B gap mostly closes. Before #389 (2026-11-11): seed 3 installed at 30 min
+    // 26 s, at 214 of 218, and had no gang by 90 min; seed 5 at 28 min 26 s, at 216 of 217, its gang at 78 min 6 s.
+    // Since (2026-11-13): no install on either; seed 3's gang at 39 min 41 s, seed 5's at 30 min 41 s.
+    expect(installed).toBeNull();
+    expect(formedAtMs).not.toBeNull();
+    // The test's claim: the planner's arm forms the gang no later than the rules' (34:41 ≤ 39:41, 28:41 ≤ 30:41).
+    expect(formedAtMs as number).toBeGreaterThanOrEqual(PLANNER_FORMED_MS[seed] as number);
   },
 );
