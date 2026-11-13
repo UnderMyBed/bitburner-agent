@@ -57,6 +57,7 @@ import {
   type InstallTimingPolicy,
   type NotQueued,
   readAugmentationsEnabled,
+  readCycleLooks,
   writeAugmentationsEnabled,
 } from "./augmentations.ts";
 import { type BackdoorDue, BackdoorRule } from "./backdoors.ts";
@@ -544,8 +545,9 @@ export class DesiredStateController {
      */
     gangRoute?: Bn2Route;
     /**
-     * The store's environment (#360): the destroy estimate's prior is read from its slow snapshots, once a BitNode.
-     * Null (tests of other rules): no prior, the estimate's time online from 0.
+     * The store's environment (#360): the destroy estimate's prior is read from its slow snapshots, once a BitNode, and
+     * A6's T for a cycle first seen past its start (#388). Null (tests of other rules): no prior, the estimate's time
+     * online from 0, and T's game time before such a cycle was first seen.
      */
     environment?: Environment | null;
     /** Levelling's (d), batching for the money then an install (#380): weighed; off for a test's A/B alone. */
@@ -564,6 +566,8 @@ export class DesiredStateController {
       emit: (event) => this.#emit(event),
       installTiming,
       bn2Route,
+      // A cycle first seen past its start (#388): its time online from this environment's slow snapshots of it.
+      cycleLooks: environment === null ? null : (lastAugReset) => readCycleLooks(store, environment, lastAugReset),
     });
     this.#factions = new FactionRule({ log, emit: (event) => this.#emit(event) });
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
