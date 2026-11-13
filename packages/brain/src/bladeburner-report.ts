@@ -39,6 +39,7 @@ import {
   BLADEBURNER_REBUILD_EVENT_KIND,
   BLADEBURNER_TRAINING_HELD_EVENT_KIND,
   bladeburnerSnapshotOf,
+  describeRebuildBound,
   homeMaxRamOf,
 } from "./bladeburner.ts";
 import { BladeburnerActionsFold } from "./bladeburner-actions-report.ts";
@@ -113,7 +114,14 @@ export class BladeburnerFold {
   readonly #holds: { atMs: number; held: boolean }[];
 
   /** The rebuilds after an install (#404), from the rule's `bladeburnerRebuild` events: each start, and its end. */
-  readonly #rebuilds: { fromMs: number; toMs: number | null; targets: string; seconds: number | null }[] = [];
+  readonly #rebuilds: {
+    fromMs: number;
+    toMs: number | null;
+    targets: string;
+    seconds: number | null;
+    /** Past its bound at its first sighting (#407's review): not run, a failure; its bound and price then. */
+    skipped: { boundSeconds: number; pricedSeconds: number | null } | null;
+  }[] = [];
 
   /**
    * `events`: the window's, for the rule's `bladeburnerTrainingHeld` (its overdue clock stops while held) and (#404)
@@ -128,7 +136,16 @@ export class BladeburnerFold {
       .filter((event) => event.kind === BLADEBURNER_REBUILD_EVENT_KIND)
       .sort((a, b) => a.atMs - b.atMs);
     for (const { atMs, detail } of rebuilds) {
-      const fields = (detail ?? {}) as { started?: unknown; targets?: unknown; seconds?: unknown };
+      const fields = (detail ?? {}) as {
+        started?: unknown;
+        targets?: unknown;
+        seconds?: unknown;
+        skipped?: unknown;
+        boundSeconds?: unknown;
+        pricedSeconds?: unknown;
+      };
+      const finite = (value: unknown): number | null =>
+        typeof value === "number" && Number.isFinite(value) ? value : null;
       const open = this.#rebuilds.at(-1);
       if (fields.started === true) {
         const targets = (fields.targets ?? {}) as Record<string, unknown>;
@@ -136,7 +153,11 @@ export class BladeburnerFold {
           fromMs: atMs,
           toMs: null,
           targets: COMBAT_STATS.map((stat) => `${stat} ${String(targets[stat] ?? "?")}`).join(", "),
-          seconds: typeof fields.seconds === "number" && Number.isFinite(fields.seconds) ? fields.seconds : null,
+          seconds: finite(fields.seconds),
+          skipped:
+            fields.skipped === true
+              ? { boundSeconds: finite(fields.boundSeconds) ?? 0, pricedSeconds: finite(fields.pricedSeconds) }
+              : null,
         });
       } else if (open !== undefined && open.toMs === null) {
         open.toMs = atMs;
@@ -147,7 +168,9 @@ export class BladeburnerFold {
 
   /** Whether a rebuild was under way at `atMs` (#404): started by then, not ended before. */
   #rebuildingAt(atMs: number): boolean {
-    return this.#rebuilds.some((each) => each.fromMs <= atMs && (each.toMs === null || atMs <= each.toMs));
+    return this.#rebuilds.some(
+      (each) => each.skipped === null && each.fromMs <= atMs && (each.toMs === null || atMs <= each.toMs),
+    );
   }
 
   /** The time from `fromMs` to `toMs` the training was held for the owner's work. */
@@ -345,7 +368,8 @@ export class BladeburnerFold {
           `${formatDuration(each.boundMs)}; ${end}`,
       );
     }
-    // The rebuilds after an install (#404): shown; overdue is the World Daemon's stall (section 4), failed there.
+    // The rebuilds after an install (#404): shown; overdue is the World Daemon's stall (section 4), failed there; one past
+    // its bound at its first sighting (#407's review), not run, a failure here.
     if (this.#rebuilds.length > 0) {
       lines.push("  the rebuilds after an install (#404), Training back to the combat levels before it:");
       for (const each of this.#rebuilds) {
@@ -357,6 +381,14 @@ export class BladeburnerFold {
               (each.seconds === null || !(each.seconds > 0)
                 ? ""
                 : ` (${((each.toMs - each.fromMs) / (each.seconds * 1000)).toFixed(2)} of the estimate)`);
+        if (each.skipped !== null && each.seconds !== null) {
+          const line =
+            `the rebuild after an install (#404) from ${formatIsoTime(each.fromMs)} to ${each.targets} not run: ` +
+            describeRebuildBound({ firstSeconds: each.seconds, ...each.skipped });
+          lines.push(`    ${line}`);
+          failures.push(line);
+          continue;
+        }
         lines.push(`    from ${formatIsoTime(each.fromMs)} to ${each.targets}: ${estimate}; ${end}`);
       }
     }

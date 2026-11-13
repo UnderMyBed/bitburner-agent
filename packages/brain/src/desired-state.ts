@@ -1975,6 +1975,7 @@ export class DesiredStateController {
   #blackOpsInstallCache: {
     mediumData: MediumSnapshotData | null;
     bitNode: number;
+    targets: string;
     figures: BlackOpsInstallFigures | null;
   } | null = null;
 
@@ -1982,10 +1983,20 @@ export class DesiredStateController {
   #blackOpsInstall(): BlackOpsInstallFigures | null {
     const bitNode = (this.#slowData?.resetInfo as { currentNode?: unknown } | undefined)?.currentNode;
     if (typeof bitNode !== "number") return null;
+    // A rebuild under way (#407's review): both sides priced at its targets.
+    const rebuild = this.#bladeburner.rebuilding()?.targets ?? null;
+    const targets = JSON.stringify(rebuild);
     const cached = this.#blackOpsInstallCache;
-    if (cached !== null && cached.mediumData === this.#mediumData && cached.bitNode === bitNode) return cached.figures;
-    const figures = blackOpsInstallFiguresOf(this.#mediumData, bitNode);
-    this.#blackOpsInstallCache = { mediumData: this.#mediumData, bitNode, figures };
+    if (
+      cached !== null &&
+      cached.mediumData === this.#mediumData &&
+      cached.bitNode === bitNode &&
+      cached.targets === targets
+    ) {
+      return cached.figures;
+    }
+    const figures = blackOpsInstallFiguresOf(this.#mediumData, bitNode, rebuild);
+    this.#blackOpsInstallCache = { mediumData: this.#mediumData, bitNode, targets, figures };
     return figures;
   }
 

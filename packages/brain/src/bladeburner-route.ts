@@ -52,6 +52,7 @@ import {
   bladeburnerSkillMultsOf,
   type ClimbAttempts,
   type CombatPerson,
+  type CombatStat,
   chooseBladeburnerAction,
   chooseWinRoute,
   climbRiseLowerBound,
@@ -253,6 +254,8 @@ export interface BlackOpsInstallFigures {
     input: Omit<BladeburnerActionInput, "target">;
     at: BlackOpsRouteAt;
     combat: CombatPerson;
+    /** A rebuild under way (#407's review): its targets, the levels both of the planner's sides are priced at. */
+    levels?: Record<CombatStat, number>;
   } | null;
 }
 
@@ -263,6 +266,8 @@ export interface BlackOpsInstallFigures {
 export function blackOpsInstallFiguresOf(
   mediumData: MediumSnapshotData | null,
   bitNode: number,
+  /** The Bladeburner rule's rebuild under way (its `rebuilding`'s targets), or null. */
+  rebuildTargets: Record<CombatStat, number> | null = null,
 ): BlackOpsInstallFigures | null {
   const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
   if (winRouteOf(bitNode) !== "blackOps" || rankMultiplier === null) return null;
@@ -290,6 +295,7 @@ export function blackOpsInstallFiguresOf(
       },
       at: { rank, next, chanceRead: nextRead.chance },
       combat,
+      ...(rebuildTargets === null ? {} : { levels: rebuildTargets }),
     },
   };
 }

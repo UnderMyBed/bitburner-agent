@@ -306,6 +306,37 @@ describe("the planner's install timing on the route (#404): keep, or install now
     expect(tie.choice).toBe("keep");
   });
 
+  test("mid-rebuild (#407's review): both priced at its targets, keeping finishing it first", () => {
+    const gain = bladeburnerInstallGain(0, [ESPERTECH]);
+    const weak = person(20);
+    const now = combatOf(20);
+    const targets = { strength: 100, defense: 100, dexterity: 100, agility: 100 };
+    const timing = blackOpsInstallTiming({
+      input: inputAt(weak),
+      at,
+      combat: now,
+      gain,
+      installable: true,
+      levels: targets,
+    });
+    const atTargets = blackOpsInstallTiming({ input: inputAt(weak), at, combat: now, gain, installable: true });
+    const finish = bladeburnerRebuildSeconds(now, { targets }).seconds;
+    const route100 = blackOpsRouteEstimate(
+      { ...inputAt(weak), forecast: { ...weak, skills: { ...weak.skills, ...targets } } },
+      {
+        ...at,
+        firstToRankSeconds: null,
+      },
+    ).seconds;
+    expect(timing.keepSeconds).toBeCloseTo(finish + route100, 3);
+    expect(timing.rebuildSeconds).toBeCloseTo(
+      bladeburnerRebuildSeconds(now, { targets, gain, fromZero: true }).seconds,
+      6,
+    );
+    // Not at the stats now: keeping there is the route at combat 20.
+    expect(atTargets.keepSeconds).toBeGreaterThan(timing.keepSeconds);
+  });
+
   test("the rebuild's cost decides at high levels: at combat 1,000, Training back to it takes longer than the route saves", () => {
     const strong = person(1000);
     const timing = blackOpsInstallTiming({
@@ -397,7 +428,8 @@ describe("BN6's playability by the estimate with installs (#404): within ×2 of 
 
   test("at B6's BN6.1 states (rank 0, combat 100 and 300, no skills), the whole shop installed: past the bar", () => {
     const shop = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", 6, null));
-    // Every augmentation in the game with a multiplier the route reads, all at once: the most installs can bring here.
+    // Every augmentation in the game with a multiplier the route reads, all at once: an upper bound on what installs can
+    // bring here (#407's review: BigD's Big ... Brain among them, sold by no faction in BN6).
     const every = bladeburnerInstallGain(
       0,
       Object.keys(AUGMENTATIONS).filter((name) => {

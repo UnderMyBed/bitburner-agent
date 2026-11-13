@@ -169,6 +169,7 @@ import {
   THE_RED_PILL,
   winRouteOf,
 } from "@bitburner-agent/core";
+import { BLADEBURNER_PRICED_REBUILD_SETTING } from "./bladeburner.ts";
 import type { BlackOpsInstallFigures } from "./bladeburner-route.ts";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
 import { workConditionsOf, workingPersonOf } from "./factions.ts";
@@ -3067,6 +3068,14 @@ export class AugmentationRule {
         // the gang (#357's (3)), for its favour, at once too.
         reason = plannedReasonOf(timing?.route);
         this.#cancelCountdown(`the planner's install for ${reason}, at once`);
+        // The rebuild it priced (#407's review): the Bladeburner rule's bound on the rebuild after it.
+        const rebuildMs = timing?.blackOps?.rebuildMs ?? null;
+        if (timing?.route === BLACK_OPS_ROUTE && rebuildMs !== null) {
+          this.#store.setSetting(
+            BLADEBURNER_PRICED_REBUILD_SETTING,
+            JSON.stringify({ lastAugReset: resetInfo.lastAugReset, seconds: rebuildMs / 1000 }),
+          );
+        }
       } else if (countdownReason === null) {
         this.#cancelCountdown(`the rule no longer says install: ${describeCounts(rule)}`);
         // Held back from cloud servers only for an install the rule would choose with A2's payback limit's more income:

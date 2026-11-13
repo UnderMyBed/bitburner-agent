@@ -28,7 +28,13 @@ import {
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { BLACK_OPS_ROUTE, type InstallTimingView } from "../src/augmentations.ts";
-import { BLADEBURNER_LEVELS_SETTING, BladeburnerRule, readBladeburnerLevels } from "../src/bladeburner.ts";
+import {
+  BLADEBURNER_LEVELS_SETTING,
+  BLADEBURNER_PRICED_REBUILD_SETTING,
+  BladeburnerRule,
+  readBladeburnerLevels,
+} from "../src/bladeburner.ts";
+import { BladeburnerFold } from "../src/bladeburner-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
@@ -143,6 +149,11 @@ function slow(
   };
 }
 
+/** The planner's priced rebuild (#407's review) for the install that ends the cycle from `lastAugReset`, as A6's. */
+function price(settings: ReturnType<typeof memorySettings>, lastAugReset: number, seconds: number) {
+  settings.setSetting(BLADEBURNER_PRICED_REBUILD_SETTING, JSON.stringify({ lastAugReset, seconds }));
+}
+
 /** A settings store in memory, as the rule keeps its record in the brain's. */
 function memorySettings() {
   const settings = new Map<string, string>();
@@ -164,13 +175,18 @@ describe("the rebuild after an install (#404): Training back to the levels befor
     expect(readBladeburnerLevels(settings)).toEqual({
       lastNodeReset: 0,
       lastAugReset: 0,
+      previousAugReset: null,
       levels: { strength: 100, defense: 100, dexterity: 100, agility: 100 },
       rebuild: null,
     });
-    // An install: the next cycle's first reading, every stat at 1, Training at once.
+    // An install the planner priced at its rebuild: the next cycle's first reading, every stat at 1, Training at once.
+    price(settings, 0, skillExpFor(100, 1));
     expect(decide(rule, 1, HOUR, 0).state?.action).toEqual(TRAINING_ORDER);
     const rebuild = rule.view().rebuild;
     expect(rebuild?.targets).toEqual({ strength: 100, defense: 100, dexterity: 100, agility: 100 });
+    // Its bound (#407's review): twice the price and 10 minutes.
+    expect(rebuild).toMatchObject({ skipped: false, pricedSeconds: skillExpFor(100, 1) });
+    expect(rebuild?.boundSeconds).toBeCloseTo(2 * skillExpFor(100, 1) + 600, 6);
     // At ×1 from 0: level 100's experience at Training's 1 a second (30 × 1² each 30 s).
     expect(rebuild?.seconds).toBeCloseTo(skillExpFor(100, 1), 6);
     expect(rule.view().line).toContain(
@@ -190,6 +206,7 @@ describe("the rebuild after an install (#404): Training back to the levels befor
   test("a restart mid-rebuild keeps it (the store's record); none with no cycle before it seen; the owner's work holds", () => {
     const settings = memorySettings();
     decide(new BladeburnerRule(() => {}, undefined, settings), 300, 0);
+    price(settings, 0, skillExpFor(300, 1));
     decide(new BladeburnerRule(() => {}, undefined, settings), 1, HOUR);
     const restarted = new BladeburnerRule(() => {}, undefined, settings);
     expect(decide(restarted, 50, HOUR).state?.action).toEqual(TRAINING_ORDER);
@@ -223,6 +240,60 @@ describe("the rebuild after an install (#404): Training back to the levels befor
     });
     expect(decision.state?.action).toBeUndefined();
     expect(held.view().line).toContain("actions held for your work on the dashboard");
+  });
+
+  test("a second install mid-rebuild (#407's review): the targets stay the levels before the first, not the partial", () => {
+    const settings = memorySettings();
+    const rule = new BladeburnerRule(() => {}, undefined, settings);
+    decide(rule, 100, 0);
+    price(settings, 0, skillExpFor(100, 1));
+    decide(rule, 1, HOUR);
+    expect(decide(rule, 50, HOUR).state?.action).toEqual(TRAINING_ORDER);
+    // Installed again at 50 of 100: the next cycle rebuilds to 100, not 50 (#407's review: 49d37a7 took 50).
+    price(settings, HOUR, skillExpFor(100, 1));
+    expect(decide(rule, 1, 2 * HOUR).state?.action).toEqual(TRAINING_ORDER);
+    expect(rule.view().rebuild?.targets).toEqual({ strength: 100, defense: 100, dexterity: 100, agility: 100 });
+  });
+
+  test("a rebuild past its bound (#407's review): a manual install at combat 600, unpriced: the actions, and the report fails", () => {
+    const settings = memorySettings();
+    const events: { type: string; skipped?: boolean }[] = [];
+    const lines: string[] = [];
+    const rule = new BladeburnerRule(
+      (line) => lines.push(line),
+      (event) => events.push(event),
+      settings,
+    );
+    decide(rule, 600, 0, 0);
+    // Yours (no price): Training to 600 is about 2 × 10⁵ h at ×1, past 10 min.
+    expect(decide(rule, 1, HOUR, 1000).state?.action).not.toEqual(TRAINING_ORDER);
+    expect(rule.view().rebuild).toMatchObject({ skipped: true, pricedSeconds: null, boundSeconds: 600 });
+    expect(rule.rebuilding()).toBeNull();
+    expect(rule.view().line).toContain("not rebuilding the combat stats the install reset (#404): Training's ");
+    expect(lines).toContainEqual(expect.stringContaining("not rebuilt: Training's"));
+    const started = events.filter((event) => event.type === "bladeburnerRebuild");
+    expect(started).toEqual([expect.objectContaining({ started: true, skipped: true, boundSeconds: 600 })]);
+    // Priced by the planner, but far short of 600's: past twice the price and 10 min, the same.
+    const priced = memorySettings();
+    const other = new BladeburnerRule(() => {}, undefined, priced);
+    decide(other, 600, 0, 0);
+    price(priced, 0, 3600);
+    expect(decide(other, 1, HOUR, 1000).state?.action).not.toEqual(TRAINING_ORDER);
+    expect(other.view().rebuild).toMatchObject({ skipped: true, pricedSeconds: 3600, boundSeconds: 7800 });
+    // The run report's section 8: a failure.
+    const fold = new BladeburnerFold(
+      started.map((event) => ({ kind: "bladeburnerRebuild", atMs: 1000, detail: event })),
+    );
+    fold.addSlow(0, slow(6, { lastAugReset: HOUR }));
+    fold.addMedium(1000, medium(1));
+    const failures: string[] = [];
+    const section = fold.section(failures, 2000);
+    expect(failures).toEqual([
+      expect.stringMatching(
+        /^the rebuild after an install \(#404\) from .* to strength 600, defense 600, dexterity 600, agility 600 not run: Training's .* past its bound, 10 min \(10 min: the planner priced no rebuild for this install\): the stats left to the actions$/,
+      ),
+    ]);
+    expect(section.join("\n")).toContain("not run: Training's");
   });
 });
 
@@ -366,16 +437,61 @@ describe("the controller (#404): the planner's install timing on the Black Ops' 
       dexterity: 100,
       agility: 100,
     });
+    // The planner priced it (A6's record at its choice), so the rule runs it.
+    expect(JSON.parse(store.getSetting(BLADEBURNER_PRICED_REBUILD_SETTING) as string)).toMatchObject({
+      lastAugReset: 0,
+    });
   });
 
-  test("the rebuild's stall: none within twice its first estimate and 10 min; past it, the World Daemon's", () => {
+  test("mid-rebuild (#407's review): A6 prices keep and install now at the rebuild's targets, not the stats now", () => {
+    // A brain restarted mid-rebuild: the store's record (to 100, the install from the cycle at 0, priced).
+    store.setSetting(
+      BLADEBURNER_LEVELS_SETTING,
+      JSON.stringify({
+        lastNodeReset: 0,
+        lastAugReset: 2 * HOUR,
+        previousAugReset: 0,
+        levels: { strength: 1, defense: 1, dexterity: 1, agility: 1 },
+        rebuild: { strength: 100, defense: 100, dexterity: 100, agility: 100 },
+      }),
+    );
+    store.setSetting(
+      BLADEBURNER_PRICED_REBUILD_SETTING,
+      JSON.stringify({ lastAugReset: 0, seconds: skillExpFor(100, 1) }),
+    );
+    const { controller, play } = connected();
+    const events: { type: string; timing?: InstallTimingView }[] = [];
+    controller.subscribe((event) => events.push(event as (typeof events)[number]));
+    play(
+      2,
+      () => slow(6, { lastAugReset: 2 * HOUR, queued: ["Hyperion Plasma Cannon V1"] }),
+      () => medium(1),
+      2 * HOUR,
+    );
+    expect(controller.bladeburnerView().rebuild?.targets.agility).toBe(100);
+    // Keeping: Training's rest of the rebuild (about 3.1 h from 1), then the route at 100; at the stats now it'd be never.
+    // Installing Hyperion now is the same rebuild from 0 and a shorter route: chosen.
+    const view = events.find((event) => event.type === "augmentationInstallChosen")?.timing?.blackOps;
+    expect(view?.choice).toBe("install");
+    expect(view?.keepMs).not.toBeNull();
+    expect(view?.keepMs as number).toBeGreaterThan(0.9 * skillExpFor(100, 1) * 1000);
+    expect(view?.keepMs as number).toBeLessThan(1e7 * 3_600_000);
+    expect(view?.rebuildMs).toBeCloseTo(skillExpFor(100, 1) * 1000, -3);
+  });
+
+  test("the rebuild's stall: none within twice its priced rebuild and 10 min; past it, the World Daemon's", () => {
     const { controller, play } = connected();
     play(
       1,
       () => slow(6, { queued: [] }),
       () => medium(100),
     );
-    // Its first estimate 11,255 s (3 h 8 min) at Training's 1 a second: the bound 6 h 25 min.
+    // The planner's price for the install (as A6's at its choice): its estimate, 11,255 s (3 h 8 min) at Training's 1 a
+    // second, so the bound twice it and 10 minutes, 6 h 25 min.
+    store.setSetting(
+      BLADEBURNER_PRICED_REBUILD_SETTING,
+      JSON.stringify({ lastAugReset: 0, seconds: skillExpFor(100, 1) }),
+    );
     const next = () => slow(6, { lastAugReset: 2 * HOUR });
     play(6 * 60, next, () => medium(1), 2 * HOUR);
     expect(controller.worldDaemonView().stall).toBeNull();

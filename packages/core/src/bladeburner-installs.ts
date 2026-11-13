@@ -17,8 +17,9 @@
  *   `bladeburner_max_stamina` and `bladeburner_stamina_gain`. The Bladeburners faction sells 18
  *   (`Augmentation/Augmentations.ts:190-300` and on, core's `AUGMENTATIONS`): together ×1.92 on the success chance,
  *   ×1.17 to ×1.23 on the combat levels, ×1.21 on the max stamina and ×1.17 on its regain; The Blade's Simulacrum
- *   ($150b) moves none of them (it lifts the one focus, `Bladeburner.ts:178-180`). NeuroFlux Governor's levels add
- *   1.01 each to the levels and experience.
+ *   ($150b) moves none of them: its value is 0 at flat competence, its focus value left out (it lifts the one focus,
+ *   `Bladeburner.ts:178-180`, so the gym or faction work could run beside the actions; the planner's, later).
+ *   NeuroFlux Governor's levels add 1.01 each to the levels and experience.
  * - **The rebuild** (the install's time cost): the brain trains the four combat stats back to their levels before the
  *   install with Bladeburner's own Training (the brain's Bladeburner rule), 30 × `mults.<stat>_exp` of each of the four
  *   an attempt of 30 s, taken twice (`Bladeburner.ts:1094-1105`, then `PersonObjects/Person.ts:192-198`: core's
@@ -35,12 +36,21 @@
  *   the competence read, their times, ρ and the stamina computed there.
  * - **The choice:** keeping, B6's estimate now; installing now, the rebuild and the estimate after it; the least, a tie to
  *   keeping (an install is irreversible); installing now only with something to install. Both estimates take the next
- *   one's rank by the tail alone (the counts' stock now left out of both alike).
+ *   one's rank by the tail alone (the counts' stock now left out of both alike). While a rebuild is under way
+ *   (`levels`, its targets, #407's review), both are priced at those levels: keeping finishes it (Training from the
+ *   levels now) and then B6's estimate there; installing now rebuilds to them from 0 at the gain.
+ * - **Biased towards installing, so untrusted until #408** (#407's review): B6's estimate holds the competence flat,
+ *   which makes the route about 10³ times too long early on (the skill points a rank of 3 brings alone make it about
+ *   ×1,000 faster by rank 400,000, the reviewer's figures), so each augmentation's share of it is overpriced by that
+ *   factor against a rebuild that isn't: EsperTech's 7% of a realistic route of about 466 h is 33 h, against a 133 h
+ *   rebuild at combat 300, yet it installs. BN6 is unplayable (./bitnodes.ts), so the campaign never runs this live; in
+ *   a BN6 entered by hand it installs too eagerly. #408, the competence's growth in the estimate, is what corrects it.
  * Left out, and labelled:
  * - the competence's rise over the route on either side (B6's estimate holds it): the stats the actions and Training add
- *   after the rebuild, and the level multipliers' share of that later experience (×gain), cautious for installing;
+ *   after the rebuild, and the level multipliers' share of that later experience (×gain); on balance towards
+ *   installing, as above;
  * - hacking and charisma, which the install also resets: taken at 1 after it (nothing in the route rebuilds them on
- *   purpose), cautious for installing; their weights are small (the contracts' charisma 0.1, hacking 0);
+ *   purpose), against installing; their weights are small (the contracts' charisma 0.1, hacking 0);
  * - the rank the actions gain during the rebuild (Training gains none, `Bladeburner.ts:1094-1105`), cautious;
  * - the Bladeburners faction's reputation lost to favour, which only the next purchases need, not the route;
  * - the money the install resets, and the hospital's: the route's time doesn't read them;
@@ -135,6 +145,13 @@ export function bladeburnerPersonAfterInstall(
   };
 }
 
+/** `person` with each combat stat at least at `levels` (#407's review: a rebuild's targets). */
+function personAtLevels(person: BladeburnerPerson, levels: Readonly<Record<CombatStat, number>>): BladeburnerPerson {
+  const skills = { ...person.skills };
+  for (const stat of COMBAT_STATS) skills[stat] = Math.max(skills[stat], levels[stat]);
+  return { ...person, skills };
+}
+
 /** Training's experience a game second of one combat stat at its experience multiplier (`Bladeburner.ts:1094-1105`). */
 export function trainingExpPerSecond(expMult: number): number {
   return trainingExpPerAttempt(expMult) / BLADEBURNER_REST_SECONDS[BLADEBURNER_TRAINING];
@@ -216,16 +233,26 @@ export function blackOpsInstallTiming({
   combat,
   gain,
   installable,
+  levels,
 }: {
   input: Omit<BladeburnerActionInput, "target">;
   at: BlackOpsRouteAt;
   combat: CombatPerson;
   gain: BladeburnerInstallGain;
   installable: boolean;
+  /** A rebuild under way (#407's review): its targets, the levels both sides are priced at. Absent, the levels now. */
+  levels?: Readonly<Record<CombatStat, number>>;
 }): BlackOpsInstallTiming {
-  const keepSeconds = routeSeconds(input, at).seconds;
-  const rebuildSeconds = bladeburnerRebuildSeconds(combat, { gain, fromZero: true }).seconds;
-  const afterSeconds = routeSeconds(input, at, bladeburnerPersonAfterInstall(input.person, gain)).seconds;
+  const priced = levels === undefined ? input.person : personAtLevels(input.person, levels);
+  // Keeping finishes a rebuild under way first (Training from the levels now), then the route at its targets.
+  const finish = levels === undefined ? 0 : bladeburnerRebuildSeconds(combat, { targets: levels }).seconds;
+  const keepSeconds = finish + routeSeconds(input, at, levels === undefined ? undefined : priced).seconds;
+  const rebuildSeconds = bladeburnerRebuildSeconds(combat, {
+    targets: levels ?? combat.skills,
+    gain,
+    fromZero: true,
+  }).seconds;
+  const afterSeconds = routeSeconds(input, at, bladeburnerPersonAfterInstall(priced, gain)).seconds;
   const installNowSeconds = installable ? rebuildSeconds + afterSeconds : null;
   const choice = installNowSeconds !== null && installNowSeconds < keepSeconds ? "install" : "keep";
   return { keepSeconds, rebuildSeconds, afterSeconds, installNowSeconds, choice, gain };

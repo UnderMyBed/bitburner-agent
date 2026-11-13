@@ -193,7 +193,8 @@ export function knownBitNodes(): number[] {
  * ×2 the slowest destroy measured so far (BN4.1's 27 h 5 min online, the campaign report of 2026-11-12), 54 h 10 min.
  * At B6's BN6.1 states (rank 0, no skills) the estimate with the Bladeburners faction's whole shop installed is
  * 1,023,000 h at combat 100 and 117,400 h at 300; with every augmentation in the game that moves the route's
- * multipliers, 165,100 h and 27,090 h (core's bladeburner-installs.test.ts). Far past: B6's estimate holds the
+ * multipliers, an upper bound (BigD's Big ... Brain among them, sold by no faction in BN6), 165,100 h and 27,090 h (core's
+ * bladeburner-installs.test.ts). Far past: B6's estimate holds the
  * competence (the skill points a rank of 3 brings, the stats the actions add), cautious on balance, so a later slice's
  * estimate of that rise decides it. BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is
  * B8's.

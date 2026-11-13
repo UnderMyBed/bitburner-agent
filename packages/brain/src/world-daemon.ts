@@ -73,7 +73,7 @@ import {
   worldDaemonProblem,
 } from "@bitburner-agent/core";
 import type { CountFacts } from "./augmentations.ts";
-import type { BladeburnerRebuildView } from "./bladeburner.ts";
+import { BLADEBURNER_REBUILD_SLACK_MS, type BladeburnerRebuildView } from "./bladeburner.ts";
 import type { BlackOpsRouteView } from "./bladeburner-route.ts";
 import { describeEta, redPillWork, resetInfoOf, workConditionsOf, workingPersonOf } from "./factions.ts";
 import type { GangStallStretch } from "./gang-stalls.ts";
@@ -755,14 +755,11 @@ export interface WorldDaemonInputs {
   bladeburnerActing?: boolean;
   /**
    * The Bladeburner rule's rebuild after an install (#404, its `rebuilding`): the rank's stall waits for it (Training
-   * gains none), and the rebuild has its own bound, twice its first estimate and 10 minutes from its first sighting.
-   * Absent or null: none.
+   * gains none), and the rebuild has its own bound from its first sighting (#407's review): twice the planner's priced
+   * rebuild and 10 minutes (the rule runs none past it). Absent or null: none.
    */
   bladeburnerRebuild?: BladeburnerRebuildView | null;
 }
-
-/** The rebuild's slack beyond twice its first estimate (#404), as #343's waits and B2's rests are bounded: 10 minutes. */
-export const BLADEBURNER_REBUILD_SLACK_MS = 10 * 60_000;
 
 /** The World Daemon rule (#215), as the controller runs it. */
 export class WorldDaemonRule {
@@ -1066,15 +1063,19 @@ export class WorldDaemonRule {
     const rankStallMs = route?.rankStallMs ?? null;
     const nextRank = route?.next?.rank ?? null;
     if (route !== null && bladeburnerActing && bladeburnerRebuild !== null) {
-      // The rebuild after an install (#404): Training gains no rank, so the climb waits; the rebuild's own bound, twice
-      // its first estimate (game seconds; bonus time only shortens it) and 10 minutes from its first sighting, fails it.
+      // The rebuild after an install (#404): Training gains no rank, so the climb waits; the rebuild's own bound (#407's
+      // review: twice the planner's priced rebuild, game seconds, and 10 minutes) from its first sighting fails it.
       this.#rankHigh = null;
-      const boundMs = 2 * bladeburnerRebuild.firstSeconds * 1000 + BLADEBURNER_REBUILD_SLACK_MS;
+      const boundMs = bladeburnerRebuild.boundSeconds * 1000;
+      const priced =
+        bladeburnerRebuild.pricedSeconds === null
+          ? `10 min, the planner priced none`
+          : `twice the planner's priced ${formatDuration(bladeburnerRebuild.pricedSeconds * 1000)} and ` +
+            `${formatDuration(BLADEBURNER_REBUILD_SLACK_MS)}`;
       steps.set("blackOpsRank", {
         detail:
           `the combat stats not rebuilt after the install (#404) by Training within ${formatDuration(boundMs)}: ` +
-          `twice its first estimate, ${formatDuration(bladeburnerRebuild.firstSeconds * 1000)}, and 10 min (` +
-          `${formatDuration(bladeburnerRebuild.seconds * 1000)} left by it now)`,
+          `${priced} (${formatDuration(bladeburnerRebuild.seconds * 1000)} left by it now)`,
         ...(bladeburnerRebuild.sinceMs === null ? {} : { sinceMs: bladeburnerRebuild.sinceMs }),
         withinMs: boundMs,
       });
