@@ -370,6 +370,6 @@ test.each([3, 5])(
     expect(installed).toBeNull();
     expect(formedAtMs).not.toBeNull();
     // The test's claim: the planner's arm forms the gang no later than the rules' (34:41 ≤ 39:41, 28:41 ≤ 30:41).
-    expect(formedAtMs as number).toBeGreaterThanOrEqual(PLANNER_FORMED_MS[seed] as number);
+    expect((formedAtMs as number | null) ?? 0).toBeGreaterThanOrEqual(PLANNER_FORMED_MS[seed] as number);
   },
 );
