@@ -140,7 +140,10 @@ import {
   installTiming,
   intentId,
   type JoinedFaction,
+  LEVEL_RISE_TERM,
+  type LevelRise,
   levellingInstallMultipliers,
+  levelRiseOf,
   type MediumSnapshotData,
   NETBURNERS,
   NEUROFLUX_GOVERNOR,
@@ -161,7 +164,7 @@ import { workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
-import { HackingExpRate } from "./world-daemon.ts";
+import { HACKING_EXP_GAP_MS, HACKING_EXP_WINDOW_MS, HackingExpRate } from "./world-daemon.ts";
 
 // What's within reach beyond a joined seller's reputation moved to core (#260); these names stay here for the brain's
 // other modules and tests.
@@ -298,6 +301,18 @@ export type InstallTimingView = InstallTiming & {
   unseenMs?: number;
   /** `unseenMs` is a store's from before #343 (#397's review): mostly the gaps its clock left out. */
   unseenGaps?: true;
+  /**
+   * τ by work along the level's rise (#401, core's level-rise.ts): the experience rate a second at the level now it
+   * takes, and whence: measured now (`HackingExpRate`'s window) or the last cycle's carried over the install
+   * (`AUGMENTATION_LEVEL_RISE_SETTING`), the larger. Absent with neither: at the level now.
+   */
+  levelRise?: {
+    expPerSecond: number;
+    from: "measured now" | "the last cycle's";
+    /** The last cycle's: its dead time, and whether measured (a ramp) or the fallback (`LEVEL_RAMP_FALLBACK_MS`). */
+    deadMs?: number;
+    deadMeasured?: boolean;
+  };
   /** The time online in the store's slow snapshots of the cycle before the bars' clock began (#388): T counts it. */
   onlineBeforeMs?: number;
   words: string;
@@ -1077,6 +1092,80 @@ export interface InstallWait {
 }
 
 /** The wait as stored, or null; a value the brain didn't write fails, as the count hold's does. */
+/**
+ * The level's rise carried over an install (#401): κ, the experience rate a second per (level + 50), measured as the
+ * install was asked for (`HackingExpRate` over its whole window, `HACKING_EXP_WINDOW_MS`), times the install's
+ * `hacking_exp` and `hacking_speed` (core's `levellingInstallMultipliers`, the queue's), for the cycles after it
+ * in the BitNode (`lastNodeReset`): a cycle's own window starts again at the install and measures the hack loop's
+ * ramp, not what the RAM earns (the Red Pill holds: 15 to 800 times under the hold's rate, #401). Its cycle's
+ * `lastAugReset`; a restart keeps it. `deadMs` (#405's review): the ramp's dead time for the cycle after it, the
+ * cycle's own ramp measured (`AUGMENTATION_LEVEL_RAMP_SETTING`), else the last measured in the BitNode (the one it
+ * carried in), else null: none measured yet (an older setting's too).
+ */
+export const AUGMENTATION_LEVEL_RISE_SETTING = "augmentations.levelRise";
+
+export interface CarriedLevelRise {
+  lastNodeReset: number;
+  lastAugReset: number;
+  kappa: number;
+  deadMs: number | null;
+}
+
+/**
+ * A cycle's ramp after its install (#405's review), as #389 keeps its rebuild: the time online from the install until
+ * the experience rate measured (`HackingExpRate`, from its first minute) first reaches, per level + 50, the κ carried
+ * into the cycle; its cycle's `lastAugReset`. Measured once a cycle, kept across a restart. Only for a cycle this brain
+ * watched from its install with the rate unbroken (#405's second review, as #388's `cycleSeen` guards T): a cycle first
+ * seen over a gap (`HACKING_EXP_GAP_MS`) past its install, a restart past that, or a gap or a fall in the experience
+ * mid-ramp (which empty `HackingExpRate`) store `rampMs` null, not measured, and the last measured carries.
+ */
+export const AUGMENTATION_LEVEL_RAMP_SETTING = "augmentations.levelRamp";
+
+/**
+ * The dead time where no ramp is measured yet in the BitNode (the first install, a cycle never reaching the rate
+ * carried into it, an older setting): the experience rate's window, `HACKING_EXP_WINDOW_MS`, the time before the
+ * cycle's own rate is measured whole at all. Labelled in the words.
+ */
+export const LEVEL_RAMP_FALLBACK_MS = HACKING_EXP_WINDOW_MS;
+
+export function readLevelRamp(store: TelemetryStore): { lastAugReset: number; rampMs: number | null } | null {
+  const value = store.getSetting(AUGMENTATION_LEVEL_RAMP_SETTING);
+  if (value === null) return null;
+  let ramp: { lastAugReset?: unknown; rampMs?: unknown } | null;
+  try {
+    ramp = JSON.parse(value) as typeof ramp;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_LEVEL_RAMP_SETTING} isn't JSON`);
+  }
+  const { lastAugReset, rampMs } = ramp ?? {};
+  if (!isFiniteNumber(lastAugReset) || (rampMs !== null && !(isFiniteNumber(rampMs) && rampMs >= 0))) {
+    throw new Error(`the store's ${AUGMENTATION_LEVEL_RAMP_SETTING} isn't a ramp the brain wrote`);
+  }
+  return { lastAugReset, rampMs: rampMs as number | null };
+}
+
+export function readCarriedLevelRise(store: TelemetryStore): CarriedLevelRise | null {
+  const value = store.getSetting(AUGMENTATION_LEVEL_RISE_SETTING);
+  if (value === null) return null;
+  let carried: Partial<Record<keyof CarriedLevelRise, unknown>> | null;
+  try {
+    carried = JSON.parse(value) as typeof carried;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_LEVEL_RISE_SETTING} isn't JSON`);
+  }
+  const { lastNodeReset, lastAugReset, kappa, deadMs } = carried ?? {};
+  if (
+    !isFiniteNumber(lastNodeReset) ||
+    !isFiniteNumber(lastAugReset) ||
+    !isFiniteNumber(kappa) ||
+    !(kappa > 0) ||
+    (deadMs !== undefined && deadMs !== null && !(isFiniteNumber(deadMs) && deadMs >= 0))
+  ) {
+    throw new Error(`the store's ${AUGMENTATION_LEVEL_RISE_SETTING} isn't a rate the brain wrote`);
+  }
+  return { lastNodeReset, lastAugReset, kappa, deadMs: (deadMs as number | null | undefined) ?? null };
+}
+
 export function readInstallWait(store: TelemetryStore): InstallWait | null {
   const value = store.getSetting(AUGMENTATION_INSTALL_WAIT_SETTING);
   if (value === null) return null;
@@ -1242,10 +1331,20 @@ export function describeInstallTiming(
       : "";
   const parts = describeTParts(timing);
   const online = parts === "" ? "" : `; ${parts}`;
+  const rise =
+    timing.levelRise === undefined
+      ? ""
+      : `; τ by work along the level's rise, ${Math.round(timing.levelRise.expPerSecond).toLocaleString("en-US")} exp/s ` +
+        `now (${timing.levelRise.from}` +
+        (timing.levelRise.deadMs === undefined
+          ? ")"
+          : timing.levelRise.deadMeasured === true
+            ? `, after its ramp of ${formatEta(timing.levelRise.deadMs)} measured)`
+            : `, after ${formatEta(timing.levelRise.deadMs)}: no ramp measured yet, the rate's window)`);
   return (
     `${count.installed} of ${count.required} installed, ${timing.adding} new at an install, ` +
     `${formatEta(timing.onlineMs)} this cycle (T${online}); to Daedalus's count: ` +
-    `${candidates.join(", ") || "no estimate"}${scaled}; chosen: ${chosen}${held}`
+    `${candidates.join(", ") || "no estimate"}${scaled}${rise}; chosen: ${chosen}${held}`
   );
 }
 
@@ -1490,6 +1589,12 @@ export class AugmentationRule {
   readonly #expRate = new HackingExpRate();
   /** The medium snapshot's game time last sampled for it: each is taken once (the rate restarts on a time not later). */
   #expSampledAtMs: number | null = null;
+  /**
+   * The cycle's ramp watch (#405's second review): its `lastAugReset` (the slow snapshot's), the last experience sample,
+   * and whether this brain has watched it from its install (its first sample within `HACKING_EXP_GAP_MS` of it) with
+   * the rate unbroken since (no gap over it, no fall). Within one brain process: a restart starts it again.
+   */
+  #rampWatch: { lastAugReset: number; lastAtMs: number; lastExp: number; unbroken: boolean } | null = null;
   /** The planner's choice and n as last decided (#343), or null when it isn't timing installs: logged on a change. */
   #timingLogged: string | null = null;
   /** Installing now held for the income (#343): the cycle, when it began (online), and whether it's been reported. */
@@ -1762,6 +1867,7 @@ export class AugmentationRule {
     if (mediumGameTimeMs !== null && mediumGameTimeMs !== this.#expSampledAtMs && isFiniteNumber(hackingExp)) {
       this.#expSampledAtMs = mediumGameTimeMs;
       this.#expRate.add(mediumGameTimeMs, hackingExp);
+      this.#watchRamp(slowData, mediumGameTimeMs, hackingExp);
     }
     this.#recordDone(doneIds, fastGameTimeMs, atMs);
     this.#watchInstallDone(doneIds, slowGameTimeMs, atMs);
@@ -2257,6 +2363,8 @@ export class AugmentationRule {
     const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
     const money = player.money - this.#spent.reduce((sum, each) => sum + each.price, 0);
     const hackingLevel = player.person.skills.hacking;
+    // The level's rise over the work (#401): τ by work along it (core's `countablesToCome`).
+    const levelRise = this.#levelRise(mediumData, slowData, resetInfo.lastAugReset, currentNode, hackingLevel);
     // Short of Daedalus's count (#228): any augmentation counts.
     // With The Red Pill at the gang's faction (#334, BN2), Daedalus isn't needed: never short of its count.
     const count = daedalusCountOf({
@@ -2628,6 +2736,7 @@ export class AugmentationRule {
             person: player.person,
             conditions: workConditionsOf(resetInfo, slowData, shareBonus),
             work: holdWork,
+            rise: levelRise.rise,
             money: budget,
             income,
             // Netburners' five before it's joined (#387): the Hacknet rule buys its setup once one is waited for.
@@ -2663,6 +2772,15 @@ export class AugmentationRule {
             next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
             timeOnlineMs: onlineMs,
             ...unseen,
+            ...(levelRise.from === null
+              ? {}
+              : {
+                  levelRise: {
+                    expPerSecond: levelRise.rise.kappa * (hackingLevel + LEVEL_RISE_TERM),
+                    from: levelRise.from,
+                    ...levelRise.dead,
+                  },
+                }),
           };
           timing = { ...figures, words: describeInstallTiming(figures, count) };
           this.#watchIncomeHold(timing, resetInfo.lastAugReset, onlineMs, atMs);
@@ -2740,6 +2858,7 @@ export class AugmentationRule {
                 person: player.person,
                 conditions: workConditionsOf(resetInfo, slowData, shareBonus),
                 work: holdWork,
+                rise: levelRise.rise,
                 money: budget,
                 income: this.#income(),
                 // A restart or a gap loses the income for 10 minutes: the window open, its money taken as coming.
@@ -3131,6 +3250,7 @@ export class AugmentationRule {
     }
     if (!this.#installing) {
       this.#installing = true;
+      this.#carryLevelRise(installable, hackingLevel, resetInfo.lastAugReset, slowData);
       writeAugmentationCycle(this.#store, {
         ...readAugmentationCycle(this.#store),
         lastAugReset: cycle?.lastAugReset ?? resetInfo.lastAugReset,
@@ -3147,6 +3267,118 @@ export class AugmentationRule {
       waiting: false,
     };
     return { intent: null, install: true, committed: true };
+  }
+
+  /**
+   * The level's path from now (#401, core's level-rise.ts) for τ by work: the experience and the level now, and κ the
+   * larger of the experience rate measured now (over `HackingExpRate`'s whole window, as #378's review has the gang's
+   * τ_g: its first minutes after an install measure the hack loop's start) and the one carried over the last install
+   * in the BitNode (`AUGMENTATION_LEVEL_RISE_SETTING`): the window early in a cycle is the hack loop's ramp (the Red
+   * Pill holds' starts, 15 to 800 times under their rates), the carried one the RAM the last cycle ended on, under the
+   * RAM bought since. The carried one rises only after its dead time (#405's review: the restart's ramp and the cloud
+   * servers the install deleted), less the time online this cycle so far: the cycle before's ramp measured, else the
+   * fallback (`LEVEL_RAMP_FALLBACK_MS`). Neither: flat, the level now, as before #401. Measures this cycle's ramp too:
+   * the time online when the rate (from its first minute) first reaches the carried κ per level + 50, stored once.
+   */
+  #levelRise(
+    mediumData: MediumSnapshotData,
+    slowData: SlowSnapshotData,
+    lastAugReset: number,
+    currentNode: number,
+    level: number,
+  ): {
+    rise: LevelRise;
+    from: NonNullable<InstallTimingView["levelRise"]>["from"] | null;
+    dead: { deadMs: number; deadMeasured: boolean } | Record<string, never>;
+  } {
+    const { exp, levelMult } = hackingFiguresOf(mediumData, currentNode);
+    const measured = levelRiseOf({
+      exp,
+      level,
+      levelMult,
+      expPerSecond: this.#expRate.windowFull() ? this.#expRate.perSecond() : null,
+    });
+    const lastNodeReset = (slowData.resetInfo as { lastNodeReset?: unknown } | undefined)?.lastNodeReset;
+    const stored = readCarriedLevelRise(this.#store);
+    const carried =
+      stored !== null && stored.lastNodeReset === lastNodeReset && stored.lastAugReset < lastAugReset ? stored : null;
+    const sinceInstallMs = this.#onlineClock?.lastAugReset === lastAugReset ? this.#onlineClock.onlineMs : 0;
+    const watch = this.#rampWatch?.lastAugReset === lastAugReset ? this.#rampWatch : null;
+    if (carried !== null && watch !== null && readLevelRamp(this.#store)?.lastAugReset !== lastAugReset) {
+      // Not watched from the install with the rate unbroken: not measured, once, and the last measured carries.
+      const perSecond = this.#expRate.perSecond();
+      if (!watch.unbroken) {
+        this.#store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, JSON.stringify({ lastAugReset, rampMs: null }));
+      } else if (perSecond !== null && perSecond / (level + LEVEL_RISE_TERM) >= carried.kappa) {
+        this.#store.setSetting(
+          AUGMENTATION_LEVEL_RAMP_SETTING,
+          JSON.stringify({ lastAugReset, rampMs: sinceInstallMs }),
+        );
+      }
+    }
+    if (carried !== null && carried.kappa > measured.kappa) {
+      const deadMs = carried.deadMs ?? LEVEL_RAMP_FALLBACK_MS;
+      return {
+        rise: { ...measured, kappa: carried.kappa, delaySeconds: Math.max(0, deadMs - sinceInstallMs) / 1000 },
+        from: "the last cycle's",
+        dead: { deadMs, deadMeasured: carried.deadMs !== null },
+      };
+    }
+    return { rise: measured, from: measured.kappa > 0 ? "measured now" : null, dead: {} };
+  }
+
+  /** Keeps the ramp's watch (`#rampWatch`) at each experience sample, a new cycle's on the slow snapshot's reset. */
+  #watchRamp(slowData: SlowSnapshotData | null, atMs: number, exp: number): void {
+    const lastAugReset = (slowData?.resetInfo as { lastAugReset?: unknown } | undefined)?.lastAugReset;
+    const watch = this.#rampWatch;
+    if (isFiniteNumber(lastAugReset) && watch?.lastAugReset !== lastAugReset) {
+      this.#rampWatch = {
+        lastAugReset,
+        lastAtMs: atMs,
+        lastExp: exp,
+        unbroken: atMs >= lastAugReset && atMs - lastAugReset <= HACKING_EXP_GAP_MS,
+      };
+      return;
+    }
+    if (watch === null) return;
+    const broken = atMs - watch.lastAtMs > HACKING_EXP_GAP_MS || exp < watch.lastExp;
+    this.#rampWatch = { ...watch, lastAtMs: atMs, lastExp: exp, unbroken: watch.unbroken && !broken };
+  }
+
+  /**
+   * Carries the level's rise over the install asked for (#401, `AUGMENTATION_LEVEL_RISE_SETTING`): the experience rate
+   * measured now over its whole window, per (level + 50), times the install's `hacking_exp` and `hacking_speed` (core's
+   * `levellingInstallMultipliers` of `installing`, NeuroFlux Governor's levels each an entry). None measured, or the
+   * BitNode's start unread, or an augmentation core doesn't know (logged): the one stored is kept (an earlier cycle's,
+   * on less RAM: cautious for waiting).
+   */
+  #carryLevelRise(installing: readonly string[], level: number, lastAugReset: number, slowData: SlowSnapshotData) {
+    const perSecond = this.#expRate.windowFull() ? this.#expRate.perSecond() : null;
+    const lastNodeReset = (slowData.resetInfo as { lastNodeReset?: unknown } | undefined)?.lastNodeReset;
+    if (perSecond === null || !(perSecond > 0) || !isFiniteNumber(lastNodeReset)) return;
+    let gain: ReturnType<typeof levellingInstallMultipliers>;
+    try {
+      gain = levellingInstallMultipliers(
+        installing.filter((name) => name === NEUROFLUX_GOVERNOR).length,
+        installing.filter((name) => name !== NEUROFLUX_GOVERNOR),
+      );
+    } catch (error) {
+      // An augmentation core doesn't know: the install goes on, the rise not carried (the last one stored kept).
+      this.#log(`augmentations: the level's rise not carried over the install (${(error as Error).message})`);
+      return;
+    }
+    const kappa = (perSecond / (level + LEVEL_RISE_TERM)) * gain.hackingExp * gain.hackingSpeed;
+    // This cycle's ramp, measured; else the last measured in the BitNode, the one carried in; else none yet.
+    const ramp = readLevelRamp(this.#store);
+    const before = readCarriedLevelRise(this.#store);
+    const deadMs =
+      ramp?.lastAugReset === lastAugReset && ramp.rampMs !== null
+        ? ramp.rampMs
+        : before !== null && before.lastNodeReset === lastNodeReset
+          ? before.deadMs
+          : null;
+    const carried: CarriedLevelRise = { lastNodeReset, lastAugReset, kappa, deadMs };
+    this.#store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify(carried));
   }
 
   /**

@@ -24,6 +24,7 @@ import type { JoinedFaction } from "./faction-state.ts";
 import { factionReputationPerSecond, type WorkingPerson } from "./faction-work.ts";
 import { bestWorkRate, type WorkConditions } from "./faction-work-choice.ts";
 import { INVITATION_CHECK_MS, NETBURNERS } from "./hacknet.ts";
+import { type LevelRise, workSecondsAlong } from "./level-rise.ts";
 import type { Work } from "./work.ts";
 
 /** `Omit` over each member of a union, not over their common fields. */
@@ -104,8 +105,10 @@ export interface HoldWork {
  * - work, the sooner of that and a donation: only at a seller someone works for: the owner's faction work there, at
  *   its work type; or, with no owner's work and A5's switch on, A5 under the hold (`bestWorkRate`, the work's formula;
  *   since #345 with the share bonus `conditions` carry: the brain's mean over the income's window of the one measured,
- *   1 with none in it, cautious for waiting;
- *   the level's rise over the work left out: cautious for waiting, optimistic for installing now);
+ *   1 with none in it, cautious for waiting; since #401 along the hacking level's rise, `rise` (core's
+ *   level-rise.ts, the work's rate linear in the level, `reputation.ts:16-52`), flat with none: each faction's work
+ *   from now, though `nextCountables` adds them in turn, so a later one's comes at a higher level: cautious for
+ *   waiting);
  * - its money: the set with it, in buy order (`augmentationBuyOrder`: a dear one goes first), with the set's donations
  *   and its own, beyond `money`, at `income` a second. With no income measured, only what `money` covers, unless
  *   `assumeMoney` (a hold's window already open: a restart or a gap lost the income for 10 minutes), when the money
@@ -131,6 +134,7 @@ export function countablesToCome({
   income,
   assumeMoney = false,
   netburners = null,
+  rise = null,
 }: {
   sold: readonly string[];
   state: AugmentationPurchaseState;
@@ -145,6 +149,8 @@ export function countablesToCome({
   income: number | null;
   assumeMoney?: boolean;
   netburners?: NetburnersRoute | null;
+  /** The level's path from now (#401, core's `levelRiseOf`), its level the person's; null or absent: flat. */
+  rise?: LevelRise | null;
 }): CountableWithMoney[] {
   const setNames = set.purchases.map((purchase) => purchase.name);
   const afterSet = { ...state, queued: [...state.queued, ...setNames] };
@@ -154,18 +160,30 @@ export function countablesToCome({
     if (income !== null && income > 0) return (moneyShort / income) * 1000;
     return income === null && assumeMoney ? 0 : Number.POSITIVE_INFINITY;
   };
-  /** The work's reputation a second at `seller` under the hold, or null where nobody works for it. */
-  const workRate = (seller: JoinedFaction): number | null => {
+  const { keep: _keep, ...rateConditions } = conditions;
+  const level = person.skills.hacking;
+  const path: LevelRise = rise ?? { exp: 0, level, levelMult: 1, kappa: 0 };
+  /**
+   * The work's rate at each level along the path (#401): the game's at the level now and a level up, the formula
+   * linear in the level (`reputation.ts:16-52`), so exact.
+   */
+  const rateAlong = (workType: Parameters<typeof factionReputationPerSecond>[1], favor: number, perSecond: number) => {
+    const up = { ...person, skills: { ...person.skills, hacking: level + 1 } };
+    const slope = factionReputationPerSecond(up, workType, { favor, ...rateConditions }) - perSecond;
+    return (atLevel: number) => perSecond + slope * (atLevel - level);
+  };
+  /** The work's rate along the level at `seller` under the hold, or null where nobody works for it. */
+  const workRate = (seller: JoinedFaction): ((atLevel: number) => number) | null => {
     if (work.owners !== null) {
       if (work.owners.kind !== "faction" || work.owners.faction !== seller.name) return null;
-      const { keep: _keep, ...rateConditions } = conditions;
       const perSecond = factionReputationPerSecond(person, work.owners.workType, {
         favor: seller.favor,
         ...rateConditions,
       });
-      return perSecond > 0 ? perSecond : null;
+      return perSecond > 0 ? rateAlong(work.owners.workType, seller.favor, perSecond) : null;
     }
-    return work.brainWorks ? (bestWorkRate(person, seller, conditions)?.perSecond ?? null) : null;
+    const best = work.brainWorks ? bestWorkRate(person, seller, conditions) : null;
+    return best === null ? null : rateAlong(best.workType, seller.favor, best.perSecond);
   };
   const toCome: CountableWithMoney[] = [];
   for (const name of sold) {
@@ -206,9 +224,9 @@ export function countablesToCome({
       });
     }
     for (const seller of sellers) {
-      const perSecond = workRate(seller);
-      if (perSecond === null) continue;
-      const workMs = ((reputation - seller.reputation) / perSecond) * 1000;
+      const rateAt = workRate(seller);
+      if (rateAt === null) continue;
+      const workMs = workSecondsAlong(path, rateAt, reputation - seller.reputation) * 1000;
       routes.push({
         augmentation: name,
         faction: seller.name,
@@ -230,18 +248,23 @@ export function countablesToCome({
   }
   if (netburners === null || joined.some((faction) => faction.name === NETBURNERS)) return toCome;
   if (work.owners !== null || !work.brainWorks) return toCome;
-  const perSecond = bestWorkRate(person, { name: NETBURNERS, reputation: 0, favor: 0 }, conditions)?.perSecond;
+  const best = bestWorkRate(person, { name: NETBURNERS, reputation: 0, favor: 0 }, conditions);
   // Bought (setupMoney 0, #387's review): the game's check alone, no wait for the set's money.
   const setupMs = netburners.setupMoney > 0 ? moneyMsFor(netburners.setupMoney) : 0;
   const beforeJoinMs = netburners.invited ? 0 : setupMs + INVITATION_CHECK_MS;
-  if (perSecond === undefined || !Number.isFinite(beforeJoinMs)) return toCome;
+  if (best === null || !Number.isFinite(beforeJoinMs)) return toCome;
+  const rateAt = rateAlong(best.workType, 0, best.perSecond);
   for (const name of netburners.sold) {
     if (name === NEUROFLUX_GOVERNOR || name === THE_RED_PILL || sold.includes(name)) continue;
     if (Object.hasOwn(afterSet.installed, name) || afterSet.queued.includes(name)) continue;
     if (missingPrerequisites(name, afterSet).length > 0) continue;
     const { reputation } = augmentationCost(name, afterSet);
     const priceAdded = purchaseSequenceCost(augmentationBuyOrder([...setNames, name]), state).money - set.money;
-    const workMs = beforeJoinMs + (reputation / perSecond) * 1000;
+    // Flat, as before #401 to the digit; else the work from the invitation on, at the level then.
+    const workMs =
+      path.kappa > 0
+        ? workSecondsAlong(path, rateAt, reputation, beforeJoinMs / 1000) * 1000
+        : beforeJoinMs + (reputation / best.perSecond) * 1000;
     toCome.push({
       augmentation: name,
       faction: NETBURNERS,

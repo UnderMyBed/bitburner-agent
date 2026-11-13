@@ -23,10 +23,12 @@ import {
   type IntentRequest,
   intentId,
   isWorthInstalling,
+  levelRiseOf,
   newBatcherHealth,
   PORT_OPENER_PROGRAMS,
   type SnapshotTier,
   type StaticSnapshotData,
+  workSecondsAlong,
 } from "@bitburner-agent/core";
 import { holdsOf, installDecision, NO_HOLDS, nextPurchase, type Purchase, type Purse } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -1469,6 +1471,59 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           way: "work",
           tauMs: expect.closeTo(30 * MINUTE, -3),
         });
+      });
+
+      test("the experience the medium snapshots measure reaches the planner's τ by work (#401): flat, today's; rising, less", () => {
+        // The Black Hand 120 minutes off by A5's work (hacking 300, favour 0, no share), its money in hand.
+        const rate = factionReputationPerSecond(
+          { skills: richMedium(0).player.skills, mults: { faction_rep: 1 } },
+          "hacking",
+          { favor: 0, sourceFile15Level: 0, factionWorkRepGain: 1, focused: true, implant: false },
+        );
+        const blackHand = 100_000 - rate * 120 * 60;
+        const tauOf = (perSecond: number) => {
+          const { controller, connection } = connectedWithLoopOff("planner");
+          // The medium snapshots' experience rising at `perSecond` (under a level's worth in 10 minutes: hacking 300).
+          for (let minute = 0; minute <= 10; minute += 1) {
+            const medium = richMedium(1e12);
+            const exp = { hacking: medium.player.exp.hacking + perSecond * 60 * minute };
+            for (const [tier, data] of [
+              ["slow", plannerSlow({ minute, blackHand })],
+              ["medium", { ...medium, player: { ...medium.player, exp } }],
+            ] as const) {
+              connection.receive(
+                encodeControlMessage({
+                  protocolVersion: CONTROL_PROTOCOL_VERSION,
+                  type: "snapshot",
+                  agentSessionId: "session-1",
+                  tier,
+                  sequenceNumber: ++sequenceNumber,
+                  gameTimeMs: 10 * 3_600_000 + minute * MINUTE,
+                  data,
+                }),
+              );
+            }
+          }
+          return controller.augmentationsView().progress?.timing;
+        };
+        const flat = tauOf(0);
+        expect(flat?.next[0]).toMatchObject({
+          augmentation: TBH,
+          way: "work",
+          tauMs: expect.closeTo(120 * MINUTE, -3),
+        });
+        expect(flat?.levelRise).toBeUndefined();
+        const rising = tauOf(250);
+        expect(rising?.levelRise).toEqual({ expPerSecond: expect.closeTo(250, 6), from: "measured now" });
+        // Along the level's path from the last snapshot's experience: core's, and shorter than the flat 120 minutes.
+        const along =
+          workSecondsAlong(
+            levelRiseOf({ exp: 6_106_794 + 250 * 600, level: 300, levelMult: 1, expPerSecond: 250 }),
+            (level) => rate * (level / 300),
+            rate * 120 * 60,
+          ) * 1000;
+        expect(rising?.next[0]?.tauMs).toBeCloseTo(along, -3);
+        expect(rising?.next[0]?.tauMs).toBeLessThan(120 * MINUTE - MINUTE);
       });
 
       test("a wait at 29 of 30, The Black Hand's money 5 min off: nothing goes; restarted, no income measured, still none", () => {
