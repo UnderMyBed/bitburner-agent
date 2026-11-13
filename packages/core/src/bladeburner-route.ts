@@ -20,8 +20,10 @@
  *   the augmentations: B7's, the planner's), so later chances and ρ err low and the time long, cautious; at a chance of 0
  *   now the time is never, "never at the competence now". The stock's counts after the next one (their regrowth is in ρ,
  *   their stock now isn't): cautious. The rank over each requirement at a failure (the rebuild errs long). The ±10% on
- *   each rank (its mean). The stamina a Black Op costs and its rests, and HP (B2's, the planner's). The bonus time's ×5
- *   (game seconds, so cautious in real time). The destroy's own minute or two through the gate.
+ *   each rank (its mean). The bonus time's ×5 (game seconds, so cautious in real time). Optimistic: the stamina a
+ *   Black Op costs (0.285 × diffMult, 41.8 for Daedalus, `Bladeburner.ts:1015-1024`) and its rests, HP (a failure's
+ *   hpLoss × diffMult, the hospital's money; B2's, the planner's), and the destroy's own minute or two through the gate.
+ *   Cautious on balance: the competence's rise dominates.
  * - **The Red Pill's route** in BN6 (`redPillLevelSeconds`): its hacking level alone, by the formulas, is a lower bound:
  *   w0r1d_d43m0n's 3,000 × `WorldDaemonDifficulty` (6,000 in BN6) at the level multiplier the level and experience imply
  *   now (`PersonObjects/formulas/skill.ts:7-27`, with BN6's 0.35 in it), the experience still needed over the measured
@@ -184,7 +186,11 @@ export function redPillLevelSeconds({
   return Math.max(0, hackingExpForLevel(requiredLevel, level / base) - exp) / expPerSecond;
 }
 
-/** The planner's choice of route (#398): the route, and whether The Red Pill's estimate is hopeless, with why. */
+/**
+ * The planner's choice of route (#398): the route, and whether The Red Pill's estimate is hopeless, with why. Shown, not
+ * acted on: the route the brain plays is `winRouteOf`'s, fixed per BitNode (BN6's the Black Ops), so a "redPill" choice
+ * there is said (the path's line, #360's BO source) but changes nothing; acting on it is a later slice's.
+ */
 export interface WinRouteChoice {
   route: WinRoute;
   /** The Red Pill's estimate past the bar (or never); null where it isn't measured. */

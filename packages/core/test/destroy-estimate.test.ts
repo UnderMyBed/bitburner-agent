@@ -502,6 +502,10 @@ describe("BN6's route, the Black Ops' (#398)", () => {
     expect(estimate.terms).toHaveLength(1);
     expect(estimate.terms[0]).toMatchObject({ term: "BO", ms: 600 * MINUTE, atLeast: false, label: "cautious" });
     expect(estimate.terms[0]?.source).toContain("3 of 21 done");
+    // Cautious on balance (#400's review): the competence's rise left out, the stamina and HP named, optimistic.
+    expect(estimate.terms[0]?.source).toContain(
+      "(cautious on balance: its rise left out; the Black Ops' stamina, 41.8 a Daedalus attempt, and HP left out, optimistic)",
+    );
     expect(estimate.terms[0]?.source).toContain("The Red Pill's by the formulas at least 2.78e+66 h");
     expect(estimate.terms[0]?.source).toContain("the planner's choice: the Black Ops (The Red Pill's hopeless");
     expect(estimate).toMatchObject({ remainingMs: 600 * MINUTE, totalMs: 720 * MINUTE, atLeast: false, never: false });

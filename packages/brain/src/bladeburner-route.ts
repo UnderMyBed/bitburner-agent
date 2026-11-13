@@ -10,7 +10,7 @@
 //   one's attempts) and The Red Pill's (core's `redPillLevelSeconds`: w0r1d_d43m0n's hacking level alone at the
 //   measured experience rate, at least), and the choice between them (core's `chooseWinRoute`, The Red Pill's hopeless
 //   past the BitNode's time so far).
-// - **The rank's stall bound** (decision 45): the rank's high not passed for longer than twice the longest the rule's
+// - **The rank's stall bound** (decision 45): the rank not rising (any rise restarts it) for longer than twice the longest the rule's
 //   own cycle holds it flat, a rest from ½ max stamina to the max at the natural regain alone (the slowest rest), the
 //   next Black Op's attempt, and its failure's loss rebuilt at the sustainable rate; and `BLADEBURNER_REST_SLACK_MS`, as
 //   B2's stuck resting is bounded. The rate 0, the rebuild is left out of it: the bound stays finite, so a dead route is
@@ -57,7 +57,7 @@ export interface BlackOpsRouteView {
   redPillSeconds: number | null;
   /** The planner's choice between them (core's `chooseWinRoute`). */
   choice: WinRouteChoice;
-  /** How long the rank's high may stand before it's a stall, ms; null unread. */
+  /** How long the rank may go without a rise before it's a stall, ms; null unread. */
   rankStallMs: number | null;
 }
 

@@ -2,11 +2,7 @@
 // with a level to gain that the brain can play, then a replay.
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
-import {
-  BITNODE_BLACK_OPS_HOPELESS_REASON,
-  BITNODE_NO_WIN_ROUTE_REASON,
-  bitNodeUnplayableReason,
-} from "../src/bitnodes.ts";
+import { BITNODE_BLACK_OPS_B7_REASON, BITNODE_NO_WIN_ROUTE_REASON, bitNodeUnplayableReason } from "../src/bitnodes.ts";
 import {
   CAMPAIGN_ORDER,
   describeSkipped,
@@ -21,15 +17,15 @@ const gameSource = (file: string) =>
 
 const NO_DATA = "no hacking multipliers or prices yet";
 /**
- * BN6's and BN7's (#367): core has their tables; BN6's route is built but hopeless until Bladeburner's B7 (#398), BN7's
+ * BN6's and BN7's (#367): core has their tables; BN6's route is built but waits for Bladeburner's B7 (#398), BN7's
  * is B8's.
  */
 const NO_ROUTE = BITNODE_NO_WIN_ROUTE_REASON;
-const HOPELESS = BITNODE_BLACK_OPS_HOPELESS_REASON;
+const NEEDS_B7 = BITNODE_BLACK_OPS_B7_REASON;
 /** Every BitNode the order holds that the brain can't play yet, in the order's sequence (BN2 playable since #334). */
 const UNPLAYABLE = [6, 7, 3, 9, 11, 8, 15, 10, 13, 14, 12];
 /** Why each is skipped: BN6 and BN7 for the win route (#367), the rest for core's tables. */
-const reasonOf = (bitNode: number) => (bitNode === 6 ? HOPELESS : bitNode === 7 ? NO_ROUTE : NO_DATA);
+const reasonOf = (bitNode: number) => (bitNode === 6 ? NEEDS_B7 : bitNode === 7 ? NO_ROUTE : NO_DATA);
 const REPLAY =
   "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, " +
   "Source-File 4 at 3, Source-File 5 at 3), but the run";
@@ -125,7 +121,7 @@ test("skipping: past BN2 ×3, the unplayable rows before BN5.2-3 are skipped, ea
     replay: null,
     skipped,
   });
-  expect(describeSkipped(skipped)).toBe(`BN6 skipped: ${HOPELESS}; BN7 skipped: ${NO_ROUTE}; BN3 skipped: ${NO_DATA}`);
+  expect(describeSkipped(skipped)).toBe(`BN6 skipped: ${NEEDS_B7}; BN7 skipped: ${NO_ROUTE}; BN3 skipped: ${NO_DATA}`);
   // A save with SF2.3 already: BN5.1 has nothing to gain in BN2, never said as skipped.
   expect(nextBitNodeOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3, 2: 3 } })).toEqual({
     bitNode: 5,
@@ -144,7 +140,7 @@ test("skipping: past BN2 ×3, the unplayable rows before BN5.2-3 are skipped, ea
   expect(next.bitNode).toBe(1);
   expect(next.skipped.map((each) => each.bitNode)).toEqual([5, ...UNPLAYABLE]);
   expect(describeSkipped(next.skipped.slice(0, 3))).toBe(
-    `BN5 skipped: no prices yet; BN6 skipped: ${HOPELESS}; BN7 skipped: ${NO_ROUTE}`,
+    `BN5 skipped: no prices yet; BN6 skipped: ${NEEDS_B7}; BN7 skipped: ${NO_ROUTE}`,
   );
   expect(describeSkipped([])).toBeNull();
 });
@@ -188,6 +184,6 @@ test("nothing playable left to gain: BN1 again, a replay saying why and what was
     expect(nextBitNodeOf({ currentNode, ownedSF })).toEqual({ bitNode: 1, replay: REPLAY, skipped: skippedAll });
   }
   expect(describeSkipped(skippedAll)).toBe(
-    `BN6 skipped: ${HOPELESS}; BN7 skipped: ${NO_ROUTE}; BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: ${NO_DATA}`,
+    `BN6 skipped: ${NEEDS_B7}; BN7 skipped: ${NO_ROUTE}; BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: ${NO_DATA}`,
   );
 });

@@ -305,7 +305,7 @@ describe("the destroy", () => {
 
   test("past the BitNodes the brain can't play yet (#323): BN2.3 into BN5 again, the skipped logged and in the view", () => {
     const skipped =
-      "BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+      "BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
       "BN3 skipped: no hacking multipliers or prices yet";
     const bn23 = { currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } };
     expect(update({ slowData: slow(bn23) })).toBe(true);
@@ -694,7 +694,7 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
     "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
     "Source-File 5 at 3), but the run";
   const SKIPPED =
-    "BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+    "BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
     "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 " +
     "and BN12 skipped: no hacking multipliers or prices yet";
   const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
@@ -774,7 +774,7 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
       "on (into BitNode 2)",
     );
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } }))).toBe(
-      "on (into BitNode 5 (BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: " +
+      "on (into BitNode 5 (BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: " +
         "no hacking multipliers or prices yet))",
     );
     expect(describeWorldDaemonSwitch(true, slow({ ownedSF: CAPS }))).toBe(
@@ -1128,6 +1128,11 @@ describe("the Black Ops' route (#398): BN6", () => {
       "off on this route (#398): The Red Pill's holds (A6), levelling (#336) and A8's Red Pill path (Daedalus, The " +
         "Red Pill, w0r1d_d43m0n's hacking level)",
     ]);
+    // A Red Pill choice is shown, not acted on: the route played is fixed per BitNode (#400's review).
+    const redPill = chooseWinRoute({ blackOpsSeconds: 7200, redPillSeconds: 3600, soFarSeconds: 36_000 });
+    expect(describeWorldDaemonPath({ ...path, blackOps: view({ choice: redPill }) })[1]).toMatch(
+      /The Red Pill chosen \(The Red Pill's the shorter\); shown, not acted on: this BitNode plays the Black Ops$/,
+    );
     // Unread: said.
     expect(describeWorldDaemonPath({ ...path, blackOps: null })[0]).toBe(
       "the Black Ops (#398): no reading yet (the division joined, and home's RAM for its reader)",
@@ -1152,7 +1157,7 @@ describe("the Black Ops' route (#398): BN6", () => {
     expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(5));
     expect(lines).toEqual([
       "world daemon: all 21 Black Ops done (#398): destroying the BitNode, into BitNode 5 (BN6 skipped: no win route " +
-        "yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the " +
+        "yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the " +
         "Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: no hacking multipliers or prices yet) (the " +
         "gate, then a save backup first)",
     ]);
@@ -1173,17 +1178,18 @@ describe("the Black Ops' route (#398): BN6", () => {
     ]);
   });
 
-  test("the rank's stall: its high not passed within the route's bound, on both sides; rising, or not acting, none", () => {
+  test("the rank's stall: not rising (flat or falling) within the route's bound, on both sides; rising, or not acting, none", () => {
     const bound = 20 * MINUTE;
     bn6({ rank: 300_500 }, { nowMs: 0 });
+    // A fall (a failure) isn't a rise: the clock runs on from 0.
     bn6({ rank: 300_400 }, { nowMs: bound - 1 });
     expect(rule.stall()).toBeNull();
-    bn6({ rank: 300_500 }, { nowMs: bound });
+    bn6({ rank: 300_400 }, { nowMs: bound });
     expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
-    expect(rule.stall()?.detail).toContain("Bladeburner's rank not past its high of 300,500");
+    expect(rule.stall()?.detail).toContain("Bladeburner's rank not rising (300,400 now)");
     expect(events.map((event) => event.type === "worldDaemonStalled" && event.step)).toEqual(["blackOpsRank"]);
-    // Past its high: the stall over, the clock from then.
-    bn6({ rank: 300_501 }, { nowMs: bound + MINUTE });
+    // A rise from the last reading: the stall over, the clock from then.
+    bn6({ rank: 300_401 }, { nowMs: bound + MINUTE });
     expect(rule.stall()).toBeNull();
     // Rising all along: never.
     rule = new WorldDaemonRule({});
@@ -1199,6 +1205,20 @@ describe("the Black Ops' route (#398): BN6", () => {
       bn6({ rank: 440_000, done: 21, next: null }, { nowMs: at, enabled: false });
     }
     expect(rule.stall()).toBeNull();
+  });
+
+  test("several Black Op failures in a row (#400's review), each loss rebuilt to its rank: no stall, the rank rising", () => {
+    // Centurion at 300,000: six failures, 5,000 each (`data/BlackOperations.ts:644`), each rebuilt in 10 min, an hour
+    // in all: three times the 20 min bound, the high of 300,000 never passed (three in a row is 12.5% at p = 0.5).
+    for (let failure = 0; failure < 6; failure++) {
+      const from = failure * 10 * MINUTE;
+      bn6({ rank: 300_000 }, { nowMs: from });
+      for (let minute = 1; minute < 10; minute++) {
+        bn6({ rank: 295_000 + (5_000 * (minute - 1)) / 9 }, { nowMs: from + minute * MINUTE });
+      }
+    }
+    expect(rule.stall()).toBeNull();
+    expect(events).toEqual([]);
   });
 
   test("The Red Pill's steps are off there (A8): Daedalus joined, its reputation flat, no stall; BN4's has it", () => {

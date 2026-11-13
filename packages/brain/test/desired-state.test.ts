@@ -2507,7 +2507,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         ]);
       });
 
-      test("from BN2.3 (#323, #334): into BN5 again, past the BitNodes the brain can't play yet, in the view and stored", async () => {
+      test("from BN2.3 (#323, #334, #398): into BN5 again, BN6 skipped for B7 with its reason, in the view and stored", async () => {
         const { controller, sentIds, settleBackup, daemonMedium } = withTheRedPill({
           ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 },
           currentNode: 2,
@@ -2516,7 +2516,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
         daemonMedium();
         const skipped =
-          "BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+          "BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
           "BN3 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({ nextBitNode: 5, replay: null, skipped });
         daemonMedium();
@@ -2573,7 +2573,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
           "Source-File 5 at 3), but the run";
         const skipped =
-          "BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+          "BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
           "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({
           destroying: true,

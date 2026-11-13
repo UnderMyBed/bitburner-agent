@@ -35,7 +35,7 @@
 //   The Red Pill and w0r1d_d43m0n's hacking level are off there, and said so, as are The Red Pill's holds (core's
 //   `augmentationEndgame` and `daedalusCountOf`) and levelling (no `daemon` on this path). The destroy is asked for once
 //   the reading shows all 21 done (none next), into the order's next BitNode, through the gate as before. Its stalls
-//   (decision 45): the rank's high not passed within the route's bound (`blackOpsRank`, ./bladeburner-route.ts's
+//   (decision 45): the rank not rising (any rise from the last reading restarts it, #400's review) within the route's bound (`blackOpsRank`, ./bladeburner-route.ts's
 //   `rankStallMs`, while the Bladeburner rule acts), and all 21 done without the destroy (`destroy`, 5 minutes, the Red
 //   Pill route's own). A Black Op due and not run is B5's check (./bladeburner-black-ops-report.ts).
 import {
@@ -570,7 +570,9 @@ export function describeBlackOpsRoute(view: BlackOpsRouteView | null): string[] 
       : ` (the next one's rank by B5's stock and tail, each later one's at ${rankPerMinute(estimate.rate)} ` +
         "sustainable, each one's attempts at the competence now)") +
     `; ${THE_RED_PILL}'s ${redPill}${view.choice.redPillHopeless === true ? ", hopeless" : ""}: ` +
-    `${view.choice.route === "blackOps" ? "the Black Ops" : THE_RED_PILL} chosen (${view.choice.why})`;
+    `${view.choice.route === "blackOps" ? "the Black Ops" : THE_RED_PILL} chosen (${view.choice.why})` +
+    // Shown, not acted on (#400's review): the route played is `winRouteOf`'s, fixed per BitNode.
+    (view.choice.route === "redPill" ? "; shown, not acted on: this BitNode plays the Black Ops" : "");
   return [view.rank === null && view.done === null ? unread : head + next + eta, planner, off];
 }
 
@@ -758,7 +760,7 @@ export class WorldDaemonRule {
   readonly #expRate = new HackingExpRate();
   /** Bladeburner's rank a second (#398), over the medium snapshots' readings: a Black Op's failure is part of it. */
   readonly #rankRate = new HackingExpRate({ fallsCount: true });
-  /** The rank's high on the Black Ops' route (#398), and since when, while the Bladeburner rule acts. */
+  /** Bladeburner's rank at the last reading on the Black Ops' route (#398), and its last rise, while the rule acts. */
   #rankHigh: { value: number; sinceMs: number } | null = null;
   #path: WorldDaemonPath | null = null;
   #enabled = true;
@@ -1045,10 +1047,15 @@ export class WorldDaemonRule {
       rank !== null &&
       rankStallMs !== null
     ) {
-      if (this.#rankHigh === null || rank > this.#rankHigh.value) this.#rankHigh = { value: rank, sinceMs: nowMs };
+      // Any rise from the last reading restarts the clock (#400's review): a Black Op's failure loses its rank, which the
+      // rebuild brings back to its requirement only, so a high would stand through failures in a row (12.5% for three at
+      // p = 0.5). A rank flat or falling for the bound is the stall.
+      const last = this.#rankHigh;
+      this.#rankHigh =
+        last === null || rank > last.value ? { value: rank, sinceMs: nowMs } : { value: rank, sinceMs: last.sinceMs };
       steps.set("blackOpsRank", {
         detail:
-          `Bladeburner's rank not past its high of ${count(this.#rankHigh.value)} on the Black Ops' route (#398, ` +
+          `Bladeburner's rank not rising (${count(this.#rankHigh.value)} now) on the Black Ops' route (#398, ` +
           `${route.done} of ${BLACK_OPS_COUNT} done), the bound ${formatDuration(rankStallMs)}: twice a rest to the ` +
           "max, the next Black Op's attempt and a failure's rebuild, and 10 min",
         sinceMs: this.#rankHigh.sinceMs,
