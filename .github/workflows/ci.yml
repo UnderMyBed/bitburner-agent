@@ -81,9 +81,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Each job named (a job dropped from `needs` gives an empty result, so it fails), then every job in `needs`.
       - name: Every job succeeded
         env:
+          STATIC: ${{ needs.static.result }}
+          TEST: ${{ needs.test.result }}
           RESULTS: ${{ toJSON(needs.*.result) }}
         run: |
-          echo "$RESULTS"
+          echo "static: $STATIC; test: $TEST; all: $RESULTS"
+          test "$STATIC" = "success"
+          test "$TEST" = "success"
           test "$(echo "$RESULTS" | tr -d '[:space:][]"' | tr ',' '\n' | sort -u)" = "success"
