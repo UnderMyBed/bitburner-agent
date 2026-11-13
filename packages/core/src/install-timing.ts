@@ -34,9 +34,11 @@
  * Unpriced (no R measured: a cycle first seen past its first work, or a restart before it; no rate known, κ 0), each is
  * this one's shape (T, or T + τ_k after a wait), as before #389; countables past those known, the last priced cycle's
  * length again (labelled: either way). BN4.2's hindcast, c2-c8 (core's install-timing.test.ts, on #401's fixture):
- * install now 0.67-1.34 times the actual, every one within ×2 (before #389, 5 of 7); the planner's choice the same but
- * at c3 (a wait for 3, a near tie, about 20 min worse on the actuals: #406 asks a wait to beat installing by more than
- * the estimates' error) and c8 (a wait for the last, 4 min better).
+ * install now 0.67-1.34 times the actual, every one within ×2 (before #389, 5 of 7); the planner's choice main's but at
+ * c3 (a wait for 3, about 20 min worse in hindsight, right in expectation) and c8 (a wait for the last, 4 min better).
+ * The caller prices from its second cycle alone (#389's decision; the brain's: a κ carried over an install): in the
+ * first, every later cycle's rate is this cycle's κ through an install not made, and install now mustn't win on that.
+ * Installing now is chosen only by more than the best wait's τ error (#406, `installTiming`).
  * Left out, each labelled:
  * - level-rise.ts's own (home RAM and servers bought later, the share's change, the batcher's target): see there;
  * - the favour gained at the install and after: the caller's rate at the favour after this install, none after it

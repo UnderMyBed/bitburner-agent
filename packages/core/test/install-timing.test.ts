@@ -754,12 +754,12 @@ function hindcastAt({ index, T, next }: (typeof CHOICES)[number]) {
 describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's path, and the planner's choice", () => {
   /**
    * Each choice: before #389 (this cycle's shape) and priced (the countables left split to the least total, along the
-   * level's path), install now's estimate over the actual and the k chosen. Within ×2 every one priced (before, c6 and
-   * c7 aren't: 0.36, 0.32). The choice is the same at c2 and c4-c7. Two flip, accepted (the coordinator's decision on
-   * #389):
-   * - c3 waits for 3 (Cranial Signal Processors - Gen III's 123 min), 266 against install now's 275: a near tie, about
-   *   20 min worse on the actuals (24 installed at +123 waiting, at +103 installing). #406 asks a wait to beat
-   *   installing by more than the estimates' error.
+   * level's path: c2 on, a κ carried over an install, so the DP prices), install now's estimate over the actual and the
+   * k chosen, under #406's margin (installing only by more than the best wait's τ error; the evidence holds no rate
+   * series for its error, so 0: a tie waits). Within ×2 every one priced (before, c6 and c7 aren't: 0.36, 0.32). The
+   * choice is the same as main's at c2 and c4-c7. Two differ (the coordinator's decisions on #389 and #406):
+   * - c3 waits for 3 (Cranial Signal Processors - Gen III's 123 min), 266 against install now's 275: about 20 min worse
+   *   in hindsight (24 installed at +123 waiting, at +103 installing), right in expectation.
    * - c8 waits for the last (Neuroreceptor Management Implant, 46 min) against install now's 47: about 4 min better
    *   (the count at +46, installing's at +50).
    */

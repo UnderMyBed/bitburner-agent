@@ -3220,12 +3220,19 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
       kept: null,
       timeOnlineMs: 28 * MINUTE,
       next: [{ augmentation: TBH, faction: TBH, way: "work", tauMs: expect.closeTo(17 * MINUTE, -3) }],
-      // #389: no faction work seen (the input absent), so R isn't measured: this one's shape, said so.
-      laterCycles: { rebuildMs: null, deadMs: 10 * MINUTE, deadMeasured: false, left: 13, why: "no faction work yet" },
+      // #389: no κ carried over an install (the BitNode's first cycle here): this one's shape, said so.
+      laterCycles: {
+        rebuildMs: null,
+        deadMs: 10 * MINUTE,
+        deadMeasured: false,
+        left: 13,
+        carried: false,
+        why: "no faction work yet",
+      },
       words:
         "25 of 30 installed, 4 new at an install, 28 min this cycle (T); to Daedalus's count: install now 28 min, " +
-        "wait for The Black Hand (17 min, by work at The Black Hand) 17 min; later cycles this one's shape: R not " +
-        "measured (no faction work yet); chosen: wait for 1",
+        "wait for The Black Hand (17 min, by work at The Black Hand) 17 min; later cycles this one's shape: DP from " +
+        "the second cycle: no rate carried over an install yet; chosen: wait for 1",
     });
     expect(progress).toMatchObject({ reason: null, countdown: null, countHold: null, held: null });
     expect(rule.view().waitingFor).toBe(`the planner's time to Daedalus's count: ${progress?.timing?.words}`);
@@ -3911,8 +3918,18 @@ describe("the planner's later cycles priced from the countables left (#389)", ()
     return slow({ joined, queued: [GEN_I], ownedAugs: OWNED, earned, lastAugReset });
   }
   /** The planner's rule `minutes` online this cycle, R `rebuildMinutes` (none: not measured, not in the store). */
-  const plannerAt = (minutes: number, rebuildMinutes: number | null) => {
+  const plannerAt = (minutes: number, rebuildMinutes: number | null, carried = true) => {
     earned = 0;
+    // A κ carried over an install in this BitNode (a cycle before, as the install stores it): the DP prices. Its κ
+    // tiny, so the rate measured now is the one taken.
+    if (carried) {
+      store.setSetting(
+        AUGMENTATION_LEVEL_RISE_SETTING,
+        JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 1e-12, deadMs: null }),
+      );
+    } else {
+      store.deleteSetting(AUGMENTATION_LEVEL_RISE_SETTING);
+    }
     store.setSetting(
       AUGMENTATION_ONLINE_SETTING,
       JSON.stringify({ lastAugReset: 0, onlineMs: minutes * MINUTE, lastGameTimeMs: gameTimeMs }),
@@ -3976,7 +3993,7 @@ describe("the planner's later cycles priced from the countables left (#389)", ()
     for (let minute = 0; minute < count; minute += 1) minuteOn(fields, more);
   };
 
-  test("unpriced: R not measured (no faction work yet), or no level's rise known: install now at T, as before #389", () => {
+  test("unpriced: R not measured (no faction work yet): install now at T, as before #389", () => {
     expect(Object.keys(OWNED)).toHaveLength(28);
     expect(Object.keys(OWNED_DEAR)).toHaveLength(28);
     expect(genIIIn(33)).toBeGreaterThan(0);
@@ -3989,32 +4006,30 @@ describe("the planner's later cycles priced from the countables left (#389)", ()
       onlineMs: 30 * MINUTE,
       candidates: [
         { k: 0, estimateMs: 30 * MINUTE },
-        { k: 1, tauMs: expect.closeTo(33 * MINUTE, -3) },
+        // Gen II along the carried κ, a tiny one: within 5 s of the 33 min at the level now.
+        { k: 1, tauMs: expect.closeTo(33 * MINUTE, -4) },
       ],
       choice: 0,
-      laterCycles: { rebuildMs: null, why: "no faction work yet", deadMs: 10 * MINUTE, deadMeasured: false },
+      laterCycles: {
+        rebuildMs: null,
+        why: "no faction work yet",
+        deadMs: 10 * MINUTE,
+        deadMeasured: false,
+        carried: true,
+      },
     });
     expect(chosenTiming()?.later).toBeUndefined();
     expect(chosenTiming()?.candidates[0]?.cyclesMs).toBeUndefined();
     expect(chosenTiming()?.words).toMatch(
-      /; later cycles this one's shape: R not measured \(no faction work yet\); chosen: install now$/,
-    );
-  });
-
-  test("R measured but the level flat (no rate measured): no level's rise known, this one's shape", () => {
-    plannerAt(19, 5);
-    elevenMinutes();
-    expect(chosenTiming()).toMatchObject({ candidates: [{ k: 0, estimateMs: 30 * MINUTE }, { k: 1 }], choice: 0 });
-    expect(chosenTiming()?.words).toMatch(
-      /; later cycles this one's shape: no level's rise known; chosen: install now$/,
+      /; later cycles this one's shape: R not measured \(no faction work yet\)(; τ by work along [^;]*)?; chosen: install now$/,
     );
   });
 
   /** The timing at CyberSec's `reputation` (Gen II at 18,750 by A5's work), the level rising, R 5 min. */
-  const pricedAt = (reputation: number, owned: Record<string, number>) => {
+  const pricedAt = (reputation: number, owned: Record<string, number>, minutes = 19, carried = true) => {
     store.deleteSetting(AUGMENTATION_INSTALL_WAIT_SETTING);
     exp = E300;
-    plannerAt(19, 5);
+    plannerAt(minutes, 5, carried);
     risingMinutes(11, { cyberSec: reputation, owned });
     const view = chosenTiming() ?? timing();
     events = [];
@@ -4048,6 +4063,32 @@ describe("the planner's later cycles priced from the countables left (#389)", ()
     }
     expect(pricedAt(low, OWNED)?.choice).toBe(0);
     expect(pricedAt(low, OWNED_DEAR)?.choice).toBe(1);
+  });
+
+  test("the first cycle (no κ carried over an install): this cycle's shape, even where the DP would install", () => {
+    // Gen II from none at CyberSec, T 600 min. From the second cycle the DP prices install now under Gen II's τ:
+    // install. In the first, install now is T, 600, over the τ: the wait, as before #389, and said so.
+    const second = pricedAt(0, OWNED, 589);
+    const tau = second?.candidates[1]?.tauMs as number;
+    expect(second).toMatchObject({ choice: 0, later: { rebuildMs: 5 * MINUTE }, laterCycles: { carried: true } });
+    expect(second?.candidates[0]?.estimateMs as number).toBeLessThan(tau);
+    expect(tau).toBeLessThan(600 * MINUTE);
+    const first = pricedAt(0, OWNED, 589, false);
+    expect(first).toMatchObject({
+      choice: 1,
+      candidates: [{ k: 0, estimateMs: 600 * MINUTE }, { k: 1 }],
+      laterCycles: { carried: false },
+    });
+    expect(first?.later).toBeUndefined();
+    expect(first?.candidates[0]?.cyclesMs).toBeUndefined();
+    expect(first?.words).toMatch(
+      /; later cycles this one's shape: DP from the second cycle: no rate carried over an install yet/,
+    );
+    // A restart in the first cycle carries none: the store's measurement alone.
+    rule = newRule("planner");
+    minuteOn({ cyberSec: 0 });
+    expect(timing()?.laterCycles?.carried).toBe(false);
+    expect(timing()?.later).toBeUndefined();
   });
 
   test("Netburners' route open (#387): its five among the countables left, its 1,875 the cheapest: a shorter cycle", () => {

@@ -333,9 +333,17 @@ export type InstallTimingView = InstallTiming & {
   /**
    * What prices the later cycles (#389, #343's route alone): R (null, not measured: `why`), the dead time their level
    * starts flat for (measured, or the fallback), and how many countables left are known. Priced, core's `later` and
-   * each candidate's `cyclesMs` are given; unpriced (no R, or no level's rise known), this cycle's shape.
+   * each candidate's `cyclesMs` are given; unpriced (the first cycle, no κ carried over an install yet; or no R), this cycle's shape.
    */
-  laterCycles?: { rebuildMs: number | null; deadMs: number; deadMeasured: boolean; left: number; why?: string };
+  laterCycles?: {
+    rebuildMs: number | null;
+    deadMs: number;
+    deadMeasured: boolean;
+    left: number;
+    /** A κ carried over an install in this BitNode (#389): the DP prices only from the second cycle. */
+    carried: boolean;
+    why?: string;
+  };
   words: string;
   /**
    * BN2 before the gang (#357's (1)): its candidates in place of #343's, install now (k 0) and wait for the gang (k 1),
@@ -1441,8 +1449,8 @@ export function describeInstallTiming(
 /**
  * How the later cycles are priced, in words (#389), or "" with none (no `laterCycles`, or no candidate with a cycle
  * after its install): "; later cycles from the 12 countables left, cheapest first, split to the least: R 4 min, the
- * level along its rise after its ramp of 5 min measured"; unpriced, "; later cycles this one's shape: R not measured
- * (no faction work yet)" or "…: no level's rise known".
+ * level along its rise after its ramp of 5 min measured"; unpriced, "; later cycles this one's shape: DP from the second
+ * cycle: no rate carried over an install yet" or "…: R not measured (no faction work yet)".
  */
 function describeLaterCycles(timing: Omit<InstallTimingView, "words">): string {
   const later = timing.laterCycles;
@@ -1458,7 +1466,10 @@ function describeLaterCycles(timing: Omit<InstallTimingView, "words">): string {
       `${formatEta(timing.later.rebuildMs)}, the level along its rise ${ramp}`
     );
   }
-  const why = later.rebuildMs === null ? `R not measured (${later.why ?? "unknown"})` : "no level's rise known";
+  // Priced from the second cycle with R: else the first cycle (no κ carried), or R not measured.
+  const why = !later.carried
+    ? "DP from the second cycle: no rate carried over an install yet"
+    : `R not measured (${later.why ?? "unknown"})`;
   return `; later cycles this one's shape: ${why}`;
 }
 
@@ -2222,6 +2233,16 @@ export class AugmentationRule {
   }
 
   /**
+   * Whether a κ was carried over an install in this BitNode (#389), as the install stored it
+   * (`AUGMENTATION_LEVEL_RISE_SETTING`: its BitNode's `lastNodeReset`, a cycle before this one).
+   */
+  #riseCarried(lastAugReset: number, slowData: SlowSnapshotData): boolean {
+    const lastNodeReset = (slowData.resetInfo as { lastNodeReset?: unknown } | undefined)?.lastNodeReset;
+    const stored = readCarriedLevelRise(this.#store);
+    return stored !== null && stored.lastNodeReset === lastNodeReset && stored.lastAugReset < lastAugReset;
+  }
+
+  /**
    * The dead time the later cycles' level starts flat for (#389, #405): this cycle's ramp measured, else the one carried
    * in (the BitNode's last measured), else the fallback (`LEVEL_RAMP_FALLBACK_MS`): the carry's own at the install.
    */
@@ -2944,6 +2965,11 @@ export class AugmentationRule {
             rebuildMs !== null
               ? {}
               : { why: "waiting" in rebuild ? "no faction work yet" : "the cycle first seen with its work going on" };
+          // From the second cycle (#389's decision): a κ carried over an install in this BitNode, as stored at it
+          // (`AUGMENTATION_LEVEL_RISE_SETTING`, never a restart's). In the first, every later cycle's rate would be this
+          // cycle's κ through an install not made yet: install now mustn't win on that, so this cycle's shape, as
+          // before #389.
+          const carried = this.#riseCarried(resetInfo.lastAugReset, slowData);
           const figures = {
             ...installTiming({
               needed,
@@ -2964,7 +2990,7 @@ export class AugmentationRule {
               later: {
                 left,
                 rebuildMs,
-                rise: levelRise.from === null ? null : levelRise.rise,
+                rise: carried ? levelRise.rise : null,
                 deadSeconds: dead.deadMs / 1000,
                 rateAt,
                 installing: [...installable, ...setNames],
@@ -2973,7 +2999,14 @@ export class AugmentationRule {
             next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
             timeOnlineMs: onlineMs,
             ...unseen,
-            laterCycles: { rebuildMs, deadMs: dead.deadMs, deadMeasured: dead.measured, left: left.length, ...why },
+            laterCycles: {
+              rebuildMs,
+              deadMs: dead.deadMs,
+              deadMeasured: dead.measured,
+              left: left.length,
+              carried,
+              ...why,
+            },
             ...(levelRise.from === null
               ? {}
               : {
