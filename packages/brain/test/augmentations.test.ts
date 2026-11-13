@@ -2500,6 +2500,39 @@ describe("held for Daedalus's count (#243)", () => {
     expect(rule.view().progress?.countHold).toMatchObject({ way: "work", etaMs: expect.closeTo(5 * MINUTE, -3) });
   });
 
+  test("the level's rise (#401): The Black Hand 21 min off isn't held flat (20 min); along the last cycle's κ, held", () => {
+    const reputation = reputationFor(21 * MINUTE);
+    online();
+    minuteOn({ reputation });
+    expect(rule.view().progress).toMatchObject({ countHold: null, reason: "count reached" });
+    // The last cycle's rate carried over its install: the level rises over the work.
+    const exp = hackingExpOfLevel(HACKING, 1);
+    const kappa = (1_000 * exp) / 600 / (HACKING + 50);
+    store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa }));
+    const along =
+      workSecondsAlong(
+        { exp, level: HACKING, levelMult: 1, kappa },
+        (level) => RATE * (level / HACKING),
+        RATE * 21 * 60,
+      ) * 1000;
+    expect(along).toBeLessThan(20 * MINUTE);
+    online();
+    minuteOn({ reputation });
+    expect(rule.view().progress?.countHold).toMatchObject({
+      augmentation: TBH,
+      way: "work",
+      workMs: expect.closeTo(along, -3),
+    });
+    // The owner's field work there: along the rise too, shorter than at the level now (5 min).
+    const there = { kind: "faction", faction: TBH, workType: "field" } as const;
+    const conditions = workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow());
+    const person = workingPersonOf(playerWith(0)) as WorkingPerson;
+    const fieldRate = factionReputationPerSecond(person, "field", { favor: 0, ...conditions });
+    online();
+    minuteOn({ reputation: 100_000 - fieldRate * 300 }, MONEY, { holdWork: { owners: there, brainWorks: false } });
+    expect(rule.view().progress?.countHold?.etaMs).toBeLessThan(5 * MINUTE - 1_000);
+  });
+
   test("the work counts only where someone works: A5 under the hold, or the owner's faction work there", () => {
     const fiveOff = reputationFor(5 * MINUTE);
     // A5's switch off, no owner's work: nobody earns The Black Hand's reputation, so no hold.
@@ -3308,6 +3341,15 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     }
     expect(taus[0]).toBeLessThan(42 * MINUTE - 10_000);
     expect(taus[1]).toBeLessThan(taus[0] as number);
+    // The window not whole yet (5 minutes): not measured, the level now.
+    plannerAt(60);
+    let exp = E0;
+    for (let minute = 0; minute < 6; minute += 1) {
+      minuteOn({ reputation }, MONEY, withExp(exp));
+      exp += (9 * E0) / 10;
+    }
+    expect(rule.view().progress?.timing?.levelRise).toBeUndefined();
+    expect(rule.view().progress?.timing?.candidates[1]).toMatchObject({ tauMs: expect.closeTo(42 * MINUTE, -3) });
   });
 
   test("the level's rise (#401): the last cycle's κ carried over the install, where it's more than the window's", () => {
