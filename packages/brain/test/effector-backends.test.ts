@@ -11,10 +11,12 @@ import {
   classStartProblem,
   type DesiredState,
   type FastSnapshotData,
+  hacknetSetupPlan,
   type Intent,
   type IntentRequest,
   intentId,
   type MediumSnapshotData,
+  NO_HACKNET_COST_MULTIPLIERS,
   type Work,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
@@ -856,6 +858,56 @@ test("upgrading a server (sim, #194): upgraded once at the difference; again, do
 
 test("upgrading a server (its worker, #194): on a fresh save's 8 GB home beside the Agent, through the NS API alone", async () => {
   await upgradedOnceAndRefused(await forServers(1e10, { sim: false, singularity: false }), "ui");
+});
+
+const HACKNET_SETUP = intent({ action: "buyHacknetSetup", args: {} });
+/** Core's plan's cost from no node at ×1: 6 nodes, about $170k. */
+const SETUP = hacknetSetupPlan([], NO_HACKNET_COST_MULTIPLIERS).cost;
+
+/**
+ * Netburners' Hacknet totals (#387), from no node: short of the money, refused at the first purchase it can't pay,
+ * saying so, what it bought kept; with the money, the rest, done; what the game took in all (its own count,
+ * `getMoneySources`' `hacknet_expenses`: the nodes earn money meanwhile, so the money alone won't tell) is core's plan's
+ * cost from no node at ×1 (the game's own prices, `Hacknet/HacknetHelpers.tsx`: the parity); sent again, done, nothing
+ * paid.
+ */
+async function hacknetBoughtOnce(fresh: ForServers, backend: "sim" | "ui") {
+  /** The game's Hacknet spending since the install, from the next slow snapshot (one a minute). */
+  const spentSoFar = async () => {
+    await fresh.game.run(61_000);
+    const sources = fresh.latest<{ moneySources?: Record<string, number> }>("slow")?.moneySources;
+    return -(sources?.hacknet_expenses ?? Number.NaN);
+  };
+  await fresh.game.runUntil(() => fresh.money() !== null, 10_000);
+  await fresh.simulation.diagnostics.setMoney(10_000);
+  await fresh.game.runUntil(() => fresh.money() === 10_000, 5_000);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [HACKNET_SETUP] });
+  expect(await triedOnce(fresh, HACKNET_SETUP.id)).toMatchObject({
+    done: false,
+    // Three nodes for $6,272.5; the fourth, $6,331.6, is past what's left.
+    problem: `the game refused node 3 ($6,332; the setup $${Math.ceil(SETUP).toLocaleString("en-US")}): not enough money`,
+    backend,
+  });
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  expect(await spentSoFar()).toBeCloseTo(1_000 + 1_850 + 3_422.5, 3);
+  await fresh.simulation.diagnostics.setMoney(1e10);
+  const outcomes = await boughtEach(fresh, [HACKNET_SETUP]);
+  expect(outcomes).toEqual([{ id: HACKNET_SETUP.id, done: true, tries: 1, problem: null, backend }]);
+  fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
+  expect(await spentSoFar()).toBeCloseTo(SETUP, 2);
+  // Sent again: the game shows the totals, done, nothing paid.
+  expect(await boughtEach(fresh, [HACKNET_SETUP])).toEqual([
+    { id: HACKNET_SETUP.id, done: true, tries: 1, problem: null, backend },
+  ]);
+  expect(await spentSoFar()).toBeCloseTo(SETUP, 2);
+}
+
+test("Hacknet to Netburners' totals (sim, #387): short of the money, refused and kept; then done at core's plan's cost; again, nothing paid", async () => {
+  await hacknetBoughtOnce(await forServers(1e10, { sim: true, singularity: false }), "sim");
+});
+
+test("Hacknet to Netburners' totals (its worker, #387): on a fresh save's 8 GB home beside the Agent, through the NS API alone", async () => {
+  await hacknetBoughtOnce(await forServers(1e10, { sim: false, singularity: false }), "ui");
 });
 
 test("a desired state the Agent refuses (#194's review): logged by both, reported, stored once, and cleared by the next it takes", async () => {

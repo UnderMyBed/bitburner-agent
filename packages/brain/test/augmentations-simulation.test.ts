@@ -24,6 +24,8 @@ import { appendFileSync } from "node:fs";
 import { augmentationsSoldBy, DAEDALUS, type MediumSnapshotData, type SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { AUGMENTATION_BOUGHT_EVENT_KIND, AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND } from "../src/augmentations.ts";
+import { FACTION_WORK_CHOSEN_EVENT_KIND } from "../src/factions.ts";
+import { INVITATION_TRAVEL_EVENT_KIND } from "../src/invitations.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { useFreshStarts } from "./helpers/fresh-start.ts";
@@ -285,11 +287,26 @@ const TO_DAEDALUS = toDaedalus(process.env.AUGMENTATION_DAEDALUS);
 const BLACK_HAND = "The Black Hand";
 /**
  * Before the Agent, harness edits stand in for the run so far: 25 installed, the cheap ones every faction the brain
- * could join soon sells (so none comes within reach in the hold, and Tian Di Hui isn't visited): The Black Hand's all
+ * could join soon sells (so none comes within reach in the hold): The Black Hand's all
  * but its own augmentation, Tian Di Hui's eight, city group A's (Sector-12 and Aevum, joined, banning B and C), Gen I
  * and NeuroFlux Governor. At the edit, hacking past 2500 too: Daedalus's requirement reached this cycle, so the count
  * is what's missing (the hold's condition, #243 review).
+ * Since #387, Netburners' five among them, so Netburners offers nothing new (A6 would count them, after a Hacknet setup,
+ * minutes off at that hacking level), in place of five that come no sooner than The Black Hand's own, so the A/B is
+ * what it was: three of The Black Hand's dearest (DataJack 112,500, Cranial Signal Processors - Gen IV 125,000,
+ * Embedded Netburner Module Core Implant 175,000, against its own 100,000), PCMatrix (100,000 at Aevum, joined at 0)
+ * and the Neuroreceptor Management Implant (75,000 at Tian Di Hui). With that one left to install, Tian Di Hui is
+ * travelled for (#228): both arms go to Ishima, and the inside one holds $1m there and joins it. Its 75,000 from none
+ * comes long after The Black Hand's, so A5 never works there and no install buys it: the test checks both, and the
+ * A/B's figures are main's.
  */
+const SWAPPED_FOR_NETBURNERS = [
+  "DataJack",
+  "Cranial Signal Processors - Gen IV",
+  "Embedded Netburner Module Core Implant",
+  "PCMatrix",
+  "Neuroreceptor Management Implant",
+];
 const RUN_3_INSTALLED = [
   ...augmentationsSoldBy(BLACK_HAND, 1, null).filter((name) => name !== BLACK_HAND && name !== "NeuroFlux Governor"),
   ...augmentationsSoldBy("Tian Di Hui", 1, null).filter((name) => name !== "NeuroFlux Governor"),
@@ -301,7 +318,8 @@ const RUN_3_INSTALLED = [
   "Neurotrainer I",
   "Cranial Signal Processors - Gen I",
   "NeuroFlux Governor",
-];
+].filter((name) => !SWAPPED_FOR_NETBURNERS.includes(name));
+RUN_3_INSTALLED.push(...augmentationsSoldBy("Netburners", 1, null).filter((name) => name !== "NeuroFlux Governor"));
 /**
  * Four reached by the edit, CyberSec joined at 18,750 and NiteSec at 20,000: the install takes the count to 29 of 30
  * (run #3's four came from BitRunners and The Black Hand).
@@ -460,6 +478,19 @@ test.each(
     await game.run(MINUTE);
     // A wait logged before the edit's slow snapshot (The Black Hand at 0, nothing reached) isn't the four's.
     const waitedWithFour = waits.filter((line) => line.includes(", 4 new at an install, "));
+    // #387's swap: Tian Di Hui travelled for, both arms; its work never chosen, nothing of its in the install's set.
+    const sinceStart = fresh.data.store.eventsInWindow({
+      environment: "E1",
+      sinceMs: EPOCH_MS,
+      untilMs: game.clock.now(),
+    });
+    const travels = sinceStart.filter((event) => event.kind === INVITATION_TRAVEL_EVENT_KIND);
+    expect(travels.map((event) => (event.detail as { city: string }).city)).toContain("Ishima");
+    const worked = sinceStart
+      .filter((event) => event.kind === FACTION_WORK_CHOSEN_EVENT_KIND && event.atMs >= editedAtMs)
+      .map((event) => (event.detail as { faction?: string }).faction);
+    expect(worked).not.toContain("Tian Di Hui");
+    expect(chosen[0]?.set.map((each) => each.augmentation)).not.toContain("Neuroreceptor Management Implant");
     if (!inside) {
       expect(waitedWithFour).toEqual([]);
       expect(chosen[0]?.set.map((each) => each.augmentation).sort()).toEqual([...REACHED_FOUR].sort());
@@ -470,9 +501,14 @@ test.each(
         untilMs: game.clock.now(),
       });
       expect(failures).toEqual([]);
-      note(
-        `seed ${seed}: installed now at 29: ${(((resetsSeenAtMs[0] ?? Number.NaN) - editedAtMs) / MINUTE).toFixed(1)} min from the edit to the reset`,
-      );
+      const nowMs = (resetsSeenAtMs[0] ?? Number.NaN) - editedAtMs;
+      note(`seed ${seed}: installed now at 29: ${(nowMs / MINUTE).toFixed(1)} min from the edit to the reset`);
+      // Seed 1's A/B as main measured it before #387's swap: the swap leaves it as it was.
+      if (seed === 1) {
+        expect((offMs / MINUTE).toFixed(1)).toBe("48.0");
+        expect(installs[0]).toBe("18.5 min: 29");
+        expect((nowMs / MINUTE).toFixed(1)).toBe("2.5");
+      }
       console.log(notes.join("\n"));
       return;
     }
@@ -499,6 +535,12 @@ test.each(
     expect(failures).toEqual([]);
     const heldMs = (resetsSeenAtMs[0] ?? Number.NaN) - editedAtMs;
     note(`seed ${seed}: waited, then installed at 30: ${(heldMs / MINUTE).toFixed(1)} min from the edit to the reset`);
+    // Seed 1's A/B as main measured it before #387's swap: the swap leaves it as it was.
+    if (seed === 1) {
+      expect((offMs / MINUTE).toFixed(1)).toBe("12.0");
+      expect(installs[0]).toBe("31.5 min: 30");
+      expect((heldMs / MINUTE).toFixed(1)).toBe("15.5");
+    }
 
     if (TO_DAEDALUS) {
       await until(daedalusSeen, DAEDALUS_WITHIN_MS);

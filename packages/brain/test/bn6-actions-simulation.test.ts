@@ -43,6 +43,9 @@ test("BN6.1, an hour from a harness join: each plan the least time to 25, the st
   const fresh = await freshStartOf({
     withDesiredState: true,
     fixture: { kind: "bitnode", n: 6, sourceFiles: SOURCE_FILES },
+    // The Agent at `FIXED_AGENT_START_MS`, the seeded draws from its first connection (#341's second item, as #369
+    // pinned cloud-servers-income): a bundle added (#387's Hacknet worker) no longer moves Raid's lottery.
+    fixedAgentStart: true,
     beforeAgent: async (game) => {
       await game.simulation.diagnostics.setHomeRam(128);
       await game.simulation.diagnostics.joinFactionWithReputation("CyberSec", 0);

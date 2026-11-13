@@ -2288,7 +2288,7 @@ describe("equipment (G3)", () => {
   test("the purchases spoken for: the one going out at its plan's price, each kind; the cloud server waiting, while it'd buy", () => {
     const intent = (action: string, args: Record<string, unknown> = {}) =>
       ({ action, args, id: `${action}()` }) as unknown as Intent;
-    const prices = { programs: 1e6, homeRam: 2e8, cloudServer: 3e7 };
+    const prices = { programs: 1e6, homeRam: 2e8, cloudServer: 3e7, hacknet: 1.7e5 };
     const server = { action: "buyServer", hostname: "pserv-3", ram: 64, price: 4e6, paybackMs: 60_000 } as const;
     const buys: {
       awaiting?: typeof server;
@@ -2308,6 +2308,8 @@ describe("equipment (G3)", () => {
     expect(spoken("upgradeHomeRam")).toEqual([{ amount: 2e8, forWhat: "upgradeHomeRam" }]);
     expect(spoken("buyServer")).toEqual([{ amount: 3e7, forWhat: "buyServer" }]);
     expect(spoken("upgradeServer")).toEqual([{ amount: 3e7, forWhat: "upgradeServer" }]);
+    // Netburners' Hacknet setup (#387), at its cost.
+    expect(spoken("buyHacknetSetup")).toEqual([{ amount: 1.7e5, forWhat: "buyHacknetSetup" }]);
     expect(spoken("travel")).toEqual([{ amount: 0, forWhat: "travel" }]);
     expect(spoken(null)).toEqual([]);
     // A price that isn't a number: none.
