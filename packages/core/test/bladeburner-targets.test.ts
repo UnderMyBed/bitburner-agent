@@ -7,6 +7,7 @@ import {
   actionRankGain,
   actionRankLoss,
   actionSeconds,
+  actionSuccessChance,
   BLADEBURNER_LEVELLED_ACTIONS,
   type BladeburnerActionReading,
   type BladeburnerPerson,
@@ -15,6 +16,7 @@ import {
   countGrowthPerSecond,
   maxStaminaOf,
 } from "../src/bladeburner-actions.ts";
+import { bladeburnerSkillMultsOf } from "../src/bladeburner-skills.ts";
 import {
   BLADEBURNER_TARGET_CELLS,
   BLADEBURNER_TARGET_CELLS_A_DISTANCE,
@@ -222,6 +224,29 @@ describe("the expected time to a target", () => {
       step: { chance: 0.1, gain: 73, loss: 3.3, rest: 0, seconds: 60, attempts: 12, next: steadyFar },
       rank: 2440,
       runs: 40_000,
+    },
+    // The next-best's own count (#392): Raid's 30, then a steady action's 50, then resting alone.
+    {
+      name: "Raid-like for 30 attempts, a steady one for 50, then resting alone, from 1,000",
+      step: {
+        chance: 0.1,
+        gain: 73,
+        loss: 3.3,
+        rest: 0,
+        seconds: 60,
+        attempts: 30,
+        next: {
+          chance: 0.4,
+          gain: 1.5,
+          loss: 0,
+          rest: 0.05,
+          seconds: 30,
+          attempts: 50,
+          next: bladeburnerRestStep(0.1 / 30),
+        },
+      },
+      rank: 1000,
+      runs: 2_000,
     },
     // A slow rise from near it that dips under the window often: the time back up to it counted (none, 10.7% short).
     {
@@ -500,5 +525,97 @@ describe("the rule's choice under a target", () => {
     });
     expect(none.work).toBeNull();
     expect(none.toTarget?.seconds).toBeCloseTo(5 / (0.1 / 30), 6);
+  });
+});
+
+describe("a far target's counts (#392)", () => {
+  // bn6-skills' hour at Typhoon's 2,500, its last reading's counts: Tracking's 4.2, Raid's 34.7, Bounty Hunter's 165.2.
+  // With the next-best's own count unbounded, each Tracking plan handed the walk to Raid as if unbounded (74.8 h, all
+  // alike), under Raid's own 90.1 h, and the rule chose Tracking at 0.343 rank/min against Raid's 0.519.
+  const who: BladeburnerPerson = {
+    skills: { hacking: 1, strength: 100, defense: 100, dexterity: 100, agility: 100, charisma: 1, intelligence: 0 },
+    mults: { bladeburner_success_chance: 1, bladeburner_max_stamina: 1, bladeburner_stamina_gain: 1 },
+  };
+  const levels = {
+    "Blade's Intuition": 2,
+    "Short-Circuit": 4,
+    "Digital Observer": 1,
+    Tracer: 3,
+    Reaper: 2,
+    "Evasive System": 2,
+    "Cyber's Edge": 1,
+  };
+  const counts: Record<string, number> = {
+    Tracking: 4.2,
+    "Bounty Hunter": 165.2,
+    Retirement: 169.8,
+    Investigation: 37.7,
+    "Undercover Operation": 57.9,
+    "Sting Operation": 52.2,
+    Raid: 34.7,
+    "Stealth Retirement Operation": 40.9,
+    Assassination: 119.9,
+  };
+  const maxLevels: Record<string, number> = { Tracking: 8, "Bounty Hunter": 6 };
+  const skills = bladeburnerSkillMultsOf(levels);
+  const readings: BladeburnerActionReading[] = BLADEBURNER_LEVELLED_ACTIONS.map((action) => {
+    const chance = actionSuccessChance(action, 1, who, {
+      city: { population: 1e9, communities: 50, chaos: 0 },
+      penalty: 1,
+      skills,
+    });
+    return {
+      type: action.type,
+      name: action.name,
+      level: 1,
+      maxLevel: maxLevels[action.name] ?? 1,
+      count: counts[action.name] as number,
+      chance: [chance, chance],
+    };
+  });
+  const max = maxStaminaOf(who, 0, skills);
+  const input = {
+    readings,
+    person: who,
+    stamina: max,
+    maxStamina: max,
+    rankMultiplier: 1,
+    speed: 1,
+    skills: { read: levels },
+  };
+
+  test("a count of 4 doesn't take the next-best's whole walk: the next-best runs its own count, then the rest", () => {
+    const target = { rank: 174.7, target: 2500 };
+    const every = bladeburnerPlansToTarget({ ...input, target });
+    const chosen = chooseBladeburnerAction({ ...input, target });
+    expect(chosen).toEqual(every[0]);
+    const tracking = every.filter((plan) => plan.work?.name === "Tracking");
+    expect(tracking.length).toBeGreaterThan(0);
+    expect(chosen.work?.name).not.toBe("Tracking");
+    expect(chosen.rankPerSecond).toBeGreaterThan(Math.max(...tracking.map((plan) => plan.rankPerSecond)));
+    // Every plan's walk is at least the distance over the fastest rate weighed (Wald's), none handed a faster one.
+    const fastest = Math.max(...every.map((plan) => plan.rankPerSecond));
+    for (const plan of every) expect(plan.toTarget?.seconds ?? 0).toBeGreaterThanOrEqual((2500 - 174.7) / fastest);
+    // And at least the rest's: once the counts are spent (Wald: each attempt expects at most its chance × its gain, at
+    // its best level; a tenth more for the counts' growth over their own steps), resting alone covers what's left at
+    // Field Analysis's 0.1 a 30 s. A next-best run past its own count (#386's, unbounded) went under it.
+    const counted = readings.reduce((total, read) => {
+      const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === read.name);
+      if (action === undefined) return total;
+      let best = 0;
+      for (let level = 1; level <= read.maxLevel; level++) {
+        const chance = Math.min(1, read.chance[0] * action.difficultyFac ** (1 - level));
+        best = Math.max(best, chance * actionRankGain(action, level, 1));
+      }
+      return total + 1.1 * read.count * best;
+    }, 0);
+    const resting = (2500 - 174.7 - counted) / (0.1 / 30);
+    expect(resting).toBeGreaterThan(0);
+    for (const plan of every) expect(plan.toTarget?.seconds ?? 0).toBeGreaterThanOrEqual(resting);
+    console.log(
+      `at 174.7 → 2,500: ${chosen.work?.name} level ${chosen.work?.level} at ${(60 * chosen.rankPerSecond).toFixed(3)} ` +
+        `rank/min, ${((chosen.toTarget?.seconds ?? 0) / 3600).toFixed(1)} h; the best Tracking ` +
+        `${((tracking[0]?.toTarget?.seconds ?? 0) / 3600).toFixed(1)} h`,
+    );
   });
 });

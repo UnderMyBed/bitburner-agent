@@ -930,16 +930,41 @@ function fastestToTarget(
   const unbounded = ({ attempts: _attempts, next: _next, ...step }: BladeburnerRankStep) => step;
   // A plan's fastest rise a second: a step's chance × gain + rest over its seconds (Wald's), or resting alone's.
   const riseOf = (step: BladeburnerRankStep) => (step.chance * step.gain + step.rest) / step.seconds;
+  // Wald's bound through a sequence (#392): each walk's attempts rise at most its `riseOf` a second for at most its
+  // attempts × (chance × gain + rest) of rank, so the least time takes the distance from the fastest first.
+  const leastThrough = (steps: readonly BladeburnerRankStep[]) => {
+    const pieces = steps
+      .map((each) => {
+        const attempts = each.attempts ?? Number.POSITIVE_INFINITY;
+        return { rise: riseOf(each), most: attempts * (each.chance * each.gain + each.rest) };
+      })
+      .filter((each) => each.rise > 0)
+      .sort((a, b) => b.rise - a.rise);
+    let left = distance;
+    let seconds = 0;
+    for (const { rise, most } of pieces) {
+      const taken = Math.min(left, most);
+      seconds += taken / rise;
+      left -= taken;
+      if (!(left > 0)) return seconds;
+    }
+    return Number.POSITIVE_INFINITY;
+  };
+  const sequenceOf = (step: BladeburnerRankStep): BladeburnerRankStep[] =>
+    step.next === undefined || !((step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY)
+      ? [{ ...step, attempts: Number.POSITIVE_INFINITY }]
+      : [step, ...sequenceOf(step.next)];
   const leastOf = (candidate: PlanCandidate, bounded: boolean) => {
     const { plan, step, name } = candidate;
     if (step === null) return aloneSeconds(plan);
-    if (!bounded || name === null || !((step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY)) {
-      return bladeburnerSecondsToRankAtLeast(step, rank, target);
+    const counted = (step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY;
+    if (!counted) return bladeburnerSecondsToRankAtLeast(step, rank, target);
+    // The next-best's search: its own count, then resting alone. The choice's: the plan's count, then its next-best's.
+    if (!bounded || name === null) {
+      return restAlone === undefined ? Number.POSITIVE_INFINITY : leastThrough([step, restAlone]);
     }
-    // A sequence rises no faster than the faster of its two.
     const next = nextAfter(name);
-    const fastest = Math.max(riseOf(step), next === undefined ? 0 : riseOf(next));
-    return fastest > 0 ? distance / fastest : Number.POSITIVE_INFINITY;
+    return next === undefined ? Number.POSITIVE_INFINITY : leastThrough([step, ...sequenceOf(next)]);
   };
   // The best among `pool` by `secondsOf`, Wald's bound (`leastOf`) ruling out the rest when pruned.
   const search = (
@@ -962,18 +987,34 @@ function fastestToTarget(
     return solved.sort((x, y) => x.seconds - y.seconds || x.order - y.order);
   };
   const pool = candidates.map((candidate, order) => ({ candidate, order }));
-  // The next-best after an action's count (cached by the action spent): its step, unbounded.
+  // Resting alone (the first candidate), what follows a next-best's own count (#392).
+  const first = candidates[0] as PlanCandidate;
+  const restAlone =
+    first.step === null && first.plan.rankPerSecond > 0 ? bladeburnerRestStep(first.plan.rankPerSecond) : undefined;
+  // A plan's step with its count, then `then` after it; unbounded where its count keeps up.
+  const withCount = (step: BladeburnerRankStep, then: BladeburnerRankStep | undefined) =>
+    (step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY
+      ? { ...unbounded(step), attempts: step.attempts as number, ...(then === undefined ? {} : { next: then }) }
+      : unbounded(step);
+  // The next-best after an action's count (cached by the action spent): its step, with its own count (#392), then
+  // resting alone.
   const nextBest = new Map<string, BladeburnerRankStep | undefined>();
+  // Each plan's time with its own count then resting alone, solved once for every next-best search it's in.
+  const counted = new Map<PlanCandidate, number>();
+  const countedSeconds = (candidate: PlanCandidate) => {
+    const { plan, step } = candidate;
+    if (step === null) return aloneSeconds(plan);
+    let seconds = counted.get(candidate);
+    if (seconds === undefined) {
+      seconds = bladeburnerSecondsToRank(withCount(step, restAlone), rank, target);
+      counted.set(candidate, seconds);
+    }
+    return seconds;
+  };
   const nextAfter = (name: string) => {
     if (!nextBest.has(name)) {
       const others = pool.filter(({ candidate }) => candidate.name !== name);
-      const [best] = search(
-        others,
-        false,
-        ({ plan, step }) =>
-          step === null ? aloneSeconds(plan) : bladeburnerSecondsToRank(unbounded(step), rank, target),
-        false,
-      );
+      const [best] = search(others, false, countedSeconds, false);
       const step = best === undefined || !Number.isFinite(best.seconds) ? undefined : best.candidate.step;
       nextBest.set(
         name,
@@ -981,7 +1022,7 @@ function fastestToTarget(
           ? undefined
           : step === null || step === undefined
             ? bladeburnerRestStep(best.candidate.plan.rankPerSecond)
-            : unbounded(step),
+            : withCount(step, restAlone),
       );
     }
     return nextBest.get(name);

@@ -222,8 +222,12 @@ export function bladeburnerSecondsToRankAtLeast(step: BladeburnerRankStep, rank:
  * them in (the first is the best now), where a mixture spreads a lottery's tickets over ranks where its failures cost:
  * each step the first with chance w, else the second, w = attempts/n (n the first's own expected steps from `rank`),
  * set once more at attempts over the mixed walk's expected steps; 3,523 s against the simulated sequence's 3,068
- * (+15%) for Raid's 12 then a steady action from rank 3 in the core test. The second's own count isn't bounded. With
- * no `next`, a count short of the walk is never. The next-best is the one fastest from the rank now (#390's review),
+ * (+15%) for Raid's 12 then a steady action from rank 3 in the core test. **The second's own count** (#392) is
+ * bounded too, with its own `next` after it (the rule's: resting alone), by backward induction (`boundedNext`): left
+ * unbounded, at a far target a plan with a count of 4 handed the whole walk to a next-best it could only run for its
+ * own count, and the rule chose it for that (bn6-skills' hour at Typhoon's 2,500). Left out, and labelled: the counts'
+ * growth while another action runs (only their own steps' growth is in their attempts), so a far target's time errs
+ * long. With no `next`, a count short of the walk is never. The next-best is the one fastest from the rank now (#390's review),
  * not from where the count runs out: labelled.
  * Left out, and labelled: the skill points the max rank earns (B3's), either way, as both routes earn them about in
  * proportion to the rank they make; the stamina's own path (a cycle's rest spread over its attempts,
@@ -238,7 +242,15 @@ export function bladeburnerSecondsToRank(step: BladeburnerRankStep, rank: number
   }
   // Each walk on its own grid, by its own steps, over the one window (the next-best's taken onto the first's).
   const bounded = attempts < Number.POSITIVE_INFINITY;
-  const grid = bladeburnerTargetGrid(bounded && step.next !== undefined ? [step, step.next] : [step], rank, target);
+  // The next-best, and (#392) what follows its own count: the window under them all.
+  const sequence = [step];
+  if (bounded && step.next !== undefined) {
+    sequence.push(step.next);
+    if (step.next.next !== undefined && (step.next.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY) {
+      sequence.push(step.next.next);
+    }
+  }
+  const grid = bladeburnerTargetGrid(sequence, rank, target);
   const cells = grid.cells[0] as number;
   const chain = chainOf(step, target, !bounded, cells, grid.low);
   const from = Math.max(0, rank);
@@ -293,13 +305,26 @@ export function bladeburnerSecondsToRank(step: BladeburnerRankStep, rank: number
   if (!(aliveOf(distribution) > 1e-12)) return seconds;
   // Then the next-best's from wherever the walk is.
   if (step.next === undefined) return Number.POSITIVE_INFINITY;
-  const nextCells = grid.cells[1] as number;
-  const nextSeconds = solvedNext(step.next, target, nextCells, grid.low);
+  // The next-best on its own grid (#392: by its own steps, so solved once for every plan it follows).
+  const following = step.next;
+  const nextBounded = (following.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY;
+  const nextGrid = bladeburnerTargetGrid(
+    nextBounded && following.next !== undefined ? [following, following.next] : [following],
+    rank,
+    target,
+  );
+  const nextCells = nextGrid.cells[0] as number;
+  const nextLow = nextGrid.low;
+  const nextSeconds = nextBounded
+    ? boundedNext(following, target, nextCells, nextLow, nextGrid.cells[1] ?? nextCells)
+    : solvedNext(following, target, nextCells, nextLow);
   if (nextSeconds === null) return Number.POSITIVE_INFINITY;
+  const nextRise = bladeburnerStepRise(following);
   // The next-best's seconds at each of the first's points, between its own two around it (its last's to the target's
-  // 0 past it).
+  // 0 past it); under its window, Wald's time back up to it.
   const nextAt = (x: number) => {
-    const cell = ((x - grid.low) / (target - grid.low)) * nextCells;
+    if (x < nextLow) return (nextSeconds[0] as number) + ((nextLow - x) * following.seconds) / nextRise;
+    const cell = ((x - nextLow) / (target - nextLow)) * nextCells;
     const k = Math.min(nextCells - 1, Math.floor(cell));
     const share = cell - k;
     const upper = k + 1 < nextCells ? (nextSeconds[k + 1] as number) : 0;
@@ -326,6 +351,63 @@ function solvedNext(step: BladeburnerRankStep, target: number, cells: number, lo
   const { seconds } = chainOf(step, target, true, cells, low);
   solvedNexts.set(step, { target, cells, low, seconds });
   return seconds;
+}
+
+/**
+ * A next-best bounded by its own count (#392): its seconds from each of its grid points, its `attempts` then its own
+ * `next` (resting alone), by backward induction over the attempts left (Bertsekas, "Dynamic Programming and Optimal
+ * Control", 4th ed., 2017, vol. 1, §1.3: V_k = c + Q·V_{k−1}, V_0 the tail's), solved once a step, target and grid.
+ * Null where the tail can't rise.
+ */
+const boundedNexts = new WeakMap<
+  BladeburnerRankStep,
+  { target: number; cells: number; low: number; seconds: Float64Array | null }
+>();
+function boundedNext(
+  step: BladeburnerRankStep,
+  target: number,
+  cells: number,
+  low: number,
+  tailCells: number,
+): Float64Array | null {
+  const known = boundedNexts.get(step);
+  if (known !== undefined && known.target === target && known.cells === cells && known.low === low) {
+    return known.seconds;
+  }
+  const remember = (seconds: Float64Array | null) => {
+    boundedNexts.set(step, { target, cells, low, seconds });
+    return seconds;
+  };
+  const tail = step.next === undefined ? null : solvedNext(step.next, target, tailCells, low);
+  if (tail === null) return remember(null);
+  const { offsets, columns, shares, extras } = chainOf(step, target, false, cells, low);
+  // V_0: the tail's at each point, between its own two around it (its last's to the target's 0 past it).
+  let values = new Float64Array(cells);
+  for (let i = 0; i < cells; i++) {
+    const cell = (i / cells) * tailCells;
+    const k = Math.min(tailCells - 1, Math.floor(cell));
+    const share = cell - k;
+    const upper = k + 1 < tailCells ? (tail[k + 1] as number) : 0;
+    values[i] = (1 - share) * (tail[k] as number) + share * upper;
+  }
+  let next = new Float64Array(cells);
+  const attempts = Math.max(0, Math.floor(step.attempts ?? 0));
+  // Until the attempts are spent, or more of them no longer move any point's time (a count far past the walk's:
+  // the walk is absorbed first, as the forward run's 1e-12).
+  for (let n = 0; n < attempts; n++) {
+    let moved = 0;
+    for (let i = 0; i < cells; i++) {
+      let total = step.seconds + (extras[i] as number);
+      for (let at = offsets[i] as number; at < (offsets[i + 1] as number); at++) {
+        total += (shares[at] as number) * (values[columns[at] as number] as number);
+      }
+      moved = Math.max(moved, Math.abs(total - (values[i] as number)) / Math.max(1, Math.abs(total)));
+      next[i] = total;
+    }
+    [values, next] = [next, values];
+    if (!(moved > 1e-12)) break;
+  }
+  return remember(values);
 }
 
 /**
