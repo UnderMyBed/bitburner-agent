@@ -517,6 +517,21 @@ describe("the later cycles priced from the countables left (#389)", () => {
     ).toEqual([expect.closeTo(64, 6), expect.closeTo(64, 6)]);
   });
 
+  test("a split pays where a cycle's installs speed the next: the countables installed before each cycle count", () => {
+    // BitRunners Neurolink first (100 reputation: hacking ×1.15, its experience ×1.2, speed ×1.05), then 1,000,000 at
+    // another faction, the rate the level / 100. Installed first in a cycle of its own, it speeds the long one by more
+    // than its cycle costs: two cycles. Were the installs before a cycle left out, one.
+    const two = [left_("BitRunners Neurolink", 100, "BitRunners"), left_(WIRED, 1_000_000, "Sector-12")];
+    const cycles = laterCyclesMs({
+      count: 2,
+      perCycle: 2,
+      shapeMs: 0,
+      later: priced(two, { rateAt: (_, level) => level / 100, rebuildMs: MINUTE }),
+    });
+    expect(cycles).toHaveLength(2);
+    expect((cycles[0] as number) < (cycles[1] as number)).toBe(true);
+  });
+
   test("the recurrence is the least over every split of the cheapest first (BN4.2's c4, 8 left: all 128 splits)", () => {
     const { later, count } = hindcastAt(CHOICES[2] as (typeof CHOICES)[number]);
     expect(count).toBe(8);

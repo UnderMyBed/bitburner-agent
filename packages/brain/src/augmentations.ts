@@ -1505,7 +1505,7 @@ export function describeInstallTiming(
   const scaled =
     timing.tauScale > 1 ? `; each τ ×${timing.tauScale.toFixed(1)}, the overdue wait's measured error` : "";
   // #406: what the margin kept, and its error (a share of each τ).
-  const error = `±${(100 * (timing.tauError ?? 0)).toFixed(1)}% of a τ`;
+  const error = `±${formatEta(timing.marginMs ?? 0)}`;
   const kept =
     timing.kept === "margin"
       ? `; install now not shorter than the best wait by more than its τ's error (${error}): the wait`
@@ -3055,6 +3055,42 @@ export class AugmentationRule {
             income,
             upTo: Math.max(0, needed - adding),
           });
+          // #406: each τ's error, the share's (its samples' over the window) and κ's propagated through the τ: the
+          // next countables again at κ lowered by its measured error (the window's own, "measured now"; the carried
+          // rate's isn't measured: left out), each τ's change over it (the countable matched by name: its place among
+          // them may move, labelled).
+          const shareError = meanRelativeError(this.#shareSamples.map((sample) => sample.bonus));
+          const kappaError = levelRise.from === "measured now" ? this.#expRate.relativeError() : null;
+          const lowered =
+            kappaError !== null && kappaError > 0
+              ? nextCountables({
+                  toCome: countablesToCome({
+                    sold,
+                    state: purchaseState,
+                    set,
+                    joined,
+                    shops,
+                    terms,
+                    person: player.person,
+                    conditions: workConditionsOf(resetInfo, slowData, shareBonus),
+                    work: holdWork,
+                    rise: { ...levelRise.rise, kappa: levelRise.rise.kappa * Math.max(0, 1 - kappaError) },
+                    money: budget,
+                    income,
+                    netburners,
+                  }),
+                  set,
+                  state: purchaseState,
+                  money: budget,
+                  income,
+                  upTo: Math.max(0, needed - adding),
+                })
+              : [];
+          const withError = next.map((each) => {
+            const low = lowered.find((one) => one.augmentation === each.augmentation)?.tauMs;
+            const kappaPart = low !== undefined && each.tauMs > 0 ? Math.max(0, low - each.tauMs) / each.tauMs : null;
+            return { ...each, tauError: tauRelativeError(shareError, kappaPart) };
+          });
           // The wait under way (kept in the store, a restart keeps it): once overdue, each fresh τ scaled by its
           // measured error, the wait so far over its first τ (decision 67's rates fitted online), so a stalled wait
           // gives way, except at the last countable, where the scaled wait never exceeds T; the overdue failure reports
@@ -3111,17 +3147,13 @@ export class AugmentationRule {
               needed,
               adding,
               onlineMs: cycleMs,
-              next,
+              next: withError,
               incomeMeasured: income !== null,
               invitationHeld: invitationHold > 0,
               tauScale,
-              // #406: install now only by more than the best wait's τ's error, from the share's and κ's measured
-              // errors over their windows (κ's only where it's the window's own, "measured now": the carried rate's
-              // isn't measured, left out); the wait under way held until a rival beats it by more than the error.
-              tauError: tauRelativeError(
-                meanRelativeError(this.#shareSamples.map((sample) => sample.bonus)),
-                levelRise.from === "measured now" ? this.#expRate.relativeError() : null,
-              ),
+              // #406: install now only by more than the best wait's τ error (each wait's own, above; the share's
+              // alone where a τ has none); the wait under way held until a rival beats it by more than the error.
+              tauError: tauRelativeError(shareError, null),
               held: wait === null ? null : wait.untilAdding - adding,
               later: {
                 left,

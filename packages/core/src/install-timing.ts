@@ -477,6 +477,8 @@ export interface InstallTimingCandidate {
   estimateMs: number;
   /** Its later cycles' lengths, ms, where they're priced from the countables left (#389); absent, this one's shape. */
   cyclesMs?: number[];
+  /** A wait's τ's error, ms (#406): its relative error (its own, else `tauError`) times its τ; absent where 0. */
+  errorMs?: number;
 }
 
 /** The planner's install timing (#343): N, n and T, the candidates with an estimate, and the choice (k), or null. */
@@ -495,8 +497,10 @@ export interface InstallTiming {
   tauScale: number;
   /** What priced the later cycles from the countables left (#389): R, the dead time and κ; absent, unpriced. */
   later?: { rebuildMs: number; deadSeconds: number; kappa: number };
-  /** The relative error of a wait's τ (#406, `tauRelativeError`): each margin is it times the τ concerned. */
+  /** The relative error of a wait's τ (#406, `tauRelativeError`), where a wait gives none of its own. */
   tauError: number;
+  /** The margin the choice was kept by, ms (#406): the error it was compared within; absent where none kept it. */
+  marginMs?: number;
   /**
    * What the margin kept (#406): "margin", a wait chosen as installing now didn't beat the best wait by more than its
    * error; "held", the choice of the last reading kept as no rival beat it by more than the error; null, neither.
@@ -518,15 +522,15 @@ export function meanRelativeError(samples: readonly number[]): number | null {
 }
 
 /**
- * The relative error of a τ by work (#406), from the rates' measured errors over their windows: the share bonus's
- * mean (#351, `shareBonusMean`'s samples) and the experience rate that sets κ (#405, `HackingExpRate`'s), each
- * `meanRelativeError`, added in quadrature (independent errors, to first order). A τ by work goes as 1 over the work's
- * rate, which is proportional to the share bonus, so its relative error is the share's; and κ's at most (the level's
- * rise is all of the work's rate's growth: an elasticity at most 1, taken as 1, cautious for installing now). None
- * measured: 0 (the margin then only breaks ties, to the wait; with no income measured, the hold for it applies).
+ * The relative error of a τ by work (#406), from the rates' measured errors over their windows, added in quadrature
+ * (independent errors, to first order): the share bonus's mean (#351, `shareBonusMean`'s samples, `meanRelativeError`):
+ * a τ by work goes as 1 over the work's rate, proportional to the share bonus, so its relative error is the share's;
+ * and κ's (#405, `HackingExpRate`'s steps), propagated through the τ itself: the caller's τ again at κ lowered by its
+ * relative error, the change over the τ (`kappaPart`). None measured: 0 (the margin then only breaks ties, to the
+ * wait; with no income measured, the hold for it applies).
  */
-export function tauRelativeError(shareError: number | null, kappaError: number | null): number {
-  return Math.sqrt((shareError ?? 0) ** 2 + (kappaError ?? 0) ** 2);
+export function tauRelativeError(shareError: number | null, kappaPart: number | null): number {
+  return Math.sqrt((shareError ?? 0) ** 2 + (kappaPart ?? 0) ** 2);
 }
 
 /**
@@ -557,7 +561,7 @@ export function installTiming({
   needed: number;
   adding: number;
   onlineMs: number;
-  next: readonly { tauMs: number; augmentation?: string }[];
+  next: readonly { tauMs: number; augmentation?: string; tauError?: number }[];
   incomeMeasured?: boolean;
   invitationHeld?: boolean;
   tauScale?: number;
@@ -584,11 +588,13 @@ export function installTiming({
     const afterWait = later === undefined ? undefined : { ...later, left, installing };
     const estimateMs = waitEstimateMs(needed, adding, k, tauMs, onlineMs, afterWait);
     if (estimateMs !== null) {
+      const errorMs = (each.tauError ?? tauError) * tauMs;
       candidates.push({
         k,
         tauMs,
         estimateMs,
         ...cyclesOf(needed - adding - k, adding + k, onlineMs + tauMs, afterWait),
+        ...(errorMs > 0 ? { errorMs } : {}),
       });
     }
   }
@@ -601,14 +607,16 @@ export function installTiming({
   };
   const best = least(() => true);
   const bestWait = least((candidate) => candidate.k > 0);
-  const margin = (...each: InstallTimingCandidate[]) => tauError * Math.max(0, ...each.map((one) => one.tauMs));
+  const margin = (...each: InstallTimingCandidate[]) => Math.max(0, ...each.map((one) => one.errorMs ?? 0));
   let kept: InstallTiming["kept"] = null;
+  let marginMs: number | null = null;
   let chosen = best;
   // Installing now only by more than the best wait's τ's error (#406), short of the count.
   if (best?.k === 0 && adding < needed && bestWait !== null) {
     if (!(best.estimateMs < bestWait.estimateMs - margin(bestWait))) {
       chosen = bestWait;
       kept = "margin";
+      marginMs = margin(bestWait);
     }
   }
   const installing = chosen?.k === 0 && adding < needed;
@@ -619,6 +627,7 @@ export function installTiming({
   const last = held !== null && held > 0 ? candidates.find((candidate) => candidate.k === held) : undefined;
   if (last !== undefined && chosen !== null && chosen.k !== last.k && !(chosen.k === 0 && adding >= needed)) {
     if (!(chosen.estimateMs < last.estimateMs - margin(chosen, last))) {
+      marginMs = margin(chosen, last);
       chosen = last;
       kept = "held";
     }
@@ -640,5 +649,6 @@ export function installTiming({
     ...work,
     tauError,
     kept,
+    ...(marginMs === null ? {} : { marginMs }),
   };
 }

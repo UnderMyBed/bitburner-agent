@@ -8,6 +8,7 @@ import {
   AUGMENTATION_NAMES,
   augmentationsSoldBy,
   chooseAugmentationsToBuy,
+  countablesLeft,
   DAEDALUS_COUNT_HOLD_MS,
   donationToReach,
   type FactionState,
@@ -18,6 +19,7 @@ import {
   type InstallTimingCandidate,
   isWorthInstalling,
   LATER_CYCLE_FACTIONS,
+  laterCyclesMs,
   levellingInstallMultipliers,
   type MediumSnapshotData,
   PORT_OPENER_PROGRAMS,
@@ -4050,6 +4052,8 @@ describe("the planner's later cycles priced from the countables left (#389)", ()
     expect(cheap?.words).toMatch(
       /; later cycles from the \d+ countables left, cheapest first, split to the least: R 5 min, the level along its rise after 10 min: no ramp measured yet, the rate's window/,
     );
+    // Each later cycle's length in the words.
+    expect(cheap?.words).toMatch(/install now [\d.]+ (min|h) \(then [\d.]+ (min|h)\)/);
     const nowOf = (view: typeof cheap) => view?.candidates[0]?.estimateMs as number;
     // The cheapest left, CashRoot Starter Kit's 12,500 (Sector-12), against DermaForce Particle Barrier's 15,000.
     expect(nowOf(dear)).toBeGreaterThan(nowOf(cheap));
@@ -4091,6 +4095,95 @@ describe("the planner's later cycles priced from the countables left (#389)", ()
     minuteOn({ cyberSec: 0 });
     expect(timing()?.laterCycles?.carried).toBe(false);
     expect(timing()?.later).toBeUndefined();
+  });
+
+  test("the brain's later cycles are core's on its inputs: NiteSec's favour after the install, what it installs", () => {
+    // NiteSec joined at 3,000: its Neurotrainer II (10,000) the cheapest left, worked after the install at the favour
+    // that 3,000 earns (`favorAfterInstall`), the level's path after Gen I and the set's installs.
+    store.deleteSetting(AUGMENTATION_INSTALL_WAIT_SETTING);
+    exp = E300;
+    plannerAt(19, 5);
+    risingMinutes(11, { cyberSec: 0, niteSec: 3000 });
+    const chosenEvent = events.filter((event) => event.type === "augmentationInstallChosen").at(-1) as
+      | { timing?: InstallTimingView; set?: { augmentation: string }[] }
+      | undefined;
+    const view = chosenEvent?.timing ?? timing();
+    const setNames = (chosenEvent?.set ?? rule.view().set ?? []).map((each) =>
+      typeof each === "string" ? each : each.augmentation,
+    );
+    const joined = [
+      { name: "CyberSec", reputation: 0, favor: 0 },
+      { name: "NiteSec", reputation: 3000, favor: 0 },
+    ];
+    const person = workingPersonOf(medium({ money: MONEY })) as WorkingPerson;
+    const conditions = workConditionsOf({ currentNode: 1, ownedAugs: OWNED, ownedSF: {} }, slow());
+    const { keep: _keep, ...rateConditions } = conditions;
+    const rateAt = (faction: string, level: number) => {
+      const seller = joined.find((each) => each.name === faction);
+      const favor = seller === undefined ? 0 : favorAfterInstall(seller.favor, seller.reputation);
+      const best = bestWorkRate(person, { name: faction, reputation: 0, favor }, conditions);
+      if (best === null) return 0;
+      const at = { ...person, skills: { ...person.skills, hacking: level } };
+      return factionReputationPerSecond(at, best.workType, { favor, ...rateConditions });
+    };
+    const state = {
+      installed: OWNED,
+      queued: [GEN_I],
+      sourceFile11Level: 0,
+      bitNodeMultipliers: { AugmentationMoneyCost: 1, AugmentationRepCost: 1 },
+    };
+    const left = countablesLeft({
+      factions: ["CyberSec", "NiteSec", ...LATER_CYCLE_FACTIONS],
+      bitNode: 1,
+      state,
+      set: setNames,
+    });
+    expect(left[0]?.augmentation).toBe("Neurotrainer II");
+    const expected = laterCyclesMs({
+      count: (view?.needed as number) - (view?.adding as number),
+      perCycle: view?.adding as number,
+      shapeMs: Number.NaN,
+      later: {
+        left,
+        rebuildMs: 5 * MINUTE,
+        rise: { exp, level: 300, levelMult: 1, kappa: view?.later?.kappa as number },
+        deadSeconds: 600,
+        rateAt,
+        installing: [GEN_I, ...setNames],
+      },
+    });
+    expect(view?.candidates[0]?.cyclesMs).toEqual(expected.map((ms) => expect.closeTo(ms, 0)));
+  });
+
+  test("the ramp measured this cycle (#405) is the later cycles' dead time; a κ from another BitNode carries none", () => {
+    store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, JSON.stringify({ lastAugReset: 0, rampMs: 3 * MINUTE }));
+    const measured = pricedAt(0, OWNED);
+    expect(measured).toMatchObject({
+      later: { deadSeconds: 180 },
+      laterCycles: { deadMs: 3 * MINUTE, deadMeasured: true },
+    });
+    expect(measured?.words).toMatch(/the level along its rise after its ramp of 3 min measured/);
+    store.deleteSetting(AUGMENTATION_LEVEL_RAMP_SETTING);
+    // A κ stored in another BitNode (its lastNodeReset), or at this cycle's own install: none carried, the first rule.
+    for (const stored of [
+      { lastNodeReset: -5, lastAugReset: -1, kappa: 1e-12, deadMs: null },
+      { lastNodeReset: 0, lastAugReset: 0, kappa: 1e-12, deadMs: null },
+    ]) {
+      store.deleteSetting(AUGMENTATION_INSTALL_WAIT_SETTING);
+      exp = E300;
+      plannerAt(19, 5, false);
+      store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify(stored));
+      risingMinutes(11, { cyberSec: 0 });
+      const view =
+        (
+          events.filter((event) => event.type === "augmentationInstallChosen").at(-1) as
+            | { timing?: InstallTimingView }
+            | undefined
+        )?.timing ?? timing();
+      expect(view?.laterCycles?.carried).toBe(false);
+      events = [];
+      store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+    }
   });
 
   test("Netburners' route open (#387): its five among the countables left, its 1,875 the cheapest: a shorter cycle", () => {
@@ -4244,7 +4337,7 @@ describe("the margin (#406): install now only by more than the best wait's τ er
     expect(tau - 30).toBeLessThan(nearTie.tauError * tau);
     expect(nearTie).toMatchObject({ choice: 1, kept: "margin" });
     expect(nearTie.words).toMatch(
-      /; install now not shorter than the best wait by more than its τ's error \(±[\d.]+% of a τ\): the wait$/,
+      /; install now not shorter than the best wait by more than its τ's error \(±[^)]+\): the wait$/,
     );
     expect(events.filter((event) => event.type === "augmentationInstallChosen")).toEqual([]);
     // Gen II 40 min off: install now wins by 10, past the error: it installs.
@@ -4286,9 +4379,7 @@ describe("the margin (#406): install now only by more than the best wait's τ er
     expect(two.estimateMs).toBeLessThan(one.estimateMs);
     expect(one.estimateMs - two.estimateMs).toBeLessThan(held.tauError * Math.max(one.tauMs, two.tauMs));
     expect(held).toMatchObject({ choice: 1, kept: "held" });
-    expect(held.words).toMatch(
-      /; the wait under way kept: no rival shorter by more than the error \(±[\d.]+% of a τ\)/,
-    );
+    expect(held.words).toMatch(/; the wait under way kept: no rival shorter by more than the error \(±[^)]+\)/);
     // Past the error (τ2 10 min under): the rival taken.
     const taken = readings(joined(nite(waitFor1 + 1 - 10)), OWNED_27);
     expect(taken).toMatchObject({ choice: 2, kept: null });
