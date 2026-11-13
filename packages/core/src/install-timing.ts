@@ -493,12 +493,48 @@ export interface InstallTiming {
   tauScale: number;
   /** What priced the later cycles from the countables left (#389): R, the dead time and κ; absent, unpriced. */
   later?: { rebuildMs: number; deadSeconds: number; kappa: number };
+  /** The relative error of a wait's τ (#406, `tauRelativeError`): each margin is it times the τ concerned. */
+  tauError: number;
+  /**
+   * What the margin kept (#406): "margin", a wait chosen as installing now didn't beat the best wait by more than its
+   * error; "held", the choice of the last reading kept as no rival beat it by more than the error; null, neither.
+   */
+  kept: "margin" | "held" | null;
+}
+
+/**
+ * A rate's relative standard error from its samples (#406): the standard deviation of the samples over √n, over their
+ * mean (the error of a mean of n independent samples); null with fewer than 2 or a mean not above 0.
+ */
+export function meanRelativeError(samples: readonly number[]): number | null {
+  const n = samples.length;
+  if (n < 2) return null;
+  const mean = samples.reduce((sum, each) => sum + each, 0) / n;
+  if (!(mean > 0)) return null;
+  const variance = samples.reduce((sum, each) => sum + (each - mean) ** 2, 0) / (n - 1);
+  return Math.sqrt(variance / n) / mean;
+}
+
+/**
+ * The relative error of a τ by work (#406), from the rates' measured errors over their windows: the share bonus's
+ * mean (#351, `shareBonusMean`'s samples) and the experience rate that sets κ (#405, `HackingExpRate`'s), each
+ * `meanRelativeError`, added in quadrature (independent errors, to first order). A τ by work goes as 1 over the work's
+ * rate, which is proportional to the share bonus, so its relative error is the share's; and κ's at most (the level's
+ * rise is all of the work's rate's growth: an elasticity at most 1, taken as 1, cautious for installing now). None
+ * measured: 0 (the margin then only breaks ties, to the wait; with no income measured, the hold for it applies).
+ */
+export function tauRelativeError(shareError: number | null, kappaError: number | null): number {
+  return Math.sqrt((shareError ?? 0) ** 2 + (kappaError ?? 0) ** 2);
 }
 
 /**
  * The candidates and the choice (#343): install now (with n above 0) and each next k with a τ (times `tauScale`, an
- * overdue wait's measured error; never, with a τ above 0 times a scale of Infinity), the least estimate chosen; a tie
- * to install (irreversible, it still passes the controller's gate), then to the fewer to wait for. With no income
+ * overdue wait's measured error; never, with a τ above 0 times a scale of Infinity), the least estimate chosen, a tie to
+ * the fewer to wait for. Installing now, irreversible, is chosen over the best wait only when it beats it by more than
+ * the error of their difference (#406): their later cycles' terms in common cancel, so it's the wait's τ's, `tauError`
+ * times its τ; within it, or a tie, the wait, which the next reading decides again. And a choice the last reading made
+ * (`held`, a k above 0: the wait under way) is kept until a rival beats it by more than the error of the larger τ of
+ * the two (the hysteresis #406 filed: a choice doesn't flap within the error). With no income
  * measured (`incomeMeasured` false), installing now is chosen only once the set meets the count; else the least wait,
  * or none (`heldForIncome` says so); likewise while an invitation's money is held (`invitationHeld`,
  * `heldForInvitation`). With `later` (#389), each candidate's later cycles are priced from the countables left (a
@@ -513,6 +549,8 @@ export function installTiming({
   invitationHeld = false,
   tauScale = 1,
   later,
+  tauError = 0,
+  held = null,
 }: {
   needed: number;
   adding: number;
@@ -522,6 +560,8 @@ export function installTiming({
   invitationHeld?: boolean;
   tauScale?: number;
   later?: LaterCycles;
+  tauError?: number;
+  held?: number | null;
 }): InstallTiming {
   const priced = pricedBy(later);
   /** A candidate's later cycles, where they're priced and there are any: `cyclesMs`. */
@@ -558,14 +598,45 @@ export function installTiming({
     return best;
   };
   const best = least(() => true);
-  const held = best?.k === 0 && adding < needed;
-  const heldForIncome = held && !incomeMeasured;
-  const heldForInvitation = held && invitationHeld;
-  const choice =
-    heldForIncome || heldForInvitation ? (least((candidate) => candidate.k > 0)?.k ?? null) : (best?.k ?? null);
+  const bestWait = least((candidate) => candidate.k > 0);
+  const margin = (...each: InstallTimingCandidate[]) => tauError * Math.max(0, ...each.map((one) => one.tauMs));
+  let kept: InstallTiming["kept"] = null;
+  let chosen = best;
+  // Installing now only by more than the best wait's τ's error (#406), short of the count.
+  if (best?.k === 0 && adding < needed && bestWait !== null) {
+    if (!(best.estimateMs < bestWait.estimateMs - margin(bestWait))) {
+      chosen = bestWait;
+      kept = "margin";
+    }
+  }
+  const installing = chosen?.k === 0 && adding < needed;
+  const heldForIncome = installing && !incomeMeasured;
+  const heldForInvitation = installing && invitationHeld;
+  if (heldForIncome || heldForInvitation) chosen = bestWait;
+  // The last reading's choice kept, unless a rival beats it by more than the error (#406's hysteresis).
+  const last = held !== null && held > 0 ? candidates.find((candidate) => candidate.k === held) : undefined;
+  if (last !== undefined && chosen !== null && chosen.k !== last.k && !(chosen.k === 0 && adding >= needed)) {
+    if (!(chosen.estimateMs < last.estimateMs - margin(chosen, last))) {
+      chosen = last;
+      kept = "held";
+    }
+  }
+  const choice = chosen?.k ?? null;
   const work =
     priced && later.rebuildMs !== null
       ? { later: { rebuildMs: later.rebuildMs, deadSeconds: later.deadSeconds, kappa: later.rise?.kappa ?? 0 } }
       : {};
-  return { needed, adding, onlineMs, candidates, choice, heldForIncome, heldForInvitation, tauScale, ...work };
+  return {
+    needed,
+    adding,
+    onlineMs,
+    candidates,
+    choice,
+    heldForIncome,
+    heldForInvitation,
+    tauScale,
+    ...work,
+    tauError,
+    kept,
+  };
 }

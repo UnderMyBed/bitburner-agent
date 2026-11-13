@@ -20,8 +20,10 @@ import {
   LATER_CYCLE_FACTIONS,
   type LaterCycles,
   laterCyclesMs,
+  meanRelativeError,
   nextCountables,
   reputationOneFactionAtATime,
+  tauRelativeError,
   waitEstimateMs,
 } from "../src/install-timing.ts";
 import type { LevelRise } from "../src/level-rise.ts";
@@ -95,6 +97,8 @@ describe("the choice (#343)", () => {
       heldForIncome: false,
       heldForInvitation: false,
       tauScale: 1,
+      tauError: 0,
+      kept: null,
     });
     // The last one a cycle off, or more: install now.
     expect(installTiming({ needed: 5, adding: 4, onlineMs: 28 * MINUTE, next: [{ tauMs: 29 * MINUTE }] }).choice).toBe(
@@ -143,12 +147,16 @@ describe("the choice (#343)", () => {
     });
   });
 
-  test("the set meeting the count installs; a tie goes to install, then to the fewer to wait for", () => {
+  test("the set meeting the count installs; a tie goes to the wait (#406), then to the fewer to wait for", () => {
     expect(installTiming({ needed: 3, adding: 3, onlineMs: MINUTE, next: [{ tauMs: 0 }] }).choice).toBe(0);
-    // 2 to go, 1 a cycle of 10 minutes: install now 10; the next at 10 minutes, 10 too.
-    expect(installTiming({ needed: 2, adding: 1, onlineMs: 10 * MINUTE, next: [{ tauMs: 10 * MINUTE }] }).choice).toBe(
-      0,
-    );
+    // 2 to go, 1 a cycle of 10 minutes: install now 10; the next at 10 minutes, 10 too. Installing, irreversible, only
+    // when it's less: a tie waits (the next reading decides again).
+    expect(
+      installTiming({ needed: 2, adding: 1, onlineMs: 10 * MINUTE, next: [{ tauMs: 10 * MINUTE }] }),
+    ).toMatchObject({
+      choice: 1,
+      kept: "margin",
+    });
     const tied = installTiming({ needed: 9, adding: 0, onlineMs: MINUTE, next: [{ tauMs: 0 }, { tauMs: 0 }] });
     expect(tied.candidates.map((each) => each.estimateMs)).toEqual([8 * MINUTE, 4 * MINUTE]);
     expect(tied.choice).toBe(2);
@@ -223,6 +231,60 @@ describe("the choice (#343)", () => {
     });
     expect(timing.candidates).toEqual([{ k: 0, tauMs: 0, estimateMs: 6 * 20 * MINUTE }]);
     expect(timing.choice).toBe(0);
+  });
+});
+
+describe("the margin (#406): installing only by more than the error, a choice kept within it", () => {
+  test("a rate's relative error: the samples' standard deviation over √n, over their mean; none with one", () => {
+    expect(meanRelativeError([])).toBeNull();
+    expect(meanRelativeError([1.6])).toBeNull();
+    expect(meanRelativeError([0, 0])).toBeNull();
+    // 1, 2, 3: mean 2, standard deviation 1, over √3: 0.2887.
+    expect(meanRelativeError([1, 2, 3])).toBeCloseTo(1 / Math.sqrt(3) / 2, 12);
+    expect(meanRelativeError([1.6, 1.6, 1.6])).toBeCloseTo(0, 12);
+    // τ's: the share's and κ's in quadrature; none measured, 0.
+    expect(tauRelativeError(0.03, 0.04)).toBeCloseTo(0.05, 12);
+    expect(tauRelativeError(null, 0.04)).toBeCloseTo(0.04, 12);
+    expect(tauRelativeError(null, null)).toBe(0);
+  });
+
+  // 9 to go, 4 new, T 59: install now 2T = 118; waiting for 1 at τ, τ + T + τ.
+  const at59 = (tauMinutes: number, fields: Partial<Parameters<typeof installTiming>[0]> = {}) =>
+    installTiming({ needed: 9, adding: 4, onlineMs: 59 * MINUTE, next: [{ tauMs: tauMinutes * MINUTE }], ...fields });
+
+  test("a near tie within the wait's τ's error waits; a clear win installs", () => {
+    // τ 29.4: the wait 117.8 against 118, install now by 0.2 min: a win with no error measured, within 10% of τ's.
+    expect(at59(29.6)).toMatchObject({ choice: 0, kept: null });
+    expect(at59(29.4)).toMatchObject({ choice: 1, kept: null });
+    expect(at59(29.6, { tauError: 0.1 })).toMatchObject({ choice: 1, kept: "margin", tauError: 0.1 });
+    // τ 33: the wait 125 against 118, install now by 7 min, more than 10% of 33's 3.3: install.
+    expect(at59(33, { tauError: 0.1 })).toMatchObject({ choice: 0, kept: null });
+    // The edge: install now wins by 2τ − 59, the margin 0.1τ: τ 31.05. Under it, the wait; over it, install.
+    expect(at59(31, { tauError: 0.1 })).toMatchObject({ choice: 1, kept: "margin" });
+    expect(at59(31.2, { tauError: 0.1 })).toMatchObject({ choice: 0, kept: null });
+  });
+
+  test("a held choice doesn't flap within the error: a rival beating it by less is passed over; by more, taken", () => {
+    const next = [{ tauMs: 20 * MINUTE }, { tauMs: 26 * MINUTE }];
+    // 9 to go, 4 new, T 59: wait for 1, 20 + (59 + 20) = 99; for 2, 26 + (59 + 26) = 111; install now 118.
+    const base = { needed: 9, adding: 4, onlineMs: 59 * MINUTE, next };
+    const free = installTiming(base);
+    const [, one, two] = free.candidates;
+    expect(free.choice).toBe((one?.estimateMs as number) <= (two?.estimateMs as number) ? 1 : 2);
+    // Held at the other (wait for 2): kept while the least beats it by less than the error of the larger τ, 26 min's.
+    const other = free.choice === 1 ? 2 : 1;
+    const gap = Math.abs((one?.estimateMs as number) - (two?.estimateMs as number)) / MINUTE;
+    const within = installTiming({ ...base, held: other, tauError: (gap + 0.1) / 26 });
+    expect(within).toMatchObject({ choice: other, kept: "held" });
+    const beyond = installTiming({ ...base, held: other, tauError: (gap - 0.1) / 26 });
+    expect(beyond).toMatchObject({ choice: free.choice, kept: null });
+    // Held, and install now beats it by more than its τ's error: install; within it: kept.
+    expect(at59(40, { held: 1, tauError: 0.1 })).toMatchObject({ choice: 0, kept: null });
+    expect(at59(30.5, { held: 1, tauError: 0.1 })).toMatchObject({ choice: 1, kept: "margin" });
+    // The set meeting the count installs whatever was held.
+    expect(installTiming({ needed: 4, adding: 4, onlineMs: MINUTE, next: [{ tauMs: MINUTE }], held: 1 }).choice).toBe(
+      0,
+    );
   });
 });
 
@@ -506,17 +568,18 @@ describe("the later cycles priced from the countables left (#389)", () => {
       later: { rebuildMs: 4 * MINUTE, deadSeconds: 0, kappa: 1 },
     });
     // Left dearer, M 50,000 at Chongqing: install now's next cycle (N and M, two factions) 4 + 20 + 100 = 124 min; the
-    // wait's, M alone, 104 after 20. A tie, to install; 1 minute less of τ moves the choice to the wait.
+    // wait's, M alone, 104 after 20. A tie, to the wait (#406); before #389 (24 against 64), install.
     const dear = [left_(SPEECH, 10_000, "Tian Di Hui"), left_(TARGETING, 50_000, "Chongqing")];
     const dearTiming = installTiming({ ...base, later: priced(dear) });
     expect(dearTiming.candidates.map((each) => [each.k, Math.round(each.estimateMs / MINUTE)])).toEqual([
       [0, 124],
       [1, 124],
     ]);
-    expect(dearTiming.choice).toBe(0);
-    const sooner = { ...base, next: [{ tauMs: 19 * MINUTE, augmentation: SPEECH }] };
-    expect(installTiming({ ...sooner, later: priced(dear) }).choice).toBe(1);
-    expect(installTiming(sooner).choice).toBe(0);
+    expect(dearTiming.choice).toBe(1);
+    expect(installTiming(base).choice).toBe(0);
+    // A minute more of τ: install now, by a minute.
+    const later = { ...base, next: [{ tauMs: 21 * MINUTE, augmentation: SPEECH }] };
+    expect(installTiming({ ...later, later: priced(dear) }).choice).toBe(0);
     // Unpriced (no R measured): as before #389, no `cyclesMs` and no `later`.
     expect(installTiming({ ...base, later: priced(dear, { rebuildMs: null }) })).toEqual(installTiming(base));
   });

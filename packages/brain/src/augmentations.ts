@@ -158,6 +158,7 @@ import {
   levellingInstallMultipliers,
   levelRiseOf,
   type MediumSnapshotData,
+  meanRelativeError,
   NETBURNERS,
   NEUROFLUX_GOVERNOR,
   type NetburnersRoute,
@@ -170,6 +171,7 @@ import {
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
+  tauRelativeError,
   winRouteOf,
 } from "@bitburner-agent/core";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
@@ -1404,11 +1406,19 @@ export function describeInstallTiming(
         : `wait for ${timing.choice}`;
   const scaled =
     timing.tauScale > 1 ? `; each τ ×${timing.tauScale.toFixed(1)}, the overdue wait's measured error` : "";
+  // #406: what the margin kept, and its error (a share of each τ).
+  const error = `±${(100 * (timing.tauError ?? 0)).toFixed(1)}% of a τ`;
+  const kept =
+    timing.kept === "margin"
+      ? `; install now not shorter than the best wait by more than its τ's error (${error}): the wait`
+      : timing.kept === "held"
+        ? `; the wait under way kept: no rival shorter by more than the error (${error})`
+        : "";
   const held = timing.heldForIncome
     ? "; install now held: no income measured yet (10 minutes of slow snapshots), and it doesn't meet the count"
     : timing.heldForInvitation
       ? "; install now held: the money held for an invitation (#228), and it doesn't meet the count"
-      : "";
+      : kept;
   const parts = describeTParts(timing);
   const online = parts === "" ? "" : `; ${parts}`;
   const rise =
@@ -2808,6 +2818,8 @@ export class AugmentationRule {
             heldForIncome: false,
             heldForInvitation: false,
             tauScale: 1,
+            tauError: 0,
+            kept: null,
             next: [],
             timeOnlineMs: onlineMs,
             ...unseen,
@@ -2850,6 +2862,8 @@ export class AugmentationRule {
             heldForIncome: false,
             heldForInvitation: gang.heldForInvitation,
             tauScale,
+            tauError: 0,
+            kept: null,
             next: [],
             timeOnlineMs: onlineMs,
             ...unseen,
@@ -2939,6 +2953,14 @@ export class AugmentationRule {
               incomeMeasured: income !== null,
               invitationHeld: invitationHold > 0,
               tauScale,
+              // #406: install now only by more than the best wait's τ's error, from the share's and κ's measured
+              // errors over their windows (κ's only where it's the window's own, "measured now": the carried rate's
+              // isn't measured, left out); the wait under way held until a rival beats it by more than the error.
+              tauError: tauRelativeError(
+                meanRelativeError(this.#shareSamples.map((sample) => sample.bonus)),
+                levelRise.from === "measured now" ? this.#expRate.relativeError() : null,
+              ),
+              held: wait === null ? null : wait.untilAdding - adding,
               later: {
                 left,
                 rebuildMs,

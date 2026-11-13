@@ -62,6 +62,7 @@ import {
   isBitNodeNumber,
   type JoinedFaction,
   type MediumSnapshotData,
+  meanRelativeError,
   type NextBitNode,
   nextBitNodeOf,
   type SlowSnapshotData,
@@ -672,6 +673,20 @@ export class HackingExpRate {
     const last = this.#samples.at(-1);
     if (first === undefined || last === undefined || last.atMs - first.atMs < 60_000) return null;
     return ((last.exp - first.exp) / (last.atMs - first.atMs)) * 1000;
+  }
+
+  /**
+   * The rate's relative error over the window (#406): the experience a second between each two samples, their
+   * `meanRelativeError` (core's); null with fewer than two such steps.
+   */
+  relativeError(): number | null {
+    const rates: number[] = [];
+    for (let index = 1; index < this.#samples.length; index++) {
+      const before = this.#samples[index - 1] as { atMs: number; exp: number };
+      const after = this.#samples[index] as { atMs: number; exp: number };
+      rates.push(((after.exp - before.exp) / (after.atMs - before.atMs)) * 1000);
+    }
+    return meanRelativeError(rates);
   }
 
   /**

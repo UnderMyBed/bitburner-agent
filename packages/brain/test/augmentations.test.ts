@@ -3216,6 +3216,8 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
       heldForIncome: false,
       heldForInvitation: false,
       tauScale: 1,
+      tauError: 0,
+      kept: null,
       timeOnlineMs: 28 * MINUTE,
       next: [{ augmentation: TBH, faction: TBH, way: "work", tauMs: expect.closeTo(17 * MINUTE, -3) }],
       // #389: no faction work seen (the input absent), so R isn't measured: this one's shape, said so.

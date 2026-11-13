@@ -902,9 +902,11 @@ export {
   LATER_CYCLE_FACTIONS,
   type LaterCycles,
   laterCyclesMs,
+  meanRelativeError,
   type NextCountable,
   nextCountables,
   reputationOneFactionAtATime,
+  tauRelativeError,
   waitEstimateMs,
 } from "./install-timing.ts";
 export {
