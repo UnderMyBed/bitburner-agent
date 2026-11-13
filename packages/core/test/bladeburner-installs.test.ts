@@ -221,6 +221,24 @@ describe("the forecast at an install's person (#404): the actions' and Black Ops
     );
   });
 
+  test("at a stronger person: the times there (agility and dexterity), the actions' and the Black Ops'", () => {
+    const stronger = person(600);
+    const tracking = BLADEBURNER_LEVELLED_ACTIONS.find((action) => action.name === "Tracking");
+    // Tracking alone at level 1 of 1: one work and level to compare, at combat 100 (Tracking at 1 a second's time).
+    const weak = inputAt(person(100));
+    const only = { ...weak, readings: weak.readings.filter((read) => read.name === "Tracking") };
+    const here = chooseBladeburnerAction(only).work;
+    const there = chooseBladeburnerAction({ ...only, forecast: stronger }).work;
+    expect(tracking).toBeDefined();
+    expect([here?.level, there?.level]).toEqual([1, 1]);
+    expect(there?.seconds).toBeLessThan(here?.seconds as number);
+    const ultron = BLADEBURNER_BLACK_OPS[17] as BladeburnerBlackOp;
+    const at = routeAt(who, ultron, 240_000);
+    const plain = blackOpsRouteEstimate(input, { ...at, firstToRankSeconds: null });
+    const strong = blackOpsRouteEstimate({ ...input, forecast: stronger }, { ...at, firstToRankSeconds: null });
+    expect(strong.steps[0]?.seconds).toBeLessThan(plain.steps[0]?.seconds as number);
+  });
+
   test("the Black Ops: the next one's low end read × its formula there over its formula read; the later at the formula", () => {
     const ultron = BLADEBURNER_BLACK_OPS[17] as BladeburnerBlackOp;
     const strong = person(5000);

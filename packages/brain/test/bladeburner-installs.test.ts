@@ -199,6 +199,16 @@ describe("the rebuild after an install (#404): Training back to the levels befor
       levels: { strength: 50 },
       rebuild: { strength: 300 },
     });
+    // A destroy's new BitNode (its own start): Bladeburner cleared, nothing to rebuild to there.
+    const destroyed = new BladeburnerRule(() => {}, undefined, settings);
+    const next = slow(6, { lastAugReset: 3 * HOUR });
+    const afterDestroy = destroyed.update({
+      mediumData: medium(1),
+      slowData: { ...next, resetInfo: { ...next.resetInfo, lastNodeReset: 3 * HOUR } },
+      homeKeptGb: 32,
+    });
+    expect(afterDestroy.state?.action).not.toEqual(TRAINING_ORDER);
+    expect(destroyed.view().rebuild).toBeNull();
     // A store with no record (a cycle not seen before): no targets, B2's order (the actions rebuild them, labelled).
     const fresh = new BladeburnerRule(() => {}, undefined, memorySettings());
     expect(decide(fresh, 1, 2 * HOUR).state?.action).not.toEqual(TRAINING_ORDER);
