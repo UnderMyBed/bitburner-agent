@@ -1,9 +1,7 @@
 // The hacking level's rise over faction work (#401): the level's path from the measured experience rate, the work's
 // reputation along it, the cycles after an install, and the hindcast of BN4.2's work rates, cycle by cycle.
 import { describe, expect, test } from "vitest";
-import { AUGMENTATIONS } from "../src/augmentation-data.ts";
 import { hackingExpOfLevel } from "../src/batcher.ts";
-import { repToFavor } from "../src/donations.ts";
 import { factionReputationPerSecond } from "../src/faction-work.ts";
 import {
   LEVEL_RISE_TERM,
@@ -15,7 +13,18 @@ import {
   workSecondsAlong,
 } from "../src/level-rise.ts";
 import { levellingInstallMultipliers, secondsToHackingLevel } from "../src/levelling.ts";
-import { C1_BOUGHT, type Cycle, BN4_2, SOURCE_FILE_1_3, BN4_FACTION_WORK_REP_GAIN, MINUTE, multipliers, favourMultiplier, rateIn, measuredExp, measuredFactor, endRise, gainOf, rampOf, RAMP_FALLBACK_MINUTES, deadFor, measuredExpAt } from "./bn4-2-fixture.ts";
+import {
+  BN4_2,
+  type Cycle,
+  deadFor,
+  endRise,
+  MINUTE,
+  measuredExpAt,
+  measuredFactor,
+  multipliers,
+  RAMP_FALLBACK_MINUTES,
+  rateIn,
+} from "./bn4-2-fixture.ts";
 
 /** A level-linear rate, as hacking work's is (`reputation.ts:16-24`). */
 const linear = (perLevel: number) => (level: number) => perLevel * level;

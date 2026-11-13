@@ -426,4 +426,3 @@ export const measuredExpAt = (index: number, minutes: number) => {
   const [t1, e1] = points[at] as [number, number];
   return t1 === t0 ? e1 : e0 + ((e1 - e0) * (minutes - t0)) / (t1 - t0);
 };
-

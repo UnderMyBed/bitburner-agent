@@ -8,24 +8,36 @@ import {
   augmentationBitNodeMultipliers,
   purchaseSequenceCost,
 } from "../src/augmentations.ts";
+import { favorAfterInstall, repToFavor } from "../src/donations.ts";
+import { factionReputationPerSecond } from "../src/faction-work.ts";
 import {
   type CountableLeft,
   countablesLeft,
+  factionRepGain,
   type InstallTiming,
-  type LaterCycles,
   installNowEstimateMs,
   installTiming,
   LATER_CYCLE_FACTIONS,
+  type LaterCycles,
   laterCyclesMs,
   nextCountables,
   reputationOneFactionAtATime,
   waitEstimateMs,
 } from "../src/install-timing.ts";
-import { BN4_2, BN4_FACTION_WORK_REP_GAIN, type Cycle, deadFor, endRise, measuredFactor, multipliers } from "./bn4-2-fixture.ts";
-import { favorAfterInstall, repToFavor } from "../src/donations.ts";
-import { factionReputationPerSecond } from "../src/faction-work.ts";
+import type { LevelRise } from "../src/level-rise.ts";
+import { levellingInstallMultipliers } from "../src/levelling.ts";
+import {
+  BN4_2,
+  BN4_FACTION_WORK_REP_GAIN,
+  type Cycle,
+  deadFor,
+  endRise,
+  measuredFactor,
+  multipliers,
+} from "./bn4-2-fixture.ts";
 
 const MINUTE = 60_000;
+const sum = (values: readonly number[]) => values.reduce((total, each) => total + each, 0);
 const NEUROFLUX = "NeuroFlux Governor";
 const STATE: AugmentationPurchaseState = {
   installed: {},
@@ -318,7 +330,7 @@ describe("the next countables (#343)", () => {
 });
 
 describe("the later cycles priced from the countables left (#389)", () => {
-  const left = (augmentation: string, reputation: number, ...sellers: string[]): CountableLeft => ({
+  const left_ = (augmentation: string, reputation: number, ...sellers: string[]): CountableLeft => ({
     augmentation,
     reputation,
     sellers,
@@ -373,101 +385,175 @@ describe("the later cycles priced from the countables left (#389)", () => {
 
   test("the reputation one faction at a time: each faction's dearest, added up; a shared seller where it serves more", () => {
     expect(reputationOneFactionAtATime([])).toBe(0);
-    expect(reputationOneFactionAtATime([left("D", 15_000, "Volhaven"), left("C", 18_750, "Volhaven")])).toBe(18_750);
-    expect(reputationOneFactionAtATime([left("N", 37_500, "Tian Di Hui"), left("G", 37_500, "Chongqing")])).toBe(
+    expect(reputationOneFactionAtATime([left_("D", 15_000, "Volhaven"), left_("C", 18_750, "Volhaven")])).toBe(18_750);
+    expect(reputationOneFactionAtATime([left_("N", 37_500, "Tian Di Hui"), left_("G", 37_500, "Chongqing")])).toBe(
       75_000,
     );
     // Neuralstimulator at Chongqing, which sells the other too: one faction's work serves both.
     expect(
-      reputationOneFactionAtATime([left("S", 50_000, "The Black Hand", "Chongqing"), left("G", 37_500, "Chongqing")]),
+      reputationOneFactionAtATime([left_("S", 50_000, "The Black Hand", "Chongqing"), left_("G", 37_500, "Chongqing")]),
     ).toBe(50_000);
     // The dearest first: a cheaper one at a faction already worked for adds nothing; one with no seller, nothing.
     expect(
-      reputationOneFactionAtATime([left("A", 5_000, "Volhaven"), left("B", 20_000, "Volhaven"), left("X", 9)]),
+      reputationOneFactionAtATime([left_("A", 5_000, "Volhaven"), left_("B", 20_000, "Volhaven"), left_("X", 9)]),
     ).toBe(20_000);
   });
 
-  test("each later cycle R + (T − R) · W_j / W_0; the same W, T again; unpriced or past those known, this one's shape", () => {
-    const work = { rebuildMs: 4 * MINUTE, reputation: 12_500 };
-    const cheap = [left("A", 12_500, "Sector-12"), left("B", 12_500, "Volhaven"), left("C", 25_000, "Volhaven")];
-    const at = (
-      count: number,
-      perCycle: number,
-      shapeMs: number,
-      later: Parameters<typeof laterCyclesMs>[0]["later"],
-    ) => laterCyclesMs({ count, perCycle, onlineMs: 23 * MINUTE, shapeMs, later });
-    // 3 countables at 1 a cycle: 12,500 each, then 25,000 (twice the work).
-    expect(at(3, 1, 23 * MINUTE, { left: cheap, work })).toEqual([23 * MINUTE, 23 * MINUTE, 42 * MINUTE]);
-    // 2 a cycle: A and B (two factions, 25,000), then C alone.
-    expect(at(3, 2, 23 * MINUTE, { left: cheap, work })).toEqual([42 * MINUTE, 42 * MINUTE]);
-    // Past the countables known: this one's shape (`shapeMs`) for each cycle short of them.
-    expect(at(5, 2, 30 * MINUTE, { left: cheap, work })).toEqual([42 * MINUTE, 30 * MINUTE, 30 * MINUTE]);
-    // Unpriced: no work (R not measured), W_0 0, or T not past R: each cycle this one's shape.
-    for (const unpriced of [null, { ...work, reputation: 0 }, { ...work, rebuildMs: 23 * MINUTE }]) {
-      expect(at(3, 1, 30 * MINUTE, { left: cheap, work: unpriced })).toEqual([30 * MINUTE, 30 * MINUTE, 30 * MINUTE]);
-    }
-    expect(at(2, 1, MINUTE, undefined)).toEqual([MINUTE, MINUTE]);
-    // A wait's later cycles bring n + k each: 6 to go, 2 new, waiting for 1 at 10 min, then 3 at three factions
-    // (30,000) in one cycle, 4 + 20 · 3; never the 2 a cycle installing now has.
-    const four = ["F0", "F1", "F2", "F3"].map((faction) => left(faction, 10_000, faction));
-    const at24 = { rebuildMs: 4 * MINUTE, reputation: 10_000 };
-    expect(waitEstimateMs(6, 2, 1, 10 * MINUTE, 24 * MINUTE, { left: four, work: at24 })).toBe(74 * MINUTE);
-    expect(installNowEstimateMs(6, 2, 24 * MINUTE, { left: four, work: at24 })).toBe(88 * MINUTE);
+  /** Countables with no hacking, hacking_exp, hacking_speed or faction_rep multiplier: they leave the rate as it is. */
+  const [WIRED, RIB, DERMA, SPEECH, TARGETING] = [
+    "Wired Reflexes",
+    "Combat Rib I",
+    "DermaForce Particle Barrier",
+    "Speech Enhancement",
+    "Augmented Targeting I",
+  ];
+  test("the plain countables leave the rate as it is", () => {
+    const plain = [WIRED, RIB, DERMA, SPEECH, TARGETING];
+    expect(levellingInstallMultipliers(0, plain)).toEqual({ hacking: 1, hackingExp: 1, hackingSpeed: 1 });
+    expect(factionRepGain(plain)).toBe(1);
+  });
+  /** A path that rises (so the later cycles price), and a rate that doesn't depend on the level: each cycle R + W / c. */
+  const RISING: LevelRise = { exp: 0, level: 100, levelMult: 1, kappa: 1 };
+  /** 10,000 reputation in 20 minutes. */
+  const PER_SECOND = 10_000 / (20 * 60);
+  const priced = (left: CountableLeft[], fields: Partial<LaterCycles> = {}): LaterCycles => ({
+    left,
+    rebuildMs: 4 * MINUTE,
+    rise: RISING,
+    deadSeconds: 0,
+    rateAt: () => PER_SECOND,
+    installing: [],
+    ...fields,
   });
 
-  test("the countables left costing as this cycle's: install now's estimate is the one before #389, ⌈(N − n) / n⌉ · T", () => {
-    for (const [needed, adding] of [
-      [13, 4],
-      [6, 2],
-      [30, 16],
-      [9, 1],
-    ] as const) {
-      const work = { rebuildMs: 5 * MINUTE, reputation: 10_000 };
-      // n a cycle, all at one faction of its own at 10,000: W_0 again in every cycle.
-      const same = Array.from({ length: needed }, (_, index) =>
-        left(`L${index}`, 10_000, `F${Math.floor(index / adding)}`),
-      );
-      const old = installNowEstimateMs(needed, adding, 44 * MINUTE);
-      expect(old).toBe(Math.ceil((needed - adding) / adding) * 44 * MINUTE);
-      expect(installNowEstimateMs(needed, adding, 44 * MINUTE, { left: same, work })).toBeCloseTo(old as number, 6);
+  test("unpriced (no R, no rise, κ 0): ⌈count / perCycle⌉ cycles of this one's shape, as before #389", () => {
+    const left = [left_(WIRED, 10_000, "F")];
+    for (const unpriced of [
+      priced(left, { rebuildMs: null }),
+      priced(left, { rise: null }),
+      priced(left, { rise: { ...RISING, kappa: 0 } }),
+      priced(left, { rise: { ...RISING, levelMult: 0 } }),
+      undefined,
+    ]) {
+      expect(laterCyclesMs({ count: 5, perCycle: 2, shapeMs: 30 * MINUTE, later: unpriced })).toEqual([
+        30 * MINUTE,
+        30 * MINUTE,
+        30 * MINUTE,
+      ]);
     }
+    expect(laterCyclesMs({ count: 0, perCycle: 2, shapeMs: MINUTE, later: priced(left) })).toEqual([]);
+  });
+
+  test("priced: R and each faction's work in turn; split to the least total, here one cycle (a split adds an R)", () => {
+    // 20,000 at F (A's 10,000 served by C's) and 10,000 at G: 4 + 40 + 20 min in one cycle.
+    const left = [left_(WIRED, 10_000, "F"), left_(RIB, 10_000, "G"), left_(DERMA, 20_000, "F")];
+    const cycles = laterCyclesMs({ count: 3, perCycle: 1, shapeMs: MINUTE, later: priced(left) });
+    expect(cycles.map((ms) => ms / MINUTE)).toEqual([expect.closeTo(64, 6)]);
+    // Past the countables known: the 3 priced, then ⌈2 / 2⌉ cycle of the last priced one's length.
+    expect(
+      laterCyclesMs({ count: 5, perCycle: 2, shapeMs: MINUTE, later: priced(left) }).map((ms) => ms / MINUTE),
+    ).toEqual([expect.closeTo(64, 6), expect.closeTo(64, 6)]);
+  });
+
+  test("the recurrence is the least over every split of the cheapest first (BN4.2's c4, 8 left: all 128 splits)", () => {
+    const { later, count } = hindcastAt(CHOICES[2] as (typeof CHOICES)[number]);
+    expect(count).toBe(8);
+    const cycleOf = (from: number, to: number) =>
+      laterCyclesMs({
+        count: to - from,
+        perCycle: to - from,
+        shapeMs: Number.NaN,
+        later: {
+          ...later,
+          left: later.left.slice(from, to),
+          installing: [...later.installing, ...later.left.slice(0, from).map((each) => each.augmentation)],
+        },
+      });
+    let least = Number.POSITIVE_INFINITY;
+    for (let mask = 0; mask < 2 ** (count - 1); mask++) {
+      let total = 0;
+      let from = 0;
+      for (let to = 1; to <= count; to++) {
+        if (to === count || (mask & (1 << (to - 1))) !== 0) {
+          // One cycle alone: its own least is itself, the same cycle as the recurrence prices.
+          total += sum(cycleOf(from, to));
+          from = to;
+        }
+      }
+      least = Math.min(least, total);
+    }
+    const cycles = laterCyclesMs({ count, perCycle: 1, shapeMs: Number.NaN, later });
+    expect(sum(cycles)).toBeCloseTo(least, 3);
+    expect(cycles.length).toBeGreaterThan(1);
   });
 
   test("dearer countables left: install now's estimate rises, and the choice moves from install to wait", () => {
-    const work = { rebuildMs: 4 * MINUTE, reputation: 10_000 };
     // 4 to go, 2 new: before #389, install now T 24, wait for 1 at 20 min 20 + 44 = 64. Install.
-    const base = { needed: 4, adding: 2, onlineMs: 24 * MINUTE, next: [{ tauMs: 20 * MINUTE, augmentation: "N" }] };
+    const base = { needed: 4, adding: 2, onlineMs: 24 * MINUTE, next: [{ tauMs: 20 * MINUTE, augmentation: SPEECH }] };
     expect(installTiming(base)).toMatchObject({
       candidates: [{ estimateMs: 24 * MINUTE }, { estimateMs: 64 * MINUTE }],
       choice: 0,
     });
-    // Left as this cycle's (10,000 at one faction): the same estimate to install now, each cycle's length given.
-    const same = [left("N", 10_000, "Tian Di Hui"), left("M", 10_000, "Tian Di Hui")];
-    expect(installTiming({ ...base, later: { left: same, work } })).toMatchObject({
+    // Left cheap (10,000 each at Tian Di Hui): install now's next cycle 4 + 20 = 24 min; the wait's, M alone, 24 after
+    // 20. Install.
+    const cheap = [left_(SPEECH, 10_000, "Tian Di Hui"), left_(TARGETING, 10_000, "Tian Di Hui")];
+    expect(installTiming({ ...base, later: priced(cheap) })).toMatchObject({
       candidates: [
-        { k: 0, estimateMs: 24 * MINUTE, cyclesMs: [24 * MINUTE] },
-        // After the wait, M alone at 10,000: R + (T − R) · 1, 24; not 44, its shape.
-        { k: 1, estimateMs: 44 * MINUTE, cyclesMs: [24 * MINUTE] },
+        { k: 0, estimateMs: expect.closeTo(24 * MINUTE, 3), cyclesMs: [expect.closeTo(24 * MINUTE, 3)] },
+        { k: 1, estimateMs: expect.closeTo(44 * MINUTE, 3), cyclesMs: [expect.closeTo(24 * MINUTE, 3)] },
       ],
       choice: 0,
-      work,
+      later: { rebuildMs: 4 * MINUTE, deadSeconds: 0, kappa: 1 },
     });
-    // Left dearer, 50,000 at Chongqing: install now's next cycle (N and M, two factions) 4 + 20 · 6 = 124 min; the
-    // wait's, M alone, 4 + 20 · 5 = 104 after 20. A tie, to install; 1 minute less of τ moves the choice to the wait.
-    const dear = [left("N", 10_000, "Tian Di Hui"), left("M", 50_000, "Chongqing")];
-    const priced = installTiming({ ...base, later: { left: dear, work } });
-    expect(priced.candidates).toEqual([
-      { k: 0, tauMs: 0, estimateMs: 124 * MINUTE, cyclesMs: [124 * MINUTE] },
-      { k: 1, tauMs: 20 * MINUTE, estimateMs: 124 * MINUTE, cyclesMs: [104 * MINUTE] },
+    // Left dearer, M 50,000 at Chongqing: install now's next cycle (N and M, two factions) 4 + 20 + 100 = 124 min; the
+    // wait's, M alone, 104 after 20. A tie, to install; 1 minute less of τ moves the choice to the wait.
+    const dear = [left_(SPEECH, 10_000, "Tian Di Hui"), left_(TARGETING, 50_000, "Chongqing")];
+    const dearTiming = installTiming({ ...base, later: priced(dear) });
+    expect(dearTiming.candidates.map((each) => [each.k, Math.round(each.estimateMs / MINUTE)])).toEqual([
+      [0, 124],
+      [1, 124],
     ]);
-    expect(priced.choice).toBe(0);
-    const sooner = { ...base, next: [{ tauMs: 19 * MINUTE, augmentation: "N" }] };
-    expect(installTiming({ ...sooner, later: { left: dear, work } }).choice).toBe(1);
+    expect(dearTiming.choice).toBe(0);
+    const sooner = { ...base, next: [{ tauMs: 19 * MINUTE, augmentation: SPEECH }] };
+    expect(installTiming({ ...sooner, later: priced(dear) }).choice).toBe(1);
     expect(installTiming(sooner).choice).toBe(0);
-    // Unpriced (no R measured): as before #389, no `cyclesMs` and no `work`.
-    expect(installTiming({ ...base, later: { left: dear, work: null } })).toEqual(installTiming(base));
+    // Unpriced (no R measured): as before #389, no `cyclesMs` and no `later`.
+    expect(installTiming({ ...base, later: priced(dear, { rebuildMs: null }) })).toEqual(installTiming(base));
   });
 
+  test("the installs' multipliers raise the later cycles' rate: faction_rep times the rate, hacking and its exp the level", () => {
+    expect(factionRepGain(["Social Negotiation Assistant (S.N.A)", "NeuroFlux Governor", "Nonesuch"])).toBeCloseTo(
+      1.15 * 1.01,
+      2,
+    );
+    // A rate of the level: installing S.N.A (faction_rep 1.15) before a cycle makes it 1.15 times faster after R.
+    const level = (_: string, at: number) => at / 100;
+    const one = [left_(WIRED, 10_000, "F")];
+    const plain = laterCyclesMs({ count: 1, perCycle: 1, shapeMs: 0, later: priced(one, { rateAt: level }) });
+    const faster = laterCyclesMs({
+      count: 1,
+      perCycle: 1,
+      shapeMs: 0,
+      later: priced(one, { rateAt: level, installing: ["Social Negotiation Assistant (S.N.A)"] }),
+    });
+    expect((faster[0] as number) < (plain[0] as number)).toBe(true);
+    // A hacking multiplier (Cranial Signal Processors - Gen II, 1.07) raises the level along the path: faster again.
+    const hacking = laterCyclesMs({
+      count: 1,
+      perCycle: 1,
+      shapeMs: 0,
+      later: priced(one, { rateAt: level, installing: ["Cranial Signal Processors - Gen II"] }),
+    });
+    expect((hacking[0] as number) < (plain[0] as number)).toBe(true);
+    // The dead time holds the level flat first: slower.
+    const dead = laterCyclesMs({
+      count: 1,
+      perCycle: 1,
+      shapeMs: 0,
+      later: priced(one, { rateAt: level, deadSeconds: 600 }),
+    });
+    expect((dead[0] as number) > (plain[0] as number)).toBe(true);
+  });
 });
 
 /**
@@ -566,8 +652,7 @@ function hindcastAt({ index, T, next }: (typeof CHOICES)[number]) {
   // The work's rate at a faction: the game's hacking work at the level, this cycle's faction_rep (the installs' own
   // applied by core), the faction's favour after this install where it's joined (`favorAfterInstall`), none where it
   // isn't (the brain reads only the joined), and this cycle's measured factor in the share's place (#401's hindcast).
-  const before = (faction: string) =>
-    BN4_2.slice(0, index).reduce((sum, each) => sum + (each.earned[faction] ?? 0), 0);
+  const before = (faction: string) => BN4_2.slice(0, index).reduce((sum, each) => sum + (each.earned[faction] ?? 0), 0);
   const favorOf = (faction: string) =>
     joined.includes(faction) ? favorAfterInstall(repToFavor(before(faction)), cycle.earned[faction] ?? 0) : 0;
   const factor = measuredFactor(index);
@@ -595,60 +680,74 @@ function hindcastAt({ index, T, next }: (typeof CHOICES)[number]) {
     rateAt,
     installing: [...cycle.bought, ...Array.from({ length: cycle.neuroFlux }, () => NEUROFLUX)],
   };
-  // Exploration: the later cycles grouped by a partition of the cheapest first that minimises the total (a DP).
-  const dp = (count: number, left: typeof later.left, installing: readonly string[]) => {
-    const best: number[] = [0];
-    for (let j = 1; j <= count; j++) {
-      best[j] = Number.POSITIVE_INFINITY;
-      for (let i = 0; i < j; i++) {
-        const group = laterCyclesMs({
-          count: j - i,
-          perCycle: j - i,
-          shapeMs: Number.POSITIVE_INFINITY,
-          later: { ...later, left: left.slice(i, j), installing: [...installing, ...left.slice(0, i).map((x) => x.augmentation)] },
-        });
-        best[j] = Math.min(best[j] as number, (best[i] as number) + (group[0] as number));
-      }
-    }
-    return best[count] as number;
+  return {
+    before389: installTiming(base),
+    priced: installTiming({ ...base, later }),
+    later,
+    count: needed - cycle.bought.length,
   };
-  const n = cycle.bought.length;
-  const options = [[0, dp(needed - n, later.left, later.installing)]];
-  for (const [k] of next.entries()) {
-    const names = next.slice(0, k + 1).map(([name]) => name);
-    const tau = (next[k]?.[1] ?? 0) * MINUTE;
-    const rest = needed - n - (k + 1);
-    options.push([k + 1, tau + (rest <= 0 ? 0 : dp(rest, later.left.filter((x) => !names.includes(x.augmentation)), [...later.installing, ...names]))]);
-  }
-  const least = options.reduce((a, b) => ((b[1] as number) < (a[1] as number) ? b : a));
-  console.log(`c${index + 1} DP: ${options.map(([k, ms]) => `k${k} ${((ms as number) / MINUTE).toFixed(1)}`).join(", ")}; choice ${least[0]}`);
-  return { before389: installTiming(base), priced: installTiming({ ...base, later }) };
 }
 
-describe("BN4.2's choices c2-c9 hindcast (#389): install now along the level's path, and the planner's choice", () => {
-  test("every row, before #389 and priced, against the actual", () => {
+describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's path, and the planner's choice", () => {
+  /**
+   * Each choice: before #389 (this cycle's shape) and priced (the countables left split to the least total, along the
+   * level's path), install now's estimate over the actual and the k chosen. Within ×2 every one priced (before, c6 and
+   * c7 aren't: 0.36, 0.32). The choice is the same at c2 and c4-c7. Two flip, accepted (the coordinator's decision on
+   * #389):
+   * - c3 waits for 3 (Cranial Signal Processors - Gen III's 123 min), 266 against install now's 275: a near tie, about
+   *   20 min worse on the actuals (24 installed at +123 waiting, at +103 installing). #406 asks a wait to beat
+   *   installing by more than the estimates' error.
+   * - c8 waits for the last (Neuroreceptor Management Implant, 46 min) against install now's 47: about 4 min better
+   *   (the count at +46, installing's at +50).
+   */
+  const ROWS: [cycle: string, actual: number, before: number, beforeK: number, priced: number, pricedK: number][] = [
+    ["c2", 325, 481, 0, 435.3, 0],
+    ["c3", 257, 198, 0, 275.0, 3],
+    ["c4", 220, 288, 0, 266.0, 0],
+    ["c5", 153, 195, 0, 101.9, 0],
+    ["c6", 128, 46, 0, 98.4, 0],
+    ["c7", 96, 31, 0, 72.7, 0],
+    ["c8", 50, 44, 0, 47.2, 1],
+  ];
+
+  test("every row, before #389 and priced, against the actual; the choices", () => {
+    const now = (timing: InstallTiming) => (timing.candidates.find((each) => each.k === 0)?.estimateMs ?? 0) / MINUTE;
     const rows = CHOICES.map((choice) => {
       const { before389, priced } = hindcastAt(choice);
-      const now = (timing: InstallTiming) => (timing.candidates.find((each) => each.k === 0)?.estimateMs ?? 0) / MINUTE;
-      const chosen = (timing: InstallTiming) => timing.candidates.find((each) => each.k === timing.choice);
-      return {
-        cycle: `c${choice.index + 1}`,
-        actual: choice.actual,
-        before: { now: now(before389), choice: before389.choice, chosenMs: (chosen(before389)?.estimateMs ?? 0) / MINUTE },
-        priced: { now: now(priced), choice: priced.choice, chosenMs: (chosen(priced)?.estimateMs ?? 0) / MINUTE },
-        candidates: priced.candidates.map((each) => [each.k, Math.round(each.estimateMs / MINUTE)]),
-      };
+      return [
+        `c${choice.index + 1}`,
+        choice.actual,
+        Math.round(now(before389)),
+        before389.choice,
+        Number(now(priced).toFixed(1)),
+        priced.choice,
+      ];
     });
-    console.log(
-      rows
-        .map(
-          (row) =>
-            `${row.cycle} actual ${row.actual}: before #389 install now ${row.before.now.toFixed(1)} ` +
-            `(${(row.before.now / row.actual).toFixed(2)}), choice ${row.before.choice}; priced install now ` +
-            `${row.priced.now.toFixed(1)} (${(row.priced.now / row.actual).toFixed(2)}), choice ${row.priced.choice} ` +
-            `(${row.priced.chosenMs.toFixed(1)}) [${row.candidates.map(([k, ms]) => `k${k} ${ms}`).join(", ")}]`,
-        )
-        .join("\n"),
+    expect(rows).toEqual(
+      ROWS.map(([cycle, actual, before, beforeK, , pricedK]) => [
+        cycle,
+        actual,
+        before,
+        beforeK,
+        expect.any(Number),
+        pricedK,
+      ]),
     );
+    for (const [index, row] of rows.entries()) {
+      const [, actual, , , priced] = row as [string, number, number, number, number, number];
+      expect(priced).toBeCloseTo((ROWS[index] as (typeof ROWS)[number])[4], 0);
+      expect(priced / actual).toBeGreaterThan(0.5);
+      expect(priced / actual).toBeLessThan(2);
+    }
+    // Before #389, 5 of 7 within ×2; priced, 7 of 7.
+    const within = (ratio: number) => ratio > 0.5 && ratio < 2;
+    expect(ROWS.filter(([, actual, before]) => within(before / actual))).toHaveLength(5);
+    expect(ROWS.filter(([, actual, , , priced]) => within(priced / actual))).toHaveLength(7);
+  });
+
+  test("its cost a reading: c2's (13 left, 3 waits) under a tenth of a second", () => {
+    const start = performance.now();
+    hindcastAt(CHOICES[0] as (typeof CHOICES)[number]);
+    expect(performance.now() - start).toBeLessThan(100);
   });
 });

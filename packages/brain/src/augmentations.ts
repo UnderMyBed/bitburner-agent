@@ -64,11 +64,13 @@
 //   an invitation's money is held (#228's hold), installing now is held unless the set meets the count; held for the
 //   income past two of its windows it's `augmentationIncomeHeld` (an event, a run report failure). T counts the
 //   cycle's time before the brain first saw it. Each later cycle is priced from the countables left (#389, core's
-//   `countablesLeft` and `laterCyclesMs`): R, this cycle's time online at its first look with reputation earned at a
-//   joined faction (kept in the store, `AUGMENTATION_CYCLE_REBUILD_SETTING`), and W_0, the reputation this install's
-//   countables needed at their joined sellers, one faction at a time; the countables left are the joined factions',
-//   Tian Di Hui's, the city factions' and (its route open, #387) Netburners'. Unpriced (R not measured, W_0 0), this
-//   cycle's shape, as before #389; the words say which.
+//   `countablesLeft` and `laterCyclesMs`): R, this cycle's time online at its first look with faction work going on
+//   (the input's `factionWorking`; kept in the store, `AUGMENTATION_CYCLE_REBUILD_SETTING`, unmeasured after a restart
+//   while it waits), then the work along the level's path after the installs before each cycle (#401, flat for #405's
+//   dead time, `#laterDeadMs`), at each faction's rate (the best work type, the favour after this install); the
+//   countables left (the joined factions', Tian Di Hui's, the city factions' and, its route open, #387, Netburners')
+//   split into cycles to the least total. Unpriced (R not measured, no level's rise known), this cycle's shape, as before
+//   #389; the words say which.
 // - BN2 before the gang (#357's first slice, core's gang-route.ts): with no gang read and avmnite-02h's level in the
 //   static snapshot (`gangForming`), the planned branch's candidates are wait for the gang (τ_g: avmnite-02h's level at
 //   the measured experience rate, `#expRate`, and 70 s for the backdoor, the join and the forming) or install now (the
@@ -103,8 +105,8 @@ import {
   augmentationCost,
   augmentationEndgame,
   augmentationShops,
-  BLADEBURNER_FACTION,
   type Bn2Route,
+  bestWorkRate,
   bitNodeHackingMultipliers,
   type CountableToCome,
   type CountableWithinReach,
@@ -125,9 +127,12 @@ import {
   donationTermsOf,
   donationToReach,
   type FactionState,
+  type FactionWorkType,
   factionReadingKind,
   factionReadingOf,
   factionRepInstallMultiplier,
+  factionReputationPerSecond,
+  favorAfterInstall,
   GANG_RED_PILL_HOLD_MS,
   GANG_ROUTE_COMMIT_MS,
   GANG_ROUTE_SERVER,
@@ -162,7 +167,6 @@ import {
   purchaseSequenceCost,
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
-  reputationOneFactionAtATime,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
@@ -325,10 +329,11 @@ export type InstallTimingView = InstallTiming & {
   /** The time online in the store's slow snapshots of the cycle before the bars' clock began (#388): T counts it. */
   onlineBeforeMs?: number;
   /**
-   * What prices the later cycles (#389, #343's route alone): R (null, not measured: `why`), W_0, and how many countables
-   * left are known. Priced, core's `work` and each candidate's `cyclesMs` are given; unpriced, this cycle's shape.
+   * What prices the later cycles (#389, #343's route alone): R (null, not measured: `why`), the dead time their level
+   * starts flat for (measured, or the fallback), and how many countables left are known. Priced, core's `later` and
+   * each candidate's `cyclesMs` are given; unpriced (no R, or no level's rise known), this cycle's shape.
    */
-  laterCycles?: { rebuildMs: number | null; reputation: number; left: number; why?: string };
+  laterCycles?: { rebuildMs: number | null; deadMs: number; deadMeasured: boolean; left: number; why?: string };
   words: string;
   /**
    * BN2 before the gang (#357's (1)): its candidates in place of #343's, install now (k 0) and wait for the gang (k 1),
@@ -648,6 +653,11 @@ export interface AugmentationInputs {
    * or 0: short of Daedalus's count, the planner holds installing now meanwhile (#343). Absent, 0.
    */
   invitationHold?: number;
+  /**
+   * Faction work going on (#389), A5's or the owner's: the controller's `factionWorkGoingOn` (the work sent and the
+   * Agent's word it converged). The planner's R, the rebuild, is the time online at its first in a cycle. Absent, none.
+   */
+  factionWorking?: boolean;
   /**
    * The share bonus the batcher reports running (#345, the controller's `shareBonusOf`, ./share.ts), sampled at each
    * slow snapshot: A6's estimates by work (`countablesToCome`: the planner's τ, #243's hold) take its mean over the
@@ -1264,9 +1274,11 @@ export interface CycleSeen {
 
 /**
  * This cycle's rebuild as the planner measures it (#389), kept in the store so a restart keeps it: R, T at the cycle's
- * first look with reputation earned at a joined faction (A5's or the owner's work; never Bladeburners', which its rank
- * earns, `Bladeburner/Bladeburner.ts:1278-1280`); `waiting` while it's seen with none; null where its first look
- * already had some (first seen past it), so R isn't known and the later cycles stay unpriced.
+ * first look with faction work going on (A5's or the owner's, the controller's `factionWorkGoingOn`; never the
+ * reputation alone, which favour earns passively, `Faction/FactionHelpers.tsx`'s `processPassiveFactionRepGain`);
+ * `waiting` while it's seen with none; null where its first look already had some (first seen past it), or a brain run
+ * first looks at a cycle waiting (a restart: the work may have started while it was down), so R isn't known and the
+ * later cycles stay unpriced.
  */
 export const AUGMENTATION_CYCLE_REBUILD_SETTING = "augmentations.cycleRebuild";
 
@@ -1292,20 +1304,24 @@ export function readCycleRebuild(store: TelemetryStore): CycleRebuild | null {
 }
 
 /**
- * The rebuild after a look at the cycle `lastAugReset` (#389), `earned` whether a joined faction has reputation, at T
- * `cycleMs`: a measured (or unmeasured) one kept; a wait measured at the first look with reputation; a new cycle
- * waiting, or unmeasured where its first look already has reputation. The same object where nothing changes.
+ * The rebuild after a look at the cycle `lastAugReset` (#389), `working` whether faction work is going on, at T
+ * `cycleMs`, `firstLook` this brain run's first at the cycle: a measured (or unmeasured) one kept; a wait measured at
+ * the first look with work, unmeasured at a run's first look (a restart); a new cycle waiting, or unmeasured where its
+ * first look already has work. The same object where nothing changes.
  */
 export function nextCycleRebuild(
   stored: CycleRebuild | null,
   lastAugReset: number,
-  earned: boolean,
+  working: boolean,
   cycleMs: number,
+  firstLook = false,
 ): CycleRebuild {
   if (stored?.lastAugReset === lastAugReset) {
-    return "waiting" in stored && earned ? { lastAugReset, rebuildMs: cycleMs } : stored;
+    if (!("waiting" in stored)) return stored;
+    if (firstLook) return { lastAugReset, rebuildMs: null };
+    return working ? { lastAugReset, rebuildMs: cycleMs } : stored;
   }
-  return earned ? { lastAugReset, rebuildMs: null } : { lastAugReset, waiting: true };
+  return working ? { lastAugReset, rebuildMs: null } : { lastAugReset, waiting: true };
 }
 
 export function readCycleSeen(store: TelemetryStore): CycleSeen | null {
@@ -1414,27 +1430,25 @@ export function describeInstallTiming(
 
 /**
  * How the later cycles are priced, in words (#389), or "" with none (no `laterCycles`, or no candidate with a cycle
- * after its install): "; later cycles from the 12 countables left, cheapest first: R 4 min, this cycle's 12,500
- * reputation in 19 min"; unpriced, "; later cycles this one's shape: R not measured (no reputation earned yet)".
+ * after its install): "; later cycles from the 12 countables left, cheapest first, split to the least: R 4 min, the
+ * level along its rise after its ramp of 5 min measured"; unpriced, "; later cycles this one's shape: R not measured
+ * (no faction work yet)" or "…: no level's rise known".
  */
 function describeLaterCycles(timing: Omit<InstallTimingView, "words">): string {
   const later = timing.laterCycles;
   if (later === undefined) return "";
   const { needed, adding } = timing;
   if (!timing.candidates.some(({ k }) => adding + k < needed)) return "";
-  const reputation = Math.round(later.reputation).toLocaleString("en-US");
-  if (timing.work !== undefined) {
+  if (timing.later !== undefined) {
+    const ramp = later.deadMeasured
+      ? `after its ramp of ${formatEta(later.deadMs)} measured`
+      : `after ${formatEta(later.deadMs)}: no ramp measured yet, the rate's window`;
     return (
-      `; later cycles from the ${later.left} countables left, cheapest first: R ${formatEta(timing.work.rebuildMs)}, ` +
-      `this cycle's ${reputation} reputation in ${formatEta(timing.onlineMs - timing.work.rebuildMs)}`
+      `; later cycles from the ${later.left} countables left, cheapest first, split to the least: R ` +
+      `${formatEta(timing.later.rebuildMs)}, the level along its rise ${ramp}`
     );
   }
-  const why =
-    later.rebuildMs === null
-      ? `R not measured (${later.why ?? "unknown"})`
-      : later.reputation > 0
-        ? `no time worked yet past R ${formatEta(later.rebuildMs)}`
-        : "this install's countables needed no reputation at a joined seller";
+  const why = later.rebuildMs === null ? `R not measured (${later.why ?? "unknown"})` : "no level's rise known";
   return `; later cycles this one's shape: ${why}`;
 }
 
@@ -1687,6 +1701,10 @@ export class AugmentationRule {
   #rampWatch: { lastAugReset: number; lastAtMs: number; lastExp: number; unbroken: boolean } | null = null;
   /** The planner's choice and n as last decided (#343), or null when it isn't timing installs: logged on a change. */
   #timingLogged: string | null = null;
+  /** Faction work going on at this update (#389, the input's `factionWorking`). */
+  #factionWorking = false;
+  /** The cycle (`lastAugReset`) this brain run has looked at R in (#389): a wait carried in from before is unmeasured. */
+  #rebuildLooked: number | null = null;
   /** Installing now held for the income (#343): the cycle, when it began (online), and whether it's been reported. */
   #incomeHeld: { lastAugReset: number; sinceOnlineMs: number; reported: boolean } | null = null;
   /** The countables the planner's wait waits for (#343), as last decided: A5's work target, the reserve's. */
@@ -1934,6 +1952,7 @@ export class AugmentationRule {
   #updateOnce(inputs: AugmentationInputs, countHeldBefore: CountHoldView | null): AugmentationAsk {
     const { mediumData, mediumGameTimeMs, slowData, slowGameTimeMs, doneIds, fastGameTimeMs, nowMs } = inputs;
     const { enabled, homeRamEnabled, destroyWanted } = inputs;
+    this.#factionWorking = inputs.factionWorking === true;
     const holdWork = inputs.holdWork ?? { owners: null, brainWorks: true };
     this.#daedalusHold = 0;
     this.#redPillHeldAtGang = false;
@@ -2183,12 +2202,28 @@ export class AugmentationRule {
    * `augmentationIncomeHeld` and a log line (a run report failure). In memory: a restart measures the income afresh.
    */
   /** This cycle's rebuild (#389), R or null: the store's, moved on by this look (`nextCycleRebuild`) and kept. */
-  #cycleRebuild(lastAugReset: number, joined: readonly JoinedFaction[], cycleMs: number): CycleRebuild {
+  #cycleRebuild(lastAugReset: number, cycleMs: number): CycleRebuild {
     const stored = readCycleRebuild(this.#store);
-    const earned = joined.some((each) => each.name !== BLADEBURNER_FACTION && each.reputation > 0);
-    const next = nextCycleRebuild(stored, lastAugReset, earned, cycleMs);
+    const firstLook = this.#rebuildLooked !== lastAugReset;
+    this.#rebuildLooked = lastAugReset;
+    const next = nextCycleRebuild(stored, lastAugReset, this.#factionWorking, cycleMs, firstLook);
     if (next !== stored) this.#store.setSetting(AUGMENTATION_CYCLE_REBUILD_SETTING, JSON.stringify(next));
     return next;
+  }
+
+  /**
+   * The dead time the later cycles' level starts flat for (#389, #405): this cycle's ramp measured, else the one carried
+   * in (the BitNode's last measured), else the fallback (`LEVEL_RAMP_FALLBACK_MS`): the carry's own at the install.
+   */
+  #laterDeadMs(lastAugReset: number, slowData: SlowSnapshotData): { deadMs: number; measured: boolean } {
+    const lastNodeReset = (slowData.resetInfo as { lastNodeReset?: unknown } | undefined)?.lastNodeReset;
+    const ramp = readLevelRamp(this.#store);
+    if (ramp?.lastAugReset === lastAugReset && ramp.rampMs !== null) return { deadMs: ramp.rampMs, measured: true };
+    const before = readCarriedLevelRise(this.#store);
+    if (before !== null && before.lastNodeReset === lastNodeReset && before.deadMs !== null) {
+      return { deadMs: before.deadMs, measured: true };
+    }
+    return { deadMs: LEVEL_RAMP_FALLBACK_MS, measured: false };
   }
 
   #watchIncomeHold(timing: InstallTimingView, lastAugReset: number, onlineMs: number, atMs: number): void {
@@ -2858,17 +2893,28 @@ export class AugmentationRule {
               ? stored
               : null;
           const tauScale = wait?.overdue === true ? Math.max(1, (onlineMs - wait.sinceOnlineMs) / wait.firstTauMs) : 1;
-          // The later cycles priced from the countables left (#389): R, this cycle's rebuild (kept in the store), and
-          // W_0, what this install's countables needed at their joined sellers, one faction at a time.
-          const rebuild = this.#cycleRebuild(resetInfo.lastAugReset, joined, cycleMs);
-          const reputation = reputationOneFactionAtATime(
-            [...installable, ...setNames]
-              .filter((name) => name !== NEUROFLUX_GOVERNOR)
-              .map((name) => ({
-                reputation: augmentationCost(name, purchaseState).reputation,
-                sellers: joined.filter((each) => shops.get(each.name)?.includes(name)).map((each) => each.name),
-              })),
-          );
+          // The later cycles priced from the countables left (#389): R, this cycle's rebuild from its first work (kept
+          // in the store); the level's path now (#401) and the dead time after an install (#405); the work's rate at a
+          // faction, at the work type best at the level now, the favour after this install where it's joined (none
+          // where it isn't: the brain reads only the joined), the share's mean; and what this install installs.
+          const rebuild = this.#cycleRebuild(resetInfo.lastAugReset, cycleMs);
+          const dead = this.#laterDeadMs(resetInfo.lastAugReset, slowData);
+          const conditions = workConditionsOf(resetInfo, slowData, shareBonus);
+          const { keep: _keep, ...rateConditions } = conditions;
+          const person = player.person;
+          const workAt = new Map<string, { workType: FactionWorkType; favor: number } | null>();
+          const rateAt = (faction: string, level: number) => {
+            if (!workAt.has(faction)) {
+              const seller = joined.find((each) => each.name === faction);
+              const favor = seller === undefined ? 0 : favorAfterInstall(seller.favor, seller.reputation);
+              const best = bestWorkRate(person, { name: faction, reputation: 0, favor }, conditions);
+              workAt.set(faction, best === null ? null : { workType: best.workType, favor });
+            }
+            const work = workAt.get(faction);
+            if (work == null) return 0;
+            const at = { ...person, skills: { ...person.skills, hacking: level } };
+            return factionReputationPerSecond(at, work.workType, { favor: work.favor, ...rateConditions });
+          };
           const left = countablesLeft({
             factions: [
               ...joined.map((each) => each.name),
@@ -2883,10 +2929,7 @@ export class AugmentationRule {
           const why =
             rebuildMs !== null
               ? {}
-              : {
-                  why:
-                    "waiting" in rebuild ? "no reputation earned yet" : "the cycle first seen with reputation earned",
-                };
+              : { why: "waiting" in rebuild ? "no faction work yet" : "the cycle first seen with its work going on" };
           const figures = {
             ...installTiming({
               needed,
@@ -2896,12 +2939,19 @@ export class AugmentationRule {
               incomeMeasured: income !== null,
               invitationHeld: invitationHold > 0,
               tauScale,
-              later: { left, work: rebuildMs === null ? null : { rebuildMs, reputation } },
+              later: {
+                left,
+                rebuildMs,
+                rise: levelRise.from === null ? null : levelRise.rise,
+                deadSeconds: dead.deadMs / 1000,
+                rateAt,
+                installing: [...installable, ...setNames],
+              },
             }),
             next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
             timeOnlineMs: onlineMs,
             ...unseen,
-            laterCycles: { rebuildMs, reputation, left: left.length, ...why },
+            laterCycles: { rebuildMs, deadMs: dead.deadMs, deadMeasured: dead.measured, left: left.length, ...why },
             ...(levelRise.from === null
               ? {}
               : {
