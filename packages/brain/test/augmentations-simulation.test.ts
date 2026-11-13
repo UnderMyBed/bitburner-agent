@@ -289,7 +289,19 @@ const BLACK_HAND = "The Black Hand";
  * but its own augmentation, Tian Di Hui's eight, city group A's (Sector-12 and Aevum, joined, banning B and C), Gen I
  * and NeuroFlux Governor. At the edit, hacking past 2500 too: Daedalus's requirement reached this cycle, so the count
  * is what's missing (the hold's condition, #243 review).
+ * Since #387, Netburners' five among them, so Netburners offers nothing new (A6 would count them, after a Hacknet setup,
+ * minutes off at that hacking level), in place of five that come no sooner than The Black Hand's own, so the A/B is
+ * what it was: three of The Black Hand's dearest (DataJack 112,500, Cranial Signal Processors - Gen IV 125,000,
+ * Embedded Netburner Module Core Implant 175,000, against its own 100,000), PCMatrix (100,000 at Aevum, joined at 0)
+ * and the Neuroreceptor Management Implant (75,000 at Tian Di Hui, not joined).
  */
+const SWAPPED_FOR_NETBURNERS = [
+  "DataJack",
+  "Cranial Signal Processors - Gen IV",
+  "Embedded Netburner Module Core Implant",
+  "PCMatrix",
+  "Neuroreceptor Management Implant",
+];
 const RUN_3_INSTALLED = [
   ...augmentationsSoldBy(BLACK_HAND, 1, null).filter((name) => name !== BLACK_HAND && name !== "NeuroFlux Governor"),
   ...augmentationsSoldBy("Tian Di Hui", 1, null).filter((name) => name !== "NeuroFlux Governor"),
@@ -301,7 +313,8 @@ const RUN_3_INSTALLED = [
   "Neurotrainer I",
   "Cranial Signal Processors - Gen I",
   "NeuroFlux Governor",
-];
+].filter((name) => !SWAPPED_FOR_NETBURNERS.includes(name));
+RUN_3_INSTALLED.push(...augmentationsSoldBy("Netburners", 1, null).filter((name) => name !== "NeuroFlux Governor"));
 /**
  * Four reached by the edit, CyberSec joined at 18,750 and NiteSec at 20,000: the install takes the count to 29 of 30
  * (run #3's four came from BitRunners and The Black Hand).

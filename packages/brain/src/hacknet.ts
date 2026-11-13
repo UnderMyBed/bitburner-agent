@@ -274,6 +274,12 @@ export class HacknetRule {
         sinceWantedMs,
       });
     const sinceWanted = cycle.wantedAtMs === null ? null : atMs - cycle.wantedAtMs;
+    // Bought (the worker's word), noted before an invitation seen in the same update: the intent goes once invited.
+    if (done && !cycle.bought && cycle.wantedAtMs !== null) {
+      cycle.bought = true;
+      this.#log(`hacknet: the setup for Netburners' invitation bought (${formatMoney(cycle.cost)} at most)`);
+      emit("bought", sinceWanted);
+    }
     // The invitation (or the join, if a slow snapshot shows it first), after the rule wanted it.
     if (cycle.wantedAtMs !== null && !cycle.invited && (facts.invited || facts.joined)) {
       cycle.invited = true;
@@ -290,11 +296,6 @@ export class HacknetRule {
           `its invitation in ~${describeDuration(waitedFor.beforeJoinMs)}`,
       );
       emit("wanted");
-    }
-    if (done && !cycle.bought && cycle.wantedAtMs !== null) {
-      cycle.bought = true;
-      this.#log(`hacknet: the setup for Netburners' invitation bought (${formatMoney(cycle.cost)} at most)`);
-      emit("bought", sinceWanted);
     }
     // No invitation past the estimate and 10 minutes, the setup wanted all along: loud, once a cycle.
     if (

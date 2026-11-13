@@ -42,12 +42,13 @@ test("1 virtual hour from BN5.1 with SF1.3 and SF4.3: roots, batches, earns and 
   expect(line("    port openers:")).toMatch(/^ {4}port openers: none → BruteSSH\.exe/);
   // The batcher (on by default) batching, its hacks landing.
   expect(text).toMatch(/\n {4}hour 1: preparing, batching on [^;]+; [1-9]\d* batches, [1-9]\d* hack parts landed/);
-  // Every action done, through Singularity where it has a backend there: all but the cloud servers' (their own
-  // worker, `ui`: effectors.ts). The TOR router, a program and home RAM at least.
+  // Every action done, through Singularity where it has a backend there: all but the NS API's own, whose worker is
+  // `ui` (effectors.ts): the cloud servers' (`ns.cloud`) and, since #387, Netburners' Hacknet setup (`ns.hacknet`,
+  // `hacknet-setup.js`). The TOR router, a program and home RAM at least.
   const actions = lines.filter((each) => /^ {4}\w+\(.*\): (done|not done)/.test(each));
-  const cloud = /^ {4}(buyServer|upgradeServer)\(/;
-  expect(actions.map((each) => [cloud.test(each), /\((\w+)\)(;|$)/.exec(each)?.[1]])).toEqual(
-    actions.map((each) => [cloud.test(each), cloud.test(each) ? "ui" : "singularity"]),
+  const nsOnly = /^ {4}(buyServer|upgradeServer|buyHacknetSetup)\(/;
+  expect(actions.map((each) => [nsOnly.test(each), /\((\w+)\)(;|$)/.exec(each)?.[1]])).toEqual(
+    actions.map((each) => [nsOnly.test(each), nsOnly.test(each) ? "ui" : "singularity"]),
   );
   expect(actions.every((each) => / done after /.test(each))).toBe(true);
   expect(line("    upgradeHomeRam(32, ")).toMatch(/: done after 1 try \(singularity\); /);

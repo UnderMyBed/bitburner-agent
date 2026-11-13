@@ -14,7 +14,9 @@
 //   group's countables.
 // - A harness edit stands in for that work's hours (Tian Di Hui's reputation for all eight) and the money: A6 counts
 //   Tian Di Hui's eight and the two no-value augmentations The Black Hand and BitRunners sell (by donation), buys them
-//   and installs: 33 installed. Hacking and money edited back past Daedalus's other requirements, it invites.
+//   and installs: 33 installed, and since #387 Netburners' first too, joined after its Hacknet setup (A5 reached its
+//   1,875 in a minute at hacking past 6,000): 34. Hacking and money edited back past Daedalus's other requirements, it
+//   invites.
 // CI runs seed 1; `DAEDALUS_COUNT_SEEDS` (`1,2,3`, say) runs others.
 import { augmentationsSoldBy, isWorthInstalling, type SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
@@ -137,19 +139,21 @@ test.each(SEEDS)(
       expect.objectContaining({ group: "B", factions: groupB, short: true }),
     ]);
     expect(joined().filter((faction) => ["Sector-12", "Aevum", "Volhaven"].includes(faction))).toEqual([]);
-    // No install meanwhile (#343). The $100m covers Tian Di Hui's three (23 → 26 of 30). Installing now, about 2T (47
-    // min at the edit), is the planner's only candidate until the group joins (the hack loop is off, so the money never
-    // comes at a rate known): held while #228's hold keeps the group's money (the whole stage), and while no income is
-    // measured (seed 1: from 20.5 to 30.5 min of the game's time). Group B joined (seed 1: 28 min), its countables come
-    // by work, and waiting wins: NutriGen Implant 3 min off at New Tokyo, 34 min against installing now's 55.
+    // No install meanwhile (#343). The $100m covers Tian Di Hui's three, and since #387 Netburners' first (23 → 27 of
+    // 30): at the edit, "install now 48 min, wait for Hacknet Node NIC Architecture Neural-Upload (59 s, by work at
+    // Netburners) 26 min; chosen: wait for 1", so its Hacknet setup goes out, Netburners invites 50 s on and is joined,
+    // and A5's work reaches its 1,875 in a minute. Group B joined (seed 1: 28 min), the set is S.N.A, ADR-V1, Hacknet
+    // Node NIC Architecture Neural-Upload and Wired Reflexes, which leaves no money for group B's countables, and with
+    // the hack loop off no income comes at a rate known: none to come ("chosen: none"), and installing now (28 min,
+    // 4 new) held while no income is measured (7 min online) and while #228's hold keeps the group's money.
     expect(holds.steps).toBeGreaterThan(0);
     expect(holds.installsWhileHeld).toBe(0);
     expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([]);
     expect(fresh.controller().augmentationsView().progress?.timing).toMatchObject({
       needed: 7,
-      adding: 3,
-      choice: 1,
-      heldForIncome: false,
+      adding: 4,
+      choice: null,
+      heldForIncome: true,
     });
 
     // The work's hours, and the money: the count reached, bought, installed.
@@ -165,9 +169,17 @@ test.each(SEEDS)(
       (event) => (event.detail as { augmentation: string }).augmentation,
     );
     const counting = bought.filter((name) => name !== "NeuroFlux Governor");
-    expect(new Set(counting)).toEqual(new Set([...TIAN_DI_HUI_EIGHT, "Neural Wit Amplifier", "Magnetism Amplifier"]));
+    // And (#387) Netburners' first, its 1,875 reached before the install: the five's cheapest.
+    expect(new Set(counting)).toEqual(
+      new Set([
+        ...TIAN_DI_HUI_EIGHT,
+        "Neural Wit Amplifier",
+        "Magnetism Amplifier",
+        "Hacknet Node NIC Architecture Neural-Upload",
+      ]),
+    );
     const installed = Object.keys(slow()?.resetInfo.ownedAugs ?? {});
-    expect(installed).toHaveLength(33);
+    expect(installed).toHaveLength(34);
     expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toHaveLength(1);
 
     // Daedalus's other requirements, edited back after the reset: it invites (or A5 has joined it already).
@@ -192,7 +204,7 @@ test.each(SEEDS)(
     expect(text).toMatch(/ {4}travel\(Chongqing\): done after 1 try/);
     expect(text).toMatch(/ {4}travel\(Ishima\): done after 1 try/);
     expect(text).toMatch(/hacking for Tian Di Hui, for .*, for Daedalus's count: 23 of 30 augmentations installed/);
-    expect(text).toMatch(/Daedalus: (joined|invited); 33 of 30 augmentations installed/);
+    expect(text).toMatch(/Daedalus: (joined|invited); 34 of 30 augmentations installed/);
     expect(failures.filter((failure) => /Daedalus count stuck|NOT INVITED/.test(failure))).toEqual([]);
     const worked = events(FACTION_WORK_CHOSEN_EVENT_KIND).map((event) => (event.detail as { faction: string }).faction);
     console.log(
