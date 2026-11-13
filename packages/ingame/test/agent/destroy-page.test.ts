@@ -6,7 +6,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { NS } from "../../src/ns.ts";
 import {
   armRestartAfterDestroy,
+  BLACK_OPS_DESTROY_CONTENT,
   DESTROY_STEP_LIMITS_MS,
+  destroyByBlackOpsOnPage,
   destroyOnPage,
   portalXpath,
 } from "../../src/page/destroy-page.ts";
@@ -406,5 +408,116 @@ describe("the worker's steps (destroyOnPage)", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(clicks).toEqual(["portal 2", "enter 2"]);
     await timerFinished();
+  });
+});
+
+describe("the Black Ops' route (#398, destroyByBlackOpsOnPage)", () => {
+  const PROBLEM = "w0r1d_d43m0n isn't reachable: The Red Pill isn't installed";
+  const noNs = { asleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)) } as unknown as NS;
+  const pageFor = () => {
+    const gamePage = openGamePage(noNs, performance.now() + 3_000);
+    if (gamePage === null) throw new Error("no page");
+    return gamePage;
+  };
+  async function settled<T>(running: Promise<T>): Promise<T> {
+    let done = false;
+    const result = running.finally(() => {
+      done = true;
+    });
+    while (!done) await vi.advanceTimersByTimeAsync(50);
+    return result;
+  }
+
+  /**
+   * The sidebar's Bladeburner (`Sidebar/ui/SidebarRoot.tsx:409`), whose page has the tabs (`Bladeburner/ui/AllPages.tsx:
+   * 25-31`); the BlackOps tab shows the page, with "Destroy w0r1d_d43m0n" (`Bladeburner/ui/BlackOpPage.tsx:39-52`) when
+   * `allDone`, its letters scrambled as `CorruptibleText` renders them, the text in its child's `content`. Its click
+   * goes to the BitVerse: `toBitVerse`.
+   */
+  function bladeburnerInSidebar({ allDone = true, toBitVerse = () => bitVerse() } = {}) {
+    const item = withProps(element("div"), {
+      onClick: () => {
+        clicks.push("Bladeburner");
+        for (const label of ["General", "Contracts", "Operations", "BlackOps", "Skills"]) {
+          const tab = withProps(element("button", { textContent: label }), {
+            onClick: () => {
+              clicks.push(label);
+              if (label !== "BlackOps" || !allDone) return;
+              const corrupted = { props: { content: BLACK_OPS_DESTROY_CONTENT, spoiler: false } };
+              document.body.append(
+                withProps(element("button", { textContent: "Dest#oy w0r1d_d4)m0n" }), {
+                  children: [corrupted, null],
+                  onClick: () => {
+                    clicks.push("Destroy");
+                    document.body.replaceChildren();
+                    toBitVerse();
+                  },
+                }),
+              );
+            },
+          });
+          tab.setAttribute("role", "tab");
+          document.body.append(tab);
+        }
+      },
+    });
+    item.setAttribute("role", "button");
+    item.append(element("p", { textContent: "Bladeburner" }));
+    document.body.append(item);
+  }
+
+  test("all 21 done: the Bladeburner page, its BlackOps tab, the timer armed, the button found by its content; then the BitVerse is entered", async () => {
+    vi.useFakeTimers();
+    bladeburnerInSidebar();
+    const said = await settled(destroyByBlackOpsOnPage(pageFor(), 6, BOOT, PROBLEM));
+    expect(said).toBe(`${BLACK_OPS_DESTROY_CONTENT} clicked: entering BitNode 6 from the BitVerse`);
+    expect(clicks).toEqual(["Bladeburner", "BlackOps", "Destroy"]);
+    // The timer, armed before the click, enters BitNode 6 through its portal; its cinematic, then the run.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(clicks).toEqual(["Bladeburner", "BlackOps", "Destroy", "portal 6", "enter 6"]);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect([...document.querySelectorAll("#terminal > li")].map((line) => line.textContent)).toContain(STARTED);
+  });
+
+  test("not all done (no button): nothing clicked past the tab, the Red Pill route's problem said, no timer armed", async () => {
+    vi.useFakeTimers();
+    bladeburnerInSidebar({ allDone: false });
+    const said = await settled(destroyByBlackOpsOnPage(pageFor(), 6, BOOT, PROBLEM));
+    expect(said).toBe(
+      `no "${BLACK_OPS_DESTROY_CONTENT}" on the Black Ops page (it shows with all 21 done): ${PROBLEM}`,
+    );
+    expect(clicks).toEqual(["Bladeburner", "BlackOps"]);
+    bitVerse();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(clicks).toEqual(["Bladeburner", "BlackOps"]);
+  });
+
+  test("the click never reaching the BitVerse, the Bladeburner page still up: the timer stops, nothing destroyed", async () => {
+    vi.useFakeTimers();
+    bladeburnerInSidebar({
+      toBitVerse: () => {
+        // Still the Bladeburner page: its sidebar item back, no BitVerse.
+        bladeburnerInSidebar();
+      },
+    });
+    await settled(destroyByBlackOpsOnPage(pageFor(), 6, BOOT, PROBLEM));
+    const timer = (
+      document as unknown as Record<string, { state(): { outcome: string; fallbackReason: string | null } }>
+    ).__bitburnerAgentDestroyTimer;
+    await vi.advanceTimersByTimeAsync(DESTROY_STEP_LIMITS_MS.bitVerse + 1_000);
+    expect(timer?.state()).toEqual({
+      outcome: "stopped",
+      fallbackReason: "the BitVerse never showed: nothing was destroyed",
+    });
+  });
+
+  test("at the BitVerse already: armed at the portal, nothing clicked on the page, and entered", async () => {
+    vi.useFakeTimers();
+    bitVerse();
+    expect(await settled(destroyByBlackOpsOnPage(pageFor(), 6, BOOT, PROBLEM))).toBe(
+      "entering BitNode 6 from the BitVerse",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(clicks).toEqual(["portal 6", "enter 6"]);
   });
 });

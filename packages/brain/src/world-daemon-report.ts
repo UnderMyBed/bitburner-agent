@@ -16,6 +16,8 @@
 // for longer than a choice takes (`LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS`), or its choice's estimate past the time
 // the BitNode has taken so far, a hopeless one (decision 67's point 8). With the World Daemon's switch off, both are
 // warnings: the destroy isn't wanted, and money is what the owner asked for.
+// The Black Ops' route (#398, BN6): the path is the route's (./bladeburner-route.ts) from the window's last medium
+// snapshot, its rank a second and hacking experience measured over the window; its stalls are the rule's, failures.
 import {
   AUGMENTATIONS,
   gangFactionOf,
@@ -28,10 +30,12 @@ import {
   type StaticSnapshotData,
   shortestLevellingCandidate,
   WORLD_DAEMON,
+  winRouteOf,
   worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import { bitNodeHackingOf } from "./batcher.ts";
 import { BRAIN_STOPPED_AT_BITNODE_END_EVENT_KIND } from "./bitnode-end.ts";
+import { blackOpsRouteOf } from "./bladeburner-route.ts";
 import { DESTROY_ESTIMATED_EVENT_KIND } from "./destroy-estimate.ts";
 import { destroyEstimateHealthLines, destroyEstimatePathLines } from "./destroy-estimate-report.ts";
 import { gangShopOf } from "./gang.ts";
@@ -132,6 +136,9 @@ interface Readiness {
  */
 export class WorldDaemonFold {
   readonly #exp = new HackingExpRate();
+  /** Bladeburner's rank a second over the window (#398), a Black Op's failure part of it; a new BitNode, afresh. */
+  #rank = new HackingExpRate({ fallsCount: true });
+  #rankBitNode: number | null = null;
   /** w0r1d_d43m0n's hacking requirement from each static snapshot that gives it, in order (#308). */
   readonly #requirements: { atMs: number; level: number }[] = [];
   /** By BitNode: the run report's index of it (`BitNodeCycles.bitNodeIndexAt`). */
@@ -209,6 +216,12 @@ export class WorldDaemonFold {
       | undefined;
     const exp = player?.exp?.hacking;
     if (typeof exp === "number" && Number.isFinite(exp)) this.#exp.add(atMs, exp);
+    const rank = (data as { bladeburner?: { rank?: unknown } | null }).bladeburner?.rank;
+    if (this.#rankBitNode !== bitNode) {
+      this.#rank = new HackingExpRate({ fallsCount: true });
+      this.#rankBitNode = bitNode;
+    }
+    if (typeof rank === "number" && Number.isFinite(rank)) this.#rank.add(atMs, rank);
     const required = this.#requirements.findLast((requirement) => requirement.atMs <= atMs)?.level;
     const level = player?.skills?.hacking;
     // The levelling's samples, and since when the level has been all that's left (#336): w0r1d_d43m0n rooted, the
@@ -275,12 +288,33 @@ export class WorldDaemonFold {
       | undefined;
     const cityGroup = typeof chosen?.group === "string" ? chosen.group : null;
     try {
+      // The Black Ops' route (#398): from the last medium snapshot, at the window's rates.
+      const info = slowLast?.resetInfo as
+        | { currentNode?: unknown; ownedSF?: unknown; lastNodeReset?: unknown }
+        | undefined;
+      const bitNode = info?.currentNode;
+      const lastNodeReset = info?.lastNodeReset;
+      const blackOps =
+        typeof bitNode === "number" && winRouteOf(bitNode) === "blackOps" && typeof info?.ownedSF === "object"
+          ? blackOpsRouteOf({
+              mediumData: mediumLast ?? null,
+              bitNode,
+              ownedSF: (info.ownedSF ?? {}) as Record<string, number>,
+              rankPerSecond: this.#rank.perSecond(),
+              expPerSecond: this.#exp.perSecond(),
+              soFarMs:
+                typeof lastNodeReset === "number" && this.#slowGameTimeMs !== null
+                  ? Math.max(0, this.#slowGameTimeMs - lastNodeReset)
+                  : null,
+            })
+          : null;
       described = describeWorldDaemonPath(
         worldDaemonPath({
           staticData: staticLast ?? null,
           mediumData: mediumLast ?? null,
           slowData: slowLast ?? null,
           expPerSecond: this.#exp.perSecond(),
+          blackOps,
           cityGroup,
           // The Red Pill at the gang's faction in BN2 (#334), the slow snapshot carrying its name.
           gangShop: gangShopOf(slowLast, gangFactionOf(slowLast)),

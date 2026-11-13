@@ -20,6 +20,7 @@ import {
   type Bn2Route,
   bitNodeAssumptions,
   type DesiredState,
+  type DestroyBlackOpsInputs,
   EFFECTOR_BACKENDS,
   FACTION_ENEMIES,
   type FactionWorkType,
@@ -94,6 +95,7 @@ import {
   BladeburnerRule,
   type BladeburnerView,
 } from "./bladeburner.ts";
+import { type BlackOpsRouteView, blackOpsRouteOf } from "./bladeburner-route.ts";
 import {
   CLOUD_SERVER_RESERVE_HORIZON_MS,
   CLOUD_SERVERS_ENABLED_SETTING,
@@ -1906,6 +1908,64 @@ export class DesiredStateController {
     return typeof required === "number" && Number.isFinite(required) ? { required, unread } : null;
   }
 
+  /**
+   * The Black Ops' route as the World Daemon rule reads it (#398): ./bladeburner-route.ts's `blackOpsRouteOf` on the
+   * latest medium snapshot, at the rule's rates, the next one's rank by the Bladeburner rule's plan where its target is
+   * that rank (B5's stock and tail), and the BitNode's game time so far (the hopeless bar). Null without a slow snapshot
+   * with the BitNode.
+   */
+  /** The Black Ops' route last read (#398): its medium snapshot, the rest of its inputs, and the view. */
+  #blackOpsRouteCache: { mediumData: MediumSnapshotData | null; key: string; view: BlackOpsRouteView } | null = null;
+
+  #blackOpsRoute():
+    | ((rates: { rankPerSecond: number | null; expPerSecond: number | null }) => BlackOpsRouteView)
+    | null {
+    const info = this.#slowData?.resetInfo as { currentNode?: unknown; ownedSF?: unknown } | undefined;
+    const bitNode = info?.currentNode;
+    if (typeof bitNode !== "number" || typeof info?.ownedSF !== "object" || info.ownedSF === null) return null;
+    const ownedSF = info.ownedSF as Record<string, number>;
+    const actions = this.#bladeburner.view().actions;
+    const rank = actions?.blackOp?.check.rank;
+    const toTarget = actions?.plan.toTarget;
+    const firstToRankSeconds = toTarget !== undefined && toTarget.target === rank ? toTarget.seconds : null;
+    const lastNodeReset = resetTimeOf(this.#slowData, "lastNodeReset");
+    const soFarMs =
+      lastNodeReset === null || this.#slowGameTimeMs === null
+        ? null
+        : Math.max(0, this.#slowGameTimeMs - lastNodeReset);
+    const mediumData = this.#mediumData;
+    // Solved once a medium snapshot and its rates (the far target's solve isn't cheap): the controller updates on every
+    // snapshot and event.
+    return ({ rankPerSecond, expPerSecond }) => {
+      const plan = actions?.plan ?? null;
+      const key = [
+        bitNode,
+        rankPerSecond,
+        expPerSecond,
+        soFarMs,
+        firstToRankSeconds,
+        plan?.work?.name,
+        plan?.work?.level,
+        plan?.duty,
+      ].join();
+      const cached = this.#blackOpsRouteCache;
+      if (cached !== null && cached.mediumData === mediumData && cached.key === key) return cached.view;
+      const view = blackOpsRouteOf({
+        mediumData,
+        bitNode,
+        ownedSF,
+        rankPerSecond,
+        expPerSecond,
+        soFarMs,
+        firstToRankSeconds,
+        // The climb's bound on the plan the Bladeburner rule runs (#400's review).
+        plan,
+      });
+      this.#blackOpsRouteCache = { mediumData, key, view };
+      return view;
+    };
+  }
+
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     // The gang (#325) first: its faction, once formed, is left out of what the other rules see as joined.
@@ -2005,6 +2065,10 @@ export class DesiredStateController {
       // earns no respect, past the plan's own bound (#374).
       redPillHeldAtGang: this.#augmentations.redPillHeldAtGang(),
       gangPause: this.#gang.earningPause(),
+      // The Black Ops' route (#398): the route from the snapshots at the rule's measured rates, the next one's rank by
+      // the Bladeburner rule's own time to it; its rank's stall only while that rule acts.
+      blackOps: this.#blackOpsRoute(),
+      bladeburnerActing: this.#bladeburner.acting(),
     });
     // The planner's levelling choice (#336), on A8's path as it now reads, and A6's offer of NeuroFlux Governor levels.
     const batcherConfig = this.#desired?.batcher?.config ?? null;
@@ -2106,6 +2170,8 @@ export class DesiredStateController {
         timingLastAugReset: this.#augmentations.view().progress?.lastAugReset ?? null,
         pause: this.#gang.earningPause(),
       },
+      // BN6 (#398): the Black Ops' route as the World Daemon's path read it this update, both routes' estimates.
+      blackOps: destroyBlackOpsOf(this.#worldDaemon.view().path?.blackOps ?? null),
     });
     // The owner's queue and the brain's resets first, then the rules' intents (`#ruleIntents`, in its order). The
     // purchases before the backdoor: a `buy` never waits for its terminal action.
@@ -2247,4 +2313,18 @@ function resetFieldOf(reset: Intent): ResetSentNote["field"] {
 function resetTimeOf(slow: SlowSnapshotData | null, field: ResetSentNote["field"]): number | null {
   const resetAt = (slow?.resetInfo as Record<string, unknown> | undefined)?.[field];
   return typeof resetAt === "number" && Number.isFinite(resetAt) ? resetAt : null;
+}
+
+/**
+ * The destroy estimate's BN6 figures (#398) from the World Daemon's path: the Black Ops done and the route's time, The
+ * Red Pill's beside it, and the planner's choice; null before the reading has the count and the estimate.
+ */
+function destroyBlackOpsOf(route: BlackOpsRouteView | null): DestroyBlackOpsInputs | null {
+  if (route === null || route.done === null || route.estimate === null) return null;
+  return {
+    done: route.done,
+    ms: route.estimate.seconds * 1000,
+    redPillMs: route.redPillSeconds === null ? null : route.redPillSeconds * 1000,
+    choice: route.choice,
+  };
 }

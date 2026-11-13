@@ -3,6 +3,7 @@
 // minutes); BN2's gang route (#357's slice 3) from slice 1's and 2's goldens.
 import { describe, expect, test } from "vitest";
 import { hackingExpOfLevel } from "../src/batcher.ts";
+import { chooseWinRoute } from "../src/bladeburner-route.ts";
 import {
   DESTROY_ESTIMATE_BITNODES,
   type DestroyEstimateInputs,
@@ -318,15 +319,15 @@ const bn2Exp = (level: number) => hackingExpOfLevel(level, BN2_LEVEL_MULT);
 const SEED_1_RATE = (bn2Exp(212) - bn2Exp(201)) / (24 * 60 + 31);
 
 describe("BN2's route, the gang's (#357's slice 3)", () => {
-  test("the routes: Daedalus's in BN1, BN4 and BN5, the gang's in BN2, none elsewhere", () => {
-    expect(DESTROY_ESTIMATE_BITNODES).toEqual([1, 2, 4, 5]);
+  test("the routes: Daedalus's in BN1, BN4 and BN5, the gang's in BN2, the Black Ops' in BN6 (#398), none elsewhere", () => {
+    expect(DESTROY_ESTIMATE_BITNODES).toEqual([1, 2, 4, 5, 6]);
     expect([1, 2, 3, 4, 5, 6, 7, 12].map(destroyRouteOf)).toEqual([
       "daedalus",
       "gang",
       null,
       "daedalus",
       "daedalus",
-      null,
+      "blackOps",
       null,
       null,
     ]);
@@ -475,5 +476,54 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
     expect(destroyEstimate({ ...bn1, gang: { formed: true, waitMs: 0, redPill: null, earningInMs: null } })).toEqual(
       destroyEstimate(bn1),
     );
+  });
+});
+
+describe("BN6's route, the Black Ops' (#398)", () => {
+  const bn6: DestroyEstimateInputs = {
+    currentNode: 6,
+    ownedSF: { 1: 3, 2: 3, 4: 3, 5: 1 },
+    onlineMs: 120 * MINUTE,
+    count: 12,
+    redPillInstalled: false,
+    countMetOnlineMs: null,
+    daedalus: "not joined",
+    holdEtaMs: null,
+    levellingMs: null,
+    prior: null,
+  };
+  const choice = chooseWinRoute({ blackOpsSeconds: 36_000, redPillSeconds: 1e70, soFarSeconds: 7200 });
+
+  test("one term, BO: the route's time, cautious, with The Red Pill's beside it and the planner's choice", () => {
+    const estimate = destroyEstimate({
+      ...bn6,
+      blackOps: { done: 3, ms: 600 * MINUTE, redPillMs: 1e73, choice },
+    });
+    expect(estimate.terms).toHaveLength(1);
+    expect(estimate.terms[0]).toMatchObject({ term: "BO", ms: 600 * MINUTE, atLeast: false, label: "cautious" });
+    expect(estimate.terms[0]?.source).toContain("3 of 21 done");
+    // Cautious on balance (#400's review): the competence's rise left out, the stamina and HP named, optimistic.
+    expect(estimate.terms[0]?.source).toContain(
+      "(cautious on balance: its rise left out; the Black Ops' stamina, 41.8 a Daedalus attempt, and HP left out, optimistic)",
+    );
+    expect(estimate.terms[0]?.source).toContain("The Red Pill's by the formulas at least 2.78e+66 h");
+    expect(estimate.terms[0]?.source).toContain("the planner's choice: the Black Ops (The Red Pill's hopeless");
+    expect(estimate).toMatchObject({ remainingMs: 600 * MINUTE, totalMs: 720 * MINUTE, atLeast: false, never: false });
+    // Daedalus's 35 and w0r1d_d43m0n's 6,000 as BN6 has them, for the record.
+    expect(estimate).toMatchObject({ required: 35, requiredLevel: 6000 });
+  });
+
+  test("none before the division's reading (at least); never at a chance of 0 now; 0 with all 21 done", () => {
+    expect(destroyEstimate(bn6)).toMatchObject({ atLeast: true, never: false, remainingMs: 0 });
+    expect(destroyEstimate(bn6).terms[0]).toMatchObject({ term: "BO", ms: null });
+    const never = destroyEstimate({
+      ...bn6,
+      blackOps: { done: 20, ms: Number.POSITIVE_INFINITY, redPillMs: null, choice },
+    });
+    expect(never.never).toBe(true);
+    expect(never.terms[0]?.source).toContain("never at the competence now");
+    expect(never.terms[0]?.source).toContain("The Red Pill's by the formulas not measured");
+    const done = destroyEstimate({ ...bn6, blackOps: { done: 21, ms: 0, redPillMs: null, choice } });
+    expect(done.terms[0]).toMatchObject({ term: "BO", ms: 0, label: "done" });
   });
 });

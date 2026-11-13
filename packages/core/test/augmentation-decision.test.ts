@@ -132,6 +132,46 @@ test("Daedalus's count with The Red Pill at the gang's faction (#335's review): 
   expect(count(true)).toEqual({ installed: 0, required: 30, short: false });
 });
 
+test("The Red Pill's holds on the Black Ops' route (#398): off in BN6, Daedalus's count never short; unchanged in BN4 and BN5", () => {
+  const count = (currentNode: number) =>
+    daedalusCountOf({ currentNode, ownedSF: { 1: 3, 4: 3 }, installed: {}, joined: [], invitations: [] });
+  expect(count(4)).toEqual({ installed: 0, required: 30, short: true });
+  expect(count(5)).toEqual({ installed: 0, required: 30, short: true });
+  // BN6's `DaedalusAugsRequirement` 35 (`BitNode/BitNode.tsx:694-727`), never short there.
+  expect(count(6)).toEqual({ installed: 0, required: 35, short: false });
+  const endgame = (currentNode: number, installed: Record<string, number>, reputation: number) =>
+    augmentationEndgame({
+      installed,
+      installable: [],
+      queue: [],
+      state: { ...stateOf(installed), bitNodeMultipliers: augmentationBitNodeMultipliers(currentNode, {}) },
+      shops: augmentationShops(
+        [{ name: "Daedalus", reputation, favor: 0 }],
+        currentNode,
+        stateOf(installed),
+        () => false,
+      ),
+      money: 1e9,
+      factionRep: 1,
+      figures: { money: 1e9, skills },
+      currentNode,
+      ownedSF: {},
+      destroyWanted: true,
+    });
+  // Daedalus joined, The Red Pill short: BN4's and BN5's hold for it, as before; none in BN6.
+  for (const currentNode of [4, 5]) {
+    expect(endgame(currentNode, {}, 1000), `BN${currentNode}`).toMatchObject({ kind: "hold", why: "redPill" });
+    expect(endgame(currentNode, { "The Red Pill": 1 }, 0), `BN${currentNode}`).toEqual({
+      kind: "hold",
+      why: "destroy",
+      reserve: 0,
+    });
+  }
+  expect(endgame(6, {}, 1000)).toEqual({ kind: "none" });
+  // Installed there (the owner's), no hold for the destroy's hacking level either.
+  expect(endgame(6, { "The Red Pill": 1 }, 0)).toEqual({ kind: "none" });
+});
+
 test("gangRedPillEtaMs (#334): the reputation still needed at the cycle's average rate; never with none earned", () => {
   // 500,000 in 20 minutes: 2,000,000 more at 25,000 a minute, 80 minutes.
   expect(gangRedPillEtaMs(500_000, 2.5e6, 20 * 60_000)).toBeCloseTo(80 * 60_000, 6);

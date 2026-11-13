@@ -1320,6 +1320,26 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     expect(controller.levellingView().mode).toBe("install");
   });
 
+  test("BN6, the Black Ops' route (#398): The Red Pill installed there, no destroy's hold and no levelling; A6's set isn't only levelling's", () => {
+    // The same as BN4's case above, in BN6: the hacking level isn't the destroy's there, so neither levelling nor the
+    // destroy's hold applies, and DataJack (`hacking_money` alone, nothing to levelling) is bought with the rest.
+    const controller = new DesiredStateController({ channel, store });
+    const events: RuleEvent[] = [];
+    controller.subscribe((event) => events.push(event));
+    const connection = connectAgent();
+    const slowData = slow({ faction: "NiteSec", reputation: 0, favor: 200, currentNode: 6, neuroFluxLevel: 70 });
+    aMinuteOf(connection, { money: 1e15, slowData });
+    send(connection, "medium", medium({ level: 2000, money: 1e15, expAbove: 3000 }), 200 * SECOND);
+    send(connection, "slow", slowData, 200 * SECOND);
+    expect(controller.levellingView().applies).toBe(false);
+    const installs = events.filter((event) => event.type === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND);
+    expect(installs).toHaveLength(1);
+    expect(installs[0]).not.toMatchObject({ reason: "the hacking level" });
+    const bought = (installs[0] as unknown as { set: { augmentation: string }[] }).set.map((each) => each.augmentation);
+    expect(bought).toContain("DataJack");
+    expect(addsToLevelling(["DataJack"])).toBe(false);
+  });
+
   test("no install without A6's offer: the switch off, or no faction's reputation reaching a level", () => {
     for (const setUp of [() => writeAugmentationsEnabled(store, false), () => {}]) {
       const controller = new DesiredStateController({ channel, store });

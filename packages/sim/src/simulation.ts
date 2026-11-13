@@ -276,6 +276,8 @@ export class Simulation {
       chaos?: number;
       stamina?: number;
       maxLevels?: Record<string, number>;
+      /** The Black Ops done (#398): the next is the n-th. */
+      blackOpsDone?: number;
     }) => this.rpc.call("diagnostics.setBladeburnerFigures", { figures }),
     /** Gives the player charisma experience, through the game's own gain. A harness edit, for test scenarios (#155). */
     gainCharismaExp: (exp: number) => this.rpc.call("diagnostics.gainCharismaExp", { exp }),

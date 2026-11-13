@@ -12,6 +12,7 @@ import {
   getBitNodeLevel,
   getDefaultBitNodeOptions,
 } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
+import { numberOfBlackOperations } from "../../../../../vendor/bitburner-src/src/Bladeburner/data/BlackOperations";
 import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
 import { CompanyName } from "../../../../../vendor/bitburner-src/src/Company/Enums";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
@@ -307,9 +308,10 @@ export function setBladeburnerRank(rank: number) {
 /**
  * Sets Bladeburner's figures (#375): its current city's population, estimate, communities and chaos
  * (`Bladeburner/City.ts:8-28`), or (#383) the named city's, the stamina (`Bladeburner.ts:121-122`), and contracts' and
- * operations' max levels by name (`Actions/LevelableAction.ts:28`), each as given, the rest left: a harness edit for
- * core's parity tests and the cities' scenario, not something a player can do. Not in the division, a city not one of
- * the six, or an action of neither kind, throws.
+ * operations' max levels by name (`Actions/LevelableAction.ts:28`), and (#398) the Black Ops done, each as given, the
+ * rest left: a harness edit for core's parity tests and the cities' and the win route's scenarios, not something a
+ * player can do. Not in the division, a city not one of the six, an action of neither kind, or a count of Black Ops
+ * not a whole number to 21, throws.
  */
 export function setBladeburnerFigures(figures: {
   city?: string;
@@ -319,6 +321,7 @@ export function setBladeburnerFigures(figures: {
   chaos?: number;
   stamina?: number;
   maxLevels?: Record<string, number>;
+  blackOpsDone?: number;
 }) {
   const bladeburner = Player.bladeburner;
   if (!bladeburner) throw new RangeError("not in the Bladeburner division");
@@ -332,6 +335,14 @@ export function setBladeburnerFigures(figures: {
   if (figures.communities !== undefined) city.comms = figures.communities;
   if (figures.chaos !== undefined) city.chaos = figures.chaos;
   if (figures.stamina !== undefined) bladeburner.stamina = figures.stamina;
+  // The Black Ops done (#398, `Bladeburner.ts:58`, `numBlackOpsComplete`): the next is the n-th
+  // (`NetscriptFunctions/Bladeburner.ts:88-96`).
+  if (figures.blackOpsDone !== undefined) {
+    if (!Number.isInteger(figures.blackOpsDone) || figures.blackOpsDone > numberOfBlackOperations) {
+      throw new RangeError(`blackOpsDone must be a whole number to ${numberOfBlackOperations}`);
+    }
+    bladeburner.numBlackOpsComplete = figures.blackOpsDone;
+  }
   for (const [name, maxLevel] of Object.entries(figures.maxLevels ?? {})) {
     const action =
       (bladeburner.contracts as Record<string, { maxLevel: number }>)[name] ??
