@@ -59,7 +59,7 @@ export function batcherOnHome(store: TelemetryStore): boolean {
 
 /**
  * What home keeps for the Agent and its workers, GB: a fresh save's 8, of which the Agent and its largest worker take
- * 7.55 (architecture §14, Q1). The batcher runs on home only with its budget free beyond it: home of 16 GB or more.
+ * 7.75 (the Hacknet buyer's since #387; architecture §14, Q1). The batcher runs on home only with its budget free beyond it: home of 16 GB or more.
  */
 export const HOME_KEPT_FOR_THE_AGENT_GB = 8;
 

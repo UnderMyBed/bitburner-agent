@@ -53,12 +53,21 @@ test.each(SEEDS)(
     const joinedAtMs = game.clock.now() - EPOCH_MS;
     await game.run(WORKED_MS);
 
-    // The brain joined once, chose CyberSec's hacking work, and logged both. Tian Di Hui too, travelled for at hacking
-    // 50 and $1.2m (#228: its ADR-V1 and S.N.A have a hacking value).
+    // The brain joined CyberSec once, chose its hacking work, and logged both. Tian Di Hui too, travelled for at hacking
+    // 50 and $1.2m (#228: its ADR-V1 and S.N.A have a hacking value). And (#387) Netburners, at hacking 80: its
+    // invitation after the Hacknet setup the planner waits for its five on, joined once too.
     expect(
       brain.logLines.filter((line) => line.startsWith("factions: joining ") && !line.includes("Tian Di Hui")),
-    ).toEqual(["factions: joining CyberSec (its invitation)"]);
+    ).toEqual(["factions: joining CyberSec (its invitation)", "factions: joining Netburners (its invitation)"]);
     expect(brain.logLines).toContain("factions: CyberSec joined");
+    const setup = brain.logLines.findIndex((line) =>
+      line.startsWith("hacknet: the setup for Netburners' invitation bought"),
+    );
+    const invited = brain.logLines.findIndex((line) => line.startsWith("hacknet: Netburners invited, "));
+    const joining = brain.logLines.indexOf("factions: joining Netburners (its invitation)");
+    expect(setup).toBeGreaterThanOrEqual(0);
+    expect(invited).toBeGreaterThan(setup);
+    expect(joining).toBeGreaterThan(setup);
     const chosen = brain.logLines.filter((line) => line.startsWith("faction work: "));
     expect(chosen[0]).toMatch(/^faction work: hacking for CyberSec, for Neurotrainer I \(reputation \d of 1,000, /);
     expect(brain.logLines.filter((line) => line.includes("STALLED"))).toEqual([]);
@@ -107,12 +116,14 @@ test.each(SEEDS)(
     expect(lines).toContainEqual(
       expect.stringMatching(/^ {4}joinFaction\(CyberSec\): done after 1 try \(sim\); done by /),
     );
-    // Tian Di Hui too, travelled for (#228), before or after.
+    // Tian Di Hui too, travelled for (#228), before or after; and (#387) Netburners, after its Hacknet setup.
     const joinedLine = lines.find((line) => line.startsWith("    joined: ")) ?? "";
     expect(joinedLine.slice("    joined: ".length).split(", ").sort()).toEqual([
       expect.stringMatching(/^CyberSec by \S+$/),
+      expect.stringMatching(/^Netburners by \S+$/),
       expect.stringMatching(/^Tian Di Hui by \S+$/),
     ]);
+    expect(lines).toContainEqual(expect.stringMatching(/^ {4}buyHacknetSetup\(\): done after 1 try \(sim\); /));
     expect(lines).toContainEqual(
       expect.stringMatching(/^ {6}\S+ {2}hacking for CyberSec, for Neurotrainer I \(reputation \d of 1,000, /),
     );

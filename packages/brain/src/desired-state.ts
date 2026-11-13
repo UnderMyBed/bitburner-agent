@@ -129,6 +129,16 @@ import {
 } from "./gang.ts";
 import type { GangStallStretch } from "./gang-stalls.ts";
 import { HACK_LOOP_ENABLED_SETTING, type LastHackTarget, planHackLoop, readHackLoopEnabled } from "./hack-loop.ts";
+import {
+  HACKNET_SETUP_INTENT,
+  type HacknetEvent,
+  HacknetRule,
+  type HacknetView,
+  hacknetMultipliersOf,
+  type NetburnersFacts,
+  netburnersFactsOf,
+  netburnersRoute,
+} from "./hacknet.ts";
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type InvitationEvent, type InvitationInputs, InvitationRule, type InvitationView } from "./invitations.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
@@ -287,7 +297,8 @@ export type RuleEvent =
   | LevellingEvent
   | DestroyEstimateEvent
   | GangEvent
-  | BladeburnerEvent;
+  | BladeburnerEvent
+  | HacknetEvent;
 
 /** What the dashboard shows of the stop at the BitNode's end (#303). */
 export interface StopAtBitNodeEndView {
@@ -456,6 +467,9 @@ export class DesiredStateController {
   /** The travel for invitations (#228), Tian Di Hui's and the city group's: the rule, and the travel it asks for. */
   readonly #invitations: InvitationRule;
   #travel: Intent | null = null;
+  /** Hacknet to Netburners' invitation (#387): the rule, and Netburners' facts this update. */
+  readonly #hacknet: HacknetRule;
+  #netburnersFacts: NetburnersFacts | null = null;
   #factionWork: { faction: string; workType: FactionWorkType } | null = null;
   /** Who gets the rules' events (#203, #210): the store, through main.ts. */
   readonly #listeners = new Set<(event: RuleEvent) => void>();
@@ -555,6 +569,7 @@ export class DesiredStateController {
     this.#worldDaemon = new WorldDaemonRule({ log, emit: (event) => this.#emit(event) });
     this.#levelling = new LevellingRule({ log, emit: (event) => this.#emit(event) });
     this.#invitations = new InvitationRule({ log, emit: (event) => this.#emit(event) });
+    this.#hacknet = new HacknetRule({ log, emit: (event) => this.#emit(event) });
     this.#bitNodeEnd = new BitNodeEndWatch({ log, emit: (event) => this.#emit(event) });
     this.#destroyEstimate = new DestroyEstimateRule({
       store,
@@ -932,7 +947,13 @@ export class DesiredStateController {
   /** What the dashboard shows of the joins and the brain's faction work (#203). */
   factionsView(): FactionsView {
     // With the travel for invitations (#228 review): the travel, the hold, or why it waits.
-    return { ...this.#factions.view(), invitations: this.#invitations.view() };
+    // And Netburners' Hacknet setup (#387).
+    return { ...this.#factions.view(), invitations: this.#invitations.view(), hacknet: this.#hacknet.view() };
+  }
+
+  /** Netburners' Hacknet setup (#387): wanted, bought, invited, or why not. */
+  hacknetView(): HacknetView {
+    return this.#hacknet.view();
   }
 
   /** Where the gang stands (#325): the dashboard's line. */
@@ -1202,11 +1223,73 @@ export class DesiredStateController {
     return true;
   }
 
-  /** The purchase to ask for now, as an intent: one at a time, cheapest first, among the activities switched on. */
+  /**
+   * The purchase to ask for now, as an intent, one at a time: a program or home RAM (cheapest first, among those
+   * switched on), then Netburners' Hacknet setup (#387), then a cloud server.
+   */
   #choosePurchase(): Intent | null {
     const other = this.#chooseProgramOrHomeRam();
-    const cloud = this.#chooseCloudServer(other);
-    return other ?? cloud;
+    const hacknet = this.#chooseHacknet(other);
+    const cloud = this.#chooseCloudServer(other ?? hacknet);
+    return other ?? hacknet ?? cloud;
+  }
+
+  /**
+   * Netburners' Hacknet setup (#387, ./hacknet.ts): while the planner's wait waits for its countables, after a program
+   * or home RAM (`other`), with the money above every hold cloud servers keep and home RAM's, A6's as the setup's τ has
+   * it (`hacknetReserve`).
+   */
+  #chooseHacknet(other: Intent | null): Intent | null {
+    // A6's money as the setup's τ has it (#387's review): while the wait waits for Netburners' countables, the set's
+    // alone, not their own prices, which come after the setup; else its reserve and the countdown's hold.
+    const augmentations = this.#augmentations.hacknetReserve();
+    const reserve = this.#reserveForOtherPurchase(this.#income.rate()?.perSecond ?? 0, false, false, augmentations);
+    const holds: MoneyReserve[] = [
+      ...(reserve === null ? [] : [reserve]),
+      { amount: this.#augmentations.daedalusHold(), forWhat: "Daedalus's invitation" },
+      { amount: this.#augmentations.redPillHold(), forWhat: "The Red Pill's donation" },
+      { amount: this.#invitations.hold(), forWhat: "an invitation travelled for" },
+    ];
+    const hold = holds.reduce<MoneyReserve>((most, each) => (each.amount > most.amount ? each : most), {
+      amount: 0,
+      forWhat: "nothing",
+    });
+    const money = this.#mediumData?.player?.money;
+    return this.#hacknet.update({
+      facts: this.#netburnersFacts,
+      waitedFor: this.#augmentations.netburnersWaitedFor(),
+      done: this.#doneIds().has(HACKNET_SETUP_INTENT.id),
+      installUnderWay: this.#installUnderWay(),
+      other: other === null ? null : describePurchase(other),
+      money: typeof money === "number" && Number.isFinite(money) ? money : null,
+      hold,
+      nowMs: this.#lastEventAtMs,
+    });
+  }
+
+  /** Netburners' facts (#387) from the connected Agent's snapshots, or null where they don't say it all. */
+  #netburnersFactsOf(): NetburnersFacts | null {
+    const slow = this.#slowData;
+    const state = slow === null ? null : (factionReadingOf(slow)?.state ?? null);
+    const resetInfo = slow === null ? null : resetInfoOf(slow);
+    const lastAugReset = slow?.resetInfo?.lastAugReset;
+    const player = this.#mediumData?.player as { skills?: { hacking?: unknown } } | undefined;
+    const hacking = player?.skills?.hacking;
+    const mults = hacknetMultipliersOf(player);
+    if (state === null || resetInfo === null || mults === null) return null;
+    if (typeof lastAugReset !== "number" || !Number.isFinite(lastAugReset)) return null;
+    if (typeof hacking !== "number" || !Number.isFinite(hacking)) return null;
+    const options = slow?.resetInfo?.bitNodeOptions;
+    return netburnersFactsOf({
+      state,
+      lastAugReset,
+      currentNode: resetInfo.currentNode,
+      installed: resetInfo.ownedAugs,
+      ownedSF: resetInfo.ownedSF,
+      bitNodeOptions: typeof options === "object" && options !== null ? options : {},
+      hackingLevel: hacking,
+      mults,
+    });
   }
 
   /**
@@ -1266,8 +1349,16 @@ export class DesiredStateController {
    * money of the set the money will cover within that horizon, where that's more. `leaveOutNearlyAffordable` (gang
    * equipment's, #330): without the program or home RAM, when it goes out this round, held at its price instead.
    */
-  #reserveForOtherPurchase(perSecond: number, leaveOutNearlyAffordable = false): MoneyReserve | null {
+  #reserveForOtherPurchase(
+    perSecond: number,
+    leaveOutNearlyAffordable = false,
+    withHacknet = true,
+    augmentationReserve = this.#augmentations.reserve(),
+  ): MoneyReserve | null {
     const waiting: MoneyReserve[] = [];
+    // Netburners' Hacknet setup (#387) while it waits for money, as a program's: not for its own hold (`withHacknet`).
+    const hacknet = withHacknet ? this.#hacknet.reserve() : 0;
+    if (hacknet > 0) waiting.push({ amount: hacknet, forWhat: "Netburners' Hacknet setup" });
     const programs = this.#programsPlan;
     if (readProgramsEnabled(this.#store) && programs !== null && programs.price !== null) {
       const item = [TOR_ROUTER, ...PORT_OPENER_PROGRAMS].find((each) => !programs.owned.includes(each));
@@ -1282,7 +1373,7 @@ export class DesiredStateController {
     const shortfall = (cheaper?.amount ?? 0) - (typeof money === "number" ? money : 0);
     const nearly = shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000;
     const other = !leaveOutNearlyAffordable && cheaper !== undefined && nearly ? cheaper : null;
-    const augmentations = this.#augmentations.reserve();
+    const augmentations = augmentationReserve;
     const invitation = this.#invitations.hold();
     if (invitation > Math.max(augmentations, other?.amount ?? 0)) {
       return { amount: invitation, forWhat: "an invitation travelled for (#228)" };
@@ -1313,6 +1404,7 @@ export class DesiredStateController {
         programs: this.#programsPlan?.price,
         homeRam: this.#homeRamPlan?.price,
         cloudServer: this.#cloudServersPlan?.next?.price,
+        hacknet: this.#hacknet.view().cost,
       },
       cloud: {
         awaiting: this.#cloudServersPlan?.awaitingMoney,
@@ -1848,6 +1940,13 @@ export class DesiredStateController {
       this.#fastGameTimeMs,
       batcherNotRunning(this.#fastData?.batcherDeploy) !== null,
     );
+    // Netburners' facts (#387): A6's route to its countables, and the Hacknet rule's (in the purchases, below).
+    this.#netburnersFacts = this.#netburnersFactsOf();
+    const lastAugReset = resetTimeOf(this.#slowData, "lastAugReset");
+    const netburners = netburnersRoute(
+      this.#netburnersFacts,
+      this.#hacknet.bought(lastAugReset) || this.#doneIds().has(HACKNET_SETUP_INTENT.id),
+    );
     // Augmentations and the reset (#210) first: an install chosen holds the programs back.
     const augmentations = this.#augmentations.update({
       mediumData: this.#mediumData,
@@ -1875,6 +1974,8 @@ export class DesiredStateController {
       gangForming: this.#gangFormingInputs(),
       // With the gang (#357's (3)): p and the plan's respect a cycle, as the gang rule's managed decision has them.
       gangInstall: this.#gang.installFigures(),
+      // Netburners before it's joined (#387): its countables among the planner's, after its Hacknet setup.
+      netburners,
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;
@@ -2116,6 +2217,7 @@ function describePurchase(intent: Intent): string {
   if (intent.action === "buyTor") return "the TOR router";
   if (intent.action === "buyProgram") return intent.args.program;
   if (intent.action === "upgradeHomeRam") return `home RAM to ${intent.args.fromRam * 2} GB`;
+  if (intent.action === "buyHacknetSetup") return "Netburners' Hacknet setup";
   return intent.id;
 }
 

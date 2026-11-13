@@ -70,7 +70,13 @@ export type IntentRequest =
    * lost (an install keeps them, `Prestige.ts:155-158`). Done once the game shows the skill at `level` or over, so each
    * level the brain buys is its own intent.
    */
-  | { action: "upgradeBladeburnerSkill"; args: { skill: string; level: number } };
+  | { action: "upgradeBladeburnerSkill"; args: { skill: string; level: number } }
+  /**
+   * Buys Hacknet the cheapest way to Netburners' invitation's totals (#387, core's `hacknetSetupPlan`), from the nodes
+   * the player has: not gated, as it's lost at an install (`PlayerObjectGeneralMethods.ts:130`) as cloud servers are.
+   * Done once the game shows the totals, so sent again after an install it buys them again.
+   */
+  | { action: "buyHacknetSetup"; args: Record<string, never> };
 
 /** Each action, once: a `Record` over `ActionName`, so the compiler refuses a new action left out. */
 const EVERY_ACTION: Record<ActionName, true> = {
@@ -90,6 +96,7 @@ const EVERY_ACTION: Record<ActionName, true> = {
   createGang: true,
   joinBladeburnerDivision: true,
   upgradeBladeburnerSkill: true,
+  buyHacknetSetup: true,
 };
 /** Every action an intent can name: for the dashboard's queue form, which a test keeps in step (#147). */
 export const INTENT_ACTIONS = Object.keys(EVERY_ACTION) as ActionName[];
@@ -115,7 +122,7 @@ export interface EffectorReport {
 /**
  * The ways the Agent can carry out an intent or converge the work (#145, #151, architecture §5.6). `ui` is a home
  * worker without Singularity: the page's, or NS calls alone where the API needs no Singularity (`buyServer`, #159;
- * `upgradeServer`, #194).
+ * `upgradeServer`, #194; `buyHacknetSetup`, #387).
  */
 export const EFFECTOR_BACKENDS = ["sim", "singularity", "ui"] as const;
 export type EffectorBackend = (typeof EFFECTOR_BACKENDS)[number];
@@ -263,6 +270,8 @@ function parseArgs(action: unknown, args: JsonObject): Parsed<IntentRequest> | n
       }
       return { ok: true, message: { action, args: { faction: args.faction as string } } };
     case "joinBladeburnerDivision":
+      return { ok: true, message: { action, args: {} } };
+    case "buyHacknetSetup":
       return { ok: true, message: { action, args: {} } };
     case "upgradeBladeburnerSkill": {
       const skill = bladeburnerSkill(String(args.skill));

@@ -41,6 +41,7 @@ import {
   type WorkingPerson,
   type WorkResetInfo,
 } from "@bitburner-agent/core";
+import type { HacknetView } from "./hacknet.ts";
 import { CITY_GROUP_CHOSEN_EVENT_KIND, type InvitationView } from "./invitations.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { TelemetryStore } from "./telemetry-store.ts";
@@ -333,6 +334,8 @@ export interface FactionsView {
   cityGroup: string | null;
   /** The travel for invitations (#228 review): the travel, the hold, or why it waits; the controller's, absent here. */
   invitations?: InvitationView;
+  /** Netburners' Hacknet setup (#387, ./hacknet.ts): wanted, bought, invited, or why not; the controller's. */
+  hacknet?: HacknetView;
   /** The rule's choice, or null, and whether it's the work sent (not with the owner's work, or the switch off). */
   choice: FactionWorkChoice | null;
   sent: boolean;

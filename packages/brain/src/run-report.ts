@@ -90,6 +90,7 @@ import {
 } from "./gap-report.ts";
 import { hackLoopHosts, readHackLoopEnabled } from "./hack-loop.ts";
 import { HackingFold } from "./hacking-ceiling.ts";
+import { HACKNET_SETUP_EVENT_KIND, hacknetHealthLines, hacknetLines } from "./hacknet.ts";
 import {
   CITY_GROUP_CHOSEN_EVENT_KIND,
   INVITATION_TRAVEL_EVENT_KIND,
@@ -1154,6 +1155,8 @@ function windowSection(facts: RunFacts): string[] {
     INVITATION_TRAVEL_EVENT_KIND,
     CITY_GROUP_CHOSEN_EVENT_KIND,
     INVITATION_WAITING_EVENT_KIND,
+    // Netburners' Hacknet setup (#387): section 3's factions part lists each.
+    HACKNET_SETUP_EVENT_KIND,
     // The objective at 12 (#357): section 7 lists each, in words (#368's review: not raw here).
     GANG_OBJECTIVE_CHOSEN_EVENT_KIND,
   ];
@@ -1860,6 +1863,7 @@ function actionsSection(facts: RunFacts, verbose: boolean): string[] {
       facts.events.filter((event) => event.kind === BRAIN_STARTED_EVENT_KIND).map((event) => event.atMs),
       verbose ? undefined : (atMs) => facts.cycles.cycleLabelAt(atMs),
     ),
+    ...hacknetLines(facts.events, formatIsoTime),
   );
   lines.push(
     ...(verbose
@@ -2200,6 +2204,7 @@ function healthSection(
   lines.push(...backdoorHealthLines(facts, failures));
   lines.push(...factionWorkHealthLines(facts, failures));
   lines.push(...invitationHealthLines(facts.events, failures, formatIsoTime));
+  lines.push(...hacknetHealthLines(facts.events, failures, formatIsoTime));
   lines.push(
     ...facts.augmentations.healthLines(facts.events, {
       untilMs: facts.untilMs,

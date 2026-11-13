@@ -127,7 +127,7 @@ test.each(SEEDS)(
       }
       holds.installs = installs;
     };
-    await simulation.diagnostics.setMoney(100e6);
+    await simulation.diagnostics.setMoney(150e6);
     const groupB = ["Chongqing", "New Tokyo", "Ishima"];
     await game.runUntil(() => {
       watchHold();
@@ -137,20 +137,26 @@ test.each(SEEDS)(
       expect.objectContaining({ group: "B", factions: groupB, short: true }),
     ]);
     expect(joined().filter((faction) => ["Sector-12", "Aevum", "Volhaven"].includes(faction))).toEqual([]);
-    // No install meanwhile (#343). The $100m covers Tian Di Hui's three (23 → 26 of 30). Installing now, about 2T (47
-    // min at the edit), is the planner's only candidate until the group joins (the hack loop is off, so the money never
-    // comes at a rate known): held while #228's hold keeps the group's money (the whole stage), and while no income is
-    // measured (seed 1: from 20.5 to 30.5 min of the game's time). Group B joined (seed 1: 28 min), its countables come
-    // by work, and waiting wins: NutriGen Implant 3 min off at New Tokyo, 34 min against installing now's 55.
+    // No install meanwhile (#343). $150m since #387 (main's $100m covered Tian Di Hui's three, and #387's Netburners'
+    // first took the rest): it covers Tian Di Hui's three and Neural Wit Amplifier (23 → 27 of 30), and leaves the money
+    // for a group-B countable after them. Installing now, about T, is the planner's only candidate until the group joins
+    // (the hack loop is off, so the money never comes at a rate known): held while #228's hold keeps the group's money
+    // (the whole stage), and while no income is measured. Group B joined (seed 1: 28 min, 7 min online), its countables
+    // come by work: "install now 28 min, wait for NutriGen Implant (3 min, by work at New Tokyo) 34 min; chosen: wait
+    // for 1; install now held: no income measured yet". Installing now, 4 new, is the shorter (main's 3 new made it 55
+    // min), so this is the income's hold choosing the wait for a group-B countable by work, not a wait on the merits:
+    // that's augmentations-simulation.test.ts's inside arm (The Black Hand inside installing now's estimate).
     expect(holds.steps).toBeGreaterThan(0);
     expect(holds.installsWhileHeld).toBe(0);
     expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([]);
-    expect(fresh.controller().augmentationsView().progress?.timing).toMatchObject({
-      needed: 7,
-      adding: 3,
-      choice: 1,
-      heldForIncome: false,
-    });
+    const timing = fresh.controller().augmentationsView().progress?.timing;
+    expect(timing).toMatchObject({ needed: 7, adding: 4, heldForIncome: true, choice: 1 });
+    expect(timing?.next[0]).toMatchObject({ augmentation: "NutriGen Implant", faction: "New Tokyo", way: "work" });
+    // The candidates: installing now the shorter, the wait for 1 longer; the hold is what chooses it.
+    const [now, waitForOne] = timing?.candidates ?? [];
+    expect(now?.k).toBe(0);
+    expect(waitForOne?.k).toBe(1);
+    expect(waitForOne?.estimateMs).toBeGreaterThan(now?.estimateMs ?? Number.POSITIVE_INFINITY);
 
     // The work's hours, and the money: the count reached, bought, installed.
     await simulation.diagnostics.joinFactionWithReputation("Tian Di Hui", 80_000);

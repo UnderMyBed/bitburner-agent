@@ -50,7 +50,13 @@ export {
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
 } from "./augmentation-plan.ts";
-export { type CountableWithMoney, countablesToCome, donationTermsOf, type HoldWork } from "./augmentation-reach.ts";
+export {
+  type CountableWithMoney,
+  countablesToCome,
+  donationTermsOf,
+  type HoldWork,
+  type NetburnersRoute,
+} from "./augmentation-reach.ts";
 export {
   AUGMENTATION_NAMES,
   AUGMENTATION_PRICE_GROWTH,
@@ -837,6 +843,26 @@ export {
   WEAKEN_SECURITY_PER_THREAD,
   WEAKEN_TIME_PER_HACK_TIME,
 } from "./hacking-ceiling.ts";
+export {
+  HACKNET_NODE,
+  HACKNET_SETUP_WORKER_NAME,
+  type HacknetCostMultipliers,
+  type HacknetNodeStats,
+  type HacknetSetupPlan,
+  type HacknetStep,
+  hacknetCoreCost,
+  hacknetLevelCost,
+  hacknetNodeCost,
+  hacknetRamCost,
+  hacknetServersInEffect,
+  hacknetSetupPlan,
+  hacknetTotals,
+  INVITATION_CHECK_MS,
+  NETBURNERS,
+  NETBURNERS_INVITATION,
+  NO_HACKNET_COST_MULTIPLIERS,
+  netburnersTotalsMet,
+} from "./hacknet.ts";
 export { HOME_RAM_LIMIT, homeRamUpgradePrice, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";
 export {

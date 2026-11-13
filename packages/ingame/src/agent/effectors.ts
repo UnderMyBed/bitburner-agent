@@ -6,7 +6,8 @@
 // - `singularity`: a home worker that calls the Singularity API, once SF4 or BN4 makes it available.
 // - `ui`: a home worker that does it without Singularity: through the game's page, or with NS calls alone where the
 //   API has them (`buyServer`, #159; `upgradeServer`, #194; `createGang`, #325; `joinBladeburnerDivision`, #367;
-//   `upgradeBladeburnerSkill`, #379). Such an action has no Singularity worker: the `ui` one does it in any game.
+//   `upgradeBladeburnerSkill`, #379; `buyHacknetSetup`, #387). Such an action has no Singularity worker: the `ui` one
+//   does it in any game.
 // The brain never knows which backend does an intent or the work. The simulator's effectors aren't named like NS
 // functions: the game charges RAM for such names in in-game code.
 import {
@@ -29,6 +30,11 @@ import {
   FACTION_STATE_WORKER_NAME,
   FACTION_WORK_WORKER_NAME,
   type FactionStateReport,
+  HACKNET_SETUP_WORKER_NAME,
+  type HacknetCostMultipliers,
+  type HacknetNodeStats,
+  type HacknetStep,
+  hacknetSetupPlan,
   INSTALL_AUGMENTATIONS_WORKER_NAME,
   type Intent,
   JOIN_BLADEBURNER_WORKER_NAME,
@@ -79,6 +85,10 @@ export interface SimEffectors {
   createGangWith(faction: string): EffectorReport;
   enlistInBladeburner(): EffectorReport;
   raiseBladeburnerSkill(skill: string, level: number): EffectorReport;
+  /** The player's Hacknet nodes and cost multipliers (#387), or why the brain buys none here (Hacknet servers). */
+  readHacknetNodes(): { nodes: HacknetNodeStats[]; mults: HacknetCostMultipliers } | { problem: string };
+  /** Core's plan's steps (#387), each through the game's own purchase. */
+  buildHacknetSetup(steps: HacknetStep[]): EffectorReport;
 }
 
 /** A home worker and its arguments, before the deadline it's given. */
@@ -242,6 +252,19 @@ export function effectorFor(intent: Intent): Effector {
         sim: (effectors) => effectors.raiseBladeburnerSkill(skill, level),
       };
     }
+    // Hacknet to Netburners' invitation's totals (#387), with the NS API alone (`NetscriptFunctions/Hacknet.ts:53-118`)
+    case "buyHacknetSetup":
+      return {
+        description: "buy Hacknet to Netburners' invitation's totals",
+        ui: { workerName: HACKNET_SETUP_WORKER_NAME, workerArguments: [] },
+        singularity: null,
+        // The plan is core's, as the worker's: the simulator's bundle can't import core, so it's handed the steps.
+        sim: (effectors) => {
+          const read = effectors.readHacknetNodes();
+          if ("problem" in read) return { done: false, problem: read.problem };
+          return effectors.buildHacknetSetup(hacknetSetupPlan(read.nodes, read.mults).steps);
+        },
+      };
   }
 }
 

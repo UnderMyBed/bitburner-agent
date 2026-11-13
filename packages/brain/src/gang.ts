@@ -420,7 +420,7 @@ export function gangMoneyHoldOf(
 /**
  * The money spoken for on top of the holds (G3, #330's review), `gangMoneyHoldOf`'s `purchases`: the purchase going out
  * this round at its plan's price (a program or the TOR router at the programs plan's, home RAM at its plan's, a cloud
- * server at the cloud plan's next), and the cloud server that pays back and waits for money (`awaitingMoney`) while
+ * server at the cloud plan's next, Netburners' Hacknet setup at its cost from no node, #387), and the cloud server that pays back and waits for money (`awaitingMoney`) while
  * cloud servers would buy it: switched on, with the hack loop on (they only run it), no install chosen (they're lost
  * at it), and no problem holding them back (until the owner turns them off and on again, maybe for good). A price not
  * a finite number counts as none.
@@ -431,7 +431,7 @@ export function gangPurchasesSpokenFor({
   cloud,
 }: {
   purchase: { intent: Intent; forWhat: string } | null;
-  prices: { programs?: number | null; homeRam?: number | null; cloudServer?: number | null };
+  prices: { programs?: number | null; homeRam?: number | null; cloudServer?: number | null; hacknet?: number | null };
   cloud: {
     awaiting?: CloudServerPurchase | undefined;
     enabled: boolean;
@@ -450,7 +450,9 @@ export function gangPurchasesSpokenFor({
           ? prices.homeRam
           : action === "buyServer" || action === "upgradeServer"
             ? prices.cloudServer
-            : 0;
+            : action === "buyHacknetSetup"
+              ? prices.hacknet
+              : 0;
     held.push({ amount: typeof price === "number" && Number.isFinite(price) ? price : 0, forWhat: purchase.forWhat });
   }
   const waiting = cloud.awaiting;
