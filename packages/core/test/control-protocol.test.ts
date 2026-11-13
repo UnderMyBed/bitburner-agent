@@ -729,6 +729,15 @@ describe("Bladeburner (#367)", () => {
     expect(bladeburnerOf({ joinTheFaction: false, action: { ...action, level: 0 } })).toMatch(
       /^desiredState's bladeburner's action isn't /,
     );
+    // B5 (#392): a Black Op, at no level; one with a level refused.
+    const blackOp = { type: "Black Operations", name: "Operation Typhoon", level: null };
+    expect(bladeburnerOf({ joinTheFaction: false, action: blackOp })).toEqual({
+      joinTheFaction: false,
+      action: blackOp,
+    });
+    expect(bladeburnerOf({ joinTheFaction: false, action: { ...blackOp, level: 1 } })).toMatch(
+      /^desiredState's bladeburner's action isn't /,
+    );
     // B4 (#383): the city, carried; one not the six's refused.
     expect(bladeburnerOf({ joinTheFaction: false, action, city: "Ishima" })).toEqual({
       joinTheFaction: false,

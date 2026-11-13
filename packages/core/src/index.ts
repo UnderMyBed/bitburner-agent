@@ -315,6 +315,7 @@ export {
   fieldAnalysisRank,
   maxStaminaAtSkills,
   maxStaminaOf,
+  memoizedBladeburnerChoice,
   populationSuccessFactor,
   REGENERATION_CHAMBER,
   staminaGainPerSecond,
@@ -322,6 +323,25 @@ export {
   successesForNextLevel,
   trainingExpPerAttempt,
 } from "./bladeburner-actions.ts";
+export {
+  BLACK_OP_TIME_PENALTY,
+  BLACK_OPERATIONS,
+  BLADEBURNER_BLACK_OPS,
+  BLADEBURNER_RANKS_PER_SKILL_POINT,
+  type BladeburnerBlackOp,
+  type BladeburnerBlackOpCheck,
+  type BladeburnerBlackOpReading,
+  blackOpChanceLow,
+  blackOpHpLoss,
+  blackOpRankGain,
+  blackOpRankLoss,
+  blackOpSeconds,
+  blackOpSecondsToDone,
+  blackOpStaminaCost,
+  blackOpSuccessChance,
+  bladeburnerBlackOp,
+  checkBladeburnerBlackOp,
+} from "./bladeburner-black-ops.ts";
 export {
   BLADEBURNER_CHAOS_ACTION_SECONDS,
   BLADEBURNER_CITIES,
@@ -365,8 +385,14 @@ export {
   planBladeburnerSkills,
 } from "./bladeburner-skills.ts";
 export {
+  BLADEBURNER_STOCK_ALPHA,
   BLADEBURNER_TARGET_CELLS,
+  BLADEBURNER_TARGET_CELLS_A_DISTANCE,
   BLADEBURNER_TARGET_CELLS_A_STEP,
+  BLADEBURNER_TARGET_CELLS_MOST,
+  BLADEBURNER_TARGET_WINDOW_DISTANCES,
+  BLADEBURNER_TARGET_WINDOW_STEPS,
+  type BladeburnerRankSource,
   type BladeburnerRankStep,
   bladeburnerAttemptsInCount,
   bladeburnerCycleStep,
@@ -374,7 +400,10 @@ export {
   bladeburnerRestStep,
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
-  bladeburnerTargetCells,
+  bladeburnerStepRise,
+  bladeburnerStockInClosedForm,
+  bladeburnerSustainableRate,
+  bladeburnerTargetGrid,
 } from "./bladeburner-targets.ts";
 export {
   CAMPAIGN_ORDER,

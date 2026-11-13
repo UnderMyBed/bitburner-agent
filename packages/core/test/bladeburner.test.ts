@@ -384,6 +384,19 @@ describe("the worker", () => {
       ok: true,
       bladeburner: { joinTheFaction: false, action: { type: "General", name: "Field Analysis", level: null } },
     });
+    // B5 (#392): a Black Op, at no level.
+    expect(
+      parseBladeburnerState({
+        joinTheFaction: false,
+        action: { type: "Black Operations", name: "Operation Typhoon", level: null },
+      }),
+    ).toEqual({
+      ok: true,
+      bladeburner: {
+        joinTheFaction: false,
+        action: { type: "Black Operations", name: "Operation Typhoon", level: null },
+      },
+    });
     expect(parseBladeburnerState({ joinTheFaction: true, action: null })).toEqual({
       ok: true,
       bladeburner: { joinTheFaction: true },
@@ -393,7 +406,8 @@ describe("the worker", () => {
       { type: "Contracts", name: "Tracking", level: 1.5 },
       { type: "Contracts", name: "Tracking", level: null },
       { type: "General", name: "Training", level: 1 },
-      { type: "Black Operations", name: "Operation Typhoon", level: null },
+      { type: "Black Operations", name: "Operation Typhoon", level: 1 },
+      { type: "Black Ops", name: "Operation Typhoon", level: null },
       { type: "Operations", name: 3, level: 1 },
       "Tracking",
     ]) {

@@ -4,6 +4,8 @@
 // (#375) the action's, (#379) a skill raised to a level, and (#383) the division moved and the cities read. The
 // simulator runs the real ones (packages/brain/test/bladeburner-effectors.test.ts).
 import {
+  BLACK_OPERATIONS,
+  BLADEBURNER_BLACK_OPS,
   BLADEBURNER_CITIES,
   BLADEBURNER_CITY_WORKER_NAME,
   BLADEBURNER_LEVELLED_ACTIONS,
@@ -111,6 +113,7 @@ function standIn({
   starts = true,
   points = 0,
   skills = {} as Record<string, number>,
+  blackOpsDone = 0,
 } = {}) {
   const calls: string[] = [];
   let joined = inDivision;
@@ -121,10 +124,16 @@ function standIn({
       getStamina: () => [30, 40],
       getBonusTime: () => 2_500,
       getCurrentAction: () => underWay,
-      getActionEstimatedSuccessChance: () => [0.4, 0.5],
+      getActionEstimatedSuccessChance: (type: string) => (type === BLACK_OPERATIONS ? [0.3, 0.35] : [0.4, 0.5]),
       getActionCurrentLevel: (_type: string, name: string) => levels[name] ?? 1,
       getActionMaxLevel: (_type: string, name: string) => maxLevels[name] ?? 1,
-      getActionCountRemaining: () => 10,
+      // A Black Op's count: 0 once done, else 1 (`NetscriptFunctions/Bladeburner.ts:182-183`).
+      getActionCountRemaining: (type: string, name: string) =>
+        type === BLACK_OPERATIONS
+          ? BLADEBURNER_BLACK_OPS.findIndex((op) => op.name === name) < blackOpsDone
+            ? 0
+            : 1
+          : 10,
       setActionAutolevel: (_type: string, name: string, autoLevel: boolean) => {
         calls.push(`setActionAutolevel(${name}, ${autoLevel})`);
       },
@@ -232,6 +241,8 @@ test("bladeburner.js's action (#375): the level held, started unless under way; 
     // B3 (#379): the points, and every skill's level.
     skillPoints: 0,
     skillLevels: Object.fromEntries(BLADEBURNER_SKILL_NAMES.map((name) => [name, 0])),
+    // B5 (#392): the next Black Op, and the game's range for it.
+    blackOp: { name: "Operation Typhoon", chance: [0.3, 0.35] },
   });
   // Under way at its level: nothing started again, the level not set again.
   const again = standIn({ inDivision: true, current: tracking, levels: { Tracking: 2 }, maxLevels: { Tracking: 3 } });
@@ -266,6 +277,36 @@ test("bladeburner.js's action (#375): the level held, started unless under way; 
   const none = standIn({ inDivision: true, current: tracking });
   expect(bladeburnerReading(none.ns, { joinTheFaction: false })).toMatchObject({ found: tracking, current: tracking });
   expect(none.calls).toEqual([]);
+});
+
+test("bladeburner.js's Black Ops (#392): the next in order read, none once all 21 are done; one run as an action", () => {
+  const second = standIn({ inDivision: true, blackOpsDone: 1 });
+  expect(bladeburnerReading(second.ns, { joinTheFaction: false }).blackOp).toEqual({
+    name: "Operation Zero",
+    chance: [0.3, 0.35],
+  });
+  const done = standIn({ inDivision: true, blackOpsDone: 21 });
+  expect(bladeburnerReading(done.ns, { joinTheFaction: false }).blackOp).toBeNull();
+  // Run: started, no level held (a Black Op has none); under way, not started again.
+  const order = { type: BLACK_OPERATIONS, name: "Operation Typhoon", level: null } as const;
+  const run = standIn({ inDivision: true });
+  expect(bladeburnerReading(run.ns, { joinTheFaction: false, action: order })).toMatchObject({
+    problems: [],
+    current: { type: BLACK_OPERATIONS, name: "Operation Typhoon" },
+  });
+  expect(run.calls).toEqual(["startAction(Black Operations, Operation Typhoon)"]);
+  const underWay = standIn({ inDivision: true, current: { type: BLACK_OPERATIONS, name: "Operation Typhoon" } });
+  bladeburnerReading(underWay.ns, { joinTheFaction: false, action: order });
+  expect(underWay.calls).toEqual([]);
+  // Done since the brain asked (a state that outlived its one attempt): nothing started, no problem.
+  const stale = standIn({ inDivision: true, blackOpsDone: 1 });
+  expect(bladeburnerReading(stale.ns, { joinTheFaction: false, action: order }).problems).toEqual([]);
+  expect(stale.calls).toEqual([]);
+  // The game refusing it (its rank not met, or one before it not done): a problem.
+  const refused = standIn({ inDivision: true, starts: false });
+  expect(bladeburnerReading(refused.ns, { joinTheFaction: false, action: order }).problems).toEqual([
+    "the game didn't start Operation Typhoon (Black Operations): the rank under its own, or not the next",
+  ]);
 });
 
 test("bladeburner-skill.js (#379): at the level or over, done with nothing bought; else the levels short in one call; refusals", () => {

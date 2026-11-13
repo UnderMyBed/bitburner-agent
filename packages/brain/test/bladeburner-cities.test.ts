@@ -122,7 +122,7 @@ function reading({
 
 /**
  * A medium snapshot in the division with `bladeburner`, home 128 GB, the player's figures as `getPlayer()` has them;
- * in the Bladeburners faction (#386), so no current-rank target until B5's Black Ops: the rule by rank a second.
+ * in the Bladeburners faction (#386), and no Black Op read (a B4 Agent's), so no current-rank target: the rule by rank a second.
  */
 function medium(bladeburner: unknown, { factions = ["CyberSec", "Bladeburners"] as string[], who = PERSON } = {}) {
   return {
@@ -385,7 +385,7 @@ describe("the rule (#383)", () => {
     ]) {
       expect(bladeburnerSnapshotOf(medium(bad)).reading).toEqual({
         kind: "unread",
-        problem: "the Bladeburner reading's stamina, actions, skills or cities aren't figures",
+        problem: "the Bladeburner reading's stamina, actions, skills, cities or Black Op aren't figures",
       });
     }
   });
