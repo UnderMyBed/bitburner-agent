@@ -16,8 +16,9 @@
  * - **Its chances:** the next one's the estimate's low end read (B5's, the stamina's penalty out), the later ones' the
  *   game's formula at the competence now (`blackOpSuccessChance`, rested: no penalty) times the next one's low end over
  *   its formula (the city's population estimate's share, common to every Black Op, `Actions/BlackOperation.ts:55-61`).
- * - **Left out, and labelled:** the competence's rise over the route (the skill points a rank of 3 brings, the stats and
- *   the augmentations: B7's, the planner's), so later chances and ρ err low and the time long, cautious; at a chance of 0
+ * - **Left out, and labelled:** the competence's rise over the route (the skill points a rank of 3 brings, the stats; an
+ *   install's augmentations are B7's forecast, ./bladeburner-installs.ts), so later chances and ρ err low and the time
+ *   long, cautious; at a chance of 0
  *   now the time is never, "never at the competence now". The stock's counts after the next one (their regrowth is in ρ,
  *   their stock now isn't): cautious. The rank over each requirement at a failure (the rebuild errs long). The ±10% on
  *   each rank (its mean). The bonus time's ×5 (game seconds, so cautious in real time). Optimistic: the stamina a
@@ -37,6 +38,7 @@ import { hackingExpForLevel } from "./augmentation-plan.ts";
 import type { WinRoute } from "./bitnodes.ts";
 import {
   type BladeburnerActionInput,
+  type BladeburnerPerson,
   bladeburnerTailRate,
   chooseBladeburnerAction,
   staminaPenalty,
@@ -123,7 +125,9 @@ export function blackOpsRouteSeconds({
  * The Black Ops' route from a reading (#398): the next Black Op `next` and those after it, at `input`'s competence
  * (the forecast's, its skills read), the next one's chance its low end as `chanceRead` gives it. `firstToRankSeconds`:
  * the rule's time to the next one's rank where it has it (its plan's `toTarget`); null, the tail alone (a stock not
- * modelled: the rule's target another, the faction's 25); absent, solved here (B5's least expected time to it).
+ * modelled: the rule's target another, the faction's 25); absent, solved here (B5's least expected time to it). With
+ * `input.forecast` (#404, an install's person), the route there: the times, ρ and the later chances at it, the next
+ * one's low end read times its formula there over its formula read.
  */
 export function blackOpsRouteEstimate(
   input: Omit<BladeburnerActionInput, "target">,
@@ -142,16 +146,28 @@ export function blackOpsRouteEstimate(
   const mults = bladeburnerSkillMultsOf(input.skills?.read ?? {});
   const penalty = input.maxStamina > 0 ? staminaPenalty(input.stamina, input.maxStamina) : 0;
   const nextLow = blackOpChanceLow(chanceRead, penalty);
-  const formula = (op: BladeburnerBlackOp) => blackOpSuccessChance(op, input.person, { penalty: 1, skills: mults });
-  const nextFormula = formula(next);
+  // At an install's person (#404, `input.forecast`): the formula there, the low end read scaled by it as the skills'.
+  const at = input.forecast ?? input.person;
+  const formulaOf = (op: BladeburnerBlackOp, who: BladeburnerPerson) =>
+    blackOpSuccessChance(op, who, { penalty: 1, skills: mults });
+  const formula = (op: BladeburnerBlackOp) => formulaOf(op, at);
+  const nextFormula = formulaOf(next, input.person);
   // The low end's share of the formula's (pop/popEst at the low end): common to every Black Op; 1 where unknown.
   const share = nextLow !== null && nextFormula > 0 && nextFormula < 1 ? Math.min(1, nextLow / nextFormula) : 1;
+  const nextAt =
+    nextLow === null
+      ? formula(next)
+      : at === input.person
+        ? nextLow
+        : nextFormula > 0
+          ? Math.min(1, (nextLow * formula(next)) / nextFormula)
+          : Math.min(1, share * formula(next));
   const left = BLADEBURNER_BLACK_OPS.slice(BLADEBURNER_BLACK_OPS.findIndex((op) => op.name === next.name));
   const ops = left.map((op) => ({
     name: op.name,
     rank: op.rank,
-    chance: op.name === next.name ? (nextLow ?? nextFormula) : Math.min(1, share * formula(op)),
-    seconds: blackOpSeconds(op, input.person, mults),
+    chance: op.name === next.name ? nextAt : Math.min(1, share * formula(op)),
+    seconds: blackOpSeconds(op, at, mults),
     gain: blackOpRankGain(op, input.rankMultiplier),
     loss: blackOpRankLoss(op),
   }));

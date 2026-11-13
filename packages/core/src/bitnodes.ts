@@ -188,20 +188,25 @@ export function knownBitNodes(): number[] {
  * The BitNodes core knows that the brain has no win route in yet (#367): a BitNode is playable only with one. BN6's and
  * BN7's is the 21 Black Ops (Bladeburner's epic, #359). The Red Pill's is hopeless there: w0r1d_d43m0n at hacking
  * 6,000 (3,000, `Server/data/servers.ts:1536`, × `WorldDaemonDifficulty` 2, `Server/ServerHelpers.ts:383-385`) at a
- * level multiplier of 0.35 (`BitNode.tsx:694-769`), 17,143 at ×1, against BN4's 9,000. BN6's is built (B6, #398), but the
- * competence it needs comes from augmentations and installs on the route, B7's, so BN6 waits for B7 (#400's review:
- * the route's estimate at a BN6.1 start is 5.0 million h at combat 100 and 499,000 h at 300, cautious on balance: the
- * rate and chances held at their start, the skills the rank brings and the stats' growth left out, erring long by far;
- * the Black Ops' stamina and HP left out, erring short). BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is B8's.
+ * level multiplier of 0.35 (`BitNode.tsx:694-769`), 17,143 at ×1, against BN4's 9,000. BN6's is built (B6, #398), and
+ * its installs (B7, #404), but BN6 is played only once the route's estimate with installs is within the campaign's bar:
+ * ×2 the slowest destroy measured so far (BN4.1's 27 h 5 min online, the campaign report of 2026-11-12), 54 h 10 min.
+ * At B6's BN6.1 states (rank 0, no skills) the estimate with the Bladeburners faction's whole shop installed is
+ * 1,023,000 h at combat 100 and 117,400 h at 300; with every augmentation in the game that moves the route's
+ * multipliers, an upper bound (BigD's Big ... Brain among them, sold by no faction in BN6), 165,100 h and 27,090 h (core's
+ * bladeburner-installs.test.ts). Far past: B6's estimate holds the
+ * competence (the skill points a rank of 3 brings, the stats the actions add), cautious on balance, so a later slice's
+ * estimate of that rise decides it. BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is
+ * B8's.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
-  [6, "no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route)"],
+  [6, "no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404)"],
   [7, "no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8)"],
 ]);
 /** Why BN7 is skipped until Bladeburner's B8 (#367, #398). */
 export const BITNODE_NO_WIN_ROUTE_REASON = NO_WIN_ROUTE.get(7) as string;
-/** Why BN6 is skipped until Bladeburner's B7 (#398, #400's review). */
-export const BITNODE_BLACK_OPS_B7_REASON = NO_WIN_ROUTE.get(6) as string;
+/** Why BN6 is skipped (#398, #404): the Black Ops' estimate with installs past the campaign's bar. */
+export const BITNODE_BLACK_OPS_ESTIMATE_REASON = NO_WIN_ROUTE.get(6) as string;
 
 /** The BitNodes the brain plays (#323): those core knows (`knownBitNodes`) with a win route (#367), in order. */
 export function playableBitNodes(): number[] {

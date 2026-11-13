@@ -95,7 +95,12 @@ import {
   BladeburnerRule,
   type BladeburnerView,
 } from "./bladeburner.ts";
-import { type BlackOpsRouteView, blackOpsRouteOf } from "./bladeburner-route.ts";
+import {
+  type BlackOpsInstallFigures,
+  type BlackOpsRouteView,
+  blackOpsInstallFiguresOf,
+  blackOpsRouteOf,
+} from "./bladeburner-route.ts";
 import {
   CLOUD_SERVER_RESERVE_HORIZON_MS,
   CLOUD_SERVERS_ENABLED_SETTING,
@@ -561,7 +566,7 @@ export class DesiredStateController {
     this.#log = log;
     this.#backdoors = new BackdoorRule(log);
     this.#gang = new GangRule(log, store, { emit: (event) => this.#emit(event), route: gangRoute });
-    this.#bladeburner = new BladeburnerRule(log, (event) => this.#emit(event));
+    this.#bladeburner = new BladeburnerRule(log, (event) => this.#emit(event), this.#store);
     this.#augmentations = new AugmentationRule({
       store,
       log,
@@ -1966,6 +1971,35 @@ export class DesiredStateController {
     };
   }
 
+  /** A6's figures on the Black Ops' route last read (#404): one a medium snapshot, so A6 solves its timing once. */
+  #blackOpsInstallCache: {
+    mediumData: MediumSnapshotData | null;
+    bitNode: number;
+    targets: string;
+    figures: BlackOpsInstallFigures | null;
+  } | null = null;
+
+  /** A6's figures on the Black Ops' route (#404, ./bladeburner-route.ts's `blackOpsInstallFiguresOf`), or null. */
+  #blackOpsInstall(): BlackOpsInstallFigures | null {
+    const bitNode = (this.#slowData?.resetInfo as { currentNode?: unknown } | undefined)?.currentNode;
+    if (typeof bitNode !== "number") return null;
+    // A rebuild under way (#407's review): both sides priced at its targets.
+    const rebuild = this.#bladeburner.rebuilding()?.targets ?? null;
+    const targets = JSON.stringify(rebuild);
+    const cached = this.#blackOpsInstallCache;
+    if (
+      cached !== null &&
+      cached.mediumData === this.#mediumData &&
+      cached.bitNode === bitNode &&
+      cached.targets === targets
+    ) {
+      return cached.figures;
+    }
+    const figures = blackOpsInstallFiguresOf(this.#mediumData, bitNode, rebuild);
+    this.#blackOpsInstallCache = { mediumData: this.#mediumData, bitNode, targets, figures };
+    return figures;
+  }
+
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     // The gang (#325) first: its faction, once formed, is left out of what the other rules see as joined.
@@ -2042,6 +2076,8 @@ export class DesiredStateController {
       gangInstall: this.#gang.installFigures(),
       // Netburners before it's joined (#387): its countables among the planner's, after its Hacknet setup.
       netburners,
+      // The Black Ops' route in the division (#404): the planner's keep or install now, by B6's estimate.
+      blackOpsInstall: this.#blackOpsInstall(),
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;
@@ -2071,6 +2107,8 @@ export class DesiredStateController {
       // the Bladeburner rule's own time to it; its rank's stall only while that rule acts.
       blackOps: this.#blackOpsRoute(),
       bladeburnerActing: this.#bladeburner.acting(),
+      // The rebuild after an install (#404): the rank's stall waits for it, within its own bound.
+      bladeburnerRebuild: this.#bladeburner.rebuilding(),
     });
     // The planner's levelling choice (#336), on A8's path as it now reads, and A6's offer of NeuroFlux Governor levels.
     const batcherConfig = this.#desired?.batcher?.config ?? null;

@@ -27,7 +27,8 @@
 //   and a rest under way, for longer than twice the rule's own time to rest to the max ((max − stamina) over the rest's
 //   stamina a second, at the stretch's first reading) and `BLADEBURNER_REST_SLACK_MS`, as #343's waits are bounded: a
 //   failure. Idle (the owner's work, or a stop) isn't resting, nor (#383) Diplomacy or Incite Violence, the rule's own
-//   chaos actions (./bladeburner-cities-report.ts judges those). A gap in the readings or an install ends it (#377's
+//   chaos actions (./bladeburner-cities-report.ts judges those), nor (#404) Training during the rule's rebuild after an
+//   install (its `bladeburnerRebuild` events; the World Daemon's stall bounds it). A gap in the readings or an install ends it (#377's
 //   re-review): what ran meanwhile isn't known.
 // - **The hospital** (#377's review): HP isn't in the rule's choice (money against rank is the planner's, #375). A
 //   visit is the HP back at its max from under it, with no Regeneration Chamber's 2 under way (`Bladeburner.ts:983-991`,
@@ -61,6 +62,7 @@ import {
   BLADEBURNER_FACTION,
   BLADEBURNER_READING_SECONDS,
   BLADEBURNER_REST_SECONDS,
+  BLADEBURNER_TRAINING,
   type BladeburnerActionPlan,
   type BladeburnerForecastInput,
   type BladeburnerLevelledAction,
@@ -306,6 +308,13 @@ const levelsText = (levels: BladeburnerSkillLevels) =>
 
 /** The actions over a window, folded from the medium snapshots in the division, in order. */
 export class BladeburnerActionsFold {
+  /** Whether the rule's rebuild after an install was under way at a time (#404): its Training isn't stuck resting. */
+  readonly #rebuildingAt: (atMs: number) => boolean;
+
+  constructor(rebuildingAt: (atMs: number) => boolean = () => false) {
+    this.#rebuildingAt = rebuildingAt;
+  }
+
   #first: Kept | null = null;
   #last: Kept | null = null;
   #readings = 0;
@@ -531,7 +540,9 @@ export class BladeburnerActionsFold {
 
   /** Stuck resting: the plan has work and a rest is under way; each stretch's bound from its first reading. */
   #watchResting(atMs: number, kept: Kept, plan: BladeburnerActionPlan, running: Running | null, broken: boolean): void {
-    const stuck = plan.work !== null && running?.resting === true;
+    // Training during the rebuild after an install (#404) is the rule's own choice, bounded by the World Daemon's stall.
+    const rebuild = running?.name === BLADEBURNER_TRAINING && this.#rebuildingAt(atMs);
+    const stuck = plan.work !== null && running?.resting === true && !rebuild;
     if (!stuck || broken) {
       if (this.#restingOpen !== null) this.#resting.push(this.#restingOpen);
       this.#restingOpen = null;

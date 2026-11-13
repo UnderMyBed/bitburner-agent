@@ -26,7 +26,17 @@
 //   a later slice); the gym's cost against the brain's purchases (only core's class guard: 10 minutes of its cost);
 //   below Powerhouse's $1.44m the training goes to Iron Gym, 10 times slower (about 4.7 h at SF1.3), A5's work and the
 //   invitations' travel held all the while (the player's focus is the planner's, later); an install mid-training,
-//   which loses the combat experience (A6 doesn't weigh it: B7's).
+//   which loses the combat experience (A6's count rule's before the join, as before #404: the planner times installs
+//   on the route in the division only, B7's).
+// - The rebuild after an install (B7, #404): in the division, the levels each cycle reaches are kept in the store
+//   (`BLADEBURNER_LEVELS_SETTING`); in a later cycle of the BitNode with any combat stat under the last cycle's most,
+//   Bladeburner's Training (all four at once, 30 × mult² each 30 s, core's `bladeburnerRebuildSeconds`) goes ahead of
+//   B2's order, B4's chaos actions and a Black Op not under way, until all four are back: within a reading of the
+//   first after the install. Not the gym (the install leaves $1,000; the focus is the planner's). Said in the line, an
+//   event at its start and end (`bladeburnerRebuild`, the run report's), and the World Daemon's rank stall waits for it
+//   within its own bound (#407's review: twice the planner's priced rebuild and 10 min, or 10 min for an install it
+//   didn't price; past it at the first sighting, no rebuild: B2's actions, and the report fails it). Left out, and labelled: an install the brain didn't see
+//   the cycle before of (none to rebuild to: the actions rebuild the stats), and hacking and charisma (reset too).
 // - The actions (B2, #375), once the reading has them: core's `chooseBladeburnerAction`, the contract or operation and
 //   its level with the most rank a game second over a cycle of work and rest, from the game's estimate's low end at
 //   each one's level, within the counts, and the rest with it (Field Analysis, the Regeneration Chamber or Training).
@@ -75,6 +85,7 @@ import {
   BLADEBURNER_FACTION_RANK,
   BLADEBURNER_JOIN_LEVEL,
   BLADEBURNER_SKILL_NAMES,
+  BLADEBURNER_TRAINING,
   BLADEBURNER_WORKER_RAM_GB,
   type BladeburnerActionInput,
   type BladeburnerActionOrder,
@@ -93,11 +104,14 @@ import {
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
   bladeburnerRankTarget,
+  bladeburnerRebuildSeconds,
   bladeburnerResting,
   bladeburnerSkillCostMultiplierOf,
   bladeburnerWorkerFits,
   type ClassChoice,
   COMBAT_STATS,
+  type CombatPerson,
+  type CombatStat,
   type CombatTrainingPlan,
   cheapestBladeburnerSkillLevel,
   checkBladeburnerBlackOp,
@@ -121,10 +135,154 @@ import { bitNodeOfSlow } from "./gang.ts";
 import { formatDuration } from "./gap-report.ts";
 import type { OwnersWork } from "./work.ts";
 
+/**
+ * The store's setting for the combat levels the cycle has reached in the division, and the rebuild's targets after an
+ * install (#404): a restart keeps both.
+ */
+export const BLADEBURNER_LEVELS_SETTING = "bladeburner.levels";
+
+/**
+ * The levels' record (#404): the cycle (its BitNode's start and its last install's time), the most each combat stat
+ * reached in it, and the rebuild's targets.
+ */
+export interface BladeburnerLevelsRecord {
+  lastNodeReset: number;
+  lastAugReset: number;
+  /** The cycle before this one in the BitNode (its last install's time), whose install the rebuild follows; null none. */
+  previousAugReset: number | null;
+  levels: Record<CombatStat, number>;
+  /** The most the cycle before this one reached (an install between them), to rebuild to; null none seen. */
+  rebuild: Record<CombatStat, number> | null;
+}
+
+/** Where the rule keeps the record: the brain's store (its settings), or none (the rule's memory alone). */
+export interface BladeburnerSettings {
+  getSetting(key: string): string | null;
+  setSetting(key: string, value: string): void;
+}
+
+/** The record in the store, or null (none, or not one: a store from before #404, or edited). */
+export function readBladeburnerLevels(store: BladeburnerSettings): BladeburnerLevelsRecord | null {
+  const value = store.getSetting(BLADEBURNER_LEVELS_SETTING);
+  if (value === null) return null;
+  let record: Partial<Record<keyof BladeburnerLevelsRecord, unknown>> | null;
+  try {
+    record = JSON.parse(value) as typeof record;
+  } catch {
+    throw new Error(`the store's ${BLADEBURNER_LEVELS_SETTING} isn't JSON`);
+  }
+  const levelsOf = (raw: unknown): Record<CombatStat, number> | null => {
+    if (typeof raw !== "object" || raw === null) return null;
+    const levels = Object.fromEntries(COMBAT_STATS.map((stat) => [stat, (raw as Record<string, unknown>)[stat]]));
+    return Object.values(levels).every(isNumber) ? (levels as Record<CombatStat, number>) : null;
+  };
+  const levels = levelsOf(record?.levels);
+  const rebuild = record?.rebuild === null ? null : levelsOf(record?.rebuild);
+  if (
+    !isNumber(record?.lastNodeReset) ||
+    !isNumber(record?.lastAugReset) ||
+    levels === null ||
+    (record?.rebuild !== null && rebuild === null)
+  ) {
+    throw new Error(`the store's ${BLADEBURNER_LEVELS_SETTING} isn't a levels record`);
+  }
+  const previous = (record as { previousAugReset?: unknown }).previousAugReset;
+  return {
+    lastNodeReset: record.lastNodeReset,
+    lastAugReset: record.lastAugReset,
+    previousAugReset: isNumber(previous) ? previous : null,
+    levels,
+    rebuild,
+  };
+}
+
+/**
+ * The rebuild the planner priced at its install on the Black Ops' route (#407's review): the cycle the install ended
+ * (its `lastAugReset`) and core's `rebuildSeconds` then, game seconds. A6 writes it; the rule bounds the rebuild by it.
+ */
+export const BLADEBURNER_PRICED_REBUILD_SETTING = "bladeburner.pricedRebuild";
+
+/** The rebuild's slack beyond twice its price (#404, #407's review), as #343's waits and B2's rests: 10 minutes. */
+export const BLADEBURNER_REBUILD_SLACK_MS = 10 * 60_000;
+
+/** The planner's priced rebuild for the install that ended the cycle from `lastAugReset`, seconds; null none. */
+export function readPricedRebuild(store: BladeburnerSettings, lastAugReset: number): number | null {
+  const value = store.getSetting(BLADEBURNER_PRICED_REBUILD_SETTING);
+  if (value === null) return null;
+  let priced: { lastAugReset?: unknown; seconds?: unknown } | null;
+  try {
+    priced = JSON.parse(value) as typeof priced;
+  } catch {
+    throw new Error(`the store's ${BLADEBURNER_PRICED_REBUILD_SETTING} isn't JSON`);
+  }
+  return priced?.lastAugReset === lastAugReset && isNumber(priced.seconds) ? priced.seconds : null;
+}
+
+/**
+ * The rebuild after an install (#404): its targets, Training's estimate now to them (game seconds), its first, and its
+ * bound (#407's review): twice the planner's priced rebuild and 10 minutes, or 10 minutes for an install it didn't
+ * price (yours). Past the bound at its first sighting it's `skipped`: B2's actions run, and the report fails it.
+ */
+export interface BladeburnerRebuildView {
+  targets: Record<CombatStat, number>;
+  seconds: number;
+  /** When the rule first saw it under way (the controller's time) and its estimate then. */
+  sinceMs: number | null;
+  firstSeconds: number;
+  /** The planner's priced rebuild for this install, seconds; null, none (an install it didn't price). */
+  pricedSeconds: number | null;
+  /** The bound, seconds: the World Daemon's stall, and past it at the first sighting, no rebuild. */
+  boundSeconds: number;
+  skipped: boolean;
+}
+
+/** The rebuild in words (#404), for the dashboard, the log and the run report. */
+export function describeRebuild(rebuild: BladeburnerRebuildView, skills: Record<string, number>): string {
+  const left = COMBAT_STATS.map((stat) => `${stat} ${Math.floor(skills[stat] ?? 0)} of ${rebuild.targets[stat]}`);
+  if (rebuild.skipped)
+    return `not rebuilding the combat stats the install reset (#404): ${describeRebuildBound(rebuild)}`;
+  return (
+    `rebuilding the combat stats the install reset (#404): ${BLADEBURNER_TRAINING}, ${left.join(", ")}; about ` +
+    `${describeSeconds(rebuild.seconds)} to all four (Training's 30 × mult² each 30 s)`
+  );
+}
+
 /** The training's held for the owner's work (#367's review), or not: at each change, for the report's overdue clock. */
 export const BLADEBURNER_TRAINING_HELD_EVENT_KIND = "bladeburnerTrainingHeld";
 
-export type BladeburnerEvent = { type: typeof BLADEBURNER_TRAINING_HELD_EVENT_KIND; atMs: number; held: boolean };
+/** A rebuild past its bound in words (#407's review), for the line, the log and the run report. */
+export function describeRebuildBound(
+  rebuild: Pick<BladeburnerRebuildView, "firstSeconds" | "boundSeconds" | "pricedSeconds">,
+): string {
+  const bound =
+    rebuild.pricedSeconds === null
+      ? "10 min: the planner priced no rebuild for this install"
+      : `twice the planner's priced ${describeSeconds(rebuild.pricedSeconds)} and 10 min`;
+  return (
+    `Training's ${describeSeconds(rebuild.firstSeconds)} past its bound, ${describeSeconds(rebuild.boundSeconds)} ` +
+    `(${bound}): the stats left to the actions`
+  );
+}
+
+/**
+ * The rebuild after an install (#404): its start, with its targets and Training's estimate to them (game seconds), and
+ * its end, for the run report (it shows each, and Training then isn't B2's stuck resting).
+ */
+export const BLADEBURNER_REBUILD_EVENT_KIND = "bladeburnerRebuild";
+
+export type BladeburnerEvent =
+  | { type: typeof BLADEBURNER_TRAINING_HELD_EVENT_KIND; atMs: number; held: boolean }
+  | {
+      type: typeof BLADEBURNER_REBUILD_EVENT_KIND;
+      atMs: number;
+      started: boolean;
+      targets?: Record<CombatStat, number>;
+      seconds?: number;
+      /** Its bound, the planner's price, and whether it was past it (#407's review: then not run, a failure). */
+      boundSeconds?: number;
+      pricedSeconds?: number | null;
+      skipped?: boolean;
+    };
 
 /** The travel to a gym's city, as the rule asks for it (#367's review). */
 export function travelIntent(city: string): Intent {
@@ -387,6 +545,8 @@ export interface BladeburnerView {
   } | null;
   /** In the division with B3's reading (#379): the skills' plan; null without it. */
   skills?: BladeburnerSkillPlan | null;
+  /** In the division after an install (#404): the rebuild by Training under way; null, none. */
+  rebuild?: BladeburnerRebuildView | null;
 }
 
 /** "1.23 rank/min". */
@@ -545,10 +705,132 @@ export class BladeburnerRule {
   #resting = false;
   /** The chaos action under way (#383), since its first reading under way: the controller's time and the bonus time. */
   #chaosSince: { name: BladeburnerChaosActionName; atMs: number; bonusSeconds: number; keptRun: number } | null = null;
+  /** The levels' record (#404), the store's once read; undefined not read yet. */
+  #record: BladeburnerLevelsRecord | null | undefined = undefined;
+  readonly #settings: BladeburnerSettings | null;
+  /** The rebuild's first sighting (#404): its cycle, the controller's time and its estimate then. */
+  #rebuildSince: {
+    lastAugReset: number;
+    atMs: number | null;
+    seconds: number;
+    pricedSeconds: number | null;
+    boundSeconds: number;
+    skipped: boolean;
+  } | null = null;
 
-  constructor(log: (line: string) => void = () => {}, emit: (event: BladeburnerEvent) => void = () => {}) {
+  constructor(
+    log: (line: string) => void = () => {},
+    emit: (event: BladeburnerEvent) => void = () => {},
+    settings: BladeburnerSettings | null = null,
+  ) {
     this.#log = log;
     this.#emit = emit;
+    this.#settings = settings;
+  }
+
+  /**
+   * The rebuild's targets now (#404), from the levels' record: in a cycle after one the record saw in the division, in
+   * the same BitNode, the most that cycle reached, while any combat stat is under it (the install took them all to 1,
+   * `PlayerObjectGeneralMethods.ts:79-96`); none once all four are back. The record follows the most each stat reaches
+   * in a cycle, written on a rise; the targets are judged at each reading, not only the cycle's first, as the slow
+   * snapshot that shows the install can come before the medium snapshot that shows the stats reset. An install the
+   * brain didn't see the cycle before of (a store from before #404, or a save loaded) has none: labelled, the actions
+   * rebuild the stats then; and a destroy's new BitNode none (Bladeburner is cleared, B1's join again).
+   */
+  #rebuildTargets(
+    reset: { lastNodeReset: number; lastAugReset: number } | null,
+    skills: Record<CombatStat, number>,
+  ): Record<CombatStat, number> | null {
+    if (reset === null) return null;
+    const { lastNodeReset, lastAugReset } = reset;
+    if (this.#record === undefined) {
+      this.#record = this.#settings === null ? null : readBladeburnerLevels(this.#settings);
+    }
+    const record = this.#record;
+    const levels = Object.fromEntries(COMBAT_STATS.map((stat) => [stat, skills[stat]])) as Record<CombatStat, number>;
+    let next: BladeburnerLevelsRecord;
+    if (record === null || record.lastNodeReset !== lastNodeReset || lastAugReset < record.lastAugReset) {
+      next = { lastNodeReset, lastAugReset, previousAugReset: null, levels, rebuild: null };
+    } else if (lastAugReset === record.lastAugReset) {
+      const most = Object.fromEntries(
+        COMBAT_STATS.map((stat) => [stat, Math.max(record.levels[stat], levels[stat])]),
+      ) as Record<CombatStat, number>;
+      next = COMBAT_STATS.every((stat) => most[stat] === record.levels[stat]) ? record : { ...record, levels: most };
+    } else {
+      // A new cycle in the BitNode: an install since the record's; the most that cycle reached is the rebuild's, or its
+      // own rebuild's targets where higher (#407's review: a second install mid-rebuild keeps the levels before the first).
+      const before = record.rebuild;
+      const rebuild = Object.fromEntries(
+        COMBAT_STATS.map((stat) => [stat, Math.max(record.levels[stat], before?.[stat] ?? 0)]),
+      ) as Record<CombatStat, number>;
+      next = { lastNodeReset, lastAugReset, previousAugReset: record.lastAugReset, levels, rebuild };
+    }
+    if (next !== record) {
+      this.#record = next;
+      this.#settings?.setSetting(BLADEBURNER_LEVELS_SETTING, JSON.stringify(next));
+    }
+    const targets = next.rebuild;
+    return targets !== null && COMBAT_STATS.some((stat) => levels[stat] < targets[stat]) ? targets : null;
+  }
+
+  /** The rebuild under way (#404): Training's estimate to the targets now, and its first sighting's (the stall's). */
+  #rebuildView(
+    targets: Record<CombatStat, number> | null,
+    person: CombatPerson,
+    lastAugReset: number | null,
+    nowMs: number | null,
+  ): BladeburnerRebuildView | null {
+    if (targets === null || lastAugReset === null) {
+      if (this.#rebuildSince !== null) {
+        this.#log(
+          this.#rebuildSince.skipped
+            ? "bladeburner: the combat stats back by the actions after the install (#404)"
+            : "bladeburner: the combat stats rebuilt after the install (#404)",
+        );
+        if (nowMs !== null) this.#emit({ type: BLADEBURNER_REBUILD_EVENT_KIND, atMs: nowMs, started: false });
+      }
+      this.#rebuildSince = null;
+      return null;
+    }
+    const seconds = bladeburnerRebuildSeconds(person, { targets }).seconds;
+    if (this.#rebuildSince?.lastAugReset !== lastAugReset) {
+      // Its bound (#407's review): twice the planner's priced rebuild for this install and the slack, else the slack.
+      const previous = this.#record?.previousAugReset ?? null;
+      const pricedSeconds =
+        previous === null || this.#settings === null ? null : readPricedRebuild(this.#settings, previous);
+      const slack = BLADEBURNER_REBUILD_SLACK_MS / 1000;
+      const boundSeconds = pricedSeconds === null ? slack : 2 * pricedSeconds + slack;
+      const skipped = !(seconds <= boundSeconds);
+      this.#rebuildSince = { lastAugReset, atMs: nowMs, seconds, pricedSeconds, boundSeconds, skipped };
+      if (nowMs !== null) {
+        this.#emit({
+          type: BLADEBURNER_REBUILD_EVENT_KIND,
+          atMs: nowMs,
+          started: true,
+          targets,
+          seconds,
+          boundSeconds,
+          pricedSeconds,
+          skipped,
+        });
+      }
+      this.#log(
+        skipped
+          ? `bladeburner: an install reset the combat stats (#404), not rebuilt: ${describeRebuildBound({ firstSeconds: seconds, boundSeconds, pricedSeconds })}`
+          : `bladeburner: an install reset the combat stats (#404): rebuilding to ${describeLevels(targets)} by ` +
+              `${BLADEBURNER_TRAINING}, about ${describeSeconds(seconds)}`,
+      );
+    }
+    const since = this.#rebuildSince;
+    return {
+      targets,
+      seconds,
+      sinceMs: since.atMs,
+      firstSeconds: since.seconds,
+      pricedSeconds: since.pricedSeconds,
+      boundSeconds: since.boundSeconds,
+      skipped: since.skipped,
+    };
   }
 
   view(): BladeburnerView {
@@ -666,6 +948,16 @@ export class BladeburnerRule {
     // The next Black Op's rank (#392): the target once the faction is joined.
     const next = reading.kind === "read" ? reading.actions?.blackOp : undefined;
     const blackOpRank = next == null ? null : (bladeburnerBlackOp(next.name)?.rank ?? null);
+    // After an install (#404): the combat stats back to the levels before it by Training, ahead of the rest.
+    const lastAugReset = slowData?.resetInfo?.lastAugReset;
+    const lastNodeReset = slowData?.resetInfo?.lastNodeReset;
+    const reset = isNumber(lastAugReset) && isNumber(lastNodeReset) ? { lastNodeReset, lastAugReset } : null;
+    const rebuild = this.#rebuildView(
+      this.#rebuildTargets(reset, person.skills),
+      person,
+      reset?.lastAugReset ?? null,
+      nowMs,
+    );
     const actions = this.#actions(
       reading.kind === "read" ? reading.actions : null,
       mediumData,
@@ -674,6 +966,7 @@ export class BladeburnerRule {
       nowMs,
       rank === null ? null : bladeburnerRankTarget({ rank, factionJoined: inFaction, blackOpRank }),
       rank,
+      rebuild === null || rebuild.skipped ? null : describeRebuild(rebuild, person.skills),
     );
     const skills = this.#skills(reading.kind === "read" ? reading.actions : null, mediumData, bitNode);
     const line =
@@ -688,6 +981,7 @@ export class BladeburnerRule {
                 ? `joining ${BLADEBURNER_FACTION}`
                 : `${BLADEBURNER_FACTION} at rank ${BLADEBURNER_FACTION_RANK}`) +
             (actions.text === null ? "" : `; ${actions.text}`) +
+            (rebuild?.skipped === true ? `; ${describeRebuild(rebuild, person.skills)}` : "") +
             (skills.text === null ? "" : `; ${skills.text}`) +
             (reading.problems.length > 0 ? `; ${reading.problems.join("; ")}` : "");
     const state: BladeburnerState = {
@@ -698,9 +992,15 @@ export class BladeburnerRule {
       ...(actions.city === undefined ? {} : { city: actions.city }),
     };
     return this.#decide(
-      { stage: "joined", line, training: null, actions: actions.sent, skills: skills.plan },
+      { stage: "joined", line, training: null, actions: actions.sent, skills: skills.plan, rebuild },
       { ...none, state, skillIntents: skills.intents },
     );
+  }
+
+  /** The rebuild under way after an install (#404), as of the last update: the stall's bound; null none. */
+  rebuilding(): BladeburnerRebuildView | null {
+    const rebuild = this.#view.rebuild ?? null;
+    return this.#view.stage === "joined" && this.#view.actions != null && rebuild?.skipped === false ? rebuild : null;
   }
 
   /**
@@ -751,6 +1051,8 @@ export class BladeburnerRule {
     /** The next current-rank target (#386, core's `bladeburnerRankTarget`), or null: none, or met. */
     target: number | null = null,
     rank: number | null = null,
+    /** The rebuild under way after an install (#404), in words: Training in place of the rest; null, none. */
+    rebuild: string | null = null,
   ): { sent: NonNullable<BladeburnerView["actions"]> | null; text: string | null; city?: string | null } {
     if (reading === null) return { sent: null, text: null };
     const kept = this.#keptChaosAction(reading, nowMs);
@@ -810,10 +1112,19 @@ export class BladeburnerRule {
           });
     const underWay = reading.current?.type === BLACK_OPERATIONS ? reading.current.name : null;
     const blackOpOrder: "run" | "kept" | null =
-      kept !== null ? null : underWay !== null ? "kept" : check?.run === true && !this.#resting ? "run" : null;
-    // A chaos action kept (`chaosAction` is it then, and `blackOpOrder` null) comes first.
-    const order: BladeburnerActionOrder =
-      blackOpOrder !== null
+      kept !== null
+        ? null
+        : underWay !== null
+          ? "kept"
+          : check?.run === true && !this.#resting && rebuild === null
+            ? "run"
+            : null;
+    // A chaos action kept (`chaosAction` is it then, and `blackOpOrder` null) comes first; then (#404) a rebuild's
+    // Training, ahead of a Black Op not under way, a chaos action not under way and B2's order.
+    const rebuilding = rebuild !== null && kept === null && blackOpOrder === null;
+    const order: BladeburnerActionOrder = rebuilding
+      ? { type: "General", name: BLADEBURNER_TRAINING, level: null }
+      : blackOpOrder !== null
         ? {
             type: BLACK_OPERATIONS,
             name: blackOpOrder === "kept" ? (underWay as string) : (op as { name: string }).name,
@@ -825,8 +1136,9 @@ export class BladeburnerRule {
             ? { type: plan.work.type, name: plan.work.name, level: plan.work.level }
             : { type: "General", name: plan.rest.name, level: null };
     const city = kept !== null ? readCity : (cities?.city ?? readCity);
-    const then =
-      kept !== null
+    const then = rebuilding
+      ? `${rebuild}, then: `
+      : kept !== null
         ? `${kept} kept to its 60 s's end, then: `
         : blackOpOrder !== null
           ? `${order.name} ${blackOpOrder === "kept" ? "under way, kept to its end" : "run"}, then: `

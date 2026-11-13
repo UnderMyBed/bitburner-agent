@@ -570,17 +570,27 @@ export function staminaGainPerSecond(
 /**
  * The max stamina at other skill levels (#379), from the one read at `read`'s multipliers: the bonus (Training's,
  * `Bladeburner.ts:1100`) is what the max read holds beyond its agility's part. The game scales the stamina with the max
- * (`:1338-1345`), so the penalty stays.
+ * (`:1338-1345`), so the penalty stays. `at` (#404): another person to compute it for, an install's (its agility and
+ * `bladeburner_max_stamina`); the bonus is the division's and an install keeps it (`Bladeburner.ts:259-263`).
  */
 export function maxStaminaAtSkills(
   person: BladeburnerPerson,
   maxStamina: number,
   read: BladeburnerSkillMults,
   planned: BladeburnerSkillMults,
+  at: BladeburnerPerson = person,
 ): number {
   const divisor = read.stamina * person.mults.bladeburner_max_stamina;
   const bonus = divisor > 0 ? Math.max(0, maxStamina / divisor - effectiveLevel(person, "agility", read) ** 0.8) : 0;
-  return maxStaminaOf(person, bonus, planned);
+  return maxStaminaOf(at, bonus, planned);
+}
+
+/**
+ * The parts of an action's competence outside the skills' (`Actions/Action.ts:169-196`) that a person moves: the
+ * intelligence bonus 1 + 0.75·int^0.8/600 and `bladeburner_success_chance` (#404: an install's forecast scales by them).
+ */
+export function personCompetenceFactor(person: BladeburnerPerson): number {
+  return (1 + (0.75 * person.skills.intelligence ** 0.8) / 600) * person.mults.bladeburner_success_chance;
 }
 
 /** The successes level `maxLevel` + 1 opens after: ⌈½·M·(2b + M − 1)⌉ (`Actions/LevelableAction.ts:54-56`). */
@@ -815,9 +825,16 @@ function planCandidates({
   speed,
   skills = {},
   city,
+  forecast,
 }: {
   readings: readonly BladeburnerActionReading[];
   person: BladeburnerPerson;
+  /**
+   * Another person to forecast at (#404: an install's, core's `bladeburnerPersonAfterInstall`): each action's low end
+   * scaled by its competence there over the competence read, as the skills' are, the times, the max stamina and the
+   * regain computed there. None: the person read.
+   */
+  forecast?: BladeburnerPerson;
   stamina: number;
   maxStamina: number;
   rankMultiplier: number;
@@ -832,9 +849,12 @@ function planCandidates({
 }): { candidates: PlanCandidate[]; supply: BladeburnerRankSource[] } {
   const readMults = bladeburnerSkillMultsOf(skills.read ?? {});
   const mults = skills.planned === undefined ? readMults : bladeburnerSkillMultsOf(skills.planned);
-  const maxPlanned =
-    skills.planned === undefined ? maxStamina : maxStaminaAtSkills(person, maxStamina, readMults, mults);
-  const regain = staminaGainPerSecond(person, maxPlanned, mults);
+  const at = forecast ?? person;
+  const scaled = skills.planned !== undefined || forecast !== undefined;
+  const maxPlanned = scaled ? maxStaminaAtSkills(person, maxStamina, readMults, mults, at) : maxStamina;
+  const regain = staminaGainPerSecond(at, maxPlanned, mults);
+  // The person's own part of the competence forecast over the one read (#404): 1 at the person read.
+  const personRatio = forecast === undefined ? 1 : personCompetenceFactor(forecast) / personCompetenceFactor(person);
   const rests = bladeburnerRests(regain, maxPlanned, rankMultiplier);
   // A rest with no more stamina and no more rank a second than another is never the better (#386): Training's, beside
   // Field Analysis's (its cost from the same regain, and no rank).
@@ -870,14 +890,12 @@ function planCandidates({
     supply.push({ growthPerSecond: countGrowthPerSecond(action), options });
     const readCompetence = actionSkillCompetence(action, person, readMults);
     const skillRatio =
-      skills.planned === undefined || !(readCompetence > 0)
-        ? 1
-        : actionSkillCompetence(action, person, mults) / readCompetence;
+      !scaled || !(readCompetence > 0) ? 1 : (actionSkillCompetence(action, at, mults) / readCompetence) * personRatio;
     const ratio = skillRatio * (city?.ratio ?? 1);
     for (let level = 1; level <= Math.max(1, read.maxLevel); level++) {
       const chance = chanceLowAt(action, read, level, penalty, ratio);
       if (chance === null) continue;
-      const seconds = actionSeconds(action, level, person, mults);
+      const seconds = actionSeconds(action, level, at, mults);
       const short = read.count < 1 + (BLADEBURNER_READING_SECONDS * speed) / seconds;
       const gain = actionRankGain(action, level, rankMultiplier);
       const loss = actionRankLoss(action, level);

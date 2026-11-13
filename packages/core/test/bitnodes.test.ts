@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import { AUGMENTATION_NAMES } from "../src/augmentations.ts";
 import {
-  BITNODE_BLACK_OPS_B7_REASON,
+  BITNODE_BLACK_OPS_ESTIMATE_REASON,
   BITNODE_COUNT,
   BITNODE_NO_WIN_ROUTE_REASON,
   BLACK_OPS_COUNT,
@@ -250,12 +250,12 @@ test("BN6's and BN7's rows (#367): every multiplier they set on hacking and the 
   expect(bitNodeHackingMultipliers(7)).toEqual(hackingWith({ ...hacking, ScriptHackMoney: 0.5 }));
 });
 
-test("BN6's route is built (B6, #398) but waits for B7, BN7's not until B8: the campaign skips both", () => {
+test("BN6's route is built (B6, #398), its estimate with installs past the bar (B7, #404); BN7's not until B8: the campaign skips both", () => {
   expect(knownBitNodes()).toEqual([1, 2, 4, 5, 6, 7]);
   expect(playableBitNodes()).toEqual([1, 2, 4, 5]);
-  expect(bitNodeUnplayableReason(6)).toBe(BITNODE_BLACK_OPS_B7_REASON);
-  expect(BITNODE_BLACK_OPS_B7_REASON).toBe(
-    "no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route)",
+  expect(bitNodeUnplayableReason(6)).toBe(BITNODE_BLACK_OPS_ESTIMATE_REASON);
+  expect(BITNODE_BLACK_OPS_ESTIMATE_REASON).toBe(
+    "no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404)",
   );
   expect(bitNodeUnplayableReason(7)).toBe(BITNODE_NO_WIN_ROUTE_REASON);
   expect(BITNODE_NO_WIN_ROUTE_REASON).toBe("no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8)");
