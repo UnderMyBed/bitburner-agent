@@ -212,6 +212,7 @@ export {
   threadsThatFit,
 } from "./batcher.ts";
 export {
+  BITNODE_BLACK_OPS_HOPELESS_REASON,
   BITNODE_COUNT,
   BITNODE_NO_WIN_ROUTE_REASON,
   type BitNodeHackingMultipliers,

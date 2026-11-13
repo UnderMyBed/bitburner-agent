@@ -169,12 +169,12 @@ test("destroying BN1 into BN2 (sim): past the gate, the backdoor and the portal;
 });
 
 test("at the campaign order's caps (#311, #321): the brain's own destroy replays BN1, Source-File 1 left at 3, and the stop at the BitNode's end fires on it", async () => {
-  // BN1.4: Source-Files 1, 2, 4, 5 and 6 at 3 (nothing playable left in the order to gain, #323; BN6 since #398), The Red Pill installed
+  // BN1.4: Source-Files 1, 2, 4 and 5 at 3 (nothing playable left in the order to gain, #323), The Red Pill installed
   // and w0r1d_d43m0n rooted at its level. Only the World Daemon's destroy moves the game; the switch set to stop the
   // brain.
   const fresh = await freshStart({
     withDesiredState: true,
-    fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 3, 2: 3, 4: 3, 5: 3, 6: 3 } },
+    fixture: { kind: "bitnode", n: 1, sourceFiles: { 1: 3, 2: 3, 4: 3, 5: 3 } },
     beforeAgent: (game) => toTheRedPill(game),
   });
   fresh.controller().setProgramsEnabled(false);
@@ -185,17 +185,13 @@ test("at the campaign order's caps (#311, #321): the brain's own destroy replays
   const before = slow(fresh)?.resetInfo;
   expect(before).toMatchObject({
     currentNode: 1,
-    ownedSF: { 1: 3, 2: 3, 4: 3, 5: 3, 6: 3 },
+    ownedSF: { 1: 3, 2: 3, 4: 3, 5: 3 },
     ownedAugs: { "The Red Pill": 1 },
   });
   const backupsBefore = fresh.brain.saveBackupEvents.length;
   await fresh.game.runUntil(() => fresh.controller().stoppedAtBitNodeEnd(), 120_000);
   // The game took it (`RedPill.tsx:27-31`, `BitNode/ui/PortalModal.tsx:117-126`): BN1 again, no Source-File gained.
-  expect(slow(fresh)?.resetInfo).toMatchObject({
-    currentNode: 1,
-    ownedSF: { 1: 3, 2: 3, 4: 3, 5: 3, 6: 3 },
-    ownedAugs: {},
-  });
+  expect(slow(fresh)?.resetInfo).toMatchObject({ currentNode: 1, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 3 }, ownedAugs: {} });
   expect(slow(fresh)?.resetInfo.lastNodeReset).not.toBe(before?.lastNodeReset);
   expect(await bitNodeEntries(fresh.simulation)).toEqual([
     expect.objectContaining({ type: "bitnodeDestroyed", destroyed: 1, entered: 1 }),
@@ -208,9 +204,9 @@ test("at the campaign order's caps (#311, #321): the brain's own destroy replays
       .map((event) => event.detail);
   const replay =
     "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
-    "Source-File 5 at 3, Source-File 6 at 3), but the run";
+    "Source-File 5 at 3), but the run";
   const skipped =
-    "BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+    "BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
     "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
   expect(stored("bitNodeDestroySent")).toEqual([{ source: "brain", nextBitNode: 1, replay, skipped }]);
   expect(stored("worldDaemonStalled")).toEqual([]);

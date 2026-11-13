@@ -10,7 +10,14 @@
 // Then: the training at the gym through Singularity, within its estimate; the division joined through the gate and its
 // worker; the reading once home's RAM beyond what it keeps holds it; the faction at 25; section 8 passing; and the
 // campaign still skipping BN6 and BN7 (no win route until B6).
-import { type FastSnapshotData, type MediumSnapshotData, nextBitNodeOf, skillExpFor } from "@bitburner-agent/core";
+import {
+  BITNODE_BLACK_OPS_HOPELESS_REASON,
+  BITNODE_NO_WIN_ROUTE_REASON,
+  type FastSnapshotData,
+  type MediumSnapshotData,
+  nextBitNodeOf,
+  skillExpFor,
+} from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -114,7 +121,15 @@ test("BN6.1 with the campaign's Source-Files: trained at the gym, joined through
   // Nothing taken as BN1's in BN6: core has its prices and hacking multipliers now (#367).
   expect(text).not.toContain("taken as BN1's");
   expect(failures).toEqual([]);
-  // BN6 is played since B6 (#398), by the Black Ops: BN6.1's destroy enters BN6 again, the order's row 6, nothing
-  // skipped.
-  expect(nextBitNodeOf({ currentNode: 6, ownedSF: SOURCE_FILES })).toEqual({ bitNode: 6, replay: null, skipped: [] });
+  // The campaign still skips BN6 and BN7 (#367): no win route until B6. BN6.1's destroy, were there one, would enter
+  // BN5 (the order's row 8), BN6, BN7 and BN3 skipped.
+  expect(nextBitNodeOf({ currentNode: 6, ownedSF: SOURCE_FILES })).toEqual({
+    bitNode: 5,
+    replay: null,
+    skipped: [
+      { bitNode: 6, reason: BITNODE_BLACK_OPS_HOPELESS_REASON },
+      { bitNode: 7, reason: BITNODE_NO_WIN_ROUTE_REASON },
+      { bitNode: 3, reason: "no hacking multipliers or prices yet" },
+    ],
+  });
 }, 180_000);

@@ -11,7 +11,8 @@
 //   (competence ×87 by the skills, `Bladeburner.ts:776-786`), as B7's augmentations would bring it.
 // Then the brain's own: Daedalus run by B5's check, done; the World Daemon's destroy asked for with all 21 done, through
 // the gate and a save backup, by Singularity's `destroyW0r1dD43m0n` (`NetscriptFunctions/Singularity.ts:1176-1183`)
-// into the order's next, BN6.2, SF6.1 gained; the next Agent connects; the run report passes, with the route's lines,
+// into the order's next, BN5.2 (BN6 waits for B7, #400's review), SF6.1 gained; the next Agent connects; the run report
+// passes, with the route's lines,
 // and the campaign report counts BN6.1.
 import {
   BLACK_OPERATIONS,
@@ -40,7 +41,7 @@ const DAEDALUS = BLADEBURNER_BLACK_OPS[20] as (typeof BLADEBURNER_BLACK_OPS)[num
 const agentSessions = (brain: { channelEvents: { type: string }[] }) =>
   brain.channelEvents.filter((event) => event.type === "agentConnected").length;
 
-test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, then the destroy by the Black Ops into BN6.2; the reports pass", async () => {
+test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, then the destroy by the Black Ops into the order's next, BN5.2; the reports pass", async () => {
   const fresh = await freshStartOf({
     withDesiredState: true,
     fixture: { kind: "bitnode", n: 6, sourceFiles: SOURCE_FILES },
@@ -72,13 +73,13 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
   await game.runUntil(() => reading()?.blackOp !== undefined && slow() !== null, 2 * MINUTE);
   expect(reading()?.blackOp?.name).toBe(DAEDALUS.name);
   const nodeResetBefore = slow()?.resetInfo.lastNodeReset as number;
-  // The order's next from BN6.1: BN6 again, SF6 to 1 (#398: BN6 playable).
-  expect(nextBitNodeOf({ currentNode: 6, ownedSF: SOURCE_FILES })).toEqual({ bitNode: 6, replay: null, skipped: [] });
+  // The order's next from BN6.1: BN5, BN6 (until B7), BN7 and BN3 skipped.
+  expect(nextBitNodeOf({ currentNode: 6, ownedSF: SOURCE_FILES }).bitNode).toBe(5);
   // The World Daemon's path is the route's: 20 of 21 done, Daedalus next, the planner's estimates, The Red Pill's off.
   await game.run(READING_MS);
   const path = controller.worldDaemonView();
   console.log(path.lines.join("\n"));
-  expect(path).toMatchObject({ destroying: false, nextBitNode: 6, path: { route: "blackOps" } });
+  expect(path).toMatchObject({ destroying: false, nextBitNode: 5, path: { route: "blackOps" } });
   expect(path.path?.blackOps).toMatchObject({ done: 20, next: { name: DAEDALUS.name, rank: DAEDALUS.rank } });
   expect(path.lines[0]).toContain("20 of 21 done; next Operation Daedalus at rank 400,000");
   expect(path.lines[2]).toContain("off on this route (#398)");
@@ -109,14 +110,14 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
   expect(daedalusSentAtMs).not.toBeNull();
   expect(doneAtMs).not.toBeNull();
 
-  // BN6.2: SF6.1 gained beside the others; through Singularity's destroy, straight into it (no BitVerse).
-  expect(slow()?.resetInfo).toMatchObject({ currentNode: 6, ownedAugs: {} });
+  // BN5.2: SF6.1 gained beside the others; through Singularity's destroy, straight into it (no BitVerse).
+  expect(slow()?.resetInfo).toMatchObject({ currentNode: 5, ownedAugs: {} });
   expect(slow()?.resetInfo.ownedSF).toEqual({ ...SOURCE_FILES, 6: 1 });
   expect(
     (await simulation.events(0)).events.filter((event) =>
       ["bitnodeDestroyed", "bitnodeFlumed", "bitverseReached"].includes(event.type),
     ),
-  ).toEqual([expect.objectContaining({ type: "bitnodeDestroyed", destroyed: 6, entered: 6 })]);
+  ).toEqual([expect.objectContaining({ type: "bitnodeDestroyed", destroyed: 6, entered: 5 })]);
   await game.runUntil(() => agentSessions(brain) > sessionsBefore, 2 * MINUTE);
   // The gate's one save backup, its own.
   expect(brain.saveBackupEvents.slice(backupsBefore)).toEqual([expect.objectContaining({ file: expect.any(String) })]);
@@ -126,10 +127,16 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
       .filter((event) => event.kind === kind)
       .map((event) => event.detail);
   expect(stored(BITNODE_DESTROY_SENT_EVENT_KIND)).toEqual([
-    { source: "brain", nextBitNode: 6, replay: null, skipped: null },
+    {
+      source: "brain",
+      nextBitNode: 5,
+      replay: null,
+      skipped:
+        "BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: no hacking multipliers or prices yet",
+    },
   ]);
   expect(brain.logLines).toContainEqual(
-    expect.stringMatching(/^world daemon: all 21 Black Ops done \(#398\): destroying the BitNode, into BitNode 6/),
+    expect.stringMatching(/^world daemon: all 21 Black Ops done \(#398\): destroying the BitNode, into BitNode 5/),
   );
   // Within the destroy's bound of all 21 done (the stall's 5 minutes): no stall.
   await game.run(MINUTE);
@@ -143,16 +150,16 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
   expect(estimates.every((each) => each.terms.length === 1 && each.terms[0]?.term === "BO")).toBe(true);
   expect(estimates.at(-1)).toMatchObject({ moment: "black op", remainingMs: 0 });
 
-  // The run report: BN6.1 destroyed into BN6.2, the route's lines, no failure.
+  // The run report: BN6.1 destroyed into BN5.2, no failure.
   const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
   const { text, failures } = runReport(fresh.data.store, window, { verbose: true });
   const lines = text.split("\n");
   expect(lines.find((each) => each.startsWith("  BitNodes: "))).toMatch(
-    /^ {2}BitNodes: BN6\.1 from \S+, destroyed after [^,]+, into BN6\.2; BN6\.2 from \S+, not destroyed, /,
+    /^ {2}BitNodes: BN6\.1 from \S+, destroyed after [^,]+, into BN5\.2; BN5\.2 from \S+, not destroyed, /,
   );
-  expect(lines.some((each) => /^ {4}\S+ {2}destroy sent \(the brain's\), into BitNode 6$/.test(each))).toBe(true);
-  // The route's lines in the path, the window's last snapshot BN6.2's (no reading yet there).
-  expect(text).toContain("    the Black Ops (#398): no reading yet");
+  expect(
+    lines.some((each) => /^ {4}\S+ {2}destroy sent \(the brain's\), into BitNode 5 \(BN6 skipped/.test(each)),
+  ).toBe(true);
   expect(failures).toEqual([]);
   // The campaign report counts BN6.1: its row, destroyed.
   const campaign = campaignReport(fresh.data.store, { environment: "E1" });

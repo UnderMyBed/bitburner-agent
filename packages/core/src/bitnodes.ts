@@ -188,12 +188,19 @@ export function knownBitNodes(): number[] {
  * The BitNodes core knows that the brain has no win route in yet (#367): a BitNode is playable only with one. BN6's and
  * BN7's is the 21 Black Ops (Bladeburner's epic, #359). The Red Pill's is hopeless there: w0r1d_d43m0n at hacking
  * 6,000 (3,000, `Server/data/servers.ts:1536`, × `WorldDaemonDifficulty` 2, `Server/ServerHelpers.ts:383-385`) at a
- * level multiplier of 0.35 (`BitNode.tsx:694-769`), 17,143 at ×1, against BN4's 9,000. BN6's since B6 (#398); BN7's
- * at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3 is B8's.
+ * level multiplier of 0.35 (`BitNode.tsx:694-769`), 17,143 at ×1, against BN4's 9,000. BN6's is built (B6, #398), but
+ * hopeless at a BN6.1 start by its own estimate (#400's review: 5.0 million h at combat 100, 499,000 h at 300, against
+ * #336's bar, the BitNode's time so far), as the competence it needs comes from augmentations and installs, B7's: so
+ * BN6 waits for B7. BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is B8's.
  */
-const NO_WIN_ROUTE: ReadonlySet<number> = new Set([7]);
+const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
+  [6, "no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7)"],
+  [7, "no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8)"],
+]);
 /** Why BN7 is skipped until Bladeburner's B8 (#367, #398). */
-export const BITNODE_NO_WIN_ROUTE_REASON = "no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8)";
+export const BITNODE_NO_WIN_ROUTE_REASON = NO_WIN_ROUTE.get(7) as string;
+/** Why BN6 is skipped until Bladeburner's B7 (#398, #400's review). */
+export const BITNODE_BLACK_OPS_HOPELESS_REASON = NO_WIN_ROUTE.get(6) as string;
 
 /** The BitNodes the brain plays (#323): those core knows (`knownBitNodes`) with a win route (#367), in order. */
 export function playableBitNodes(): number[] {
@@ -210,7 +217,7 @@ export function bitNodeUnplayableReason(bitNode: number): string | null {
     ...(bitNodePriceMultipliers(bitNode) === null ? ["prices"] : []),
   ];
   if (missing.length > 0) return `no ${missing.join(" or ")} yet`;
-  return NO_WIN_ROUTE.has(bitNode) ? BITNODE_NO_WIN_ROUTE_REASON : null;
+  return NO_WIN_ROUTE.get(bitNode) ?? null;
 }
 
 /**

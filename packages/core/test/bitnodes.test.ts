@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import { AUGMENTATION_NAMES } from "../src/augmentations.ts";
 import {
+  BITNODE_BLACK_OPS_HOPELESS_REASON,
   BITNODE_COUNT,
   BITNODE_NO_WIN_ROUTE_REASON,
   BLACK_OPS_COUNT,
@@ -249,10 +250,13 @@ test("BN6's and BN7's rows (#367): every multiplier they set on hacking and the 
   expect(bitNodeHackingMultipliers(7)).toEqual(hackingWith({ ...hacking, ScriptHackMoney: 0.5 }));
 });
 
-test("BN6 is playable since B6 (#398), by the Black Ops; BN7 is known but not until B8, so the campaign skips it", () => {
+test("BN6's route is built (B6, #398) but hopeless until B7, BN7's not until B8: the campaign skips both", () => {
   expect(knownBitNodes()).toEqual([1, 2, 4, 5, 6, 7]);
-  expect(playableBitNodes()).toEqual([1, 2, 4, 5, 6]);
-  expect(bitNodeUnplayableReason(6)).toBeNull();
+  expect(playableBitNodes()).toEqual([1, 2, 4, 5]);
+  expect(bitNodeUnplayableReason(6)).toBe(BITNODE_BLACK_OPS_HOPELESS_REASON);
+  expect(BITNODE_BLACK_OPS_HOPELESS_REASON).toBe(
+    "no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7)",
+  );
   expect(bitNodeUnplayableReason(7)).toBe(BITNODE_NO_WIN_ROUTE_REASON);
   expect(BITNODE_NO_WIN_ROUTE_REASON).toBe("no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8)");
   // The Red Pill's route there: w0r1d_d43m0n at 3,000 (`Server/data/servers.ts:1536`) × 2 (`Server/ServerHelpers.ts:
@@ -263,8 +267,8 @@ test("BN6 is playable since B6 (#398), by the Black Ops; BN7 is known but not un
   expect(Math.round((3000 * 2) / 0.35)).toBe(17_143);
 });
 
-test("playable: BN1, BN2, BN4, BN5 and BN6, with both tables; another says what core lacks of it", () => {
-  expect(playableBitNodes()).toEqual([1, 2, 4, 5, 6]);
+test("playable: BN1, BN2, BN4 and BN5, with both tables; another says what core lacks of it", () => {
+  expect(playableBitNodes()).toEqual([1, 2, 4, 5]);
   expect(listedBitNodes([1, 2, 4, 5])).toBe("BN1, BN2, BN4 and BN5");
   expect(listedBitNodes([2, 3])).toBe("BN2 and BN3");
   expect(listedBitNodes([2])).toBe("BN2");

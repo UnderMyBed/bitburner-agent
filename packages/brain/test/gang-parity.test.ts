@@ -432,8 +432,8 @@ out({ after: shop("NiteSec"), cyberSec: shop("CyberSec") });`,
 
 test("the BitNode multipliers core has (#321, #323, #334, #367) are the engine's, BN2's, BN6's and BN7's among them", async () => {
   const sim = await start({ seed: 1, epochMs: Date.UTC(2026, 0, 1), fixture: { kind: "new", tutorial: "skipped" } });
-  expect(playableBitNodes()).toEqual([1, 2, 4, 5, 6]);
-  // BN6 and BN7 known (#367); BN6 playable since B6 (#398), BN7 not until B8.
+  expect(playableBitNodes()).toEqual([1, 2, 4, 5]);
+  // BN6 and BN7 known (#367), not playable: BN6's route hopeless until Bladeburner's B7 (#398), BN7's B8's.
   expect(knownBitNodes()).toEqual([1, 2, 4, 5, 6, 7]);
   for (const bitNode of knownBitNodes()) {
     const engine = (await sim.diagnostics.bitNodeMultipliers(bitNode, 1)) as Record<string, number>;

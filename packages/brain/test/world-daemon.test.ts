@@ -303,12 +303,11 @@ describe("the destroy", () => {
     expect(rule.view()).toMatchObject({ nextBitNode: 5, replay: null, skipped: null });
   });
 
-  test("past the BitNodes the brain can't play yet (#323): BN2.3 with SF6.3 into BN5 again, the skipped logged and in the view", () => {
+  test("past the BitNodes the brain can't play yet (#323): BN2.3 into BN5 again, the skipped logged and in the view", () => {
     const skipped =
-      "BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+      "BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
       "BN3 skipped: no hacking multipliers or prices yet";
-    // BN6 played since #398: with its Source-File at 3 already, BN2.3 goes past it, and BN7 and BN3, into BN5.
-    const bn23 = { currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2, 6: 3 } };
+    const bn23 = { currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } };
     expect(update({ slowData: slow(bn23) })).toBe(true);
     expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(5));
     expect(rule.view()).toMatchObject({ nextBitNode: 5, replay: null, skipped });
@@ -321,9 +320,8 @@ describe("the destroy", () => {
     update({ slowData: slow({ currentNode: 5, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 3 } }) });
     expect(rule.view()).toMatchObject({ nextBitNode: 5, replay: null, skipped: null });
     expect(skippedOf(bn23, 5)).toBe(skipped);
-    // BN5.1 into BN2 (#334): nothing skipped; BN2.3 into BN6 (#398): nothing skipped.
+    // BN5.1 into BN2 (#334): nothing skipped.
     expect(skippedOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3 } }, 2)).toBeNull();
-    expect(skippedOf({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } }, 6)).toBeNull();
     expect(skippedOf({ currentNode: 4, ownedSF: { 1: 3, 4: 2 } }, 5)).toBeNull();
     expect(skippedOf(undefined, 5)).toBeNull();
   });
@@ -694,21 +692,20 @@ test("the run report's path (#334): the gang's faction from the window's last sl
 describe("a replay with nothing playable left in the campaign's order to gain (#311, #321, #323)", () => {
   const REPLAY =
     "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
-    "Source-File 5 at 3, Source-File 6 at 3), but the run";
+    "Source-File 5 at 3), but the run";
   const SKIPPED =
-    "BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+    "BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
     "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 " +
     "and BN12 skipped: no hacking multipliers or prices yet";
-  const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3, 6: 3 };
+  const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
   const atCaps = { slowData: slow({ ownedSF: CAPS }) };
 
   test("replayOf: the brain's next BitNode with nothing left in the order, and only that", () => {
     expect(replayOf({ currentNode: 1, ownedSF: CAPS }, 1)).toBe(REPLAY);
     // BN5.3 destroyed: SF5 reaches 3 by it.
-    expect(replayOf({ currentNode: 5, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 2, 6: 3 } }, 1)).toBe(REPLAY);
-    // BN5.3 destroyed with BN2 short: into BN2 (#334), no replay; with BN6 short, into BN6 (#398).
+    expect(replayOf({ currentNode: 5, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 2 } }, 1)).toBe(REPLAY);
+    // BN5.3 destroyed with BN2 short: into BN2 (#334), no replay.
     expect(replayOf({ currentNode: 5, ownedSF: { 1: 3, 4: 3, 5: 2 } }, 2)).toBeNull();
-    expect(replayOf({ currentNode: 5, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 2 } }, 6)).toBeNull();
     // BN4.3 destroyed with SF1 at 3 (#321's replay): BN5 is next now (#323).
     expect(replayOf({ currentNode: 4, ownedSF: { 1: 3, 4: 2 } }, 1)).toBeNull();
     expect(skippedOf({ currentNode: 1, ownedSF: CAPS }, 1)).toBe(SKIPPED);
@@ -772,15 +769,12 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 4, ownedSF: { 1: 3, 4: 2 } }))).toBe(
       "on (into BitNode 5)",
     );
-    // BN5.1 into BN2 (#334); BN2.3 into BN6 (#398); with SF6.3, BN2.3 into BN5 again, past the rest.
+    // BN5.1 into BN2 (#334); BN2.3 into BN5 again, past the rest.
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 5, ownedSF: { 1: 3, 4: 3 } }))).toBe(
       "on (into BitNode 2)",
     );
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } }))).toBe(
-      "on (into BitNode 6)",
-    );
-    expect(describeWorldDaemonSwitch(true, slow({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2, 6: 3 } }))).toBe(
-      "on (into BitNode 5 (BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: " +
+      "on (into BitNode 5 (BN6 skipped: no win route yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: " +
         "no hacking multipliers or prices yet))",
     );
     expect(describeWorldDaemonSwitch(true, slow({ ownedSF: CAPS }))).toBe(
@@ -1151,14 +1145,16 @@ describe("the Black Ops' route (#398): BN6", () => {
     expect(bn4.redPill).not.toBeNull();
   });
 
-  test("the destroy only with all 21 done, into the order's next (BN6.1 into BN6), logged; none at 20", () => {
+  test("the destroy only with all 21 done, into the order's next (BN6.1 into BN5 while BN6 waits for B7, BN7 for B8), logged; none at 20", () => {
     expect(bn6({ done: 20, next: { name: "Operation Daedalus", rank: 400_000, chance: 0.5 } })).toBe(false);
     expect(rule.destroyIntent()).toBeNull();
     expect(bn6({ done: 21, next: null, rank: 440_000 })).toBe(true);
-    expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(6));
+    expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(5));
     expect(lines).toEqual([
-      "world daemon: all 21 Black Ops done (#398): destroying the BitNode, into BitNode 6 (the gate, then a save " +
-        "backup first)",
+      "world daemon: all 21 Black Ops done (#398): destroying the BitNode, into BitNode 5 (BN6 skipped: no win route " +
+        "yet (the Black Ops, hopeless by #398's estimate until Bladeburner's B7); BN7 skipped: no win route yet (the " +
+        "Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: no hacking multipliers or prices yet) (the " +
+        "gate, then a save backup first)",
     ]);
     // Unread (no reading): none.
     rule = new WorldDaemonRule({});

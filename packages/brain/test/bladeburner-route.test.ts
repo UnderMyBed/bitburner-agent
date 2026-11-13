@@ -285,7 +285,7 @@ describe("the controller (#398)", () => {
     return { controller, send };
   }
 
-  test("in BN6: the path is the Black Ops'; the destroy asked for only once all 21 are done, into BN6", () => {
+  test("in BN6: the path is the Black Ops'; the destroy asked for only once all 21 are done, into the order's next", () => {
     const { controller, send } = connected();
     send("slow", slow(6));
     send("medium", medium(reading(400_100, { name: "Operation Daedalus", chance: [0.4, 0.4] })));
@@ -293,7 +293,7 @@ describe("the controller (#398)", () => {
     expect(controller.worldDaemonView().path?.blackOps).toMatchObject({ done: 20 });
     expect(controller.worldDaemonView().lines[0]).toContain("20 of 21 done; next Operation Daedalus");
     send("medium", medium(reading(440_000, null)));
-    expect(controller.worldDaemonView()).toMatchObject({ destroying: true, nextBitNode: 6 });
+    expect(controller.worldDaemonView()).toMatchObject({ destroying: true, nextBitNode: 5 });
   });
 
   test("nothing in other BitNodes: BN4 and BN5 with the same reading read no route, and ask no destroy", () => {
