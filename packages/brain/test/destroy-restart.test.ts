@@ -191,7 +191,11 @@ test("at the campaign order's caps (#311, #321): the brain's own destroy replays
   const backupsBefore = fresh.brain.saveBackupEvents.length;
   await fresh.game.runUntil(() => fresh.controller().stoppedAtBitNodeEnd(), 120_000);
   // The game took it (`RedPill.tsx:27-31`, `BitNode/ui/PortalModal.tsx:117-126`): BN1 again, no Source-File gained.
-  expect(slow(fresh)?.resetInfo).toMatchObject({ currentNode: 1, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 3, 6: 3 }, ownedAugs: {} });
+  expect(slow(fresh)?.resetInfo).toMatchObject({
+    currentNode: 1,
+    ownedSF: { 1: 3, 2: 3, 4: 3, 5: 3, 6: 3 },
+    ownedAugs: {},
+  });
   expect(slow(fresh)?.resetInfo.lastNodeReset).not.toBe(before?.lastNodeReset);
   expect(await bitNodeEntries(fresh.simulation)).toEqual([
     expect.objectContaining({ type: "bitnodeDestroyed", destroyed: 1, entered: 1 }),

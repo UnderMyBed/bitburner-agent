@@ -1914,6 +1914,9 @@ export class DesiredStateController {
    * that rank (B5's stock and tail), and the BitNode's game time so far (the hopeless bar). Null without a slow snapshot
    * with the BitNode.
    */
+  /** The Black Ops' route last read (#398): its medium snapshot, the rest of its inputs, and the view. */
+  #blackOpsRouteCache: { mediumData: MediumSnapshotData | null; key: string; view: BlackOpsRouteView } | null = null;
+
   #blackOpsRoute():
     | ((rates: { rankPerSecond: number | null; expPerSecond: number | null }) => BlackOpsRouteView)
     | null {
@@ -1931,8 +1934,24 @@ export class DesiredStateController {
         ? null
         : Math.max(0, this.#slowGameTimeMs - lastNodeReset);
     const mediumData = this.#mediumData;
-    return ({ rankPerSecond, expPerSecond }) =>
-      blackOpsRouteOf({ mediumData, bitNode, ownedSF, rankPerSecond, expPerSecond, soFarMs, firstToRankSeconds });
+    // Solved once a medium snapshot and its rates (the far target's solve isn't cheap): the controller updates on every
+    // snapshot and event.
+    return ({ rankPerSecond, expPerSecond }) => {
+      const key = [bitNode, rankPerSecond, expPerSecond, soFarMs, firstToRankSeconds].join();
+      const cached = this.#blackOpsRouteCache;
+      if (cached !== null && cached.mediumData === mediumData && cached.key === key) return cached.view;
+      const view = blackOpsRouteOf({
+        mediumData,
+        bitNode,
+        ownedSF,
+        rankPerSecond,
+        expPerSecond,
+        soFarMs,
+        firstToRankSeconds,
+      });
+      this.#blackOpsRouteCache = { mediumData, key, view };
+      return view;
+    };
   }
 
   #update(): void {

@@ -120,7 +120,8 @@ export function blackOpsRouteSeconds({
 /**
  * The Black Ops' route from a reading (#398): the next Black Op `next` and those after it, at `input`'s competence
  * (the forecast's, its skills read), the next one's chance its low end as `chanceRead` gives it. `firstToRankSeconds`:
- * the rule's time to the next one's rank where it has it (its plan's `toTarget`), else solved here.
+ * the rule's time to the next one's rank where it has it (its plan's `toTarget`); null, the tail alone (a stock not
+ * modelled: the rule's target another, the faction's 25); absent, solved here (B5's least expected time to it).
  */
 export function blackOpsRouteEstimate(
   input: Omit<BladeburnerActionInput, "target">,
@@ -153,10 +154,11 @@ export function blackOpsRouteEstimate(
     loss: blackOpRankLoss(op),
   }));
   const toRank =
-    firstToRankSeconds ??
-    (rank >= next.rank
-      ? 0
-      : (chooseBladeburnerAction({ ...input, target: { rank, target: next.rank } }).toTarget?.seconds ?? null));
+    firstToRankSeconds !== undefined
+      ? firstToRankSeconds
+      : rank >= next.rank
+        ? 0
+        : (chooseBladeburnerAction({ ...input, target: { rank, target: next.rank } }).toTarget?.seconds ?? null);
   return blackOpsRouteSeconds({ rank, rate: bladeburnerTailRate(input), firstToRankSeconds: toRank, ops });
 }
 

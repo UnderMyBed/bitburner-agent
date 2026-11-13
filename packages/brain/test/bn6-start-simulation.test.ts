@@ -10,12 +10,7 @@
 // Then: the training at the gym through Singularity, within its estimate; the division joined through the gate and its
 // worker; the reading once home's RAM beyond what it keeps holds it; the faction at 25; section 8 passing; and the
 // campaign still skipping BN6 and BN7 (no win route until B6).
-import {
-  type FastSnapshotData,
-  type MediumSnapshotData,
-  nextBitNodeOf,
-  skillExpFor,
-} from "@bitburner-agent/core";
+import { type FastSnapshotData, type MediumSnapshotData, nextBitNodeOf, skillExpFor } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";

@@ -200,7 +200,10 @@ describe("the gate's guard (#398): all 21 done stands in for w0r1d_d43m0n's hack
     );
     expect(short).toBe("w0r1d_d43m0n isn't reachable: The Red Pill isn't installed; and 20 of the 21 Black Ops done");
     // w0r1d_d43m0n listed with no static snapshot for its level: all 21 done holds all the same.
-    const listed = { ...medium(reading(440_000, null)), servers: [{ hostname: "w0r1d_d43m0n", maxRam: 0, cpuCores: 1, hasAdminRights: false }] } as unknown as MediumSnapshotData;
+    const listed = {
+      ...medium(reading(440_000, null)),
+      servers: [{ hostname: "w0r1d_d43m0n", maxRam: 0, cpuCores: 1, hasAdminRights: false }],
+    } as unknown as MediumSnapshotData;
     expect(guardFailure(destroy, listed, [destroy], null)).toBeNull();
     // No Bladeburner reading: The Red Pill's alone, as before.
     expect(guardFailure(destroy, medium(undefined), [destroy], null)).toBe(

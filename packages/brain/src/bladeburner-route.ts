@@ -80,7 +80,8 @@ const isFiniteNumber = (value: unknown): value is number => typeof value === "nu
 /**
  * The route from the medium snapshot (#398): `rankPerSecond` the rank measured, `expPerSecond` the hacking experience
  * measured (The Red Pill's), `soFarMs` the BitNode's game time so far (the hopeless bar), `firstToRankSeconds` the
- * Bladeburner rule's time to the next one's rank where it has it (its plan's `toTarget`), else core solves it.
+ * Bladeburner rule's time to the next one's rank where it has it (its plan's `toTarget`), null the tail alone (the
+ * controller's while the rule's target is another, the faction's 25), absent core solves it (the run report's).
  */
 export function blackOpsRouteOf({
   mediumData,
@@ -89,7 +90,7 @@ export function blackOpsRouteOf({
   rankPerSecond,
   expPerSecond,
   soFarMs,
-  firstToRankSeconds = null,
+  firstToRankSeconds,
 }: {
   mediumData: MediumSnapshotData | null;
   bitNode: number;
