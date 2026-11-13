@@ -95,7 +95,7 @@ export function levelAlong(rise: LevelRise, seconds: number): number {
 
 /**
  * The seconds until the work, from `fromSeconds` on, has earned `reputation`, at `rateAt(level)` a second along the
- * level's path: 0 for none; Infinity where the rate is never above 0. Flat (κ 0): `fromSeconds + reputation /
+ * level's path: the start for none; Infinity where the rate is never above 0. Flat (κ 0): `fromSeconds + reputation /
  * rateAt(level)`, today's τ.
  */
 export function workSecondsAlong(

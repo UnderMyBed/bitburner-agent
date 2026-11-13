@@ -97,6 +97,26 @@ describe("the cycle after an install (#401)", () => {
     const plain = laterCycleRise(rise, { hacking: 1, hackingExp: 1, hackingSpeed: 1 });
     expect(levelAlong(after, 1800)).toBeGreaterThan(levelAlong(plain, 1800));
   });
+
+  test("its level along the path is de/dt = κ(L + 50) stepped finely, from the first seconds on", () => {
+    const after = laterCycleRise(levelRiseOf({ exp: 1e8, level: 900, levelMult: 2, expPerSecond: 9.5e4 }), {
+      hacking: 1.1,
+      hackingExp: 1.2,
+      hackingSpeed: 1.05,
+    });
+    const levelOf = (exp: number) => after.level + 32 * after.levelMult * (Math.log(exp + 534.6) - Math.log(534.6));
+    // Euler at a millisecond, to each mark in turn.
+    let exp = 0;
+    const dt = 0.001;
+    let at = 0;
+    for (const mark of [1, 10, 60, 600]) {
+      while (at < mark - dt / 2) {
+        exp += after.kappa * (levelOf(exp) + LEVEL_RISE_TERM) * dt;
+        at += dt;
+      }
+      expect(levelAlong(after, mark)).toBeCloseTo(levelOf(exp), 0);
+    }
+  });
 });
 
 /**
