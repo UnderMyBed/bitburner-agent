@@ -811,20 +811,19 @@ export class BladeburnerRule {
     const underWay = reading.current?.type === BLACK_OPERATIONS ? reading.current.name : null;
     const blackOpOrder: "run" | "kept" | null =
       kept !== null ? null : underWay !== null ? "kept" : check?.run === true && !this.#resting ? "run" : null;
+    // A chaos action kept (`chaosAction` is it then, and `blackOpOrder` null) comes first.
     const order: BladeburnerActionOrder =
-      kept !== null
-        ? { type: "General", name: kept, level: null }
-        : blackOpOrder !== null
-          ? {
-              type: BLACK_OPERATIONS,
-              name: blackOpOrder === "kept" ? (underWay as string) : (op as { name: string }).name,
-              level: null,
-            }
-          : chaosAction !== null
-            ? { type: "General", name: chaosAction, level: null }
-            : plan.work !== null && !resting
-              ? { type: plan.work.type, name: plan.work.name, level: plan.work.level }
-              : { type: "General", name: plan.rest.name, level: null };
+      blackOpOrder !== null
+        ? {
+            type: BLACK_OPERATIONS,
+            name: blackOpOrder === "kept" ? (underWay as string) : (op as { name: string }).name,
+            level: null,
+          }
+        : chaosAction !== null
+          ? { type: "General", name: chaosAction, level: null }
+          : plan.work !== null && !resting
+            ? { type: plan.work.type, name: plan.work.name, level: plan.work.level }
+            : { type: "General", name: plan.rest.name, level: null };
     const city = kept !== null ? readCity : (cities?.city ?? readCity);
     const then =
       kept !== null

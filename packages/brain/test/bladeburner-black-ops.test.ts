@@ -283,6 +283,8 @@ describe("the rule (#392)", () => {
       ).state?.action;
     expect(at(0)).toEqual({ type: "General", name: "Diplomacy", level: null });
     expect(at(30 * SECOND)).toEqual({ type: "General", name: "Diplomacy", level: null });
+    expect(chaos.view().actions?.blackOp?.order).toBeNull();
+    expect(chaos.view().line).toContain("; Diplomacy kept to its 60 s's end, then: ");
     expect(at(60 * SECOND)).toEqual(TYPHOON_ORDER);
   });
 

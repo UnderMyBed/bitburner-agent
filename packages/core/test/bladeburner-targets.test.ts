@@ -223,6 +223,13 @@ describe("the expected time to a target", () => {
       rank: 2440,
       runs: 40_000,
     },
+    // A slow rise from near it that dips under the window often: the time back up to it counted (none, 10.7% short).
+    {
+      name: "a slow rise (51% of ±1) from 2,490, often under the window",
+      step: { chance: 0.51, gain: 1, loss: 1, rest: 0, seconds: 10 },
+      rank: 2490,
+      runs: 20_000,
+    },
     {
       name: "Raid-like for 30 attempts, then Tracking-like, from 1,000",
       step: { chance: 0.1, gain: 73, loss: 3.3, rest: 0, seconds: 60, attempts: 30, next: tracking },

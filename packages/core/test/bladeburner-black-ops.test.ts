@@ -212,6 +212,7 @@ describe("the check (#392): when to run the next Black Op", () => {
   }
   const who = person(100);
   const input = inputAt(who, {});
+  const WAITING: BladeburnerSkillLevels = { Overclock: 90, Tracer: 20, "Cyber's Edge": 10 };
   const skills = { levels: {}, points: 0, costMultiplier: 1 };
 
   test("under its rank: never, whatever the chance", () => {
@@ -307,6 +308,15 @@ describe("the check (#392): when to run the next Black Op", () => {
       skills: { levels: {}, points: 1000, costMultiplier: 1 },
     });
     expect(covered.wait?.points).toBe(1);
+    // Short of the cheapest level (2 at these levels) by one point: that one awaited.
+    const short = checkBladeburnerBlackOp(inputAt(who, WAITING), {
+      op: TYPHOON,
+      rank: 2500,
+      chance: [0.5, 0.5],
+      skills: { levels: WAITING, points: 1, costMultiplier: 1 },
+    });
+    expect(cheapestBladeburnerSkillLevel(WAITING, 1)).toBe(2);
+    expect(short.wait?.points).toBe(1);
     // At the chance clamped at 1 (the high end read at 1), no rise is credited: run.
     const sure = checkBladeburnerBlackOp(input, { op: TYPHOON, rank: 2500, chance: [1, 1], skills });
     expect(sure.wait?.chance).toBe(1);
