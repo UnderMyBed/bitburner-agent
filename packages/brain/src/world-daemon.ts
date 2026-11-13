@@ -44,6 +44,7 @@ import {
   augmentationsSoldBy,
   BLACK_OPS_COUNT,
   BLADEBURNER_BLACK_OPS,
+  BLADEBURNER_FACTION_RANK,
   bitNodeUnplayableReason,
   CAMPAIGN_ORDER,
   DAEDALUS,
@@ -760,8 +761,12 @@ export class WorldDaemonRule {
   readonly #expRate = new HackingExpRate();
   /** Bladeburner's rank a second (#398), over the medium snapshots' readings: a Black Op's failure is part of it. */
   readonly #rankRate = new HackingExpRate({ fallsCount: true });
-  /** Bladeburner's rank at the last reading on the Black Ops' route (#398), and its last rise, while the rule acts. */
-  #rankHigh: { value: number; sinceMs: number } | null = null;
+  /**
+   * The Black Ops' clock (#398, #400's review), while the Bladeburner rule acts: the Black Op it's for (the count done),
+   * whether its rank has been met (the attempts; kept through a failure's dip under it), and since when, with the rank
+   * then (the climb's checkpoint).
+   */
+  #rankHigh: { done: number; attempts: boolean; value: number; sinceMs: number } | null = null;
   #path: WorldDaemonPath | null = null;
   #enabled = true;
   /** The brain's next BitNode (#321), from the BitNode and Source-Files the last slow snapshot showed, or null. */
@@ -1039,28 +1044,53 @@ export class WorldDaemonRule {
     }
     const rank = route?.rank ?? null;
     const rankStallMs = route?.rankStallMs ?? null;
+    const nextRank = route?.next?.rank ?? null;
     if (
       route !== null &&
       bladeburnerActing &&
       route.done !== null &&
       route.done < BLACK_OPS_COUNT &&
       rank !== null &&
+      // Under the faction's 25 the plan can be a lottery at rank 0 (#386): B2's bound judges it.
+      rank >= BLADEBURNER_FACTION_RANK &&
+      nextRank !== null &&
       rankStallMs !== null
     ) {
-      // Any rise from the last reading restarts the clock (#400's review): a Black Op's failure loses its rank, which the
-      // rebuild brings back to its requirement only, so a high would stand through failures in a row (12.5% for three at
-      // p = 0.5). A rank flat or falling for the bound is the stall.
+      const done = route.done;
       const last = this.#rankHigh;
+      // A Black Op's end (the count risen), or the first look: the clock afresh. Its rank met: the attempts from then,
+      // kept through a failure's dip under it. Under it: the climb, its checkpoint moved on by each rise of `climbRise`.
+      const rise = route.climbRise ?? 0;
       this.#rankHigh =
-        last === null || rank > last.value ? { value: rank, sinceMs: nowMs } : { value: rank, sinceMs: last.sinceMs };
-      steps.set("blackOpsRank", {
-        detail:
-          `Bladeburner's rank not rising (${count(this.#rankHigh.value)} now) on the Black Ops' route (#398, ` +
-          `${route.done} of ${BLACK_OPS_COUNT} done), the bound ${formatDuration(rankStallMs)}: twice a rest to the ` +
-          "max, the next Black Op's attempt and a failure's rebuild, and 10 min",
-        sinceMs: this.#rankHigh.sinceMs,
-        withinMs: rankStallMs,
-      });
+        last === null || last.done !== done
+          ? { done, attempts: rank >= nextRank, value: rank, sinceMs: nowMs }
+          : !last.attempts && rank >= nextRank
+            ? { done, attempts: true, value: rank, sinceMs: nowMs }
+            : !last.attempts && (rise > 0 ? rank >= last.value + rise : rank > last.value)
+              ? { done, attempts: false, value: rank, sinceMs: nowMs }
+              : last;
+      const clock = this.#rankHigh;
+      const attemptsMs = route.attemptsStallMs;
+      if (clock.attempts && attemptsMs !== null) {
+        steps.set("blackOpsRank", {
+          detail:
+            `${route.next?.name ?? "the next Black Op"} not done (#398, ${done} of ${BLACK_OPS_COUNT}), its rank met, ` +
+            `the bound ${formatDuration(attemptsMs)}: ⌈ln 0.001 / ln(1 − p)⌉ attempts at its low end's chance, each with ` +
+            "a failure's rebuild, a rest and 10 min",
+          sinceMs: clock.sinceMs,
+          withinMs: attemptsMs,
+        });
+      } else if (!clock.attempts) {
+        steps.set("blackOpsRank", {
+          detail:
+            `Bladeburner's rank not climbing (${count(rank)} now, ${count(clock.value)} at the clock's start) toward ` +
+            `${count(nextRank)} on the Black Ops' route (#398, ${done} of ${BLACK_OPS_COUNT} done): ` +
+            `${count(rise)} wanted within ${formatDuration(rankStallMs)}, a tenth of the sustainable rate's; the bound ` +
+            "twice a rest to the max, the next Black Op's attempt and a failure's rebuild, and 10 min",
+          sinceMs: clock.sinceMs,
+          withinMs: rankStallMs,
+        });
+      }
     } else if (!this.#ready.get("blackOpsRank")?.stored) {
       this.#rankHigh = null;
     }

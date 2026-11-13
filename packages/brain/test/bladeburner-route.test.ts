@@ -144,6 +144,13 @@ describe("the route from the reading (#398)", () => {
     const rest = r.maxStamina / 2 / staminaGainPerSecond(PERSON, r.maxStamina, mults);
     const bound = 2 * (rest + blackOpSeconds(CENTURION, PERSON, mults) + blackOpRankLoss(CENTURION) / estimate.rate);
     expect(view.rankStallMs).toBeCloseTo(bound * 1000 + BLADEBURNER_REST_SLACK_MS, 3);
+    // The climb's least rise: a tenth of the sustainable rate's over its bound (#400's review).
+    expect(view.climbRise).toBeCloseTo((estimate.rate * (view.rankStallMs as number)) / 1000 / 10, 6);
+    // The attempts' bound: ⌈ln 0.001 / ln(1 − 0.3)⌉ = 20 attempts, each with a failure's rebuild, a rest and 10 min.
+    const attempts = Math.ceil(Math.log(0.001) / Math.log(1 - 0.3));
+    expect(attempts).toBe(20);
+    const each = blackOpSeconds(CENTURION, PERSON, mults) + blackOpRankLoss(CENTURION) / estimate.rate;
+    expect(view.attemptsStallMs).toBeCloseTo((attempts * each + rest) * 1000 + BLADEBURNER_REST_SLACK_MS, 3);
     // The Red Pill's at hacking 100 against 6,000 at 0.35: hopeless by the formulas against 10 h so far.
     expect(view.redPillSeconds).toBeGreaterThan(1e30);
     expect(view.choice).toMatchObject({ route: "blackOps", redPillHopeless: true });

@@ -10,11 +10,19 @@
 //   one's attempts) and The Red Pill's (core's `redPillLevelSeconds`: w0r1d_d43m0n's hacking level alone at the
 //   measured experience rate, at least), and the choice between them (core's `chooseWinRoute`, The Red Pill's hopeless
 //   past the BitNode's time so far).
-// - **The rank's stall bound** (decision 45): the rank not rising (any rise restarts it) for longer than twice the longest the rule's
-//   own cycle holds it flat, a rest from ½ max stamina to the max at the natural regain alone (the slowest rest), the
-//   next Black Op's attempt, and its failure's loss rebuilt at the sustainable rate; and `BLADEBURNER_REST_SLACK_MS`, as
-//   B2's stuck resting is bounded. The rate 0, the rebuild is left out of it: the bound stays finite, so a dead route is
-//   loud.
+// - **The stall bounds** (decision 45, #400's review), keyed by where the rank is:
+//   - **The climb** (under the next Black Op's rank: none attempted, contracts' failures in B2's own bound): the rank
+//     must rise by `climbRise`, a tenth of what the sustainable rate gives over the bound, within `rankStallMs`: twice
+//     the longest the rule's cycle holds the rank flat (a rest from ½ max stamina at the natural regain alone, the
+//     slowest rest; the next Black Op's attempt; its failure's loss rebuilt at the sustainable rate) and
+//     `BLADEBURNER_REST_SLACK_MS`, as B2's stuck resting is bounded. A tenth catches a crawl (1% of the rate) and a flat
+//     rank, and leaves the rate's own spread over the bound room. The rate 0, the rebuild is left out and the rise is
+//     any: the bound stays finite, so a dead route is loud.
+//   - **The attempts** (the next one's rank met): the Black Ops done must rise within `attemptsStallMs`, N attempts
+//     each with a failure's rebuild at the sustainable rate, a rest to the max, and the slack: N = ⌈ln α / ln(1 − p)⌉,
+//     the attempts by which a success is all but sure at the low end's chance p, α `BLADEBURNER_RANK_ALPHA` (0.001, a
+//     false failure's chance, B2's). So a Black Op stuck failing (each rebuild a rise) is loud. None at a chance of 0
+//     (#360's estimate is never then, a failure of its own).
 import {
   BLACK_OPS_COUNT,
   BLADEBURNER_BLACK_OPS,
@@ -35,7 +43,7 @@ import {
   worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import { bladeburnerSnapshotOf, bladeburnerSpeedOf } from "./bladeburner.ts";
-import { BLADEBURNER_REST_SLACK_MS } from "./bladeburner-actions-report.ts";
+import { BLADEBURNER_RANK_ALPHA, BLADEBURNER_REST_SLACK_MS } from "./bladeburner-actions-report.ts";
 
 /** The last Black Op's rank: Operation Daedalus's 400,000 (`data/BlackOperations.ts:704-735`). */
 export const BLACK_OPS_LAST_RANK = (BLADEBURNER_BLACK_OPS.at(-1) as { rank: number }).rank;
@@ -57,8 +65,12 @@ export interface BlackOpsRouteView {
   redPillSeconds: number | null;
   /** The planner's choice between them (core's `chooseWinRoute`). */
   choice: WinRouteChoice;
-  /** How long the rank may go without a rise before it's a stall, ms; null unread. */
+  /** The climb's bound (#400's review): how long the rank may go without rising by `climbRise`, ms; null unread. */
   rankStallMs: number | null;
+  /** The climb's least rise within `rankStallMs`: a tenth of the sustainable rate's over it (0: any rise). */
+  climbRise: number | null;
+  /** The attempts' bound (#400's review): how long the Black Ops done may stand at the next one's rank, ms; null none. */
+  attemptsStallMs: number | null;
 }
 
 /** The Black Ops done from a reading's next one: 21 with none next, its place in the 21 otherwise, null unread. */
@@ -136,13 +148,22 @@ export function blackOpsRouteOf({
         : blackOpsRouteEstimate(input, { rank, next: op, chanceRead: nextRead.chance, firstToRankSeconds });
   const first = estimate?.steps[0];
   let rankStallMs: number | null = null;
+  let climbRise: number | null = null;
+  let attemptsStallMs: number | null = null;
   if (input !== null && op !== null && actions !== null) {
     const mults = bladeburnerSkillMultsOf(input.skills?.read ?? {});
     const regain = staminaGainPerSecond(input.person, actions.maxStamina, mults);
     const rest = regain > 0 ? actions.maxStamina / 2 / regain : 0;
     const rate = estimate?.rate ?? 0;
     const rebuild = rate > 0 ? blackOpRankLoss(op) / rate : 0;
-    rankStallMs = 2 * (rest + blackOpSeconds(op, input.person, mults) + rebuild) * 1000 + BLADEBURNER_REST_SLACK_MS;
+    const attempt = blackOpSeconds(op, input.person, mults);
+    rankStallMs = 2 * (rest + attempt + rebuild) * 1000 + BLADEBURNER_REST_SLACK_MS;
+    climbRise = (rate * rankStallMs) / 1000 / 10;
+    const chance = first?.chance ?? 0;
+    if (chance > 0) {
+      const attempts = chance >= 1 ? 1 : Math.ceil(Math.log(BLADEBURNER_RANK_ALPHA) / Math.log(1 - chance));
+      attemptsStallMs = (attempts * (attempt + rebuild) + rest) * 1000 + BLADEBURNER_REST_SLACK_MS;
+    }
   }
   const soFarSeconds = soFarMs === null ? null : soFarMs / 1000;
   return {
@@ -158,5 +179,7 @@ export function blackOpsRouteOf({
     redPillSeconds,
     choice: chooseWinRoute({ blackOpsSeconds: estimate?.seconds ?? null, redPillSeconds, soFarSeconds }),
     rankStallMs,
+    climbRise,
+    attemptsStallMs,
   };
 }

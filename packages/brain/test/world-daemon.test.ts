@@ -1098,6 +1098,8 @@ describe("the Black Ops' route (#398): BN6", () => {
     redPillSeconds: 1e70,
     choice: chooseWinRoute({ blackOpsSeconds: 120_000, redPillSeconds: 1e70, soFarSeconds: 36_000 }),
     rankStallMs: 20 * MINUTE,
+    climbRise: 0,
+    attemptsStallMs: 60 * MINUTE,
     ...fields,
   });
   const bn6 = (fields: Partial<BlackOpsRouteView> = {}, more: Partial<Parameters<WorldDaemonRule["update"]>[0]> = {}) =>
@@ -1178,47 +1180,96 @@ describe("the Black Ops' route (#398): BN6", () => {
     ]);
   });
 
-  test("the rank's stall: not rising (flat or falling) within the route's bound, on both sides; rising, or not acting, none", () => {
-    const bound = 20 * MINUTE;
-    bn6({ rank: 300_500 }, { nowMs: 0 });
-    // A fall (a failure) isn't a rise: the clock runs on from 0.
-    bn6({ rank: 300_400 }, { nowMs: bound - 1 });
-    expect(rule.stall()).toBeNull();
-    bn6({ rank: 300_400 }, { nowMs: bound });
-    expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
-    expect(rule.stall()?.detail).toContain("Bladeburner's rank not rising (300,400 now)");
-    expect(events.map((event) => event.type === "worldDaemonStalled" && event.step)).toEqual(["blackOpsRank"]);
-    // A rise from the last reading: the stall over, the clock from then.
-    bn6({ rank: 300_401 }, { nowMs: bound + MINUTE });
-    expect(rule.stall()).toBeNull();
-    // Rising all along: never.
-    rule = new WorldDaemonRule({});
-    for (let at = 0; at <= 3 * bound; at += MINUTE) bn6({ rank: 300_000 + at / 1000 }, { nowMs: at });
-    expect(rule.stall()).toBeNull();
-    // Flat, but the Bladeburner rule not acting (the owner's work): not judged.
-    rule = new WorldDaemonRule({});
-    for (let at = 0; at <= 3 * bound; at += MINUTE) bn6({ rank: 300_000 }, { nowMs: at, bladeburnerActing: false });
-    expect(rule.stall()).toBeNull();
-    // All 21 done, the switch off: neither the destroy's step nor the rank's.
-    rule = new WorldDaemonRule({});
-    for (let at = 0; at <= 3 * bound; at += MINUTE) {
-      bn6({ rank: 440_000, done: 21, next: null }, { nowMs: at, enabled: false });
-    }
-    expect(rule.stall()).toBeNull();
-  });
+  describe("the stalls on the route (#400's review): the climb's and the attempts' bounds", () => {
+    const CLIMB = 20 * MINUTE;
+    const ATTEMPTS = 60 * MINUTE;
+    /** Under Centurion's 300,000: the climb, its least rise 120 a 20 min bound (a tenth of 1 rank/s over it). */
+    const climbing = (rank: number, nowMs: number, more: Partial<Parameters<WorldDaemonRule["update"]>[0]> = {}) =>
+      bn6({ rank, climbRise: 120, rankStallMs: CLIMB, attemptsStallMs: ATTEMPTS }, { nowMs, ...more });
+    const attempting = (rank: number, nowMs: number, done = 18) =>
+      bn6({ rank, done, climbRise: 120, rankStallMs: CLIMB, attemptsStallMs: ATTEMPTS }, { nowMs });
 
-  test("several Black Op failures in a row (#400's review), each loss rebuilt to its rank: no stall, the rank rising", () => {
-    // Centurion at 300,000: six failures, 5,000 each (`data/BlackOperations.ts:644`), each rebuilt in 10 min, an hour
-    // in all: three times the 20 min bound, the high of 300,000 never passed (three in a row is 12.5% at p = 0.5).
-    for (let failure = 0; failure < 6; failure++) {
-      const from = failure * 10 * MINUTE;
-      bn6({ rank: 300_000 }, { nowMs: from });
-      for (let minute = 1; minute < 10; minute++) {
-        bn6({ rank: 295_000 + (5_000 * (minute - 1)) / 9 }, { nowMs: from + minute * MINUTE });
+    test("the climb flat: a stall at its bound, on both sides; a rise by its least, over", () => {
+      climbing(290_000, 0);
+      climbing(290_000, CLIMB - 1);
+      expect(rule.stall()).toBeNull();
+      climbing(290_000, CLIMB);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      expect(rule.stall()?.detail).toContain(
+        "Bladeburner's rank not climbing (290,000 now, 290,000 at the clock's start)",
+      );
+      climbing(290_120, CLIMB + MINUTE);
+      expect(rule.stall()).toBeNull();
+    });
+
+    test("a crawl at 1% of the rate (0.01 rank/s against 1): a stall at the climb's bound", () => {
+      for (let at = 0; at <= CLIMB; at += MINUTE) climbing(290_000 + (0.01 * at) / 1000, at);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      // At the rate a tenth of it would pass: none.
+      rule = new WorldDaemonRule({});
+      for (let at = 0; at <= 3 * CLIMB; at += MINUTE) climbing(290_000 + (0.2 * at) / 1000, at);
+      expect(rule.stall()).toBeNull();
+    });
+
+    test("a Black Op stuck failing, each loss rebuilt to its rank: a stall at the attempts' bound, the rebuilds no reset", () => {
+      // Centurion at 300,000: each 10 min a failure's 5,000 lost, then rebuilt (each reading a rise), each attempt a
+      // little higher than the last (the contracts' steps past the rank): the rises past a climb's least are no reset.
+      for (let failure = 0; failure * 10 * MINUTE <= ATTEMPTS; failure++) {
+        const from = failure * 10 * MINUTE;
+        const peak = 300_000 + 200 * failure;
+        attempting(peak, from);
+        for (let minute = 1; minute < 10; minute++) {
+          attempting(peak - 5_000 + (5_200 * (minute - 1)) / 9, from + minute * MINUTE);
+        }
       }
-    }
-    expect(rule.stall()).toBeNull();
-    expect(events).toEqual([]);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      expect(rule.stall()?.detail).toContain(
+        "Operation Centurion not done (#398, 18 of 21), its rank met, the bound 1 h 0 min",
+      );
+    });
+
+    test("failures in a row within the bound, each rebuilt, then the Black Op done: no stall, the clock afresh", () => {
+      for (let failure = 0; failure < 5; failure++) {
+        const from = failure * 10 * MINUTE;
+        attempting(300_000, from);
+        for (let minute = 1; minute < 10; minute++) {
+          attempting(295_000 + (5_000 * (minute - 1)) / 9, from + minute * MINUTE);
+        }
+      }
+      // Done at 55 min: the next one's climb from then.
+      bn6(
+        { rank: 310_000, done: 19, next: { name: "Operation Vindictus", rank: 350_000, chance: 0.3 }, climbRise: 120 },
+        { nowMs: 55 * MINUTE },
+      );
+      for (let at = 56; at <= 70; at++) {
+        bn6(
+          {
+            rank: 310_000 + at * 200,
+            done: 19,
+            next: { name: "Operation Vindictus", rank: 350_000, chance: 0.3 },
+            climbRise: 120,
+            rankStallMs: CLIMB,
+          },
+          { nowMs: at * MINUTE },
+        );
+      }
+      expect(rule.stall()).toBeNull();
+      expect(events).toEqual([]);
+    });
+
+    test("not judged: the rule not acting (the owner's work), all 21 done with the switch off, or under the faction's 25", () => {
+      for (let at = 0; at <= 3 * ATTEMPTS; at += MINUTE) climbing(290_000, at, { bladeburnerActing: false });
+      expect(rule.stall()).toBeNull();
+      rule = new WorldDaemonRule({});
+      for (let at = 0; at <= 3 * ATTEMPTS; at += MINUTE) {
+        bn6({ rank: 440_000, done: 21, next: null }, { nowMs: at, enabled: false });
+      }
+      expect(rule.stall()).toBeNull();
+      // Under 25 the plan can be a lottery at rank 0 (#386): B2's bound judges it, not this one.
+      rule = new WorldDaemonRule({});
+      for (let at = 0; at <= 3 * CLIMB; at += MINUTE) climbing(10, at);
+      expect(rule.stall()).toBeNull();
+    });
   });
 
   test("The Red Pill's steps are off there (A8): Daedalus joined, its reputation flat, no stall; BN4's has it", () => {
