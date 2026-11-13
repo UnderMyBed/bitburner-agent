@@ -1523,11 +1523,6 @@ export class AugmentationRule {
   }
 
   /**
-   * Whether the planner's wait (#343) waits for one of Netburners' countables before it's joined (#387): the Hacknet
-   * rule's go-ahead for its setup, with their time to its invitation (τ's part). Null while installing now, or with
-   * none of them among the k.
-   */
-  /**
    * The money the Hacknet setup leaves to A6 (#387's review): while the wait waits for Netburners' countables, the set's
    * alone, as their τ has the setup's money come after it (core's `countablesToCome`): the reserve and the countdown's
    * hold also count the countables' own prices (`addedMoney`), Netburners' among them, which come after the setup.
@@ -1538,6 +1533,11 @@ export class AugmentationRule {
     return Math.max(this.reserve(), this.countdownReserve());
   }
 
+  /**
+   * Whether the planner's wait (#343) waits for one of Netburners' countables before it's joined (#387): the Hacknet
+   * rule's go-ahead for its setup, with their time to its invitation (τ's part). Null while installing now, or with
+   * none of them among the k.
+   */
   netburnersWaitedFor(): { beforeJoinMs: number } | null {
     const first = this.#waitedFor.find((each) => each.faction === NETBURNERS && each.beforeJoinMs !== undefined);
     return this.#enabled && first?.beforeJoinMs !== undefined ? { beforeJoinMs: first.beforeJoinMs } : null;

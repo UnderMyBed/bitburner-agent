@@ -223,12 +223,6 @@ describe("hacknetServersInEffect: Hacknet servers stand in for nodes (left out)"
     expect(hacknetServersInEffect(9, {})).toBe(true);
     expect(hacknetServersInEffect(1, { 9: 1 })).toBe(true);
     expect(hacknetServersInEffect(9, { 9: 1 }, { disableHacknetServer: true })).toBe(false);
-    // The BitNode's Source-File overrides first, as `activeSourceFileLvl` reads them: SF9 overridden to 0 is none.
-    expect(hacknetServersInEffect(1, { 9: 1 }, { sourceFileOverrides: { 9: 0 } })).toBe(false);
-    expect(hacknetServersInEffect(1, {}, { sourceFileOverrides: { 9: 2 } })).toBe(true);
-    expect(gameSource("PersonObjects/Player/PlayerObjectGeneralMethods.ts")).toContain(
-      "if (this.bitNodeOptions.sourceFileOverrides.has(n)) {",
-    );
     expect(gameSource("Hacknet/HacknetHelpers.tsx")).toContain(
       "return canAccessBitNodeFeature(9) && !Player.bitNodeOptions.disableHacknetServer;",
     );

@@ -501,9 +501,14 @@ test.each(
         untilMs: game.clock.now(),
       });
       expect(failures).toEqual([]);
-      note(
-        `seed ${seed}: installed now at 29: ${(((resetsSeenAtMs[0] ?? Number.NaN) - editedAtMs) / MINUTE).toFixed(1)} min from the edit to the reset`,
-      );
+      const nowMs = (resetsSeenAtMs[0] ?? Number.NaN) - editedAtMs;
+      note(`seed ${seed}: installed now at 29: ${(nowMs / MINUTE).toFixed(1)} min from the edit to the reset`);
+      // Seed 1's A/B as main measured it before #387's swap: the swap leaves it as it was.
+      if (seed === 1) {
+        expect((offMs / MINUTE).toFixed(1)).toBe("48.0");
+        expect(installs[0]).toBe("18.5 min: 29");
+        expect((nowMs / MINUTE).toFixed(1)).toBe("2.5");
+      }
       console.log(notes.join("\n"));
       return;
     }
@@ -530,6 +535,12 @@ test.each(
     expect(failures).toEqual([]);
     const heldMs = (resetsSeenAtMs[0] ?? Number.NaN) - editedAtMs;
     note(`seed ${seed}: waited, then installed at 30: ${(heldMs / MINUTE).toFixed(1)} min from the edit to the reset`);
+    // Seed 1's A/B as main measured it before #387's swap: the swap leaves it as it was.
+    if (seed === 1) {
+      expect((offMs / MINUTE).toFixed(1)).toBe("12.0");
+      expect(installs[0]).toBe("31.5 min: 30");
+      expect((heldMs / MINUTE).toFixed(1)).toBe("15.5");
+    }
 
     if (TO_DAEDALUS) {
       await until(daedalusSeen, DAEDALUS_WITHIN_MS);

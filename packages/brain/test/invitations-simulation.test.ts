@@ -142,16 +142,21 @@ test.each(SEEDS)(
     // for a group-B countable after them. Installing now, about T, is the planner's only candidate until the group joins
     // (the hack loop is off, so the money never comes at a rate known): held while #228's hold keeps the group's money
     // (the whole stage), and while no income is measured. Group B joined (seed 1: 28 min, 7 min online), its countables
-    // come by work, and the planner waits for one: "install now 28 min, wait for NutriGen Implant (3 min, by work at New
-    // Tokyo) 34 min; chosen: wait for 1; install now held: no income measured yet". Installing now, 4 new, is shorter
-    // (main's 3 new made it 55 min: waiting won outright), so it's the income's hold that has the planner wait.
+    // come by work: "install now 28 min, wait for NutriGen Implant (3 min, by work at New Tokyo) 34 min; chosen: wait
+    // for 1; install now held: no income measured yet". Installing now, 4 new, is the shorter (main's 3 new made it 55
+    // min), so this is the income's hold choosing the wait for a group-B countable by work, not a wait on the merits:
+    // that's augmentations-simulation.test.ts's inside arm (The Black Hand inside installing now's estimate).
     expect(holds.steps).toBeGreaterThan(0);
     expect(holds.installsWhileHeld).toBe(0);
     expect(events(AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([]);
     const timing = fresh.controller().augmentationsView().progress?.timing;
-    expect(timing).toMatchObject({ needed: 7, adding: 4, heldForIncome: true });
-    expect(timing?.choice).toBeGreaterThanOrEqual(1);
+    expect(timing).toMatchObject({ needed: 7, adding: 4, heldForIncome: true, choice: 1 });
     expect(timing?.next[0]).toMatchObject({ augmentation: "NutriGen Implant", faction: "New Tokyo", way: "work" });
+    // The candidates: installing now the shorter, the wait for 1 longer; the hold is what chooses it.
+    const [now, waitForOne] = timing?.candidates ?? [];
+    expect(now?.k).toBe(0);
+    expect(waitForOne?.k).toBe(1);
+    expect(waitForOne?.estimateMs).toBeGreaterThan(now?.estimateMs ?? Number.POSITIVE_INFINITY);
 
     // The work's hours, and the money: the count reached, bought, installed.
     await simulation.diagnostics.joinFactionWithReputation("Tian Di Hui", 80_000);

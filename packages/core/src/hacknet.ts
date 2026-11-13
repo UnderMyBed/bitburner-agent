@@ -128,11 +128,9 @@ export function netburnersTotalsMet(nodes: readonly HacknetNodeStats[]): boolean
 }
 
 /**
- * Whether Hacknet servers stand in for Hacknet nodes (`Hacknet/HacknetHelpers.tsx:34-36`): in BN9, or with SF9 at
- * its active level, the BitNode's `sourceFileOverrides` first as the game's `activeSourceFileLvl` reads it
- * (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:615-620`; `getResetInfo` gives its Maps as objects), unless the
- * BitNode's options turn them off. Their costs and hashes aren't this module's (left out, labelled): the brain buys no
- * Hacknet there.
+ * Whether Hacknet servers stand in for Hacknet nodes (`Hacknet/HacknetHelpers.tsx:34-36`): in BN9, or with SF9,
+ * unless the BitNode's options turn them off. Their costs and hashes aren't this module's (left out, labelled): the
+ * brain buys no Hacknet there.
  */
 export function hacknetServersInEffect(
   currentNode: number,
@@ -140,11 +138,8 @@ export function hacknetServersInEffect(
   bitNodeOptions: Readonly<Record<string, unknown>> = {},
 ): boolean {
   if (bitNodeOptions.disableHacknetServer === true) return false;
-  const overrides = bitNodeOptions.sourceFileOverrides;
-  const override =
-    typeof overrides === "object" && overrides !== null ? (overrides as Record<string, unknown>)["9"] : undefined;
-  const level = typeof override === "number" ? override : (ownedSF["9"] ?? 0);
-  return currentNode === 9 || level > 0;
+  // `ownedSF` is the active levels, the overrides in (`NetscriptFunctions.ts:1491`, `PlayerObject.ts:93`).
+  return currentNode === 9 || (ownedSF["9"] ?? 0) > 0;
 }
 
 /** One purchase of the setup, in order: a node, or levels, RAM doublings or cores on node `node` (from 0). */
