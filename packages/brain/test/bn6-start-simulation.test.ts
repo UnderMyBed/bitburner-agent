@@ -11,7 +11,7 @@
 // worker; the reading once home's RAM beyond what it keeps holds it; the faction at 25; section 8 passing; and the
 // campaign still skipping BN6 and BN7 (no win route until B6).
 import {
-  BITNODE_BLACK_OPS_B7_REASON,
+  BITNODE_BLACK_OPS_ESTIMATE_REASON,
   BITNODE_NO_WIN_ROUTE_REASON,
   type FastSnapshotData,
   type MediumSnapshotData,
@@ -127,7 +127,7 @@ test("BN6.1 with the campaign's Source-Files: trained at the gym, joined through
     bitNode: 5,
     replay: null,
     skipped: [
-      { bitNode: 6, reason: BITNODE_BLACK_OPS_B7_REASON },
+      { bitNode: 6, reason: BITNODE_BLACK_OPS_ESTIMATE_REASON },
       { bitNode: 7, reason: BITNODE_NO_WIN_ROUTE_REASON },
       { bitNode: 3, reason: "no hacking multipliers or prices yet" },
     ],
