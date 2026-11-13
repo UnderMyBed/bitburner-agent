@@ -140,7 +140,10 @@ import {
   installTiming,
   intentId,
   type JoinedFaction,
+  LEVEL_RISE_TERM,
+  type LevelRise,
   levellingInstallMultipliers,
+  levelRiseOf,
   type MediumSnapshotData,
   NETBURNERS,
   NEUROFLUX_GOVERNOR,
@@ -297,6 +300,12 @@ export type InstallTimingView = InstallTiming & {
   unseenMs?: number;
   /** `unseenMs` is a store's from before #343 (#397's review): mostly the gaps its clock left out. */
   unseenGaps?: true;
+  /**
+   * τ by work along the level's rise (#401, core's level-rise.ts): the experience rate a second at the level now it
+   * takes, and whence: measured now (`HackingExpRate`'s window) or the last cycle's carried over the install
+   * (`AUGMENTATION_LEVEL_RISE_SETTING`), the larger. Absent with neither: at the level now.
+   */
+  levelRise?: { expPerSecond: number; from: "measured now" | "the last cycle's" };
   /** The time online in the store's slow snapshots of the cycle before the bars' clock began (#388): T counts it. */
   onlineBeforeMs?: number;
   words: string;
@@ -1076,6 +1085,38 @@ export interface InstallWait {
 }
 
 /** The wait as stored, or null; a value the brain didn't write fails, as the count hold's does. */
+/**
+ * The level's rise carried over an install (#401): κ, the experience rate a second per (level + 50), measured as the
+ * install was asked for (`HackingExpRate` over its whole window, `HACKING_EXP_WINDOW_MS`), times the install's
+ * `hacking_exp` and `hacking_speed` (core's `levellingInstallMultipliers`, the queue's), for the cycles after it
+ * in the BitNode (`lastNodeReset`): a cycle's own window starts again at the install and measures the hack loop's
+ * ramp, not what the RAM earns (the Red Pill holds: 15 to 800 times under the hold's rate, #401). Its cycle's
+ * `lastAugReset`; a restart keeps it.
+ */
+export const AUGMENTATION_LEVEL_RISE_SETTING = "augmentations.levelRise";
+
+export interface CarriedLevelRise {
+  lastNodeReset: number;
+  lastAugReset: number;
+  kappa: number;
+}
+
+export function readCarriedLevelRise(store: TelemetryStore): CarriedLevelRise | null {
+  const value = store.getSetting(AUGMENTATION_LEVEL_RISE_SETTING);
+  if (value === null) return null;
+  let carried: Partial<Record<keyof CarriedLevelRise, unknown>> | null;
+  try {
+    carried = JSON.parse(value) as typeof carried;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_LEVEL_RISE_SETTING} isn't JSON`);
+  }
+  const { lastNodeReset, lastAugReset, kappa } = carried ?? {};
+  if (!isFiniteNumber(lastNodeReset) || !isFiniteNumber(lastAugReset) || !isFiniteNumber(kappa) || !(kappa > 0)) {
+    throw new Error(`the store's ${AUGMENTATION_LEVEL_RISE_SETTING} isn't a rate the brain wrote`);
+  }
+  return { lastNodeReset, lastAugReset, kappa };
+}
+
 export function readInstallWait(store: TelemetryStore): InstallWait | null {
   const value = store.getSetting(AUGMENTATION_INSTALL_WAIT_SETTING);
   if (value === null) return null;
@@ -1241,10 +1282,15 @@ export function describeInstallTiming(
       : "";
   const parts = describeTParts(timing);
   const online = parts === "" ? "" : `; ${parts}`;
+  const rise =
+    timing.levelRise === undefined
+      ? ""
+      : `; τ by work along the level's rise, ${Math.round(timing.levelRise.expPerSecond).toLocaleString("en-US")} exp/s ` +
+        `now (${timing.levelRise.from})`;
   return (
     `${count.installed} of ${count.required} installed, ${timing.adding} new at an install, ` +
     `${formatEta(timing.onlineMs)} this cycle (T${online}); to Daedalus's count: ` +
-    `${candidates.join(", ") || "no estimate"}${scaled}; chosen: ${chosen}${held}`
+    `${candidates.join(", ") || "no estimate"}${scaled}${rise}; chosen: ${chosen}${held}`
   );
 }
 
@@ -2256,6 +2302,8 @@ export class AugmentationRule {
     const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
     const money = player.money - this.#spent.reduce((sum, each) => sum + each.price, 0);
     const hackingLevel = player.person.skills.hacking;
+    // The level's rise over the work (#401): τ by work along it (core's `countablesToCome`).
+    const levelRise = this.#levelRise(mediumData, slowData, resetInfo.lastAugReset, currentNode, hackingLevel);
     // Short of Daedalus's count (#228): any augmentation counts.
     // With The Red Pill at the gang's faction (#334, BN2), Daedalus isn't needed: never short of its count.
     const count = daedalusCountOf({
@@ -2625,6 +2673,7 @@ export class AugmentationRule {
             person: player.person,
             conditions: workConditionsOf(resetInfo, slowData, shareBonus),
             work: holdWork,
+            rise: levelRise.rise,
             money: budget,
             income,
             // Netburners' five before it's joined (#387): the Hacknet rule buys its setup once one is waited for.
@@ -2660,6 +2709,14 @@ export class AugmentationRule {
             next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
             timeOnlineMs: onlineMs,
             ...unseen,
+            ...(levelRise.from === null
+              ? {}
+              : {
+                  levelRise: {
+                    expPerSecond: levelRise.rise.kappa * (hackingLevel + LEVEL_RISE_TERM),
+                    from: levelRise.from,
+                  },
+                }),
           };
           timing = { ...figures, words: describeInstallTiming(figures, count) };
           this.#watchIncomeHold(timing, resetInfo.lastAugReset, onlineMs, atMs);
@@ -2737,6 +2794,7 @@ export class AugmentationRule {
                 person: player.person,
                 conditions: workConditionsOf(resetInfo, slowData, shareBonus),
                 work: holdWork,
+                rise: levelRise.rise,
                 money: budget,
                 income: this.#income(),
                 // A restart or a gap loses the income for 10 minutes: the window open, its money taken as coming.
@@ -3128,6 +3186,7 @@ export class AugmentationRule {
     }
     if (!this.#installing) {
       this.#installing = true;
+      this.#carryLevelRise(installable, hackingLevel, resetInfo.lastAugReset, slowData);
       writeAugmentationCycle(this.#store, {
         ...readAugmentationCycle(this.#store),
         lastAugReset: cycle?.lastAugReset ?? resetInfo.lastAugReset,
@@ -3144,6 +3203,65 @@ export class AugmentationRule {
       waiting: false,
     };
     return { intent: null, install: true, committed: true };
+  }
+
+  /**
+   * The level's path from now (#401, core's level-rise.ts) for τ by work: the experience and the level now, and κ the
+   * larger of the experience rate measured now (over `HackingExpRate`'s whole window, as #378's review has the gang's
+   * τ_g: its first minutes after an install measure the hack loop's start) and the one carried over the last install
+   * in the BitNode (`AUGMENTATION_LEVEL_RISE_SETTING`): the window early in a cycle is the hack loop's ramp (the Red
+   * Pill holds' starts, 15 to 800 times under their rates), the carried one the RAM the last cycle ended on, under the
+   * RAM bought since. Neither: flat, the level now, as before #401.
+   */
+  #levelRise(
+    mediumData: MediumSnapshotData,
+    slowData: SlowSnapshotData,
+    lastAugReset: number,
+    currentNode: number,
+    level: number,
+  ): { rise: LevelRise; from: NonNullable<InstallTimingView["levelRise"]>["from"] | null } {
+    const { exp, levelMult } = hackingFiguresOf(mediumData, currentNode);
+    const measured = levelRiseOf({
+      exp,
+      level,
+      levelMult,
+      expPerSecond: this.#expRate.windowFull() ? this.#expRate.perSecond() : null,
+    });
+    const lastNodeReset = (slowData.resetInfo as { lastNodeReset?: unknown } | undefined)?.lastNodeReset;
+    const carried = readCarriedLevelRise(this.#store);
+    const carriedKappa =
+      carried !== null && carried.lastNodeReset === lastNodeReset && carried.lastAugReset < lastAugReset
+        ? carried.kappa
+        : 0;
+    if (carriedKappa > measured.kappa) return { rise: { ...measured, kappa: carriedKappa }, from: "the last cycle's" };
+    return { rise: measured, from: measured.kappa > 0 ? "measured now" : null };
+  }
+
+  /**
+   * Carries the level's rise over the install asked for (#401, `AUGMENTATION_LEVEL_RISE_SETTING`): the experience rate
+   * measured now over its whole window, per (level + 50), times the install's `hacking_exp` and `hacking_speed` (core's
+   * `levellingInstallMultipliers` of `installing`, NeuroFlux Governor's levels each an entry). None measured, or the
+   * BitNode's start unread, or an augmentation core doesn't know (logged): the one stored is kept (an earlier cycle's,
+   * on less RAM: cautious for waiting).
+   */
+  #carryLevelRise(installing: readonly string[], level: number, lastAugReset: number, slowData: SlowSnapshotData) {
+    const perSecond = this.#expRate.windowFull() ? this.#expRate.perSecond() : null;
+    const lastNodeReset = (slowData.resetInfo as { lastNodeReset?: unknown } | undefined)?.lastNodeReset;
+    if (perSecond === null || !(perSecond > 0) || !isFiniteNumber(lastNodeReset)) return;
+    let gain: ReturnType<typeof levellingInstallMultipliers>;
+    try {
+      gain = levellingInstallMultipliers(
+        installing.filter((name) => name === NEUROFLUX_GOVERNOR).length,
+        installing.filter((name) => name !== NEUROFLUX_GOVERNOR),
+      );
+    } catch (error) {
+      // An augmentation core doesn't know: the install goes on, the rise not carried (the last one stored kept).
+      this.#log(`augmentations: the level's rise not carried over the install (${(error as Error).message})`);
+      return;
+    }
+    const kappa = (perSecond / (level + LEVEL_RISE_TERM)) * gain.hackingExp * gain.hackingSpeed;
+    const carried: CarriedLevelRise = { lastNodeReset, lastAugReset, kappa };
+    this.#store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify(carried));
   }
 
   /**

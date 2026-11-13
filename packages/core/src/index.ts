@@ -895,6 +895,15 @@ export {
   resetsTheGame,
 } from "./intents.ts";
 export {
+  LEVEL_RISE_TERM,
+  type LevelRise,
+  laterCycleRise,
+  levelAlong,
+  levelRiseOf,
+  reputationAlong,
+  workSecondsAlong,
+} from "./level-rise.ts";
+export {
   addsToLevelling,
   batchThenInstallPlan,
   chooseLevelling,

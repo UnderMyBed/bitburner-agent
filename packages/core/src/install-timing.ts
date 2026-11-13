@@ -30,9 +30,10 @@
  *   switches left out, cautious for waiting where its own choice is already one of them;
  * - the countables whose prerequisite is among the k (not offered until it's bought): cautious for waiting;
  * - a τ by work at the share bonus's mean over the last 10 minutes (#345: 1 with no share in them, as before A5 works
- *   there and the share starts), and at the hacking level now, though it rises over the work (the Red Pill holds of BN1.2 to BN4.1
- *   measured 1.2 to 1.7 times the rate at their first level, with the share): both cautious for waiting, optimistic
- *   for installing now.
+ *   there and the share starts): cautious for waiting, optimistic for installing now; since #401 along the hacking
+ *   level's rise (core's level-rise.ts: κ the larger of the experience rate measured now and the last cycle's, times
+ *   the install's gains), on the RAM it was measured on: home RAM growing and new servers left out, cautious for
+ *   waiting; with neither measured, at the level now, as before.
  * Three guards, each the rule's own measure: with no income measured (`incomeMeasured` false: 10 minutes of slow
  * snapshots after a restart or a gap), every money-bound τ is never, so installing now is held unless the set meets
  * the count; while an invitation's money is held (#228's hold, `invitationHeld`: it ends on the invitation, or 5

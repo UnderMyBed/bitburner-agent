@@ -22,6 +22,7 @@ import {
   type SlowSnapshotData,
   TOR_ROUTER,
   type WorkingPerson,
+  workSecondsAlong,
 } from "@bitburner-agent/core";
 import * as model from "@bitburner-agent/model";
 import { type Countdown, countHoldOf, holdsOf, installClock, installDecision } from "@bitburner-agent/model";
@@ -33,6 +34,7 @@ import {
   AUGMENTATION_INCOME_WINDOW_MS,
   AUGMENTATION_INSTALL_INTENT,
   AUGMENTATION_INSTALL_WAIT_SETTING,
+  AUGMENTATION_LEVEL_RISE_SETTING,
   AUGMENTATION_ONLINE_SETTING,
   AUGMENTATION_PROGRESS_COUNTS_EVERY_MS,
   AUGMENTATION_RESERVE_LOOKAHEAD_MS,
@@ -50,6 +52,7 @@ import {
   purchaseIntent,
   readAugmentationCycle,
   readAugmentationsEnabled,
+  readCarriedLevelRise,
   readCountHold,
   readCycleSeen,
   readGangRateKept,
@@ -64,7 +67,7 @@ import { bestWorkRate, workConditionsOf, workingPersonOf } from "../src/factions
 import { PURCHASE_PRICES } from "../src/programs.ts";
 import { SHARE_HOME_KEPT_GB } from "../src/share.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
-import { HACKING_EXP_WINDOW_MS } from "../src/world-daemon.ts";
+import { HACKING_EXP_WINDOW_MS, HackingExpRate } from "../src/world-daemon.ts";
 
 const GEN_I = "Cranial Signal Processors - Gen I";
 const GEN_II = "Cranial Signal Processors - Gen II";
@@ -755,6 +758,62 @@ function committed(money = 1e9) {
   throughCountdown({ slowData: slow(fields), mediumData: medium({ money, homeRam: 1024 }) });
   return fields;
 }
+
+describe("the level's rise carried over an install (#401)", () => {
+  /** Medium snapshots a minute apart, hacking 300 + the minute, A6 off (it samples the experience all the same). */
+  const measure = (minutes: number) => {
+    const rate = new HackingExpRate();
+    for (let minute = 0; minute < minutes; minute += 1) {
+      const mediumData = medium({ hacking: 300 + minute });
+      update({ enabled: false, mediumData, mediumGameTimeMs: minute * MINUTE, fastGameTimeMs: minute * MINUTE });
+      rate.add(minute * MINUTE, hackingExpOfLevel(300 + minute, 1));
+    }
+    return rate;
+  };
+  /** Committed (the note), all five queued, nothing more to buy: the install, at `minute`. */
+  const install = (minute: number) => {
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    return update({
+      slowData: slow({ reputation: 18_750, queued: [...FIVE] }),
+      mediumData: medium({ hacking: 300 + minute }),
+      mediumGameTimeMs: minute * MINUTE,
+      fastGameTimeMs: minute * MINUTE,
+    });
+  };
+
+  test("asked for with the rate measured over its whole window: κ over the level + 50, × the install's gains", () => {
+    const rate = measure(11);
+    rate.add(11 * MINUTE, hackingExpOfLevel(311, 1));
+    expect(install(11)).toEqual({ intent: null, install: true, committed: true });
+    const gain = levellingInstallMultipliers(0, FIVE);
+    expect(gain.hackingExp * gain.hackingSpeed).toBeGreaterThan(1);
+    expect(readCarriedLevelRise(store)).toEqual({
+      lastNodeReset: 0,
+      lastAugReset: 0,
+      kappa: expect.closeTo(((rate.perSecond() as number) / (311 + 50)) * gain.hackingExp * gain.hackingSpeed, 9),
+    });
+  });
+
+  test("the window not whole (5 minutes): nothing carried, the one stored kept", () => {
+    const kept = { lastNodeReset: 0, lastAugReset: -1, kappa: 2 };
+    store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify(kept));
+    measure(5);
+    expect(install(5)).toEqual({ intent: null, install: true, committed: true });
+    expect(readCarriedLevelRise(store)).toEqual(kept);
+  });
+
+  test("a setting the brain didn't write fails: A6 waits, saying why", () => {
+    const bad = ["{", JSON.stringify({ lastNodeReset: 0, lastAugReset: 0, kappa: 0 }), JSON.stringify({ kappa: 1 })];
+    for (const value of bad) {
+      store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, value);
+      expect(() => readCarriedLevelRise(store)).toThrow(/augmentations\.levelRise/);
+    }
+    update({ slowData: slow({ reputation: 18_750 }), mediumData: medium({ money: 1e9 }) });
+    expect(rule.view().waitingFor).toMatch(
+      /^the snapshots as core knows the game \(the store's augmentations\.levelRise/,
+    );
+  });
+});
 
 describe("committed", () => {
   test("the set in buy order, each once reported done; then home's RAM, NeuroFlux Governor, the install", () => {
@@ -3205,6 +3264,83 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     // The mean: 1 with no samples.
     expect(shareBonusMean([])).toBe(1);
     expect(shareBonusMean([1.6, 1.6, 1])).toBeCloseTo(1.4, 12);
+  });
+
+  /** The medium snapshot at the next minute, its hacking experience `exp` (the level held at 2,500). */
+  const withExp = (exp: number): Partial<AugmentationInputs> => {
+    const data = playerWith(MONEY);
+    return {
+      mediumData: { ...data, player: { ...(data.player as object), exp: { hacking: exp } } },
+      mediumGameTimeMs: gameTimeMs + MINUTE,
+    };
+  };
+  const E0 = hackingExpOfLevel(2_500, 1);
+  /** τ by work for The Black Hand 42 min off at the level now, along the level's path at `kappa` (core's). */
+  const along = (exp: number, kappa: number) =>
+    workSecondsAlong({ exp, level: 2_500, levelMult: 1, kappa }, (level) => RATE * (level / 2_500), RATE * 42 * 60) *
+    1000;
+
+  test("the level's rise (#401): flat over the window, today's τ (42 min); rising, τ falls with it", () => {
+    const reputation = reputationFor(42 * MINUTE);
+    plannerAt(60);
+    for (let minute = 0; minute < 11; minute += 1) minuteOn({ reputation }, MONEY, withExp(E0));
+    expect(rule.view().progress?.timing?.candidates[1]).toMatchObject({ tauMs: expect.closeTo(42 * MINUTE, -3) });
+    expect(rule.view().progress?.timing?.levelRise).toBeUndefined();
+    // T 71 min: waiting for it (42) is the choice, as at the level now before #401.
+    expect(rule.view().progress?.timing?.choice).toBe(1);
+    expect(rule.view().progress?.timing?.words).not.toMatch(/level's rise/);
+    // Rising, ×2 and ×10 over the window: τ along the level's path, shorter; the faster, the shorter still.
+    const taus: number[] = [];
+    for (const growth of [1, 9]) {
+      plannerAt(60);
+      let exp = E0;
+      for (let minute = 0; minute < 11; minute += 1) {
+        minuteOn({ reputation }, MONEY, withExp(exp));
+        if (minute < 10) exp += (growth * E0) / 10;
+      }
+      const perSecond = (growth * E0) / 600;
+      const timing = rule.view().progress?.timing;
+      expect(timing?.candidates[1]?.tauMs).toBeCloseTo(along(exp, perSecond / 2_550), -3);
+      expect(timing?.levelRise?.from).toBe("measured now");
+      expect((timing?.levelRise?.expPerSecond as number) / perSecond).toBeCloseTo(1, 9);
+      expect(timing?.words).toMatch(/; τ by work along the level's rise, [\d,]+ exp\/s now \(measured now\); chosen:/);
+      taus.push(timing?.candidates[1]?.tauMs as number);
+    }
+    expect(taus[0]).toBeLessThan(42 * MINUTE - 10_000);
+    expect(taus[1]).toBeLessThan(taus[0] as number);
+  });
+
+  test("the level's rise (#401): the last cycle's κ carried over the install, where it's more than the window's", () => {
+    const reputation = reputationFor(42 * MINUTE);
+    const kappa = (9 * E0) / 600 / 2_550;
+    const carry = (fields: object) =>
+      store.setSetting(
+        AUGMENTATION_LEVEL_RISE_SETTING,
+        JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa, ...fields }),
+      );
+    carry({});
+    plannerAt(60);
+    for (let minute = 0; minute < 11; minute += 1) minuteOn({ reputation }, MONEY, withExp(E0));
+    expect(rule.view().progress?.timing?.candidates[1]?.tauMs).toBeCloseTo(along(E0, kappa), -3);
+    expect(rule.view().progress?.timing?.candidates[1]?.tauMs).toBeLessThan(42 * MINUTE - 30_000);
+    expect(rule.view().progress?.timing?.levelRise).toMatchObject({ from: "the last cycle's" });
+    // Its own cycle's, or another BitNode's: not carried, flat.
+    for (const fields of [{ lastAugReset: 0 }, { lastNodeReset: 5 }]) {
+      carry(fields);
+      minuteOn({ reputation }, MONEY, withExp(E0));
+      expect(rule.view().progress?.timing?.candidates[1]).toMatchObject({ tauMs: expect.closeTo(42 * MINUTE, -3) });
+      expect(rule.view().progress?.timing?.levelRise).toBeUndefined();
+    }
+    // The window's more: it's taken.
+    carry({ kappa: kappa / 100 });
+    plannerAt(60);
+    let exp = E0;
+    for (let minute = 0; minute < 11; minute += 1) {
+      minuteOn({ reputation }, MONEY, withExp(exp));
+      if (minute < 10) exp += E0 / 10;
+    }
+    expect(rule.view().progress?.timing?.levelRise).toMatchObject({ from: "measured now" });
+    expect(rule.view().progress?.timing?.candidates[1]?.tauMs).toBeCloseTo(along(exp, E0 / 600 / 2_550), -3);
   });
 
   test("its reputation reached: the set meets the count (n ≥ N), installed at once with all five, 30 of 30", () => {
