@@ -36,7 +36,7 @@ import {
   describeCityChoice,
 } from "../src/bladeburner.ts";
 import { BLADEBURNER_GAP_MS } from "../src/bladeburner-actions-report.ts";
-import { BLADEBURNER_CHAOS_SLACK_MS } from "../src/bladeburner-cities-report.ts";
+import { BLADEBURNER_CHAOS_SLACK_MS, BLADEBURNER_MOVE_WITHIN_MS } from "../src/bladeburner-cities-report.ts";
 import { BladeburnerFold } from "../src/bladeburner-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { formatDuration } from "../src/gap-report.ts";
@@ -309,6 +309,24 @@ describe("the rule (#383)", () => {
       action: { type: "Operations", name: "Raid", level: 1 },
       city: "Aevum",
     });
+    // The game repeats it (#385's review): chosen again at a later run's first reading, that run is kept to its end too.
+    const again = new BladeburnerRule();
+    const atAgain = (offsetMs: number, options: ReadingOptions) =>
+      decide(again, medium(reading(options)), { nowMs: T0 + offsetMs }).state;
+    const under = { found: diplomacy, current: diplomacy };
+    const gone = { all: cities(0, { Aevum: { population: 2e9 } }), ...under };
+    expect(atAgain(0, { all: cities(52), ...under })?.action).toEqual(DIPLOMACY);
+    // 60 s: the second run's first reading, every city still at 52: chosen again.
+    expect(atAgain(60 * SECOND, { all: cities(52), ...under })?.action).toEqual(DIPLOMACY);
+    // 100 s, its measure gone: the second run kept, the city held.
+    expect(atAgain(100 * SECOND, gone)).toEqual({ joinTheFaction: false, action: DIPLOMACY, city: "Sector-12" });
+    expect(again.view().line).toContain("; Diplomacy kept to its 60 s's end, then: ");
+    // 120 s, the third run's first reading: the rule's own choice again.
+    expect(atAgain(120 * SECOND, gone)).toEqual({
+      joinTheFaction: false,
+      action: { type: "Operations", name: "Raid", level: 1 },
+      city: "Aevum",
+    });
     // Bonus time counts: 10 s and 50 s of it spent is 60 game seconds.
     const second = new BladeburnerRule();
     const bonus = (offsetMs: number, bonusSeconds: number) =>
@@ -549,7 +567,7 @@ describe("the run report's cities (#383)", () => {
     );
     expect(text).toContain(
       "  the chaos over 50 where the division works, the rule's measure wanting it off, past twice its Diplomacy " +
-        "estimate and 10 min:\n    none",
+        "estimate and 10 min, or a move's 22 s:\n    none",
     );
   });
 
@@ -585,16 +603,22 @@ describe("the run report's cities (#383)", () => {
     ).toEqual([]);
   });
 
-  test("a move: the chaos at 80 left by the next reading, no failure; staying past the bound fails", () => {
+  test("a move: the chaos at 80 left by the next reading, no failure; past two readings and an Agent round, it fails", () => {
     const all = cities(0, { "Sector-12": { chaos: 80 } });
     const moved = fold(
       at([0, 10_000, 20_000], (offsetMs) => ({ all, city: offsetMs === 0 ? "Sector-12" : "Aevum", current: BOUNTY })),
     );
     expect(moved.failures).toEqual([]);
-    const boundMs = 2 * diplomaciesTo50(80, 1) * 60_000 + BLADEBURNER_CHAOS_SLACK_MS;
-    const stayed = fold(at(every10s(0, boundMs + 1), () => ({ all, current: BOUNTY })));
-    expect(stayed.failures).toHaveLength(1);
-    expect(stayed.failures[0]).toContain("(Sector-12's chaos 80.00 at its start, the rule's Diplomacy estimate ");
+    // #385's review: a move's bound is the reading cadence's, not Diplomacy's.
+    expect(BLADEBURNER_MOVE_WITHIN_MS).toBe(2 * BLADEBURNER_READING_SECONDS * 1000 + 2_000);
+    const stayed = (offsets: number[]) => fold(at(offsets, () => ({ all, current: BOUNTY })));
+    expect(stayed([0, 10_000, BLADEBURNER_MOVE_WITHIN_MS]).failures).toEqual([]);
+    const late = stayed([0, 10_000, BLADEBURNER_MOVE_WITHIN_MS + 1]);
+    expect(late.failures).toHaveLength(1);
+    expect(late.failures[0]).toContain(
+      "(Sector-12's chaos 80.00 at its start, a move to Aevum, within two readings and an Agent round; the rule's choice: ",
+    );
+    expect(late.failures[0]).toContain(`, past its bound ${formatDuration(BLADEBURNER_MOVE_WITHIN_MS)} (`);
   });
 
   test("with an older Agent's readings (no cities): said, no failure", () => {

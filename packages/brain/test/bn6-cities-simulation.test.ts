@@ -110,7 +110,7 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
   expect(section).not.toContain("    Diplomacy under way 0 s,");
   expect(section).toContain(
     "  the chaos over 50 where the division works, the rule's measure wanting it off, past twice its Diplomacy " +
-      "estimate and 10 min:\n    none",
+      "estimate and 10 min, or a move's 22 s:\n    none",
   );
   expect(failures).toEqual([]);
 }, 240_000);

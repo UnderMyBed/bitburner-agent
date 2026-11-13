@@ -50,7 +50,8 @@
 //   estimate and chaos, the city with the most rank a second sent as the state's `city` (free, and it stops nothing:
 //   `NetscriptFunctions/Bladeburner.ts:316-321`); then Diplomacy where its chaos over 50 costs more rank than
 //   Diplomacy's 60 s, else Incite Violence where the counts it adds gain more than its 60 s and the chaos it adds cost,
-//   each in place of B2's order; else B2's order there. A chaos action under way is kept to its 60 game seconds' end
+//   each in place of B2's order; else B2's order there. A chaos action under way is kept to its run's end, each 60 game
+//   seconds, once the rule has chosen it for that run (#385's review)
 //   (#383: Incite Violence's measure can turn as the counts grow meanwhile, and starting another loses its progress,
 //   `Bladeburner.ts:186-188`), the city held with it (Diplomacy's fall is the city's at its end, `:1187-1198`). The
 //   owner's work holds the moves with the actions; the cities are still read.
@@ -450,7 +451,7 @@ export class BladeburnerRule {
   /** Whether the actions are resting (#375): below ½ max stamina until back at the max. */
   #resting = false;
   /** The chaos action under way (#383), since its first reading under way: the controller's time and the bonus time. */
-  #chaosSince: { name: BladeburnerChaosActionName; atMs: number; bonusSeconds: number } | null = null;
+  #chaosSince: { name: BladeburnerChaosActionName; atMs: number; bonusSeconds: number; keptRun: number } | null = null;
 
   constructor(log: (line: string) => void = () => {}, emit: (event: BladeburnerEvent) => void = () => {}) {
     this.#log = log;
@@ -692,15 +693,22 @@ export class BladeburnerRule {
       then +
       describeActionPlan(plan, resting, stamina, maxStamina) +
       (cities === null || readCity === null ? "" : `; ${describeCityChoice(cities, readCity)}`);
+    // The rule chose the chaos action under way again at its run's first reading (#385's review): kept to that run's end.
+    const since = this.#chaosSince;
+    if (since !== null && kept === null && order.type === "General" && order.name === since.name) {
+      since.keptRun = this.#chaosRunOf(reading, nowMs);
+    }
     return { sent: { plan, order, resting, cities, kept }, text, city };
   }
 
   /**
-   * The chaos action under way to keep (#383): Diplomacy or Incite Violence under way at the reading, for less than its
-   * 60 game seconds since its first reading under way (the controller's time, and the bonus time spent meanwhile,
-   * `Bladeburner.ts:1376-1380`). Null without the controller's time, or none under way. The worker starts it just
-   * before reading it, so the time from its first reading errs short by under a reading's carriage, and it's kept that
-   * little past its end.
+   * The chaos action under way to keep (#383): Diplomacy or Incite Violence under way at the reading, in a run of 60 game
+   * seconds the rule has chosen it for. The game repeats it on its own, so its runs are counted from its first reading
+   * under way (the controller's time, and the bonus time spent meanwhile, `Bladeburner.ts:1376-1380`): the first, which
+   * the rule sent it for, is kept; each later one (#385's review) is the rule's to choose again at its first reading,
+   * and kept to its end if it does (`#actions`). Null without the controller's time, or none under way. The worker starts
+   * it just before reading it, so the time from its first reading errs short by under a reading's carriage, and each
+   * run is kept that little past its end.
    */
   #keptChaosAction(reading: BladeburnerActionsReading, nowMs: number | null): BladeburnerChaosActionName | null {
     const current = reading.current;
@@ -713,11 +721,17 @@ export class BladeburnerRule {
       return null;
     }
     if (this.#chaosSince?.name !== name) {
-      this.#chaosSince = { name, atMs: nowMs, bonusSeconds: reading.bonusSeconds };
+      this.#chaosSince = { name, atMs: nowMs, bonusSeconds: reading.bonusSeconds, keptRun: 0 };
     }
+    return this.#chaosRunOf(reading, nowMs) <= this.#chaosSince.keptRun ? name : null;
+  }
+
+  /** Which 60 game seconds' run of the chaos action under way this reading falls in: 0 the first (#385's review). */
+  #chaosRunOf(reading: BladeburnerActionsReading, nowMs: number | null): number {
     const since = this.#chaosSince;
+    if (since === null || nowMs === null) return 0;
     const gameSeconds = (nowMs - since.atMs) / 1000 + since.bonusSeconds - reading.bonusSeconds;
-    return gameSeconds < BLADEBURNER_CHAOS_ACTION_SECONDS ? name : null;
+    return Math.floor(gameSeconds / BLADEBURNER_CHAOS_ACTION_SECONDS);
   }
 
   #decide(view: BladeburnerView, decision: BladeburnerDecision): BladeburnerDecision {

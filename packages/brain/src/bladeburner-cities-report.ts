@@ -3,16 +3,19 @@
 // estimate, the counts, the time in Diplomacy and Incite Violence, and the rule's choice (core's
 // `chooseBladeburnerCity`) at the last reading. Paths are `vendor/bitburner-src/src/`'s.
 // - **The chaos left** (decision 45): the chaos where the division works over 50, with the rule's own measure wanting
-//   it off (a move to another city, or Diplomacy paying: core's `chooseBladeburnerCity` on each reading), for longer
-//   than twice the rule's own Diplomacy estimate (core's `diplomaciesTo50` of 60 s each, at the stretch's first
-//   reading) and `BLADEBURNER_CHAOS_SLACK_MS`, as #343's waits are bounded: a failure. Real time against the game's
-//   seconds: bonus time only shortens Diplomacy (`Bladeburner.ts:1376-1380`), so the bound errs long. Idle (the owner's
-//   work, or a stop) isn't the rule's; a gap in the readings or an install ends the stretch, as stuck resting's.
+//   it off (core's `chooseBladeburnerCity` on each reading), for longer than its bound: a failure.
+//   - **Diplomacy paying:** twice the rule's own Diplomacy estimate (core's `diplomaciesTo50` of 60 s each, at the
+//     stretch's first reading) and `BLADEBURNER_CHAOS_SLACK_MS`. Real time against the game's seconds: bonus time only
+//     shortens Diplomacy (`Bladeburner.ts:1376-1380`), so the bound errs long.
+//   - **A move to another city** (#385's review): `BLADEBURNER_MOVE_WITHIN_MS`, a few readings, as a move takes one.
+//   A stretch whose wanted fix changes kind ends, and the next begins with its own bound. Idle (the owner's work, or a
+//   stop) isn't the rule's; a gap in the readings or an install ends the stretch, as stuck resting's.
 // - Left out, and labelled: the random events (`:601-699`), seen only as the figures they move.
 import {
   BLADEBURNER_CHAOS_ACTION_SECONDS,
   BLADEBURNER_CONSTANTS,
   BLADEBURNER_LEVELLED_ACTIONS,
+  BLADEBURNER_READING_SECONDS,
   type BladeburnerCityChoice,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
@@ -26,8 +29,18 @@ import { type BladeburnerActionsReading, bladeburnerSpeedOf, describeCityChoice 
 import { BLADEBURNER_GAP_MS } from "./bladeburner-actions-report.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 
-/** The chaos left's slack beyond twice the rule's Diplomacy estimate: 10 minutes, as #343's waits. */
+/**
+ * The chaos left's slack beyond twice the rule's Diplomacy estimate: 10 minutes, picked, as #343's waits' slack was
+ * (#385's review): room for a reading's or a run's delay, not a figure the game gives.
+ */
 export const BLADEBURNER_CHAOS_SLACK_MS = 10 * 60_000;
+/**
+ * How long a wanted move may take (#385's review): 22 s, from the reading cadence. The brain sends the city at the
+ * reading that wants it; the state's change makes the Agent's Bladeburner run due at once, its next round (2 s), whose
+ * city worker moves the division; the medium snapshot after carries that within a reading (10 s,
+ * `BLADEBURNER_READING_SECONDS`); and one reading more for a run the round's deadline put off.
+ */
+export const BLADEBURNER_MOVE_WITHIN_MS = 2 * BLADEBURNER_READING_SECONDS * 1000 + 2_000;
 
 /** A reading the fold keeps: its time, the city, the cities, the counts, the action under way, the cycle's install. */
 interface Kept {
@@ -38,8 +51,9 @@ interface Kept {
   choice: BladeburnerCityChoice | null;
 }
 
-/** A stretch of chaos left over 50 with the rule's measure wanting it off: from, to, its bound, and why. */
+/** A stretch of chaos left over 50 with the rule's measure wanting it off: from, to, its kind, its bound, and why. */
 interface Left {
+  kind: "move" | "diplomacy";
   fromMs: number;
   toMs: number;
   boundMs: number;
@@ -106,16 +120,19 @@ export class BladeburnerCitiesFold {
   #watchChaos(kept: Kept, charisma: number, broken: boolean): void {
     const here = kept.reading.cities?.find((each) => each.name === kept.city);
     const choice = kept.choice;
-    const wanted =
-      here !== undefined &&
-      choice !== null &&
-      kept.reading.current !== null &&
-      here.chaos > BLADEBURNER_CONSTANTS.chaosThreshold &&
-      (choice.city !== kept.city || choice.diplomacy?.pays === true);
-    if (!wanted || broken) {
+    const over = here !== undefined && choice !== null && kept.reading.current !== null;
+    const kind =
+      !over || !(here.chaos > BLADEBURNER_CONSTANTS.chaosThreshold)
+        ? null
+        : choice.city !== kept.city
+          ? "move"
+          : choice.diplomacy?.pays === true
+            ? "diplomacy"
+            : null;
+    if (kind === null || broken || this.#leftOpen?.kind !== kind) {
       if (this.#leftOpen !== null) this.#left.push(this.#leftOpen);
       this.#leftOpen = null;
-      if (!wanted) return;
+      if (kind === null) return;
     }
     if (this.#leftOpen !== null) {
       this.#leftOpen.toMs = kept.atMs;
@@ -123,13 +140,17 @@ export class BladeburnerCitiesFold {
     }
     const attempts = diplomaciesTo50(here?.chaos ?? 0, charisma);
     const estimateMs = attempts * BLADEBURNER_CHAOS_ACTION_SECONDS * 1000;
+    const why =
+      kind === "move"
+        ? `a move to ${choice?.city}, within two readings and an Agent round`
+        : `the rule's Diplomacy estimate ${attempts} × 60 s = ${formatDuration(estimateMs)}`;
     this.#leftOpen = {
+      kind,
       fromMs: kept.atMs,
       toMs: kept.atMs,
-      boundMs: 2 * estimateMs + BLADEBURNER_CHAOS_SLACK_MS,
+      boundMs: kind === "move" ? BLADEBURNER_MOVE_WITHIN_MS : 2 * estimateMs + BLADEBURNER_CHAOS_SLACK_MS,
       detail:
-        `${kept.city}'s chaos ${(here?.chaos ?? 0).toFixed(2)} at its start, the rule's Diplomacy estimate ` +
-        `${attempts} × 60 s = ${formatDuration(estimateMs)}; the rule's choice: ` +
+        `${kept.city}'s chaos ${(here?.chaos ?? 0).toFixed(2)} at its start, ${why}; the rule's choice: ` +
         (choice === null ? "none" : describeCityChoice(choice, kept.city)),
     };
   }
@@ -173,7 +194,7 @@ export class BladeburnerCitiesFold {
     );
     lines.push(
       "  the chaos over 50 where the division works, the rule's measure wanting it off, past twice its Diplomacy " +
-        "estimate and 10 min:",
+        `estimate and 10 min, or a move's ${formatDuration(BLADEBURNER_MOVE_WITHIN_MS)}:`,
     );
     const long = [...this.#left, ...(this.#leftOpen === null ? [] : [this.#leftOpen])].filter(
       (each) => each.toMs - each.fromMs > each.boundMs,
