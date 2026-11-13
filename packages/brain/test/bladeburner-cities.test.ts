@@ -120,8 +120,11 @@ function reading({
   };
 }
 
-/** A medium snapshot in the division with `bladeburner`, home 128 GB, the player's figures as `getPlayer()` has them. */
-function medium(bladeburner: unknown, { factions = ["CyberSec"] as string[], who = PERSON } = {}) {
+/**
+ * A medium snapshot in the division with `bladeburner`, home 128 GB, the player's figures as `getPlayer()` has them;
+ * in the Bladeburners faction (#386), so no current-rank target until B5's Black Ops: the rule by rank a second.
+ */
+function medium(bladeburner: unknown, { factions = ["CyberSec", "Bladeburners"] as string[], who = PERSON } = {}) {
   return {
     player: {
       skills: who.skills,
@@ -395,9 +398,9 @@ describe("the rule (#383)", () => {
     decide(rule, medium(reading({ all: cities(0, { "Sector-12": { chaos: 80 } }) })));
     decide(rule, medium(reading({ all: cities(52) })));
     expect(lines.map((line) => line.split(" (")[0])).toEqual([
-      "bladeburner: in the division, rank 0.0; Bladeburners at rank 25; Bounty Hunter level 1",
-      "bladeburner: in the division, rank 0.0; Bladeburners at rank 25; Bounty Hunter level 1",
-      "bladeburner: in the division, rank 0.0; Bladeburners at rank 25; Diplomacy, then: Tracking level 1",
+      "bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1",
+      "bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1",
+      "bladeburner: in the division, rank 0.0; Bladeburners joined; Diplomacy, then: Tracking level 1",
     ]);
     expect(lines[1]).toContain("; in Aevum (");
   });
@@ -527,7 +530,7 @@ describe("the run report's cities (#383)", () => {
    * Readings at `offsets`, each `options`'s, the rank as B2's forecast has it for Bounty Hunter under way at the chaos
    * read (its chance at the low end × 0.9, each 21 s; no loss), so B2's rank check holds.
    */
-  const at = (offsets: number[], options: (offsetMs: number) => ReadingOptions) => {
+  const at = (offsets: number[], options: (offsetMs: number) => ReadingOptions, factions = ["Bladeburners"]) => {
     let rank = 0;
     let previous: { offsetMs: number; perSecond: number } | null = null;
     return offsets.map((offsetMs) => {
@@ -536,7 +539,7 @@ describe("the run report's cities (#383)", () => {
       const read = reading(each);
       const bounty = read.actions.find((action) => action.name === "Bounty Hunter") as BladeburnerActionReading;
       previous = { offsetMs, perSecond: each.current?.name === "Bounty Hunter" ? (bounty.chance[0] * 0.9) / 21 : 0 };
-      return [T0 + offsetMs, medium(reading({ ...each, rank }), { factions: [] })] as [number, MediumSnapshotData];
+      return [T0 + offsetMs, medium(reading({ ...each, rank }), { factions })] as [number, MediumSnapshotData];
     });
   };
 
@@ -569,6 +572,18 @@ describe("the run report's cities (#383)", () => {
       "  the chaos over 50 where the division works, the rule's measure wanting it off, past twice its Diplomacy " +
         "estimate and 10 min, or a move's 22 s:\n    none",
     );
+  });
+
+  test("under the faction's 25 (#386): the rule's choice by the least time to it, as the brain's; joined, by the rate", () => {
+    const readings = (factions: string[]) =>
+      at([0, 10_000], () => ({ all: cities(0), found: BOUNTY, current: BOUNTY }), factions);
+    const choiceLine = (factions: string[]) =>
+      fold(readings(factions))
+        .text.split("\n")
+        .find((line) => line.includes("the rule's choice at the last reading"));
+    expect(choiceLine([])).toContain("rank 25 in about");
+    expect(choiceLine([])).toContain("expected: the least of the six");
+    expect(choiceLine(["Bladeburners"])).not.toContain("rank 25 in about");
   });
 
   test("the chaos left over 50 with Diplomacy paying, past twice its estimate and 10 min, fails; at it, passes", () => {

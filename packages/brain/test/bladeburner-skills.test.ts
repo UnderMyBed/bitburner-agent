@@ -87,8 +87,11 @@ function reading({ rank = 0, points = 0, levels = {}, count = 100, current = nul
   };
 }
 
-/** A medium snapshot in the division with `reading`, home 128 GB, the player's figures as `getPlayer()` has them. */
-function medium(bladeburner: unknown, { factions = ["CyberSec"] as string[] } = {}) {
+/**
+ * A medium snapshot in the division with `reading`, home 128 GB, the player's figures as `getPlayer()` has them; in the
+ * Bladeburners faction (#386), so no current-rank target until B5's Black Ops: the rule by rank a second.
+ */
+function medium(bladeburner: unknown, { factions = ["CyberSec", "Bladeburners"] as string[] } = {}) {
   return {
     player: {
       skills: PERSON.skills,
@@ -389,7 +392,7 @@ describe("the run report's skills (#379)", () => {
       folded.addSlow(atMs, { ...data, resetInfo: { ...data.resetInfo, lastAugReset: atMs + index } });
     }
     for (const [atMs, options] of readings) {
-      folded.addMedium(atMs, medium(reading(options), { factions: [] }));
+      folded.addMedium(atMs, medium(reading(options), { factions: ["Bladeburners"] }));
     }
     const failures: string[] = [];
     const text = folded.section(failures, T0 + 24 * 3600 * SECOND).join("\n");
@@ -486,14 +489,14 @@ describe("the run report's skills (#379)", () => {
     let rank = 0;
     for (let index = 0; index <= 10; index++) {
       if (index > 0 && index % 2 === 0) rank += 0.3;
-      folded.addMedium(T0 + index * 11 * SECOND, medium(tracking(index, rank), { factions: [] }));
+      folded.addMedium(T0 + index * 11 * SECOND, medium(tracking(index, rank), { factions: ["Bladeburners"] }));
     }
     const fieldFrom = T0 + 110 * SECOND;
     for (let index = 1; index <= 6; index++) {
       const field = reading({ current: FIELD, rank: rank + ((index - 1) * 10 * 0.1) / 30 });
       folded.addMedium(
         fieldFrom + index * 10 * SECOND,
-        medium({ ...field, found: index === 1 ? TRACKING : FIELD }, { factions: [] }),
+        medium({ ...field, found: index === 1 ? TRACKING : FIELD }, { factions: ["Bladeburners"] }),
       );
     }
     const failures: string[] = [];
@@ -516,7 +519,7 @@ describe("the run report's skills (#379)", () => {
     const folded = new BladeburnerFold();
     folded.addSlow(T0, slow(6));
     const { skillPoints: _points, skillLevels: _levels, ...b2 } = reading();
-    folded.addMedium(T0, medium(b2, { factions: [] }));
+    folded.addMedium(T0, medium(b2, { factions: ["Bladeburners"] }));
     const failures: string[] = [];
     expect(folded.section(failures, T0 + SECOND).join("\n")).toContain(
       "  the skills (#379): no reading with them (an older Agent's)",

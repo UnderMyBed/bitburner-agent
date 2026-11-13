@@ -14,11 +14,13 @@
 import {
   BLADEBURNER_CHAOS_ACTION_SECONDS,
   BLADEBURNER_CONSTANTS,
+  BLADEBURNER_FACTION,
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_READING_SECONDS,
   type BladeburnerCityChoice,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
+  bladeburnerRankTarget,
   chooseBladeburnerCity,
   DIPLOMACY,
   diplomaciesTo50,
@@ -80,12 +82,17 @@ export class BladeburnerCitiesFold {
     reading: BladeburnerActionsReading,
     bitNode: number,
     lastAugReset: number | null = null,
+    /** The rank read (#386): under its current-rank target, the city by the least time to it, as the brain's. */
+    rank: number | null = null,
   ): void {
     const { city, cities } = reading;
     if (city === null || cities === null) return;
     const person = bladeburnerPersonOf(data.player);
     const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
     if (person === null || rankMultiplier === null) return;
+    const factions = (data.player as { factions?: unknown } | undefined)?.factions;
+    const factionJoined = Array.isArray(factions) && factions.includes(BLADEBURNER_FACTION);
+    const target = rank === null ? null : bladeburnerRankTarget({ rank, factionJoined });
     const choice = chooseBladeburnerCity(
       {
         readings: reading.actions,
@@ -95,6 +102,7 @@ export class BladeburnerCitiesFold {
         rankMultiplier,
         speed: bladeburnerSpeedOf(reading.bonusSeconds),
         skills: { read: reading.skills?.levels ?? {} },
+        ...(target === null || rank === null ? {} : { target: { rank, target } }),
       },
       { city, cities },
     );

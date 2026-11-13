@@ -39,7 +39,9 @@
 // - **The focus** (#377's review): A5's faction work waits all the actions' time, the rests' too, Field Analysis's rank
 //   all it gains then; the time and that rank are shown, the trade the planner's.
 // - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings): its cycle's rank a
-//   second, shown beside the rank measured over the readings; not judged, as a window cuts the cycle anywhere.
+//   second, shown beside the rank measured over the readings; not judged, as a window cuts the cycle anywhere. Under
+//   the reading's current-rank target (#386, core's `bladeburnerRankTarget`), the plan the brain chooses, the least
+//   expected time to it, and that time; the stuck-resting check takes that plan's rest too.
 // - **The skills** (B3, #379): the levels read are in the game's range read, and core's time and regain take them, so
 //   the forecast is the game's with them. Shown: the levels bought over the window, the points unspent and the rule's
 //   plan at the last reading, and its forecast there beside B2's at no skills. **Points unspent:** the rule's plan
@@ -55,6 +57,7 @@ import {
   actionSeconds,
   actionStaminaCost,
   attemptRankMoments,
+  BLADEBURNER_FACTION,
   BLADEBURNER_READING_SECONDS,
   BLADEBURNER_REST_SECONDS,
   type BladeburnerActionPlan,
@@ -67,6 +70,7 @@ import {
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
+  bladeburnerRankTarget,
   bladeburnerSkillCostMultiplierOf,
   bladeburnerSkillMultsOf,
   chooseBladeburnerAction,
@@ -84,6 +88,7 @@ import {
   type BladeburnerActionsReading,
   bladeburnerSpeedOf,
   describeSkillPlan,
+  describeToTarget,
 } from "./bladeburner.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 
@@ -139,6 +144,8 @@ interface Kept {
   hp: { current: number; max: number } | null;
   /** The cycle's install (the slow snapshot's `lastAugReset`), or null. */
   lastAugReset: number | null;
+  /** The next current-rank target (#386, core's `bladeburnerRankTarget`), or null: none, or met. */
+  target: number | null;
 }
 
 /** The action under way at `kept`, as the forecast takes it: an attempt's figures, or a rest's rank a second. */
@@ -306,6 +313,8 @@ export class BladeburnerActionsFold {
     const player = data.player as { money?: unknown; hp?: { current?: unknown; max?: unknown } } | undefined;
     const hp = player?.hp;
     const levels = reading.skills?.levels ?? {};
+    const factions = (data.player as { factions?: unknown } | undefined)?.factions;
+    const factionJoined = Array.isArray(factions) && factions.includes(BLADEBURNER_FACTION);
     const kept: Kept = {
       atMs,
       rank,
@@ -318,6 +327,7 @@ export class BladeburnerActionsFold {
       money: isNumber(player?.money) ? player.money : null,
       hp: isNumber(hp?.current) && isNumber(hp?.max) ? { current: hp.current, max: hp.max } : null,
       lastAugReset,
+      target: bladeburnerRankTarget({ rank, factionJoined }),
     };
     this.#readings += 1;
     const plan = this.#plan(kept);
@@ -526,8 +536,13 @@ export class BladeburnerActionsFold {
     };
   }
 
+  /** The rule's plan at `kept`: under its target (#386), the least time to it, as the brain chooses. */
   #plan(kept: Kept): BladeburnerActionPlan {
-    return chooseBladeburnerAction({ ...this.#forecastInput(kept), skills: { read: kept.levels } });
+    return chooseBladeburnerAction({
+      ...this.#forecastInput(kept),
+      skills: { read: kept.levels },
+      ...(kept.target === null ? {} : { target: { rank: kept.rank, target: kept.target } }),
+    });
   }
 
   /** The skills' lines (#379), its failures added to `failures`. */
@@ -597,10 +612,11 @@ export class BladeburnerActionsFold {
     const planText = (plan: BladeburnerActionPlan | null) =>
       plan === null
         ? "none"
-        : plan.work === null
-          ? `${perMinute(plan.rankPerSecond)}, ${plan.rest.name} alone`
-          : `${perMinute(plan.rankPerSecond)}, ${plan.work.name} level ${plan.work.level} worked ` +
-            `${(100 * plan.duty).toFixed(0)}% with ${plan.rest.name}`;
+        : (plan.work === null
+            ? `${perMinute(plan.rankPerSecond)}, ${plan.rest.name} alone`
+            : `${perMinute(plan.rankPerSecond)}, ${plan.work.name} level ${plan.work.level} worked ` +
+              `${(100 * plan.duty).toFixed(0)}% with ${plan.rest.name}`) +
+          (plan.toTarget === undefined ? "" : ` (${describeToTarget(plan.toTarget)})`);
     const spanMs = last.atMs - first.atMs;
     lines.push(
       `    the rule's forecast over a cycle: ${planText(this.#firstPlan)} at the first reading; ` +
