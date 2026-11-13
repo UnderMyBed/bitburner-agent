@@ -57,6 +57,7 @@ import {
   actionSeconds,
   actionStaminaCost,
   attemptRankMoments,
+  BLACK_OPERATIONS,
   BLADEBURNER_FACTION,
   BLADEBURNER_READING_SECONDS,
   BLADEBURNER_REST_SECONDS,
@@ -67,6 +68,12 @@ import {
   type BladeburnerSkillLevels,
   type BladeburnerSkillMults,
   type BladeburnerSkillPlan,
+  blackOpHpLoss,
+  blackOpRankGain,
+  blackOpRankLoss,
+  blackOpSeconds,
+  blackOpStaminaCost,
+  bladeburnerBlackOp,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
@@ -80,6 +87,7 @@ import {
   fieldAnalysisRank,
   INTENT_RETRY_ROUNDS,
   type MediumSnapshotData,
+  memoizedBladeburnerChoice,
   REGENERATION_CHAMBER,
   staminaGainPerSecond,
 } from "@bitburner-agent/core";
@@ -146,6 +154,8 @@ interface Kept {
   lastAugReset: number | null;
   /** The next current-rank target (#386, core's `bladeburnerRankTarget`), or null: none, or met. */
   target: number | null;
+  /** B2's forecast, shared with the reading's other folds (#392: core's `memoizedBladeburnerChoice`). */
+  choose: typeof chooseBladeburnerAction;
 }
 
 /** The action under way at `kept`, as the forecast takes it: an attempt's figures, or a rest's rank a second. */
@@ -169,10 +179,10 @@ interface Running {
     stamina: number;
     hpLoss: number;
     chance: number;
-    /** A success's rank and a failure's loss, their means; the action, for its count's growth. */
+    /** A success's rank and a failure's loss, their means; the action, for its count's growth (null: a Black Op). */
     gain: number;
     loss: number;
-    levelled: BladeburnerLevelledAction;
+    levelled: BladeburnerLevelledAction | null;
   } | null;
 }
 
@@ -194,6 +204,35 @@ function runningOf(kept: Kept): Running | null {
       rate: fieldAnalysis ? gain / BLADEBURNER_REST_SECONDS[FIELD_ANALYSIS] : 0,
       cut: gain,
       attempt: null,
+    };
+  }
+  // A Black Op (#392): its one attempt, at the chance read for it (the next's), as a contract's or operation's.
+  const op = current.type === BLACK_OPERATIONS ? bladeburnerBlackOp(current.name) : null;
+  const next = kept.reading.blackOp;
+  if (op !== null && next != null && next.name === op.name) {
+    const chance = next.chance[0];
+    const gain = blackOpRankGain(op, kept.rankMultiplier);
+    const loss = blackOpRankLoss(op);
+    const seconds = blackOpSeconds(op, kept.person, kept.mults);
+    const { mean, variance } = attemptRankMoments(chance, gain, loss);
+    return {
+      name: current.name,
+      action: current.name,
+      resting: false,
+      rate: mean / seconds,
+      cut: chance * gain,
+      attempt: {
+        mean,
+        variance,
+        below: mean + 1.1 * loss,
+        seconds,
+        stamina: blackOpStaminaCost(op),
+        hpLoss: blackOpHpLoss(op),
+        chance,
+        gain,
+        loss,
+        levelled: null,
+      },
     };
   }
   const action = bladeburnerLevelledAction(current.type, current.name);
@@ -286,7 +325,12 @@ export class BladeburnerActionsFold {
   #restingMs = 0;
   #restingRank = 0;
   #lowestStamina: { atMs: number; stamina: number; max: number } | null = null;
-  readonly #stops: { atMs: number; action: string; cause: "stamina" | "count" | "work"; detail: string }[] = [];
+  readonly #stops: {
+    atMs: number;
+    action: string;
+    cause: "stamina" | "count" | "work" | "blackOp";
+    detail: string;
+  }[] = [];
   readonly #visits: { atMs: number; leastBill: number }[] = [];
   readonly #resting: Resting[] = [];
   #restingOpen: Resting | null = null;
@@ -305,6 +349,8 @@ export class BladeburnerActionsFold {
     reading: BladeburnerActionsReading,
     bitNode: number,
     lastAugReset: number | null = null,
+    /** B2's forecast for this reading, shared with its other folds (#392); none given, its own. */
+    choose: typeof chooseBladeburnerAction = memoizedBladeburnerChoice(),
   ): void {
     const person = bladeburnerPersonOf(data.player);
     const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
@@ -327,7 +373,13 @@ export class BladeburnerActionsFold {
       money: isNumber(player?.money) ? player.money : null,
       hp: isNumber(hp?.current) && isNumber(hp?.max) ? { current: hp.current, max: hp.max } : null,
       lastAugReset,
-      target: bladeburnerRankTarget({ rank, factionJoined }),
+      // The next Black Op's rank (#392) the target too, as the brain's.
+      target: bladeburnerRankTarget({
+        rank,
+        factionJoined,
+        blackOpRank: reading.blackOp == null ? null : (bladeburnerBlackOp(reading.blackOp.name)?.rank ?? null),
+      }),
+      choose,
     };
     this.#readings += 1;
     const plan = this.#plan(kept);
@@ -392,19 +444,24 @@ export class BladeburnerActionsFold {
       const cost = before?.attempt?.stamina ?? 0;
       const regained =
         staminaGainPerSecond(previous.person, previous.reading.maxStamina, previous.mults) * Math.max(0, seconds);
+      // A Black Op stops after its one attempt, either way (#392, `Bladeburner.ts:1083`).
       const cause =
-        before?.attempt != null && reading.stamina < cost + regained
-          ? "stamina"
-          : read !== undefined && read.count < 1
-            ? "count"
-            : "work";
+        wasRunning.type === BLACK_OPERATIONS
+          ? "blackOp"
+          : before?.attempt != null && reading.stamina < cost + regained
+            ? "stamina"
+            : read !== undefined && read.count < 1
+              ? "count"
+              : "work";
       const detail =
         cause === "stamina"
           ? `stamina ${reading.stamina.toFixed(2)} / ${reading.maxStamina.toFixed(1)}, under an attempt's ` +
             `${cost.toFixed(2)} and ${regained.toFixed(2)} regained since`
           : cause === "count"
             ? `its count ${(read?.count ?? 0).toFixed(2)}, under 1`
-            : "stopped with stamina and count left: other work";
+            : cause === "blackOp"
+              ? "its one attempt made: the game stops a Black Op either way"
+              : "stopped with stamina and count left: other work";
       this.#stops.push({ atMs, action: wasRunning.name, cause, detail });
     }
     // The hospital: the HP back at its max from under it, not by the Chamber's 2.
@@ -453,12 +510,21 @@ export class BladeburnerActionsFold {
     each.expected += attempts * attempt.mean;
     each.variance += attempts * attempt.variance;
     each.below = Math.max(each.below, attempt.below);
-    const id = (read: { type: string; name: string }) =>
-      read.type === attempt.levelled.type && read.name === attempt.levelled.name;
+    const levelled = attempt.levelled;
+    if (levelled === null) {
+      // A Black Op (#392): no count; its attempt's share of the interval, its successes from its rank, as below.
+      each.attempts += attempts;
+      each.successes += Math.min(
+        attempts,
+        Math.max(0, (rank + attempts * attempt.loss) / (attempt.gain + attempt.loss)),
+      );
+      return;
+    }
+    const id = (read: { type: string; name: string }) => read.type === levelled.type && read.name === levelled.name;
     const before = previous.reading.actions.find(id);
     const after = kept.reading.actions.find(id);
     if (before === undefined || after === undefined) return;
-    const fell = Math.max(0, before.count - after.count + countGrowthPerSecond(attempt.levelled) * seconds);
+    const fell = Math.max(0, before.count - after.count + countGrowthPerSecond(levelled) * seconds);
     each.attempts += fell;
     each.successes += Math.min(fell, Math.max(0, (rank + fell * attempt.loss) / (attempt.gain + attempt.loss)));
   }
@@ -538,7 +604,7 @@ export class BladeburnerActionsFold {
 
   /** The rule's plan at `kept`: under its target (#386), the least time to it, as the brain chooses. */
   #plan(kept: Kept): BladeburnerActionPlan {
-    return chooseBladeburnerAction({
+    return kept.choose({
       ...this.#forecastInput(kept),
       skills: { read: kept.levels },
       ...(kept.target === null ? {} : { target: { rank: kept.rank, target: kept.target } }),
@@ -662,7 +728,7 @@ export class BladeburnerActionsFold {
     if (others.length === 0) lines.push("      none but at stamina 0 (below)");
     for (const stop of others) {
       lines.push(
-        `      ${formatIsoTime(stop.atMs)}: ${stop.action}, ${stop.cause === "count" ? "the counts ran out" : "other work"} (${stop.detail})`,
+        `      ${formatIsoTime(stop.atMs)}: ${stop.action}, ${stop.cause === "count" ? "the counts ran out" : stop.cause === "blackOp" ? "done" : "other work"} (${stop.detail})`,
       );
     }
     lines.push("  an action stopped at stamina 0 at any reading:");

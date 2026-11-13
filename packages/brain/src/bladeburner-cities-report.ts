@@ -18,9 +18,11 @@ import {
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_READING_SECONDS,
   type BladeburnerCityChoice,
+  bladeburnerBlackOp,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
   bladeburnerRankTarget,
+  chooseBladeburnerAction,
   chooseBladeburnerCity,
   DIPLOMACY,
   diplomaciesTo50,
@@ -84,6 +86,8 @@ export class BladeburnerCitiesFold {
     lastAugReset: number | null = null,
     /** The rank read (#386): under its current-rank target, the city by the least time to it, as the brain's. */
     rank: number | null = null,
+    /** B2's forecast for this reading, shared with its other folds (#392); none given, its own. */
+    choose: typeof chooseBladeburnerAction = chooseBladeburnerAction,
   ): void {
     const { city, cities } = reading;
     if (city === null || cities === null) return;
@@ -92,7 +96,9 @@ export class BladeburnerCitiesFold {
     if (person === null || rankMultiplier === null) return;
     const factions = (data.player as { factions?: unknown } | undefined)?.factions;
     const factionJoined = Array.isArray(factions) && factions.includes(BLADEBURNER_FACTION);
-    const target = rank === null ? null : bladeburnerRankTarget({ rank, factionJoined });
+    // The next Black Op's rank (#392) the target too, as the brain's.
+    const blackOpRank = reading.blackOp == null ? null : (bladeburnerBlackOp(reading.blackOp.name)?.rank ?? null);
+    const target = rank === null ? null : bladeburnerRankTarget({ rank, factionJoined, blackOpRank });
     const choice = chooseBladeburnerCity(
       {
         readings: reading.actions,
@@ -105,6 +111,7 @@ export class BladeburnerCitiesFold {
         ...(target === null || rank === null ? {} : { target: { rank, target } }),
       },
       { city, cities },
+      choose,
     );
     const kept: Kept = { atMs, city, reading, lastAugReset, choice };
     this.#readings += 1;

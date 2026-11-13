@@ -55,7 +55,19 @@
 //   (#383: Incite Violence's measure can turn as the counts grow meanwhile, and starting another loses its progress,
 //   `Bladeburner.ts:186-188`), the city held with it (Diplomacy's fall is the city's at its end, `:1187-1198`). The
 //   owner's work holds the moves with the actions; the cities are still read.
+// - The Black Ops (B5, #392), once the reading has the next: its rank is the rule's current-rank target (core's
+//   `bladeburnerRankTarget`, #386's least expected time to it, once the faction is joined). At it, core's
+//   `checkBladeburnerBlackOp` decides: the expected time to it done attempting now (each failure's rank loss rebuilt)
+//   against waiting for the skill points the next level needs (a one-stage look-ahead). Run when it says so and the
+//   stamina isn't resting (the work or rest choice at ½ max, B2's, so its chance has no penalty), in place of B2's
+//   order and B4's chaos action (a chaos action under way is kept to its 60 s's end first); sent as the worker's
+//   `action`, `Black Operations`, which the game stops after its one attempt (`Bladeburner.ts:1083`). One under way is
+//   kept to its end, whatever the check says then (starting another loses its progress, `Bladeburner.ts:186-188`): the
+//   state asks no action meanwhile (null: the worker leaves the game's), so a state that outlives the attempt starts
+//   nothing (the game idles after it, `:1083`), and the next reading decides. No team (0, the game's default),
+//   labelled; the focus held for it as for any action; none outside BN6 and BN7.
 import {
+  BLACK_OPERATIONS,
   BLADEBURNER_BITNODES,
   BLADEBURNER_CHAOS_ACTION_SECONDS,
   BLADEBURNER_CONSTANTS,
@@ -68,6 +80,8 @@ import {
   type BladeburnerActionOrder,
   type BladeburnerActionPlan,
   type BladeburnerActionReading,
+  type BladeburnerBlackOpCheck,
+  type BladeburnerBlackOpReading,
   type BladeburnerChaosActionName,
   type BladeburnerCityChoice,
   type BladeburnerCityReading,
@@ -75,6 +89,7 @@ import {
   type BladeburnerSkillLevels,
   type BladeburnerSkillPlan,
   type BladeburnerState,
+  bladeburnerBlackOp,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
   bladeburnerRankTarget,
@@ -85,6 +100,7 @@ import {
   COMBAT_STATS,
   type CombatTrainingPlan,
   cheapestBladeburnerSkillLevel,
+  checkBladeburnerBlackOp,
   chooseBladeburnerAction,
   chooseBladeburnerCity,
   chooseBladeburnerSkills,
@@ -176,6 +192,19 @@ export interface BladeburnerActionsReading {
   skills: BladeburnerSkillsReading | null;
   city: string | null;
   cities: BladeburnerCityReading[] | null;
+  /** B5's (#392): the next Black Op and the game's range for it (null: all 21 done); undefined from a B4 Agent. */
+  blackOp?: BladeburnerBlackOpReading | null;
+}
+
+/** B5's Black Op of a reading (#392): undefined with none read (a B4 Agent), false with one not as it should be. */
+function blackOpReadingOf(reading: Partial<BladeburnerReading>): BladeburnerBlackOpReading | null | undefined | false {
+  const { blackOp } = reading;
+  if (blackOp === undefined) return undefined;
+  if (blackOp === null) return null;
+  const { name, chance } = (typeof blackOp === "object" ? blackOp : {}) as Partial<Record<string, unknown>>;
+  if (typeof name !== "string" || bladeburnerBlackOp(name) === null) return false;
+  if (!Array.isArray(chance) || chance.length !== 2 || !chance.every(isNumber)) return false;
+  return { name, chance: [chance[0], chance[1]] as [number, number] };
 }
 
 /** B4's cities of a reading (#383): null with none, undefined with one not a figure or a name not the six's. */
@@ -252,8 +281,19 @@ function actionsReadingOf(reading: Partial<BladeburnerReading>): BladeburnerActi
   }
   const skills = skillsReadingOf(reading);
   const cities = citiesReadingOf(reading);
-  if (skills === undefined || cities === undefined) return undefined;
-  return { stamina, maxStamina, bonusSeconds, found: foundId, current: currentId, actions: checked, skills, ...cities };
+  const blackOp = blackOpReadingOf(reading);
+  if (skills === undefined || cities === undefined || blackOp === false) return undefined;
+  return {
+    stamina,
+    maxStamina,
+    bonusSeconds,
+    found: foundId,
+    current: currentId,
+    actions: checked,
+    skills,
+    ...cities,
+    ...(blackOp === undefined ? {} : { blackOp }),
+  };
 }
 
 /** The Bladeburner of `mediumData`, checked. */
@@ -280,7 +320,7 @@ export function bladeburnerSnapshotOf(mediumData: unknown): BladeburnerSnapshot 
       joined,
       reading: {
         kind: "unread",
-        problem: "the Bladeburner reading's stamina, actions, skills or cities aren't figures",
+        problem: "the Bladeburner reading's stamina, actions, skills, cities or Black Op aren't figures",
       },
     };
   }
@@ -339,6 +379,11 @@ export interface BladeburnerView {
     kept?: BladeburnerChaosActionName | null;
     /** What the plan was chosen from (#386): the forecast's input in the city chosen, its target with it. */
     input?: BladeburnerActionInput;
+    /**
+     * The next Black Op (#392): core's check on it (null: none read, or all done), and whether the order is it (`run`:
+     * sent by the check; `kept`: under way, kept to its end).
+     */
+    blackOp?: { check: BladeburnerBlackOpCheck; order: "run" | "kept" | null } | null;
   } | null;
   /** In the division with B3's reading (#379): the skills' plan; null without it. */
   skills?: BladeburnerSkillPlan | null;
@@ -413,6 +458,33 @@ export function describeCityChoice(choice: BladeburnerCityChoice, readCity: stri
       `cost ${incite.cost.toFixed(2)}`;
   }
   return text;
+}
+
+/** "34.1%". */
+const percent = (share: number) => `${(100 * share).toFixed(1)}%`;
+/** "about 41 min", or "never". */
+const about = (seconds: number) => (Number.isFinite(seconds) ? `about ${formatDuration(seconds * 1000)}` : "never");
+
+/** The next Black Op's check in words (#392), for the dashboard, the log and the run report. */
+export function describeBlackOpCheck(check: BladeburnerBlackOpCheck): string {
+  const chance =
+    check.chance === null ? "its chance unread (stamina 0)" : `its chance ${percent(check.chance)} at the low end`;
+  if (!check.met) {
+    return (
+      `next Black Op: ${check.name} at rank ${check.rank.toLocaleString("en-US")}, ${chance}` +
+      (Number.isFinite(check.expected) ? `, ${about(check.expected)} to it done once there` : "")
+    );
+  }
+  const head = `next Black Op: ${check.name}, its rank ${check.rank.toLocaleString("en-US")} met, ${chance}`;
+  const done = `${about(check.expected)} to it done attempting now (a failure's ${check.loss} rank rebuilt in ${about(check.rebuild)})`;
+  const wait = check.wait;
+  if (wait === null) return `${head}: ${check.run ? "run" : "not run"}, ${done}`;
+  const bound = Number.isFinite(check.bound) ? `the bound ${percent(check.bound)}` : "no chance clears the wait";
+  return (
+    `${head}: ${check.run ? "run" : "waiting"} (${bound}), ${done}, against ${about(wait.expected)} after ` +
+    `${wait.points} skill point${wait.points === 1 ? "" : "s"} in ${about(wait.seconds)} (its chance then ` +
+    `${percent(wait.chance)})`
+  );
 }
 
 /** The skills' plan in words (#379), for the dashboard, the log and the run report. */
@@ -591,13 +663,16 @@ export class BladeburnerRule {
     const { reading } = snapshot;
     const rank = reading.kind === "read" ? reading.rank : null;
     const joinTheFaction = !inFaction && rank !== null && rank >= BLADEBURNER_FACTION_RANK;
+    // The next Black Op's rank (#392): the target once the faction is joined.
+    const next = reading.kind === "read" ? reading.actions?.blackOp : undefined;
+    const blackOpRank = next == null ? null : (bladeburnerBlackOp(next.name)?.rank ?? null);
     const actions = this.#actions(
       reading.kind === "read" ? reading.actions : null,
       mediumData,
       bitNode,
       ownersWork,
       nowMs,
-      rank === null ? null : bladeburnerRankTarget({ rank, factionJoined: inFaction }),
+      rank === null ? null : bladeburnerRankTarget({ rank, factionJoined: inFaction, blackOpRank }),
       rank,
     );
     const skills = this.#skills(reading.kind === "read" ? reading.actions : null, mediumData, bitNode);
@@ -617,7 +692,9 @@ export class BladeburnerRule {
             (reading.problems.length > 0 ? `; ${reading.problems.join("; ")}` : "");
     const state: BladeburnerState = {
       joinTheFaction,
-      ...(actions.sent === null ? {} : { action: actions.sent.order }),
+      // A Black Op under way (#392): no action asked, so the worker leaves it to its end, and starts nothing on a state
+      // that outlived it (the game idles after it; the next reading's rule decides).
+      ...(actions.sent === null ? {} : { action: actions.sent.blackOp?.order === "kept" ? null : actions.sent.order }),
       ...(actions.city === undefined ? {} : { city: actions.city }),
     };
     return this.#decide(
@@ -690,7 +767,7 @@ export class BladeburnerRule {
     }
     const { stamina, maxStamina } = reading;
     this.#resting = bladeburnerResting({ stamina, maxStamina, wasResting: this.#resting });
-    const forecast = {
+    const base = {
       readings: reading.actions,
       person,
       stamina,
@@ -698,8 +775,8 @@ export class BladeburnerRule {
       rankMultiplier,
       speed: bladeburnerSpeedOf(reading.bonusSeconds),
       skills: { read: reading.skills?.levels ?? {} },
-      ...(target === null || rank === null ? {} : { target: { rank, target } }),
     };
+    const forecast = { ...base, ...(target === null || rank === null ? {} : { target: { rank, target } }) };
     const cities =
       readCity === null || reading.cities === null
         ? null
@@ -714,25 +791,60 @@ export class BladeburnerRule {
         : { ...forecast, city: { ratio: cityCompetenceRatio(here, there) ?? 0, raid: there.communities > 0 } };
     const resting = this.#resting || plan.work === null;
     const chaosAction = kept ?? cities?.chaosAction ?? null;
+    // The next Black Op (#392): one under way kept to its end; else run where core's check says so, the stamina not
+    // resting (so its chance has no penalty), after a chaos action kept to its end.
+    const next = reading.blackOp;
+    const op = next == null ? null : bladeburnerBlackOp(next.name);
+    const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode);
+    const check =
+      op === null || next == null || rank === null
+        ? null
+        : checkBladeburnerBlackOp(base, {
+            op,
+            rank,
+            chance: next.chance,
+            skills:
+              reading.skills === null || costMultiplier === null
+                ? null
+                : { levels: reading.skills.levels, points: reading.skills.points, costMultiplier },
+          });
+    const underWay = reading.current?.type === BLACK_OPERATIONS ? reading.current.name : null;
+    const blackOpOrder: "run" | "kept" | null =
+      kept !== null ? null : underWay !== null ? "kept" : check?.run === true && !this.#resting ? "run" : null;
+    // A chaos action kept (`chaosAction` is it then, and `blackOpOrder` null) comes first.
     const order: BladeburnerActionOrder =
-      chaosAction !== null
-        ? { type: "General", name: chaosAction, level: null }
-        : plan.work !== null && !resting
-          ? { type: plan.work.type, name: plan.work.name, level: plan.work.level }
-          : { type: "General", name: plan.rest.name, level: null };
+      blackOpOrder !== null
+        ? {
+            type: BLACK_OPERATIONS,
+            name: blackOpOrder === "kept" ? (underWay as string) : (op as { name: string }).name,
+            level: null,
+          }
+        : chaosAction !== null
+          ? { type: "General", name: chaosAction, level: null }
+          : plan.work !== null && !resting
+            ? { type: plan.work.type, name: plan.work.name, level: plan.work.level }
+            : { type: "General", name: plan.rest.name, level: null };
     const city = kept !== null ? readCity : (cities?.city ?? readCity);
     const then =
-      kept !== null ? `${kept} kept to its 60 s's end, then: ` : chaosAction !== null ? `${chaosAction}, then: ` : "";
+      kept !== null
+        ? `${kept} kept to its 60 s's end, then: `
+        : blackOpOrder !== null
+          ? `${order.name} ${blackOpOrder === "kept" ? "under way, kept to its end" : "run"}, then: `
+          : chaosAction !== null
+            ? `${chaosAction}, then: `
+            : "";
     const text =
       then +
       describeActionPlan(plan, resting, stamina, maxStamina) +
-      (cities === null || readCity === null ? "" : `; ${describeCityChoice(cities, readCity)}`);
+      (cities === null || readCity === null ? "" : `; ${describeCityChoice(cities, readCity)}`) +
+      (next === null ? "; all 21 Black Ops done" : check === null ? "" : `; ${describeBlackOpCheck(check)}`);
     // The rule chose the chaos action under way again at its run's first reading (#385's review): kept to that run's end.
     const since = this.#chaosSince;
     if (since !== null && kept === null && order.type === "General" && order.name === since.name) {
       since.keptRun = this.#chaosRunOf(reading, nowMs);
     }
-    return { sent: { plan, order, resting, cities, kept, input }, text, city };
+    const blackOp = check === null ? null : { check, order: blackOpOrder };
+    return { sent: { plan, order, resting, cities, kept, input, blackOp }, text, city };
   }
 
   /**

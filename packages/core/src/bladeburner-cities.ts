@@ -213,6 +213,8 @@ export type BladeburnerCityForecastInput = Omit<Parameters<typeof chooseBladebur
 export function chooseBladeburnerCity(
   input: BladeburnerCityForecastInput,
   { city, cities }: { city: string; cities: readonly BladeburnerCityReading[] },
+  /** B2's forecast (#392: the run report's, shared over a reading, `memoizedBladeburnerChoice`). */
+  choose: typeof chooseBladeburnerAction = chooseBladeburnerAction,
 ): BladeburnerCityChoice | null {
   const here = cities.find((each) => each.name === city);
   if (here === undefined || !(here.population > 0)) return null;
@@ -223,7 +225,7 @@ export function chooseBladeburnerCity(
     from: BladeburnerCityForecastInput = input,
   ) => {
     const ratio = cityCompetenceRatio(here, { population: there.population, chaos }) ?? 0;
-    return chooseBladeburnerAction({ ...from, readings, city: { ratio, raid: there.communities > 0 } });
+    return choose({ ...from, readings, city: { ratio, raid: there.communities > 0 } });
   };
   // The chaos actions are weighed by rank a second (#386: a target aside, labelled), and each city's rate shown.
   const rateInput = { ...input, target: undefined };
