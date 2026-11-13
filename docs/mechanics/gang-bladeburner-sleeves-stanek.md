@@ -61,7 +61,7 @@ Other mults that touch these systems: `FactionWorkRepGain`/`CompanyWorkRepGain`/
 
 ## 1. Gangs
 
-How the brain plays Bladeburner (epic #359): B1 (#367), the combat stats to 100 at the gym, the division and the Bladeburners faction, in BN6 and BN7; B2 (#375), the contracts and operations by rank a second, and the stamina; B3 (#379), the skills by rank a second a point ([packages/brain](../../packages/brain/README.md#bladeburner-bn6-and-bn7), [packages/core](../../packages/core/README.md#bladeburner)).
+How the brain plays Bladeburner (epic #359): B1 (#367), the combat stats to 100 at the gym, the division and the Bladeburners faction, in BN6 and BN7; B2 (#375), the contracts and operations by rank a second, and the stamina; B3 (#379), the skills by rank a second a point; B4 (#383), the city by rank a second, Diplomacy and Incite Violence by the chaos's rank ([packages/brain](../../packages/brain/README.md#bladeburner-bn6-and-bn7), [packages/core](../../packages/core/README.md#bladeburner)).
 
 How the brain plays them (epic #324): G1 (#325), forming, recruiting, the task rule and the wanted level, in BN2; G2 (#328), ascension; with core's formulas checked against the engine ([packages/brain](../../packages/brain/README.md#the-gang-bn2), [packages/core](../../packages/core/README.md#gangs)).
 
@@ -330,6 +330,8 @@ Optimal SP allocation: success multipliers compose multiplicatively, so buy the 
 * Chaos decays −0.0001/s per city. Percent-based chaos changes do nothing at chaos 0.
 * Random event every `U{240..600}` s, random city: 5% new community (+10–20% pop), 5% community migration, 20% +8–24% pop, 20% pop migration, 20% riot (chaos +1 then ×(1+U{5..20}%)), 20% −8–20% pop, 10% nothing.
 * Failure of Investigation/Undercover may trigger migration (10%/15%).
+* Diplomacy (60 s, no stamina): the current city's chaos ×(1 − p/100), p = cha^0.045 + cha/1000 (`Bladeburner.ts:737-745`, `:1187-1198`): about 1% at charisma 1. Incite Violence (60 s, no stamina): every count +180 s of its growth, every city's chaos +10 then +chaos/log10(chaos) (`:1221-1236`): 0 → 20 → 50.3 → 94. Switching city is free and stops nothing (`NetscriptFunctions/Bladeburner.ts:316-321`).
+* How the brain weighs them (#383): each city by B2's forecast at its estimate and chaos; Diplomacy while the rank the chaos it takes off would lose, as the decay brings it down, is more than its 60 s's; Incite Violence while the counts it adds gain more than its 60 s and its chaos's rank.
 
 ### 2.9 Bladeburner BN multipliers & SFs
 

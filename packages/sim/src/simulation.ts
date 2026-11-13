@@ -264,8 +264,12 @@ export class Simulation {
     setGangRespect: (respect: number) => this.rpc.call("diagnostics.setGangRespect", { respect }),
     /** Sets the player's Bladeburner rank, through the game's own change. A harness edit, for tests (#367). */
     setBladeburnerRank: (rank: number) => this.rpc.call("diagnostics.setBladeburnerRank", { rank }),
-    /** Sets Bladeburner's city, stamina and actions' max levels. A harness edit, for core's parity tests (#375). */
+    /**
+     * Sets Bladeburner's current city's figures, or (#383) `city`'s, its stamina and actions' max levels. A harness
+     * edit, for core's parity tests (#375) and the cities' scenario.
+     */
     setBladeburnerFigures: (figures: {
+      city?: string;
       population?: number;
       estimate?: number;
       communities?: number;

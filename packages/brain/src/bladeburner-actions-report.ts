@@ -26,7 +26,8 @@
 // - **Stuck resting** (#377's review): the rule's plan with work (core's `chooseBladeburnerAction` on each reading)
 //   and a rest under way, for longer than twice the rule's own time to rest to the max ((max − stamina) over the rest's
 //   stamina a second, at the stretch's first reading) and `BLADEBURNER_REST_SLACK_MS`, as #343's waits are bounded: a
-//   failure. Idle (the owner's work, or a stop) isn't resting. A gap in the readings or an install ends it (#377's
+//   failure. Idle (the owner's work, or a stop) isn't resting, nor (#383) Diplomacy or Incite Violence, the rule's own
+//   chaos actions (./bladeburner-cities-report.ts judges those). A gap in the readings or an install ends it (#377's
 //   re-review): what ran meanwhile isn't known.
 // - **The hospital** (#377's review): HP isn't in the rule's choice (money against rank is the planner's, #375). A
 //   visit is the HP back at its max from under it, with no Regeneration Chamber's 2 under way (`Bladeburner.ts:983-991`,
@@ -145,7 +146,7 @@ interface Running {
   name: string;
   /** The action's own name, its level aside (#381's review: the lines by action). */
   action: string;
-  /** A rest (Field Analysis, the Chamber, Training), not a contract or operation. */
+  /** A rest (Field Analysis, the Chamber, Training), not a contract or operation, nor (#383) a chaos action. */
   resting: boolean;
   /** Rank a game second, its mean (a contract's or operation's attempts, or Field Analysis's). */
   rate: number;
@@ -182,7 +183,7 @@ function runningOf(kept: Kept): Running | null {
     return {
       name: current.name,
       action: current.name,
-      resting: true,
+      resting: Object.hasOwn(BLADEBURNER_REST_SECONDS, current.name),
       rate: fieldAnalysis ? gain / BLADEBURNER_REST_SECONDS[FIELD_ANALYSIS] : 0,
       cut: gain,
       attempt: null,

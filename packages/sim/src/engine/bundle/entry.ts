@@ -306,11 +306,13 @@ export function setBladeburnerRank(rank: number) {
 
 /**
  * Sets Bladeburner's figures (#375): its current city's population, estimate, communities and chaos
- * (`Bladeburner/City.ts:8-28`), the stamina (`Bladeburner.ts:121-122`), and contracts' and operations' max levels by
- * name (`Actions/LevelableAction.ts:28`), each as given, the rest left: a harness edit for core's parity tests, not
- * something a player can do. Not in the division, or an action of neither kind, throws.
+ * (`Bladeburner/City.ts:8-28`), or (#383) the named city's, the stamina (`Bladeburner.ts:121-122`), and contracts' and
+ * operations' max levels by name (`Actions/LevelableAction.ts:28`), each as given, the rest left: a harness edit for
+ * core's parity tests and the cities' scenario, not something a player can do. Not in the division, a city not one of
+ * the six, or an action of neither kind, throws.
  */
 export function setBladeburnerFigures(figures: {
+  city?: string;
   population?: number;
   estimate?: number;
   communities?: number;
@@ -320,7 +322,11 @@ export function setBladeburnerFigures(figures: {
 }) {
   const bladeburner = Player.bladeburner;
   if (!bladeburner) throw new RangeError("not in the Bladeburner division");
-  const city = bladeburner.getCurrentCity();
+  const city =
+    figures.city === undefined
+      ? bladeburner.getCurrentCity()
+      : (bladeburner.cities as Partial<Record<string, ReturnType<typeof bladeburner.getCurrentCity>>>)[figures.city];
+  if (!city) throw new RangeError(`no city ${figures.city}`);
   if (figures.population !== undefined) city.pop = figures.population;
   if (figures.estimate !== undefined) city.popEst = figures.estimate;
   if (figures.communities !== undefined) city.comms = figures.communities;

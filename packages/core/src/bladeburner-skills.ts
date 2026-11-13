@@ -115,7 +115,7 @@ export function bladeburnerSkill(name: string): BladeburnerSkill | null {
  * `chooseBladeburnerAction`): the five success skills, Overclock, Reaper, Evasive System and Cyber's Edge. Left out,
  * and labelled: Hands of Midas (money) and Hyperdrive (experience), the planner's to weigh (decision 67); Datamancer,
  * whose sharper population estimate raises the estimate's low end the rule reads, not the true chance, so the
- * forecast would credit it rank it doesn't gain (B4's, with the cities).
+ * forecast would credit it rank it doesn't gain (left out by B4 too, #383: the estimate's accuracy isn't forecast).
  */
 export const BLADEBURNER_RANK_SKILLS: readonly BladeburnerSkillName[] = [
   "Blade's Intuition",

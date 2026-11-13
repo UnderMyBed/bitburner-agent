@@ -45,8 +45,19 @@
 //   at once as `upgradeBladeburnerSkill` intents, one a skill to the level planned, not gated (a skill can't be lost),
 //   so the points are spent within a reading of coming. Bought with the owner's work on the dashboard too: they stop no
 //   work. The forecast reads the levels too (core's: the time, the regain and the success skills in the range read).
+// - The cities and the chaos (B4, #383), once the reading has the six (`bladeburner-city.js`, which the state's `city`
+//   asks for: null before the first): core's `chooseBladeburnerCity`, B2's forecast in each city by its population
+//   estimate and chaos, the city with the most rank a second sent as the state's `city` (free, and it stops nothing:
+//   `NetscriptFunctions/Bladeburner.ts:316-321`); then Diplomacy where its chaos over 50 costs more rank than
+//   Diplomacy's 60 s, else Incite Violence where the counts it adds gain more than its 60 s and the chaos it adds cost,
+//   each in place of B2's order; else B2's order there. A chaos action under way is kept to its run's end, each 60 game
+//   seconds, once the rule has chosen it for that run (#385's review)
+//   (#383: Incite Violence's measure can turn as the counts grow meanwhile, and starting another loses its progress,
+//   `Bladeburner.ts:186-188`), the city held with it (Diplomacy's fall is the city's at its end, `:1187-1198`). The
+//   owner's work holds the moves with the actions; the cities are still read.
 import {
   BLADEBURNER_BITNODES,
+  BLADEBURNER_CHAOS_ACTION_SECONDS,
   BLADEBURNER_CONSTANTS,
   BLADEBURNER_FACTION,
   BLADEBURNER_FACTION_RANK,
@@ -56,6 +67,9 @@ import {
   type BladeburnerActionOrder,
   type BladeburnerActionPlan,
   type BladeburnerActionReading,
+  type BladeburnerChaosActionName,
+  type BladeburnerCityChoice,
+  type BladeburnerCityReading,
   type BladeburnerReading,
   type BladeburnerSkillLevels,
   type BladeburnerSkillPlan,
@@ -70,12 +84,16 @@ import {
   type CombatTrainingPlan,
   cheapestBladeburnerSkillLevel,
   chooseBladeburnerAction,
+  chooseBladeburnerCity,
   chooseBladeburnerSkills,
   classLabel,
   combatPersonOf,
   combatTrained,
+  DIPLOMACY,
+  INCITE_VIOLENCE,
   type Intent,
   intentId,
+  isBladeburnerCity,
   type MediumSnapshotData,
   planCombatTraining,
   type SlowSnapshotData,
@@ -142,7 +160,7 @@ export interface BladeburnerSkillsReading {
 /**
  * B2's reading (#375), checked: the stamina and its max, the bonus time in seconds, the action the worker found under
  * way and the one after it acted (null idle), and every contract and operation read; and B3's skills (#379), null from
- * a B2 Agent.
+ * a B2 Agent; and B4's (#383) division's city and the cities read, null without them (a B3 Agent, or none asked for).
  */
 export interface BladeburnerActionsReading {
   stamina: number;
@@ -152,6 +170,27 @@ export interface BladeburnerActionsReading {
   current: BladeburnerActionId | null;
   actions: BladeburnerActionReading[];
   skills: BladeburnerSkillsReading | null;
+  city: string | null;
+  cities: BladeburnerCityReading[] | null;
+}
+
+/** B4's cities of a reading (#383): null with none, undefined with one not a figure or a name not the six's. */
+function citiesReadingOf(
+  reading: Partial<BladeburnerReading>,
+): { city: string | null; cities: BladeburnerCityReading[] | null } | undefined {
+  const { city, cities } = reading;
+  if (city === undefined && cities === undefined) return { city: null, cities: null };
+  if (city !== null && !isBladeburnerCity(city)) return undefined;
+  if (!Array.isArray(cities)) return undefined;
+  const checked: BladeburnerCityReading[] = [];
+  for (const each of cities as unknown[]) {
+    const { name, population, communities, chaos } = (each ?? {}) as Partial<Record<string, unknown>>;
+    if (!isBladeburnerCity(name) || !isNumber(population) || !isNumber(communities) || !isNumber(chaos)) {
+      return undefined;
+    }
+    checked.push({ name, population, communities, chaos });
+  }
+  return { city: city ?? null, cities: checked };
 }
 
 /** B3's skills of a reading (#379): null with none (a B2 Agent), undefined with one not a figure. */
@@ -208,8 +247,9 @@ function actionsReadingOf(reading: Partial<BladeburnerReading>): BladeburnerActi
     checked.push({ type, name, level, maxLevel, count, chance: [chance[0], chance[1]] as [number, number] });
   }
   const skills = skillsReadingOf(reading);
-  if (skills === undefined) return undefined;
-  return { stamina, maxStamina, bonusSeconds, found: foundId, current: currentId, actions: checked, skills };
+  const cities = citiesReadingOf(reading);
+  if (skills === undefined || cities === undefined) return undefined;
+  return { stamina, maxStamina, bonusSeconds, found: foundId, current: currentId, actions: checked, skills, ...cities };
 }
 
 /** The Bladeburner of `mediumData`, checked. */
@@ -234,7 +274,10 @@ export function bladeburnerSnapshotOf(mediumData: unknown): BladeburnerSnapshot 
   if (actions === undefined) {
     return {
       joined,
-      reading: { kind: "unread", problem: "the Bladeburner reading's stamina, actions or skills aren't figures" },
+      reading: {
+        kind: "unread",
+        problem: "the Bladeburner reading's stamina, actions, skills or cities aren't figures",
+      },
     };
   }
   return { joined, reading: { kind: "read", rank, problems, actions } };
@@ -279,8 +322,18 @@ export interface BladeburnerView {
   line: string;
   /** The training's plan while it trains, or null. */
   training: CombatTrainingPlan | null;
-  /** In the division (B2, #375): the actions' plan, the action sent, and whether it's resting; null, none sent. */
-  actions?: { plan: BladeburnerActionPlan; order: BladeburnerActionOrder; resting: boolean } | null;
+  /**
+   * In the division (B2, #375): the actions' plan, the action sent, and whether it's resting; and (B4, #383) the
+   * choice of city and chaos action (null without the cities read), and the chaos action kept to its 60 s's end, or
+   * null; null, none sent.
+   */
+  actions?: {
+    plan: BladeburnerActionPlan;
+    order: BladeburnerActionOrder;
+    resting: boolean;
+    cities?: BladeburnerCityChoice | null;
+    kept?: BladeburnerChaosActionName | null;
+  } | null;
   /** In the division with B3's reading (#379): the skills' plan; null without it. */
   skills?: BladeburnerSkillPlan | null;
 }
@@ -307,6 +360,38 @@ export function describeActionPlan(
     `${resting ? `resting with ${plan.rest.name} for ${working}` : `${working}, resting with ${plan.rest.name}`}; ` +
     `${staminaText}; worked ${(plan.duty * 100).toFixed(0)}% of a cycle, ${perMinute(plan.rankPerSecond)} over it`
   );
+}
+
+/**
+ * The city and chaos actions' choice in words (#383), read in `readCity`, for the dashboard, the log and the run
+ * report.
+ */
+export function describeCityChoice(choice: BladeburnerCityChoice, readCity: string): string {
+  const there = choice.byCity.find((each) => each.name === choice.city);
+  const from = choice.byCity.find((each) => each.name === readCity);
+  const moving =
+    choice.city !== readCity && from !== undefined
+      ? `, moving from ${readCity} (chaos ${from.chaos.toFixed(2)}, ${perMinute(from.rankPerSecond)})`
+      : "";
+  let text =
+    `in ${choice.city} (chaos ${(there?.chaos ?? 0).toFixed(2)}, ${perMinute(there?.rankPerSecond ?? 0)}: the most of ` +
+    `the six${moving})`;
+  const diplomacy = choice.diplomacy;
+  if (diplomacy !== null) {
+    text +=
+      `; ${DIPLOMACY} ${diplomacy.pays ? "pays" : "doesn't pay"}: its 60 s cost ${diplomacy.cost.toFixed(2)} rank, ` +
+      `the chaos ${diplomacy.chaos.toFixed(2)} → ${diplomacy.after.toFixed(2)} gains ${diplomacy.gain.toFixed(2)} ` +
+      `(about ${diplomacy.attemptsTo50} to 50)`;
+  }
+  const incite = choice.incite;
+  if (incite !== null) {
+    text +=
+      `; ${INCITE_VIOLENCE} ${incite.pays ? "pays" : "doesn't pay"}: the counts out for ${incite.work} ` +
+      `(${perMinute(incite.unbounded)} unbounded), +${incite.countGain.toFixed(2)} a run gains ` +
+      `${incite.gain.toFixed(2)} rank; its 60 s and the chaos ${incite.chaos.toFixed(2)} → ${incite.after.toFixed(2)} ` +
+      `cost ${incite.cost.toFixed(2)}`;
+  }
+  return text;
 }
 
 /** The skills' plan in words (#379), for the dashboard, the log and the run report. */
@@ -365,6 +450,8 @@ export class BladeburnerRule {
   #held = false;
   /** Whether the actions are resting (#375): below ½ max stamina until back at the max. */
   #resting = false;
+  /** The chaos action under way (#383), since its first reading under way: the controller's time and the bonus time. */
+  #chaosSince: { name: BladeburnerChaosActionName; atMs: number; bonusSeconds: number; keptRun: number } | null = null;
 
   constructor(log: (line: string) => void = () => {}, emit: (event: BladeburnerEvent) => void = () => {}) {
     this.#log = log;
@@ -405,7 +492,7 @@ export class BladeburnerRule {
     /** The controller's clock, for the events; null before any. */
     nowMs?: number | null;
   }): BladeburnerDecision {
-    const decision = this.#update({ mediumData, slowData, homeKeptGb, ownersWork });
+    const decision = this.#update({ mediumData, slowData, homeKeptGb, ownersWork, nowMs });
     // Held while training with the owner's work set: said at each change, for the run report's overdue clock.
     const held = this.#view.stage === "training" && ownersWork;
     if (held !== this.#held && nowMs !== null) {
@@ -420,11 +507,13 @@ export class BladeburnerRule {
     slowData,
     homeKeptGb,
     ownersWork,
+    nowMs,
   }: {
     mediumData: MediumSnapshotData | null;
     slowData: SlowSnapshotData | null;
     homeKeptGb: number;
     ownersWork: boolean;
+    nowMs: number | null;
   }): BladeburnerDecision {
     const none: BladeburnerDecision = { work: null, intent: null, state: null, skillIntents: [] };
     const bitNode = bitNodeOfSlow(slowData);
@@ -437,6 +526,7 @@ export class BladeburnerRule {
     if (!BLADEBURNER_BITNODES.includes(bitNode)) {
       this.#class = null;
       this.#resting = false;
+      this.#chaosSince = null;
       const line = `Bladeburner: not managed (played in BN6 and BN7 only for now; this is BN${bitNode})`;
       return this.#decide({ stage: "notManaged", line, training: null }, none);
     }
@@ -480,7 +570,13 @@ export class BladeburnerRule {
     const { reading } = snapshot;
     const rank = reading.kind === "read" ? reading.rank : null;
     const joinTheFaction = !inFaction && rank !== null && rank >= BLADEBURNER_FACTION_RANK;
-    const actions = this.#actions(reading.kind === "read" ? reading.actions : null, mediumData, bitNode, ownersWork);
+    const actions = this.#actions(
+      reading.kind === "read" ? reading.actions : null,
+      mediumData,
+      bitNode,
+      ownersWork,
+      nowMs,
+    );
     const skills = this.#skills(reading.kind === "read" ? reading.actions : null, mediumData, bitNode);
     const line =
       reading.kind === "absent"
@@ -496,8 +592,11 @@ export class BladeburnerRule {
             (actions.text === null ? "" : `; ${actions.text}`) +
             (skills.text === null ? "" : `; ${skills.text}`) +
             (reading.problems.length > 0 ? `; ${reading.problems.join("; ")}` : "");
-    const state: BladeburnerState =
-      actions.sent === null ? { joinTheFaction } : { joinTheFaction, action: actions.sent.order };
+    const state: BladeburnerState = {
+      joinTheFaction,
+      ...(actions.sent === null ? {} : { action: actions.sent.order }),
+      ...(actions.city === undefined ? {} : { city: actions.city }),
+    };
     return this.#decide(
       { stage: "joined", line, training: null, actions: actions.sent, skills: skills.plan },
       { ...none, state, skillIntents: skills.intents },
@@ -538,24 +637,34 @@ export class BladeburnerRule {
 
   /**
    * The action to send in the division (#375), from the reading's B2 figures: none with the owner's work set (said), or
-   * without them (a B1 Agent, or the player's figures unread).
+   * without them (a B1 Agent, or the player's figures unread). With the cities read (#383), the city and the chaos
+   * action by core's `chooseBladeburnerCity`, a chaos action under way kept to its 60 s's end (`#keptChaosAction`).
+   * `city`: the state's, with B2's figures read (null before the cities are: the Agent then reads them), else
+   * undefined (none asked).
    */
   #actions(
     reading: BladeburnerActionsReading | null,
     mediumData: MediumSnapshotData,
     bitNode: number,
     ownersWork: boolean,
-  ): { sent: NonNullable<BladeburnerView["actions"]> | null; text: string | null } {
+    nowMs: number | null,
+  ): { sent: NonNullable<BladeburnerView["actions"]> | null; text: string | null; city?: string | null } {
     if (reading === null) return { sent: null, text: null };
-    if (ownersWork) return { sent: null, text: "actions held for your work on the dashboard" };
+    const kept = this.#keptChaosAction(reading, nowMs);
+    const readCity = reading.city;
+    if (ownersWork) return { sent: null, text: "actions held for your work on the dashboard", city: readCity };
     const person = bladeburnerPersonOf(mediumData.player);
     const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
     if (person === null || rankMultiplier === null) {
-      return { sent: null, text: "no action: the player's Bladeburner figures aren't in the medium snapshot" };
+      return {
+        sent: null,
+        text: "no action: the player's Bladeburner figures aren't in the medium snapshot",
+        city: readCity,
+      };
     }
     const { stamina, maxStamina } = reading;
     this.#resting = bladeburnerResting({ stamina, maxStamina, wasResting: this.#resting });
-    const plan = chooseBladeburnerAction({
+    const forecast = {
       readings: reading.actions,
       person,
       stamina,
@@ -563,13 +672,66 @@ export class BladeburnerRule {
       rankMultiplier,
       speed: bladeburnerSpeedOf(reading.bonusSeconds),
       skills: { read: reading.skills?.levels ?? {} },
-    });
+    };
+    const cities =
+      readCity === null || reading.cities === null
+        ? null
+        : chooseBladeburnerCity(forecast, { city: readCity, cities: reading.cities });
+    const plan = cities?.plan ?? chooseBladeburnerAction(forecast);
     const resting = this.#resting || plan.work === null;
+    const chaosAction = kept ?? cities?.chaosAction ?? null;
     const order: BladeburnerActionOrder =
-      plan.work !== null && !resting
-        ? { type: plan.work.type, name: plan.work.name, level: plan.work.level }
-        : { type: "General", name: plan.rest.name, level: null };
-    return { sent: { plan, order, resting }, text: describeActionPlan(plan, resting, stamina, maxStamina) };
+      chaosAction !== null
+        ? { type: "General", name: chaosAction, level: null }
+        : plan.work !== null && !resting
+          ? { type: plan.work.type, name: plan.work.name, level: plan.work.level }
+          : { type: "General", name: plan.rest.name, level: null };
+    const city = kept !== null ? readCity : (cities?.city ?? readCity);
+    const then =
+      kept !== null ? `${kept} kept to its 60 s's end, then: ` : chaosAction !== null ? `${chaosAction}, then: ` : "";
+    const text =
+      then +
+      describeActionPlan(plan, resting, stamina, maxStamina) +
+      (cities === null || readCity === null ? "" : `; ${describeCityChoice(cities, readCity)}`);
+    // The rule chose the chaos action under way again at its run's first reading (#385's review): kept to that run's end.
+    const since = this.#chaosSince;
+    if (since !== null && kept === null && order.type === "General" && order.name === since.name) {
+      since.keptRun = this.#chaosRunOf(reading, nowMs);
+    }
+    return { sent: { plan, order, resting, cities, kept }, text, city };
+  }
+
+  /**
+   * The chaos action under way to keep (#383): Diplomacy or Incite Violence under way at the reading, in a run of 60 game
+   * seconds the rule has chosen it for. The game repeats it on its own, so its runs are counted from its first reading
+   * under way (the controller's time, and the bonus time spent meanwhile, `Bladeburner.ts:1376-1380`): the first, which
+   * the rule sent it for, is kept; each later one (#385's review) is the rule's to choose again at its first reading,
+   * and kept to its end if it does (`#actions`). Null without the controller's time, or none under way. The worker starts
+   * it just before reading it, so the time from its first reading errs short by under a reading's carriage, and each
+   * run is kept that little past its end.
+   */
+  #keptChaosAction(reading: BladeburnerActionsReading, nowMs: number | null): BladeburnerChaosActionName | null {
+    const current = reading.current;
+    const name =
+      current?.type === "General" && (current.name === DIPLOMACY || current.name === INCITE_VIOLENCE)
+        ? (current.name as BladeburnerChaosActionName)
+        : null;
+    if (name === null || nowMs === null) {
+      this.#chaosSince = null;
+      return null;
+    }
+    if (this.#chaosSince?.name !== name) {
+      this.#chaosSince = { name, atMs: nowMs, bonusSeconds: reading.bonusSeconds, keptRun: 0 };
+    }
+    return this.#chaosRunOf(reading, nowMs) <= this.#chaosSince.keptRun ? name : null;
+  }
+
+  /** Which 60 game seconds' run of the chaos action under way this reading falls in: 0 the first (#385's review). */
+  #chaosRunOf(reading: BladeburnerActionsReading, nowMs: number | null): number {
+    const since = this.#chaosSince;
+    if (since === null || nowMs === null) return 0;
+    const gameSeconds = (nowMs - since.atMs) / 1000 + since.bonusSeconds - reading.bonusSeconds;
+    return Math.floor(gameSeconds / BLADEBURNER_CHAOS_ACTION_SECONDS);
   }
 
   #decide(view: BladeburnerView, decision: BladeburnerDecision): BladeburnerDecision {
@@ -583,7 +745,7 @@ export class BladeburnerRule {
       view.stage === "training" && training !== null
         ? `training ${training.stat} at ${training.gym ?? `nothing (waiting for ${training.waitingFor})`}`
         : order != null
-          ? `in the division, ${order.name} ${order.level ?? ""}; ${buys}`
+          ? `in the division, ${order.name} ${order.level ?? ""}, ${view.actions?.cities?.city ?? ""}; ${buys}`
           : `${view.line.replace(/rank [\d.]+/, "rank")}; ${buys}`;
     if (logged !== this.#lastLogged && view.stage !== "notManaged") {
       this.#log(`bladeburner: ${view.line.replace(/^Bladeburner: /, "")}`);

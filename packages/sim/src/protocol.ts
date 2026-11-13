@@ -523,12 +523,14 @@ export interface HostMethods {
    */
   "diagnostics.setBladeburnerRank"(params: { rank: number }): void;
   /**
-   * Sets Bladeburner's current city's population, estimate, communities and chaos, the stamina, and contracts' and
-   * operations' max levels by name (each finite and 0 or more; absent, left), for core's parity tests (#375). A harness
-   * edit. Not in the division, or an action of neither kind, throws.
+   * Sets Bladeburner's current city's population, estimate, communities and chaos, or (#383) `city`'s (one of the
+   * six), the stamina, and contracts' and operations' max levels by name (each finite and 0 or more; absent, left), for
+   * core's parity tests (#375) and the cities' scenario. A harness edit. Not in the division, a city not one of the six,
+   * or an action of neither kind, throws.
    */
   "diagnostics.setBladeburnerFigures"(params: {
     figures: {
+      city?: string;
       population?: number;
       estimate?: number;
       communities?: number;

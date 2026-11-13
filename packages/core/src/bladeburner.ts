@@ -29,6 +29,7 @@
  *   whether the player has joined; `getRank`, `joinBladeburnerFaction` and `joinBladeburnerDivision` 4 GB each.
  */
 import type { BladeburnerActionReading } from "./bladeburner-actions.ts";
+import { type BladeburnerCityReading, isBladeburnerCity } from "./bladeburner-cities.ts";
 import {
   CLASS_LOCATION_NAMES,
   CLASS_LOCATIONS,
@@ -66,10 +67,17 @@ export const JOIN_BLADEBURNER_WORKER_NAME = "join-bladeburner.js";
 export const BLADEBURNER_WORKER_NAME = "bladeburner.js";
 /** Home worker: raises a skill to a level (`upgradeBladeburnerSkill`'s intent, #379). */
 export const BLADEBURNER_SKILL_WORKER_NAME = "bladeburner-skill.js";
+/** Home worker: moves the division to the brain's city and reads the six (#383: the state's `bladeburner.city`). */
+export const BLADEBURNER_CITY_WORKER_NAME = "bladeburner-city.js";
 
 /** The Bladeburner workers, for core's home worker lists. */
 export function bladeburnerWorkerFileNames(): string[] {
-  return [JOIN_BLADEBURNER_WORKER_NAME, BLADEBURNER_WORKER_NAME, BLADEBURNER_SKILL_WORKER_NAME];
+  return [
+    JOIN_BLADEBURNER_WORKER_NAME,
+    BLADEBURNER_WORKER_NAME,
+    BLADEBURNER_SKILL_WORKER_NAME,
+    BLADEBURNER_CITY_WORKER_NAME,
+  ];
 }
 
 /**
@@ -92,6 +100,15 @@ export const BLADEBURNER_WORKER_RAM_GB = 50.6;
  */
 export const BLADEBURNER_SKILL_WORKER_RAM_GB = 9.6;
 
+/**
+ * `bladeburner-city.js`'s RAM by the game's calculator (ram-budget.json, which a test keeps in step): 1.6 GB for a
+ * script, and 4 GB each for `getCityEstimatedPopulation`, `getCityCommunities`, `getCityChaos`, `getCity` and
+ * `switchCity` (`Netscript/RamCostGenerator.ts:366-370`). The Agent runs it just before `bladeburner.js`, waiting for
+ * each to exit (ingame's `run-worker.ts`), so they never hold home's RAM at once: under `BLADEBURNER_WORKER_RAM_GB`, it
+ * fits wherever B1's gate lets that one run, and home keeps nothing more for it (#383). In `bladeburner.js` instead,
+ * the reading would be 70.6 GB: 65.9 + 70.6 = 136.5 GB at SF4.3, past a 128 GB home.
+ */
+export const BLADEBURNER_CITY_WORKER_RAM_GB = 21.6;
 /** An action the brain asks `bladeburner.js` to run (#375): its type and name as the NS API has them, and its level. */
 export interface BladeburnerActionOrder {
   type: "Contracts" | "Operations" | "General";
@@ -102,11 +119,21 @@ export interface BladeburnerActionOrder {
 
 /**
  * What the brain asks of `bladeburner.js`: join the faction (the rank allows it, and it isn't joined yet); and (#375)
- * the action to run, or null (absent from a B1 brain): the game's action left as it is.
+ * the action to run, or null (absent from a B1 brain): the game's action left as it is; and (#383) the city for the
+ * division, one of the six, which `bladeburner-city.js` moves it to and then reads the cities, or null: read, not moved
+ * (absent from a B3 brain: not run).
  */
 export interface BladeburnerState {
   joinTheFaction: boolean;
   action?: BladeburnerActionOrder | null;
+  city?: string | null;
+}
+
+/** What `bladeburner-city.js` reads (#383): the division's city (null out of it), the six, and its problems. */
+export interface BladeburnerCityWorkerReading {
+  city: string | null;
+  cities: BladeburnerCityReading[];
+  problems: string[];
 }
 
 /**
@@ -115,7 +142,9 @@ export interface BladeburnerState {
  * B1 Agent): the stamina and its max (`getStamina`), the bonus time in seconds, the action the worker found under way
  * and the one under way after it acted (`getCurrentAction`: type and name, or null idle), and every contract and
  * operation, in core's order; and B3's (#379, absent from a B2 Agent): the skill points unspent (`getSkillPoints`) and
- * each skill's level (`getSkillLevel`), by core's `BLADEBURNER_SKILL_NAMES`.
+ * each skill's level (`getSkillLevel`), by core's `BLADEBURNER_SKILL_NAMES`. And B4's (#383), which the Agent adds
+ * from `bladeburner-city.js`, run just before (absent from a B3 Agent, or with no city asked for): the division's city
+ * and the six cities' population estimates, communities and chaos.
  */
 export interface BladeburnerReading {
   rank: number | null;
@@ -128,6 +157,8 @@ export interface BladeburnerReading {
   actions?: BladeburnerActionReading[];
   skillPoints?: number;
   skillLevels?: Record<string, number>;
+  city?: string | null;
+  cities?: BladeburnerCityReading[];
 }
 
 const ORDER_TYPES = ["Contracts", "Operations", "General"];
@@ -140,8 +171,12 @@ export function parseBladeburnerState(
   if (typeof value !== "object" || typeof (value as { joinTheFaction?: unknown }).joinTheFaction !== "boolean") {
     return { ok: false, reason: "bladeburner isn't { joinTheFaction: true or false }" };
   }
-  const { joinTheFaction, action } = value as { joinTheFaction: boolean; action?: unknown };
-  if (action === undefined || action === null) return { ok: true, bladeburner: { joinTheFaction } };
+  const { joinTheFaction, action, city } = value as { joinTheFaction: boolean; action?: unknown; city?: unknown };
+  if (city !== undefined && city !== null && !isBladeburnerCity(city)) {
+    return { ok: false, reason: "bladeburner's city isn't one of the six, or null" };
+  }
+  const withCity = city === undefined ? {} : { city: city as string | null };
+  if (action === undefined || action === null) return { ok: true, bladeburner: { joinTheFaction, ...withCity } };
   const { type, name, level } = action as Partial<Record<keyof BladeburnerActionOrder, unknown>>;
   const levelOk =
     type === "General" ? level === null : typeof level === "number" && Number.isInteger(level) && level >= 1;
@@ -155,7 +190,7 @@ export function parseBladeburnerState(
   }
   return {
     ok: true,
-    bladeburner: { joinTheFaction, action: { type, name, level } as BladeburnerActionOrder },
+    bladeburner: { joinTheFaction, action: { type, name, level } as BladeburnerActionOrder, ...withCity },
   };
 }
 
