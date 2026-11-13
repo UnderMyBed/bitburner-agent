@@ -3970,14 +3970,18 @@ describe("the planner's later cycles priced from the countables left (#389)", ()
   /** The experience at the level now (300, `medium`'s) and a minute's rise: 600 exp/s, so a level's rise is known. */
   const E300 = hackingExpOfLevel(300, 1);
   let exp = E300;
-  /** A minute on: a slow snapshot, the medium snapshot's experience risen 36,000. */
+  /** The experience each minute: 36,000 (steady); `uneven` alternates 20,000 and 52,000 (the same mean). */
+  let uneven = false;
+  let step = 0;
+  /** A minute on: a slow snapshot, the medium snapshot's experience risen 36,000 (or unevenly). */
   const minuteOn = (
     fields: Parameters<typeof slowWith>[0] & { owned?: Record<string, number> } = {},
     more: Partial<AugmentationInputs> = {},
   ) => {
     gameTimeMs += MINUTE;
     earned += 60e6;
-    exp += 36_000;
+    step += 1;
+    exp += uneven ? (step % 2 === 0 ? 20_000 : 52_000) : 36_000;
     const data = medium({ money: MONEY });
     const { owned, ...slowFields } = fields;
     const slowData = slowWith(slowFields);
@@ -4184,6 +4188,19 @@ describe("the planner's later cycles priced from the countables left (#389)", ()
       events = [];
       store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
     }
+  });
+
+  test("κ's measured error propagated through each τ (#406): an uneven experience rate gives each wait an error", () => {
+    // Steady: κ's error 0, no share: no error. Uneven (20,000 and 52,000 a minute): κ's relative error over the
+    // window, and each τ again at κ lowered by it: the wait for Gen II an error of its own.
+    const steady = pricedAt(18_000, OWNED);
+    expect(steady?.candidates[1]?.errorMs).toBeUndefined();
+    uneven = true;
+    const shaky = pricedAt(18_000, OWNED);
+    uneven = false;
+    const wait = shaky?.candidates[1];
+    expect(wait?.errorMs as number).toBeGreaterThan(0);
+    expect((wait?.errorMs as number) / (wait?.tauMs as number)).toBeLessThan(1);
   });
 
   test("Netburners' route open (#387): its five among the countables left, its 1,875 the cheapest: a shorter cycle", () => {

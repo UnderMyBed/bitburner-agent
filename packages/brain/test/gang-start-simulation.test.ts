@@ -378,9 +378,8 @@ test.each([3, 5])(
     const formed = formedAtMs as number | null;
     expect(formed === null || formed > (installed?.atMs as number)).toBe(true);
     // Measured on 2026-11-11: seed 3 installed at 30 min 26 s, at 214 of 218, and had no gang by 90 min; seed 5 at
-    // 28 min 26 s, at 216 of 217, its gang at 78 min 6 s. Since #389 (2026-11-13, the later cycles priced from the
-    // countables left): seed 3 at 28 min 26 s, at 213 of 218, its gang at 89 min 6 s; seed 5 as before, its gang at
-    // 73 min 6 s. Either way after the planner's arm's gang in this run.
+    // 28 min 26 s, at 216 of 217, its gang at 78 min 6 s (73 min 6 s since). Since #389 the same: the first cycle is
+    // priced as before, no rate carried over an install yet. Either way after the planner's arm's gang in this run.
     expect(formed === null || formed > plannerMs).toBe(true);
   },
 );

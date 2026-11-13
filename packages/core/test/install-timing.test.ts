@@ -259,6 +259,21 @@ describe("the margin (#406): installing only by more than the error, a choice ke
     expect(at59(29.6, { tauError: 0.1 })).toMatchObject({ choice: 1, kept: "margin", tauError: 0.1 });
     // τ 33: the wait 125 against 118, install now by 7 min, more than 10% of 33's 3.3: install.
     expect(at59(33, { tauError: 0.1 })).toMatchObject({ choice: 0, kept: null });
+    // A wait's own error (its `tauError`) over the scalar: τ 33 at 50%, 16.5 min, more than install now's 7: the wait.
+    expect(
+      installTiming({
+        needed: 9,
+        adding: 4,
+        onlineMs: 59 * MINUTE,
+        next: [{ tauMs: 33 * MINUTE, tauError: 0.5 }],
+        tauError: 0.1,
+      }),
+    ).toMatchObject({
+      choice: 1,
+      kept: "margin",
+      marginMs: 16.5 * MINUTE,
+      candidates: [{ k: 0 }, { k: 1, errorMs: 16.5 * MINUTE }],
+    });
     // The edge: install now wins by 2τ − 59, the margin 0.1τ: τ 31.05. Under it, the wait; over it, install.
     expect(at59(31, { tauError: 0.1 })).toMatchObject({ choice: 1, kept: "margin" });
     expect(at59(31.2, { tauError: 0.1 })).toMatchObject({ choice: 0, kept: null });
