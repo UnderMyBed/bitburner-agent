@@ -30,7 +30,12 @@ import {
 } from "@bitburner-agent/core";
 import { holdsOf, installDecision, NO_HOLDS, nextPurchase, type Purchase, type Purse } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { type InstallTimingPolicy, readInstallWait } from "../src/augmentations.ts";
+import {
+  AUGMENTATION_ONLINE_SETTING,
+  type InstallTimingPolicy,
+  readCycleSeen,
+  readInstallWait,
+} from "../src/augmentations.ts";
 import { HACKING_MULTIPLIERS_UNREAD } from "../src/batcher.ts";
 import { readCloudServersEnabled } from "../src/cloud-servers.ts";
 import { DesiredStateController, hackThreadsAddedUp, SAFE_MODE_TTL_MS } from "../src/desired-state.ts";
@@ -40,7 +45,7 @@ import { readHomeRamEnabled } from "../src/home-ram.ts";
 import { readManualIntents, readResetSentNote, writeResetSentNote } from "../src/manual-intents.ts";
 import { readProgramsEnabled } from "../src/programs.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
-import { TelemetryStore } from "../src/telemetry-store.ts";
+import { type Environment, TelemetryStore } from "../src/telemetry-store.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const TOKEN = "the-token";
@@ -917,7 +922,10 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
    * An Agent connected with its static snapshot sent, the hack loop off so the intents go without a medium one. Its
    * augmentation tests work the count rule short of Daedalus's count (#343: the A/B's baseline), but the planner's.
    */
-  function connectedWithLoopOff(installTiming: InstallTimingPolicy = "count rule") {
+  function connectedWithLoopOff(
+    installTiming: InstallTimingPolicy = "count rule",
+    environment: Environment | null = null,
+  ) {
     store.setSetting("hackLoop.enabled", "false");
     const backups = standInBackups();
     const controller = new DesiredStateController({
@@ -925,6 +933,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
       store,
       saveBackups: backups.saveBackups,
       installTiming,
+      environment,
     });
     const connection = connectAgent();
     send(connection, "static", network);
@@ -1590,6 +1599,128 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         }
         expect(controller.intentsView().map((each) => each.id)).toContain(INSTALL.id);
         expect(sentIds()).toContain(INSTALL.id);
+      });
+
+      describe("T, this cycle's time online (#388)", () => {
+        const HOUR = 3_600_000;
+        /** The game's 10 h, where `minuteAt`'s minutes count from: the cycle's install, seen from its start. */
+        const TEN_HOURS = 10 * HOUR;
+        /** As `minuteAt`, The Black Hand's money 5 min off, in the cycle installed at `lastAugReset`. */
+        const cycleMinute = (connection: MemoryConnection, minute: number, lastAugReset = TEN_HOURS) => {
+          const slow = plannerSlow({ minute });
+          for (const [tier, data] of [
+            ["slow", { ...slow, resetInfo: { ...slow.resetInfo, lastAugReset } }],
+            ["medium", richMedium(SHORT_OF_IT)],
+          ] as const) {
+            connection.receive(
+              encodeControlMessage({
+                protocolVersion: CONTROL_PROTOCOL_VERSION,
+                type: "snapshot",
+                agentSessionId: "session-1",
+                tier,
+                sequenceNumber: ++sequenceNumber,
+                gameTimeMs: TEN_HOURS + minute * MINUTE,
+                data,
+              }),
+            );
+          }
+        };
+        /** An earlier brain's slow snapshots of the cycle `lastAugReset`, at the game's `fromMs` on, a minute apart. */
+        const storedSlow = (lastAugReset: number, fromMs: number, minutes: number) => {
+          for (let minute = 0; minute <= minutes; minute += 1) {
+            const atMs = fromMs + minute * MINUTE;
+            store.recordSnapshot(
+              { environment: "E1", release: "v1.0.1" },
+              {
+                agentSessionId: "earlier",
+                tier: "slow",
+                sequenceNumber: minute + 1,
+                gameTimeMs: atMs,
+                receivedAtMs: atMs,
+                missedBefore: 0,
+                data: { resetInfo: { lastAugReset, ownedAugs: OWNED } },
+              },
+            );
+          }
+        };
+        const timingOf = (controller: DesiredStateController) => controller.augmentationsView().progress?.timing;
+
+        test("an offline gap over 3 min mid-cycle: T leaves it out, and install now's estimate falls with it", () => {
+          const { controller, connection } = connectedWithLoopOff("planner");
+          for (let minute = 0; minute <= 20; minute += 1) cycleMinute(connection, minute);
+          expect(timingOf(controller)).toMatchObject({ onlineMs: 20 * MINUTE, choice: 1 });
+          // The game closed for an hour: 81 min of the game's time since the install, 21 online.
+          cycleMinute(connection, 80);
+          cycleMinute(connection, 81);
+          const timing = timingOf(controller);
+          expect(timing).toMatchObject({ onlineMs: 21 * MINUTE, timeOnlineMs: 21 * MINUTE });
+          expect(timing?.candidates[0]).toEqual({ k: 0, tauMs: 0, estimateMs: 21 * MINUTE });
+          expect(timing?.unseenMs).toBeUndefined();
+          expect(controller.augmentationsView().progress?.onlineMs).toBe(21 * MINUTE);
+          expect(timing?.words).toMatch(/, 21 min this cycle \(T\); /);
+        });
+
+        test("a gap under 3 min counts: 2 minutes between slow snapshots are online", () => {
+          const { controller, connection } = connectedWithLoopOff("planner");
+          for (let minute = 0; minute <= 12; minute += 1) cycleMinute(connection, minute);
+          cycleMinute(connection, 14);
+          cycleMinute(connection, 15);
+          const timing = timingOf(controller);
+          expect(timing).toMatchObject({ onlineMs: 15 * MINUTE, timeOnlineMs: 15 * MINUTE });
+          expect(timing?.candidates[0]).toEqual({ k: 0, tauMs: 0, estimateMs: 15 * MINUTE });
+          expect(timing?.unseenMs).toBeUndefined();
+        });
+
+        test("a cycle first seen 5 h in, none of its slow snapshots stored: the game's time before, labelled cautious", () => {
+          const { controller, connection } = connectedWithLoopOff("planner", "E1");
+          for (let minute = 0; minute <= 10; minute += 1) cycleMinute(connection, minute, TEN_HOURS - 5 * HOUR);
+          const timing = timingOf(controller);
+          expect(timing).toMatchObject({
+            onlineMs: 5 * HOUR + 10 * MINUTE,
+            timeOnlineMs: 10 * MINUTE,
+            unseenMs: 5 * HOUR,
+          });
+          expect(timing?.candidates[0]).toEqual({ k: 0, tauMs: 0, estimateMs: 5 * HOUR + 10 * MINUTE });
+          expect(timing?.words).toMatch(
+            /, 5\.2 h this cycle \(T; 10 min online, and 5\.0 h before the brain first saw the cycle, counted whole: cautious, leaning towards waiting\); /,
+          );
+        });
+
+        test("a cycle first seen 5 h in, its first 20 min of slow snapshots stored (a save loaded back): their time online", () => {
+          const installed = TEN_HOURS - 5 * HOUR;
+          storedSlow(installed, installed + 30_000, 20);
+          // The other save's cycle's 10 min (none of this cycle's), and the clock gone to it meanwhile.
+          storedSlow(installed - HOUR, installed + HOUR, 10);
+          store.setSetting(
+            AUGMENTATION_ONLINE_SETTING,
+            JSON.stringify({ lastAugReset: installed - HOUR, onlineMs: HOUR, lastGameTimeMs: installed - MINUTE }),
+          );
+          const { controller, connection } = connectedWithLoopOff("planner", "E1");
+          for (let minute = 0; minute <= 10; minute += 1) cycleMinute(connection, minute, installed);
+          const timing = timingOf(controller);
+          expect(timing).toMatchObject({ onlineMs: 30 * MINUTE, timeOnlineMs: 30 * MINUTE });
+          expect(timing?.unseenMs).toBeUndefined();
+          expect(timing?.candidates[0]).toEqual({ k: 0, tauMs: 0, estimateMs: 30 * MINUTE });
+          expect(readCycleSeen(store)).toEqual({ lastAugReset: installed, gameTimeMs: installed + 30_000 });
+        });
+
+        test("BN4.2's first cycle: a store from before #343, its clock for the cycle, no record of its start, a 5 h gap: T its time online", () => {
+          const installed = TEN_HOURS - 5 * HOUR - 20 * MINUTE;
+          // The earlier brain saw its first 20 minutes, then the game closed for 5 h: its clock 20 min online.
+          storedSlow(installed, installed, 20);
+          store.setSetting(
+            AUGMENTATION_ONLINE_SETTING,
+            JSON.stringify({ lastAugReset: installed, onlineMs: 20 * MINUTE, lastGameTimeMs: installed + 20 * MINUTE }),
+          );
+          const { controller, connection } = connectedWithLoopOff("planner", "E1");
+          for (let minute = 0; minute <= 10; minute += 1) cycleMinute(connection, minute, installed);
+          const timing = timingOf(controller);
+          // The seed before #388 counted the gap: 5 h 30 min.
+          expect(timing).toMatchObject({ onlineMs: 30 * MINUTE, timeOnlineMs: 30 * MINUTE });
+          expect(timing?.unseenMs).toBeUndefined();
+          expect(timing?.candidates[0]).toEqual({ k: 0, tauMs: 0, estimateMs: 30 * MINUTE });
+          expect(readCycleSeen(store)).toEqual({ lastAugReset: installed, gameTimeMs: installed });
+        });
       });
 
       describe("Netburners' Hacknet setup (#387)", () => {

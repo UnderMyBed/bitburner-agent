@@ -159,7 +159,7 @@ import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
 import { workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
-import type { TelemetryStore } from "./telemetry-store.ts";
+import type { Environment, TelemetryStore } from "./telemetry-store.ts";
 import { HackingExpRate } from "./world-daemon.ts";
 
 // What's within reach beyond a joined seller's reputation moved to core (#260); these names stay here for the brain's
@@ -288,8 +288,13 @@ export type InstallTimingPolicy = "planner" | "count rule";
  */
 export type InstallTimingView = InstallTiming & {
   next: Pick<NextCountable, "augmentation" | "faction" | "way" | "tauMs">[];
-  /** The time online this cycle (T, `onlineMs`, also counts the cycle's time before the brain first saw it). */
+  /** The time online this cycle, the bars' clock (#388: T, `onlineMs`, is it, and `unseenMs` where there's one). */
   timeOnlineMs: number;
+  /**
+   * The game's time before the brain first saw the cycle, which T counts whole (#388, `cycleUnseenMs`): a cycle first
+   * seen over `AUGMENTATION_SLOW_GAP_MS` past its install, its time online then not known. Absent where there's none.
+   */
+  unseenMs?: number;
   words: string;
   /**
    * BN2 before the gang (#357's (1)): its candidates in place of #343's, install now (k 0) and wait for the gang (k 1),
@@ -1105,9 +1110,36 @@ function writeInstallWait(store: TelemetryStore, wait: InstallWait | null): void
 
 /**
  * The game's time the brain first saw a cycle at (#343: its clock's start), kept in the store: the planner's T counts
- * the cycle's time before it (a save first seen mid-cycle, an install made while the brain was down).
+ * the cycle's time before it, where that's over the gap (`cycleUnseenMs`: a save first seen mid-cycle, an install made
+ * while the brain was down).
  */
 export const AUGMENTATION_CYCLE_SEEN_SETTING = "augmentations.cycleSeen";
+
+/**
+ * The game's time before the brain first saw the cycle that T counts (#388): none where that was within
+ * `AUGMENTATION_SLOW_GAP_MS` of its install, so T is the bars' clock alone, the time online the run report's cycles
+ * show (the step from the install to the first slow snapshot left out, as there); past it, all of it, since its time
+ * online isn't known: cautious, leaning towards waiting (`describeInstallTiming` says so).
+ */
+export function cycleUnseenMs(seen: { lastAugReset: number; gameTimeMs: number }): number {
+  const beforeMs = seen.gameTimeMs - seen.lastAugReset;
+  return beforeMs > AUGMENTATION_SLOW_GAP_MS ? beforeMs : 0;
+}
+
+/**
+ * The game's times of the store's slow snapshots of the cycle `lastAugReset`, in the order stored (#388): a cycle the
+ * clock first sees past its start (a save loaded back, a store whose clock is gone, one from before #343) gets its time
+ * online from them, folded through `advanceOnlineClock` as the run report folds them. Read from
+ * `AUGMENTATION_SLOW_GAP_MS` before the install on, by the brain's clock (the PC's, as the game's): none is earlier.
+ */
+export function readCycleLooks(store: TelemetryStore, environment: Environment, lastAugReset: number): number[] {
+  const looks: number[] = [];
+  const after = { receivedAtMs: lastAugReset - AUGMENTATION_SLOW_GAP_MS, id: 0 };
+  for (const slow of store.iterateSlowResetInfo({ environment, after })) {
+    if (slow.resetInfo?.lastAugReset === lastAugReset) looks.push(slow.gameTimeMs);
+  }
+  return looks;
+}
 
 export function readCycleSeen(store: TelemetryStore): { lastAugReset: number; gameTimeMs: number } | null {
   const value = store.getSetting(AUGMENTATION_CYCLE_SEEN_SETTING);
@@ -1180,7 +1212,13 @@ export function describeInstallTiming(
     : timing.heldForInvitation
       ? "; install now held: the money held for an invitation (#228), and it doesn't meet the count"
       : "";
-  const online = timing.timeOnlineMs === timing.onlineMs ? "" : `; ${formatEta(timing.timeOnlineMs)} online`;
+  // T's game time before the brain first saw the cycle (#388): it raises installing now's estimate at least as much as
+  // any wait's (⌈(N − n) / n⌉ cycles of T against ⌈(N − n − k) / (n + k)⌉), so it leans towards waiting.
+  const online =
+    timing.unseenMs === undefined
+      ? ""
+      : `; ${formatEta(timing.timeOnlineMs)} online, and ${formatEta(timing.unseenMs)} before the brain first saw ` +
+        "the cycle, counted whole: cautious, leaning towards waiting";
   return (
     `${count.installed} of ${count.required} installed, ${timing.adding} new at an install, ` +
     `${formatEta(timing.onlineMs)} this cycle (T${online}); to Daedalus's count: ` +
@@ -1391,6 +1429,8 @@ export class AugmentationRule {
   readonly #timingPolicy: InstallTimingPolicy;
   /** BN2's route (#357): the planner's before the gang, or (the A/B's baseline) #343's candidates there too. */
   readonly #bn2Route: Bn2Route;
+  /** The store's slow snapshots of a cycle, by its `lastAugReset` (#388), or null: none read. */
+  readonly #cycleLooks: ((lastAugReset: number) => number[]) | null;
   /** The hacking experience rate (#357's τ_g and R), from the medium snapshots: a 10-minute window, a minute at least. */
   readonly #expRate = new HackingExpRate();
   /** The medium snapshot's game time last sampled for it: each is taken once (the rate restarts on a time not later). */
@@ -1438,6 +1478,7 @@ export class AugmentationRule {
     emit = () => {},
     installTiming: timingPolicy = "planner",
     bn2Route = "planner",
+    cycleLooks = null,
   }: {
     store: TelemetryStore;
     log?: (line: string) => void;
@@ -1446,12 +1487,15 @@ export class AugmentationRule {
     installTiming?: InstallTimingPolicy;
     /** BN2's route (#357): the planner's unless a test asks for the rules' (#343's before the gang). */
     bn2Route?: Bn2Route;
+    /** The store's slow snapshots of a cycle (#388, `readCycleLooks`); null, none read (no environment given). */
+    cycleLooks?: ((lastAugReset: number) => number[]) | null;
   }) {
     this.#store = store;
     this.#log = log;
     this.#emit = emit;
     this.#timingPolicy = timingPolicy;
     this.#bn2Route = bn2Route;
+    this.#cycleLooks = cycleLooks;
     readAugmentationCycle(store);
     readCountHold(store);
     readInstallWait(store);
@@ -1729,6 +1773,26 @@ export class AugmentationRule {
     }
   }
 
+  /**
+   * A cycle the clock first sees at the game's `gameTimeMs` (#388): within the gap of its install, from 0 (an install
+   * it watched, a new game). Past it, the store's slow snapshots of it before this one, if any, folded through
+   * `advanceOnlineClock` (the run report's fold), and the first of them its start; with none, from 0, first seen now
+   * (T then counts the game's time before, `cycleUnseenMs`).
+   */
+  #cycleStart(
+    lastAugReset: number,
+    gameTimeMs: number,
+  ): { clock: OnlineClock | null; seen: { lastAugReset: number; gameTimeMs: number } } {
+    const now = { clock: null, seen: { lastAugReset, gameTimeMs } };
+    if (this.#cycleLooks === null || cycleUnseenMs(now.seen) === 0) return now;
+    const looks = this.#cycleLooks(lastAugReset).filter((look) => look < gameTimeMs);
+    const first = looks[0];
+    if (first === undefined) return now;
+    let clock: OnlineClock | null = null;
+    for (const look of looks) clock = advanceOnlineClock(clock, look, lastAugReset).clock;
+    return { clock, seen: { lastAugReset, gameTimeMs: first } };
+  }
+
   /** A slow snapshot: a reset; and once per snapshot, the bars' clock, the income's sample and the faction state's read. */
   #sample(slowData: SlowSnapshotData, gameTimeMs: number | null, atMs: number, shareBonus: number): void {
     const lastAugReset = slowData.resetInfo?.lastAugReset;
@@ -1762,11 +1826,15 @@ export class AugmentationRule {
     this.#sampledGameTimeMs = gameTimeMs;
     let gap = false;
     if (isFiniteNumber(lastAugReset)) {
-      const { clock, leftOutMs } = advanceOnlineClock(this.#onlineClock, gameTimeMs, lastAugReset);
-      // A cycle the clock hasn't seen: when the brain first saw it (#343, the planner's T).
-      if (this.#onlineClock?.lastAugReset !== lastAugReset) {
-        this.#store.setSetting(AUGMENTATION_CYCLE_SEEN_SETTING, JSON.stringify({ lastAugReset, gameTimeMs }));
+      let from = this.#onlineClock;
+      // A cycle the clock hasn't seen: when the brain first saw it (#343, the planner's T), and, first seen past its
+      // start, its time online in the store's slow snapshots of it (#388: a save loaded back, a store's clock gone).
+      if (from?.lastAugReset !== lastAugReset) {
+        const start = this.#cycleStart(lastAugReset, gameTimeMs);
+        this.#store.setSetting(AUGMENTATION_CYCLE_SEEN_SETTING, JSON.stringify(start.seen));
+        from = start.clock;
       }
+      const { clock, leftOutMs } = advanceOnlineClock(from, gameTimeMs, lastAugReset);
       if (clock !== this.#onlineClock) {
         this.#onlineClock = clock;
         this.#store.setSetting(AUGMENTATION_ONLINE_SETTING, JSON.stringify(clock));
@@ -2388,18 +2456,23 @@ export class AugmentationRule {
         this.#incomeHeld = null;
       } else {
         const income = this.#income();
-        // T: the time online this cycle, and the game's time before the brain first saw the cycle (a save first seen
-        // mid-cycle, or an install made while it was down): offline time counted whole, cautious for installing now.
-        // A store from before #343 has no record for a cycle its clock has: when the clock began, as near as it says.
+        // T (#388): the time online this cycle, the bars' clock, gaps over 3 minutes left out, as the run report's
+        // cycles show it; and for a cycle first seen past its start with none of its slow snapshots stored (a save
+        // first seen mid-cycle, an install made while the brain was down), the game's time before, counted whole
+        // (`cycleUnseenMs`), leaning towards waiting, and labelled.
+        // A store from before #343 has no record for a cycle its clock has: its first slow snapshot of the cycle stored
+        // is when the clock began. Never the clock's last time less its time online, which counts the gaps it left out
+        // (#388: BN4.2's first cycle, T 544 min against 242 online, a 5 h gap); with none stored, the game's time.
         let seen = readCycleSeen(this.#store);
         const clock = this.#onlineClock;
         if (seen?.lastAugReset !== resetInfo.lastAugReset && clock?.lastAugReset === resetInfo.lastAugReset) {
-          seen = { lastAugReset: clock.lastAugReset, gameTimeMs: clock.lastGameTimeMs - clock.onlineMs };
+          const first = this.#cycleLooks?.(clock.lastAugReset).find((look) => look <= clock.lastGameTimeMs);
+          seen = { lastAugReset: clock.lastAugReset, gameTimeMs: first ?? clock.lastGameTimeMs - clock.onlineMs };
           this.#store.setSetting(AUGMENTATION_CYCLE_SEEN_SETTING, JSON.stringify(seen));
         }
-        const cycleMs =
-          onlineMs +
-          (seen?.lastAugReset === resetInfo.lastAugReset ? Math.max(0, seen.gameTimeMs - resetInfo.lastAugReset) : 0);
+        const unseenMs = seen?.lastAugReset === resetInfo.lastAugReset ? cycleUnseenMs(seen) : 0;
+        const cycleMs = onlineMs + unseenMs;
+        const unseen = unseenMs > 0 ? { unseenMs } : {};
         const needed = count.required - count.installed;
         // New to the count: NeuroFlux Governor's levels only while none is installed (one entry).
         const adding = countAfterInstall(ownedAugs, installing) - count.installed;
@@ -2428,6 +2501,7 @@ export class AugmentationRule {
             tauScale: 1,
             next: [],
             timeOnlineMs: onlineMs,
+            ...unseen,
             route: GANG_FORMED_ROUTE,
             gangInstall: gangTiming,
           };
@@ -2469,6 +2543,7 @@ export class AugmentationRule {
             tauScale,
             next: [],
             timeOnlineMs: onlineMs,
+            ...unseen,
             route: GANG_FORMING_ROUTE,
             gang,
           };
@@ -2520,6 +2595,7 @@ export class AugmentationRule {
             }),
             next: next.map(({ augmentation, faction, way, tauMs }) => ({ augmentation, faction, way, tauMs })),
             timeOnlineMs: onlineMs,
+            ...unseen,
           };
           timing = { ...figures, words: describeInstallTiming(figures, count) };
           this.#watchIncomeHold(timing, resetInfo.lastAugReset, onlineMs, atMs);

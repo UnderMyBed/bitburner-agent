@@ -7,7 +7,9 @@
  *   130`);
  * - **wait for the next k:** the k countables still to come soonest (`nextCountables`, from core's `countablesToCome`:
  *   by work, by a donation or by the money at the income), the k-th's time τ_k.
- * With N the countables still needed and T this cycle's time online so far, the next cycles are taken to be of this
+ * With N the countables still needed and T this cycle's time online so far (the brain's bars' clock, gaps over 3
+ * minutes left out, #388; a cycle it first saw past its start counts the game's time before whole, which leans towards
+ * waiting, as T weighs more on installing now's estimate than on any wait's), the next cycles are taken to be of this
  * one's shape, n countables in T (`installNowEstimateMs`, `waitEstimateMs`). The ceiling makes the last one worth
  * waiting for: at 29 of 30, the last 17 minutes off, waiting wins (decision 56's case, with no rule of its own). T
  * holds this cycle's rebuild, so a BitNode whose rebuild is long (BN4's, about 3 times BN1's) gets longer cycles by

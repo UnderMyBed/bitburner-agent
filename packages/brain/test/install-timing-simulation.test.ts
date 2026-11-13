@@ -6,11 +6,14 @@
 // Governor), hacking past 2,500, NiteSec and The Black Hand joined at 20,000 and BitRunners at 0 (each sells
 // countables, some reached, the rest by A5's work within the window), and $5b. Each arm, a test of its own, logs
 // Daedalus's count installed by the end (NeuroFlux Governor once), its installs and the money; the planner's report
-// has none of #343's failures. A measure, not a bar: the figures go in the PR. CI runs seed 1;
+// has none of #343's failures, and its T at the end is the run report's and the campaign's time online (#388). A
+// measure, not a bar: the figures go in the PR. CI runs seed 1;
 // `INSTALL_TIMING_SEEDS` (`1,2,3`, say) runs others.
 import { augmentationsSoldBy, type MediumSnapshotData, type SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND, type InstallTimingPolicy } from "../src/augmentations.ts";
+import { CampaignFold } from "../src/campaign-model.ts";
+import { formatDuration } from "../src/gap-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { useFreshStarts } from "./helpers/fresh-start.ts";
@@ -97,11 +100,29 @@ test.each(SEEDS.flatMap((seed) => (["count rule", "planner"] as const).map((poli
     if (policy === "planner") {
       // None of #343's failures: an install short of the count without its estimates, a NeuroFlux-only one, a wait
       // overdue. (The count rule's installs short of the count are failures by design.)
-      const { failures } = runReport(fresh.data.store, window);
+      const { failures, text } = runReport(fresh.data.store, window);
       expect(failures.filter((each) => /planner's estimates|NeuroFlux-only install|wait overdue/.test(each))).toEqual(
         [],
       );
       for (const each of chosen) expect(each.timing?.adding).toBeGreaterThan(0);
+      // One clock (#388): the planner's T at the end is the cycle's time online, as the run report's cycles section
+      // shows it (the bars' clock, from the cycle's first slow snapshot), and the campaign's less the cycle's first
+      // step, from the install to that snapshot, which the campaign counts and the bars' clock doesn't.
+      expect(timing).toMatchObject({ onlineMs: expect.any(Number) });
+      const tMs = timing?.onlineMs as number;
+      expect(timing?.unseenMs).toBeUndefined();
+      expect(timing?.timeOnlineMs).toBe(tMs);
+      const lastCycle = [...text.matchAll(/^\s+cycle \d+ from .*\((.+) online\)/gm)].at(-1);
+      expect(lastCycle?.[1]).toBe(formatDuration(tMs));
+      const fold = new CampaignFold();
+      const looks: { gameTimeMs: number; lastAugReset: unknown }[] = [];
+      for (const snapshot of fresh.data.store.iterateSlowResetInfo({ environment: "E1" })) {
+        fold.add(snapshot);
+        looks.push({ gameTimeMs: snapshot.gameTimeMs, lastAugReset: snapshot.resetInfo?.lastAugReset });
+      }
+      const reset = slow()?.resetInfo.lastAugReset as number;
+      const firstLook = looks.find((look) => look.lastAugReset === reset)?.gameTimeMs as number;
+      expect(fold.bitNodes.at(-1)?.currentCycle?.onlineMs).toBe(tMs + (firstLook - reset));
     }
   },
 );
