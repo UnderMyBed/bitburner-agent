@@ -34,6 +34,7 @@ import {
   AUGMENTATION_INCOME_WINDOW_MS,
   AUGMENTATION_INSTALL_INTENT,
   AUGMENTATION_INSTALL_WAIT_SETTING,
+  AUGMENTATION_LEVEL_RAMP_SETTING,
   AUGMENTATION_LEVEL_RISE_SETTING,
   AUGMENTATION_ONLINE_SETTING,
   AUGMENTATION_PROGRESS_COUNTS_EVERY_MS,
@@ -58,6 +59,7 @@ import {
   readGangRateKept,
   readGangRedPillHold,
   readInstallWait,
+  readLevelRamp,
   readOnlineClock,
   shareBonusMean,
 } from "../src/augmentations.ts";
@@ -791,7 +793,44 @@ describe("the level's rise carried over an install (#401)", () => {
       lastNodeReset: 0,
       lastAugReset: 0,
       kappa: expect.closeTo(((rate.perSecond() as number) / (311 + 50)) * gain.hackingExp * gain.hackingSpeed, 9),
+      // No ramp measured this cycle, none carried in: none yet (#405's review).
+      deadMs: null,
     });
+  });
+
+  test("its dead time (#405's review): this cycle's ramp measured; else the one carried in; else none", () => {
+    // This cycle's ramp, stored: carried as the next cycle's dead time.
+    store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, JSON.stringify({ lastAugReset: 0, rampMs: 4 * MINUTE }));
+    measure(11);
+    install(11);
+    expect(readCarriedLevelRise(store)).toMatchObject({ lastAugReset: 0, deadMs: 4 * MINUTE });
+    // None this cycle (another cycle's ramp), one carried in from the cycle before: the last measured, kept.
+    store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
+    for (const ramp of [null, { lastAugReset: -5, rampMs: MINUTE }]) {
+      rule = newRule();
+      if (ramp === null) store.deleteSetting(AUGMENTATION_LEVEL_RAMP_SETTING);
+      else store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, JSON.stringify(ramp));
+      store.setSetting(
+        AUGMENTATION_LEVEL_RISE_SETTING,
+        // A κ this cycle's rate never reaches: no ramp of its own measured.
+        JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 1e12, deadMs: 7 * MINUTE }),
+      );
+      measure(11);
+      install(11);
+      expect(readCarriedLevelRise(store)).toMatchObject({ lastAugReset: 0, deadMs: 7 * MINUTE });
+    }
+    // An older setting with no dead time reads as none measured; a bad ramp fails.
+    store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 1 }));
+    expect(readCarriedLevelRise(store)?.deadMs).toBeNull();
+    for (const bad of ["{", JSON.stringify({ lastAugReset: 0, rampMs: -1 }), JSON.stringify({ rampMs: 1 })]) {
+      store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, bad);
+      expect(() => readLevelRamp(store)).toThrow(/augmentations\.levelRamp/);
+    }
+    store.setSetting(
+      AUGMENTATION_LEVEL_RISE_SETTING,
+      JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 1, deadMs: -1 }),
+    );
+    expect(() => readCarriedLevelRise(store)).toThrow(/augmentations\.levelRise/);
   });
 
   test("the window not whole (5 minutes): nothing carried, the one stored kept", () => {
@@ -799,7 +838,7 @@ describe("the level's rise carried over an install (#401)", () => {
     store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify(kept));
     measure(5);
     expect(install(5)).toEqual({ intent: null, install: true, committed: true });
-    expect(readCarriedLevelRise(store)).toEqual(kept);
+    expect(readCarriedLevelRise(store)).toEqual({ ...kept, deadMs: null });
   });
 
   test("a setting the brain didn't write fails: A6 waits, saying why", () => {
@@ -3350,6 +3389,73 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     }
     expect(rule.view().progress?.timing?.levelRise).toBeUndefined();
     expect(rule.view().progress?.timing?.candidates[1]).toMatchObject({ tauMs: expect.closeTo(42 * MINUTE, -3) });
+  });
+
+  test("the dead time (#405's review): early in a cycle the carried κ rises only after it, measured or the fallback", () => {
+    const reputation = reputationFor(10 * MINUTE);
+    const kappa = (9 * E0) / 600 / 2_550;
+    for (const deadMs of [30 * MINUTE, undefined]) {
+      store.setSetting(
+        AUGMENTATION_LEVEL_RISE_SETTING,
+        JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa, ...(deadMs === undefined ? {} : { deadMs }) }),
+      );
+      plannerAt(1);
+      for (let minute = 0; minute < 3; minute += 1) minuteOn({ reputation }, MONEY, withExp(E0));
+      const timing = rule.view().progress?.timing;
+      const dead = deadMs ?? 10 * MINUTE;
+      const left = Math.max(0, dead - (timing?.timeOnlineMs as number)) / 1000;
+      expect(left).toBeGreaterThan(0);
+      const expected =
+        workSecondsAlong(
+          { exp: E0, level: 2_500, levelMult: 1, kappa, delaySeconds: left },
+          (level) => RATE * (level / 2_500),
+          RATE * 10 * 60,
+        ) * 1000;
+      expect(timing?.candidates[1]?.tauMs).toBeCloseTo(expected, -3);
+      // Later than with none, as the dead time holds the level meanwhile.
+      const undelayed =
+        workSecondsAlong(
+          { exp: E0, level: 2_500, levelMult: 1, kappa },
+          (level) => RATE * (level / 2_500),
+          RATE * 600,
+        ) * 1000;
+      expect(timing?.candidates[1]?.tauMs).toBeGreaterThan(undelayed + 1_000);
+      expect(timing?.levelRise).toMatchObject({
+        from: "the last cycle's",
+        deadMs: dead,
+        deadMeasured: deadMs !== undefined,
+      });
+      expect(timing?.words).toMatch(
+        deadMs === undefined
+          ? /\(the last cycle's, after 10 min: no ramp measured yet, the rate's window\)/
+          : /\(the last cycle's, after its ramp of 30 min measured\)/,
+      );
+    }
+  });
+
+  test("this cycle's ramp (#405's review): the time online its rate first reaches the carried κ, stored once", () => {
+    const reputation = reputationFor(42 * MINUTE);
+    // The rate over its samples reaches the carried κ per level + 50 at the second minute: E0/2, then 2·E0 a minute.
+    const kappa = E0 / 60 / 2_550;
+    store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa }));
+    plannerAt(60);
+    let exp = E0;
+    const onlineAt: number[] = [];
+    for (let minute = 0; minute < 5; minute += 1) {
+      minuteOn({ reputation }, MONEY, withExp(exp));
+      onlineAt.push(rule.view().progress?.timing?.timeOnlineMs as number);
+      if (minute === 0) expect(readLevelRamp(store)).toBeNull();
+      exp += minute === 0 ? E0 / 2 : 2 * E0;
+    }
+    // The first minute's half rate: under it; over two minutes, 1.25 times it.
+    const ramp = readLevelRamp(store);
+    expect(ramp?.lastAugReset).toBe(0);
+    expect(onlineAt).toContain(ramp?.rampMs);
+    expect(ramp?.rampMs).toBeGreaterThan(onlineAt[0] as number);
+    // Stored once: kept as the rate goes on.
+    const first = ramp?.rampMs;
+    minuteOn({ reputation }, MONEY, withExp(exp + 10 * E0));
+    expect(readLevelRamp(store)?.rampMs).toBe(first);
   });
 
   test("the level's rise (#401): the last cycle's κ carried over the install, where it's more than the window's", () => {

@@ -32,8 +32,10 @@
  * - a τ by work at the share bonus's mean over the last 10 minutes (#345: 1 with no share in them, as before A5 works
  *   there and the share starts): cautious for waiting, optimistic for installing now; since #401 along the hacking
  *   level's rise (core's level-rise.ts: κ the larger of the experience rate measured now and the last cycle's, times
- *   the install's gains), on the RAM it was measured on: home RAM growing and new servers left out, cautious for
- *   waiting; with neither measured, at the level now, as before.
+ *   the install's gains, the last cycle's after its measured ramp, #405's review): RAM bought from now on left out,
+ *   cautious for waiting; but the last cycle's rate was measured on cloud servers the install deleted (`Prestige.ts`),
+ *   optimistic for waiting early in a cycle, until they're bought back, beyond what the ramp's dead time stands in
+ *   for; with neither measured, at the level now, as before.
  * Three guards, each the rule's own measure: with no income measured (`incomeMeasured` false: 10 minutes of slow
  * snapshots after a restart or a gap), every money-bound τ is never, so installing now is held unless the set meets
  * the count; while an invitation's money is held (#228's hold, `invitationHeld`: it ends on the invitation, or 5

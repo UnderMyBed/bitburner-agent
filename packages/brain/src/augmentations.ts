@@ -164,7 +164,7 @@ import { workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
-import { HackingExpRate } from "./world-daemon.ts";
+import { HACKING_EXP_WINDOW_MS, HackingExpRate } from "./world-daemon.ts";
 
 // What's within reach beyond a joined seller's reputation moved to core (#260); these names stay here for the brain's
 // other modules and tests.
@@ -306,7 +306,13 @@ export type InstallTimingView = InstallTiming & {
    * takes, and whence: measured now (`HackingExpRate`'s window) or the last cycle's carried over the install
    * (`AUGMENTATION_LEVEL_RISE_SETTING`), the larger. Absent with neither: at the level now.
    */
-  levelRise?: { expPerSecond: number; from: "measured now" | "the last cycle's" };
+  levelRise?: {
+    expPerSecond: number;
+    from: "measured now" | "the last cycle's";
+    /** The last cycle's: its dead time, and whether measured (a ramp) or the fallback (`LEVEL_RAMP_FALLBACK_MS`). */
+    deadMs?: number;
+    deadMeasured?: boolean;
+  };
   /** The time online in the store's slow snapshots of the cycle before the bars' clock began (#388): T counts it. */
   onlineBeforeMs?: number;
   words: string;
@@ -1092,7 +1098,9 @@ export interface InstallWait {
  * `hacking_exp` and `hacking_speed` (core's `levellingInstallMultipliers`, the queue's), for the cycles after it
  * in the BitNode (`lastNodeReset`): a cycle's own window starts again at the install and measures the hack loop's
  * ramp, not what the RAM earns (the Red Pill holds: 15 to 800 times under the hold's rate, #401). Its cycle's
- * `lastAugReset`; a restart keeps it.
+ * `lastAugReset`; a restart keeps it. `deadMs` (#405's review): the ramp's dead time for the cycle after it, the
+ * cycle's own ramp measured (`AUGMENTATION_LEVEL_RAMP_SETTING`), else the last measured in the BitNode (the one it
+ * carried in), else null: none measured yet (an older setting's too).
  */
 export const AUGMENTATION_LEVEL_RISE_SETTING = "augmentations.levelRise";
 
@@ -1100,6 +1108,37 @@ export interface CarriedLevelRise {
   lastNodeReset: number;
   lastAugReset: number;
   kappa: number;
+  deadMs: number | null;
+}
+
+/**
+ * A cycle's ramp after its install (#405's review), as #389 keeps its rebuild: the time online from the install until
+ * the experience rate measured (`HackingExpRate`, from its first minute) first reaches, per level + 50, the κ carried
+ * into the cycle; its cycle's `lastAugReset`. Measured once a cycle, kept across a restart.
+ */
+export const AUGMENTATION_LEVEL_RAMP_SETTING = "augmentations.levelRamp";
+
+/**
+ * The dead time where no ramp is measured yet in the BitNode (the first install, a cycle never reaching the rate
+ * carried into it, an older setting): the experience rate's window, `HACKING_EXP_WINDOW_MS`, the time before the
+ * cycle's own rate is measured whole at all. Labelled in the words.
+ */
+export const LEVEL_RAMP_FALLBACK_MS = HACKING_EXP_WINDOW_MS;
+
+export function readLevelRamp(store: TelemetryStore): { lastAugReset: number; rampMs: number } | null {
+  const value = store.getSetting(AUGMENTATION_LEVEL_RAMP_SETTING);
+  if (value === null) return null;
+  let ramp: { lastAugReset?: unknown; rampMs?: unknown } | null;
+  try {
+    ramp = JSON.parse(value) as typeof ramp;
+  } catch {
+    throw new Error(`the store's ${AUGMENTATION_LEVEL_RAMP_SETTING} isn't JSON`);
+  }
+  const { lastAugReset, rampMs } = ramp ?? {};
+  if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(rampMs) || rampMs < 0) {
+    throw new Error(`the store's ${AUGMENTATION_LEVEL_RAMP_SETTING} isn't a ramp the brain wrote`);
+  }
+  return { lastAugReset, rampMs };
 }
 
 export function readCarriedLevelRise(store: TelemetryStore): CarriedLevelRise | null {
@@ -1111,11 +1150,17 @@ export function readCarriedLevelRise(store: TelemetryStore): CarriedLevelRise | 
   } catch {
     throw new Error(`the store's ${AUGMENTATION_LEVEL_RISE_SETTING} isn't JSON`);
   }
-  const { lastNodeReset, lastAugReset, kappa } = carried ?? {};
-  if (!isFiniteNumber(lastNodeReset) || !isFiniteNumber(lastAugReset) || !isFiniteNumber(kappa) || !(kappa > 0)) {
+  const { lastNodeReset, lastAugReset, kappa, deadMs } = carried ?? {};
+  if (
+    !isFiniteNumber(lastNodeReset) ||
+    !isFiniteNumber(lastAugReset) ||
+    !isFiniteNumber(kappa) ||
+    !(kappa > 0) ||
+    (deadMs !== undefined && deadMs !== null && !(isFiniteNumber(deadMs) && deadMs >= 0))
+  ) {
     throw new Error(`the store's ${AUGMENTATION_LEVEL_RISE_SETTING} isn't a rate the brain wrote`);
   }
-  return { lastNodeReset, lastAugReset, kappa };
+  return { lastNodeReset, lastAugReset, kappa, deadMs: (deadMs as number | null | undefined) ?? null };
 }
 
 export function readInstallWait(store: TelemetryStore): InstallWait | null {
@@ -1287,7 +1332,12 @@ export function describeInstallTiming(
     timing.levelRise === undefined
       ? ""
       : `; τ by work along the level's rise, ${Math.round(timing.levelRise.expPerSecond).toLocaleString("en-US")} exp/s ` +
-        `now (${timing.levelRise.from})`;
+        `now (${timing.levelRise.from}` +
+        (timing.levelRise.deadMs === undefined
+          ? ")"
+          : timing.levelRise.deadMeasured === true
+            ? `, after its ramp of ${formatEta(timing.levelRise.deadMs)} measured)`
+            : `, after ${formatEta(timing.levelRise.deadMs)}: no ramp measured yet, the rate's window)`);
   return (
     `${count.installed} of ${count.required} installed, ${timing.adding} new at an install, ` +
     `${formatEta(timing.onlineMs)} this cycle (T${online}); to Daedalus's count: ` +
@@ -2718,6 +2768,7 @@ export class AugmentationRule {
                   levelRise: {
                     expPerSecond: levelRise.rise.kappa * (hackingLevel + LEVEL_RISE_TERM),
                     from: levelRise.from,
+                    ...levelRise.dead,
                   },
                 }),
           };
@@ -3214,7 +3265,10 @@ export class AugmentationRule {
    * τ_g: its first minutes after an install measure the hack loop's start) and the one carried over the last install
    * in the BitNode (`AUGMENTATION_LEVEL_RISE_SETTING`): the window early in a cycle is the hack loop's ramp (the Red
    * Pill holds' starts, 15 to 800 times under their rates), the carried one the RAM the last cycle ended on, under the
-   * RAM bought since. Neither: flat, the level now, as before #401.
+   * RAM bought since. The carried one rises only after its dead time (#405's review: the restart's ramp and the cloud
+   * servers the install deleted), less the time online this cycle so far: the cycle before's ramp measured, else the
+   * fallback (`LEVEL_RAMP_FALLBACK_MS`). Neither: flat, the level now, as before #401. Measures this cycle's ramp too:
+   * the time online when the rate (from its first minute) first reaches the carried κ per level + 50, stored once.
    */
   #levelRise(
     mediumData: MediumSnapshotData,
@@ -3222,7 +3276,11 @@ export class AugmentationRule {
     lastAugReset: number,
     currentNode: number,
     level: number,
-  ): { rise: LevelRise; from: NonNullable<InstallTimingView["levelRise"]>["from"] | null } {
+  ): {
+    rise: LevelRise;
+    from: NonNullable<InstallTimingView["levelRise"]>["from"] | null;
+    dead: { deadMs: number; deadMeasured: boolean } | Record<string, never>;
+  } {
     const { exp, levelMult } = hackingFiguresOf(mediumData, currentNode);
     const measured = levelRiseOf({
       exp,
@@ -3231,13 +3289,28 @@ export class AugmentationRule {
       expPerSecond: this.#expRate.windowFull() ? this.#expRate.perSecond() : null,
     });
     const lastNodeReset = (slowData.resetInfo as { lastNodeReset?: unknown } | undefined)?.lastNodeReset;
-    const carried = readCarriedLevelRise(this.#store);
-    const carriedKappa =
-      carried !== null && carried.lastNodeReset === lastNodeReset && carried.lastAugReset < lastAugReset
-        ? carried.kappa
-        : 0;
-    if (carriedKappa > measured.kappa) return { rise: { ...measured, kappa: carriedKappa }, from: "the last cycle's" };
-    return { rise: measured, from: measured.kappa > 0 ? "measured now" : null };
+    const stored = readCarriedLevelRise(this.#store);
+    const carried =
+      stored !== null && stored.lastNodeReset === lastNodeReset && stored.lastAugReset < lastAugReset ? stored : null;
+    const sinceInstallMs = this.#onlineClock?.lastAugReset === lastAugReset ? this.#onlineClock.onlineMs : 0;
+    if (carried !== null && readLevelRamp(this.#store)?.lastAugReset !== lastAugReset) {
+      const perSecond = this.#expRate.perSecond();
+      if (perSecond !== null && perSecond / (level + LEVEL_RISE_TERM) >= carried.kappa) {
+        this.#store.setSetting(
+          AUGMENTATION_LEVEL_RAMP_SETTING,
+          JSON.stringify({ lastAugReset, rampMs: sinceInstallMs }),
+        );
+      }
+    }
+    if (carried !== null && carried.kappa > measured.kappa) {
+      const deadMs = carried.deadMs ?? LEVEL_RAMP_FALLBACK_MS;
+      return {
+        rise: { ...measured, kappa: carried.kappa, delaySeconds: Math.max(0, deadMs - sinceInstallMs) / 1000 },
+        from: "the last cycle's",
+        dead: { deadMs, deadMeasured: carried.deadMs !== null },
+      };
+    }
+    return { rise: measured, from: measured.kappa > 0 ? "measured now" : null, dead: {} };
   }
 
   /**
@@ -3263,7 +3336,16 @@ export class AugmentationRule {
       return;
     }
     const kappa = (perSecond / (level + LEVEL_RISE_TERM)) * gain.hackingExp * gain.hackingSpeed;
-    const carried: CarriedLevelRise = { lastNodeReset, lastAugReset, kappa };
+    // This cycle's ramp, measured; else the last measured in the BitNode, the one carried in; else none yet.
+    const ramp = readLevelRamp(this.#store);
+    const before = readCarriedLevelRise(this.#store);
+    const deadMs =
+      ramp?.lastAugReset === lastAugReset
+        ? ramp.rampMs
+        : before !== null && before.lastNodeReset === lastNodeReset
+          ? before.deadMs
+          : null;
+    const carried: CarriedLevelRise = { lastNodeReset, lastAugReset, kappa, deadMs };
     this.#store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify(carried));
   }
 
