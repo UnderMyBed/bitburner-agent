@@ -1,4 +1,5 @@
-# Fast tiers on every PR and on main (ADR 0004). The job name `check` is the required status check.
+# Fast tiers on every PR and on main (ADR 0004). The job name `check` is the required status check: it's the aggregate
+# of `static` and the test shards, so a failed or cancelled shard fails it (#393: one job outgrew its 30 minutes).
 name: CI
 
 on:
@@ -14,8 +15,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }} # every main commit gets a result
 
 jobs:
-  check:
-    name: check
+  static:
+    name: typecheck and lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -42,5 +43,47 @@ jobs:
         run: npm run typecheck
       - name: Lint and format
         run: npm run lint
+
+  test:
+    name: test (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false # every shard reports
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true # vendor/bitburner-src: contract tests read the pinned game source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Cache the game's dependencies
+        id: game-deps
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: vendor/bitburner-src/node_modules
+          key: game-deps-${{ runner.os }}-${{ hashFiles('vendor/bitburner-src/package-lock.json', 'packages/sim/scripts/setup-engine.ts', 'packages/sim/src/engine/vendor.ts', '.node-version') }}
+      - name: Install the game's dependencies
+        if: steps.game-deps.outputs.cache-hit != 'true'
+        run: npm run setup:engine
       - name: Test
-        run: npm test
+        run: npm test -- --shard=${{ matrix.shard }}/4
+
+  check:
+    name: check
+    if: always()
+    needs: [static, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          test "$(echo "$RESULTS" | tr -d '[:space:][]"' | tr ',' '\n' | sort -u)" = "success"
