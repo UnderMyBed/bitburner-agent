@@ -7,12 +7,17 @@
 // - **Sector-12's chaos at 80** before the Agent starts: the division's first city (`Bladeburner.ts:116`). The rule
 //   moves to another city by its forecast, the chaos where it works under 50 within a reading or two of the cities.
 // - **Every city's chaos at 52,** ten minutes on: no city to move to, so Diplomacy by its own measure (#390's review,
-//   B4's intent): each run the rule sends with the measure paying (its gain at least its 60 s forgone), none once it no
-//   longer pays, and the chaos under 50 within section 8's own bound (twice the rule's Diplomacy estimate and 10 min)
-//   and the decay from where the measure stopped. In this run (#386) Diplomacy was sent at chaos 52.000, 51.472, 50.951
-//   and 50.435, the last taking it to 49.924, under 50 after 4.3 min. On main the last run stopped at 50.115, and the
-//   decay took it under 50: #386's choice plays the hour differently (Raid at the floor, under the faction's 25), so
-//   the runs' phase against 50 differs; where the last paying run lands is the path's, not the rule's.
+//   B4's intent): each run the rule sends with the measure paying; for three minutes past its stop, none on the
+//   stopped measure (each run then started by a new decision's paying measure, over 50); and the chaos under 50 within
+//   section 8's own bound (twice the rule's Diplomacy estimate and 10 min) and the decay from where it stopped. In this
+//   run (#386) Diplomacy was sent at chaos 52.000, 51.472, 50.951 and 50.435, the last taking it to 49.924, under 50
+//   after 4.3 min: the measure never stopped above 50 on this path. Raid's own chaos (+1–5% an attempt,
+//   `Bladeburner.ts:846`) then took it to 51.9, and Diplomacy paid again (51.913, 51.387). On main the last run stopped
+//   at 50.115, and the decay took it under 50: #386's choice plays the hour differently (Raid at the floor, under the
+//   faction's 25), so the runs' phase against 50 differs; where the last paying run lands is the path's, not the rule's.
+// - **B4's break-even** (#390's review), every city then at 50.2: weighed and not paying (gain 0.108 against its 60 s's
+//   0.200 here); a later run only on a later decision's paying measure (here at 50.189, gain 0.243: the measure follows
+//   each reading's stamina and figures).
 // The whole report passing, its chaos check among it.
 import { BLADEBURNER_CITIES, diplomaciesTo50, type MediumSnapshotData, skillExpFor } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
@@ -72,61 +77,114 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
   const raisedAtMs = fresh.game.clock.now();
   const attempts = diplomaciesTo50(52, 1);
   const boundMs = 2 * attempts * 60_000 + BLADEBURNER_CHAOS_SLACK_MS;
-  let diplomacySeen = false;
   // The first reading with the 52s.
   await fresh.game.runUntil(() => chaosOf(reading()?.city) > 51.9, 2 * MINUTE);
-  // Diplomacy by its own measure (#390's review: B4's intent, not one path's figures): each decision of the rule's that
-  // sends Diplomacy (not a run kept to its end) with the measure paying, its gain at least its 60 s forgone; none once
-  // the measure no longer pays; then the chaos under 50 within section 8's bound, and the decay from where it stopped.
-  const sends: { chaos: number; gain: number; cost: number }[] = [];
-  let stopped: { chaos: number; atMs: number } | null = null;
-  let sentAfterStop = 0;
-  let startedAfterStop = 0;
+  // Diplomacy by its own measure (#390's review: B4's intent, not one path's figures). Each decision of the rule's that
+  // sends Diplomacy (not a run kept to its end), with its measure there; each run seen starting; and each decision that
+  // weighs it (the chaos over 50) without paying.
+  const sends: { atMs: number; chaos: number; gain: number; cost: number; pays: boolean }[] = [];
+  const starts: number[] = [];
+  const unpaid: { atMs: number; chaos: number; gain: number; cost: number }[] = [];
   let lastView: unknown = null;
   let wasUnderWay = false;
-  await fresh.game.runUntil(() => {
-    const view = fresh.controller().bladeburnerView();
+  const observe = () => {
     const underWay = reading()?.current?.name === "Diplomacy";
-    if (underWay) diplomacySeen = true;
-    if (underWay && !wasUnderWay && stopped !== null) startedAfterStop += 1;
+    if (underWay && !wasUnderWay) starts.push(fresh.game.clock.now());
     wasUnderWay = underWay;
-    if (view !== lastView) {
-      lastView = view;
-      const actions = view.actions;
-      const diplomacy = actions?.cities?.diplomacy ?? null;
-      const sent = actions?.order.name === "Diplomacy" && actions.kept == null;
-      if (sent && diplomacy !== null) {
-        sends.push({ chaos: diplomacy.chaos, gain: diplomacy.gain, cost: diplomacy.cost });
-        if (stopped !== null) sentAfterStop += 1;
-      }
-      if (diplomacySeen && stopped === null && diplomacy?.pays !== true) {
-        stopped = { chaos: chaosOf(reading()?.city), atMs: fresh.game.clock.now() };
-      }
+    const view = fresh.controller().bladeburnerView();
+    if (view === lastView) return;
+    lastView = view;
+    const actions = view.actions;
+    const diplomacy = actions?.cities?.diplomacy ?? null;
+    if (diplomacy === null) return;
+    const figures = {
+      atMs: fresh.game.clock.now(),
+      chaos: diplomacy.chaos,
+      gain: diplomacy.gain,
+      cost: diplomacy.cost,
+    };
+    if (actions?.order.name === "Diplomacy" && actions.kept == null) sends.push({ ...figures, pays: diplomacy.pays });
+    if (!diplomacy.pays) unpaid.push(figures);
+  };
+  // The measure's stop: the first decision, after a Diplomacy, that no longer sends one (it no longer pays, or the
+  // chaos is at 50 or under and it isn't weighed).
+  let stopped: { chaos: number; atMs: number } | null = null;
+  await fresh.game.runUntil(() => {
+    observe();
+    const actions = fresh.controller().bladeburnerView().actions;
+    if (stopped === null && starts.length > 0 && actions?.cities?.diplomacy?.pays !== true) {
+      stopped = { chaos: chaosOf(reading()?.city), atMs: fresh.game.clock.now() };
     }
     return stopped !== null && chaosOf(reading()?.city) < 50;
   }, HOUR / 2);
   const worked = reading()?.city;
+  const chaosWhenUnder = chaosOf(worked);
   const underAfterMs = fresh.game.clock.now() - raisedAtMs;
   const stop = stopped as { chaos: number; atMs: number } | null;
+  // On past the stop, three minutes: no Diplomacy sent or started.
+  const pastStopMs = fresh.game.clock.now() + 3 * MINUTE;
+  await fresh.game.runUntil(() => {
+    observe();
+    return fresh.game.clock.now() >= pastStopMs;
+  }, 4 * MINUTE);
   console.log(fresh.controller().bladeburnerView().line);
   console.log(
-    `every city at 52: Diplomacy seen ${diplomacySeen}; sent at chaos ${sends.map((each) => each.chaos.toFixed(3)).join(", ")}; ` +
-      `the measure stopped paying at ${stop?.chaos.toFixed(3)} after ${(((stop?.atMs ?? 0) - raisedAtMs) / MINUTE).toFixed(1)} ` +
+    `every city at 52: Diplomacy sent at chaos ${sends.map((each) => `${each.chaos.toFixed(3)} (gain ${each.gain.toFixed(2)}, cost ${each.cost.toFixed(2)})`).join(", ")}; ` +
+      `the measure stopped at ${stop?.chaos.toFixed(3)} after ${(((stop?.atMs ?? 0) - raisedAtMs) / MINUTE).toFixed(1)} ` +
       `min; under 50 after ${(underAfterMs / MINUTE).toFixed(1)} min (the rule's estimate to 50 ${attempts} × 60 s, the ` +
       `report's bound ${boundMs / MINUTE} min); the others: ` +
       BLADEBURNER_CITIES.map((city) => `${city} ${chaosOf(city).toFixed(2)}`).join(", "),
   );
-  expect(diplomacySeen).toBe(true);
+  expect(starts.length).toBeGreaterThan(0);
   expect(sends.length).toBeGreaterThan(0);
-  for (const each of sends)
-    expect(each.gain, `Diplomacy sent at chaos ${each.chaos}`).toBeGreaterThanOrEqual(each.cost);
+  // The order follows the measure (the brain's wiring of core's `chaosAction`).
+  for (const each of sends) expect(each.pays, `Diplomacy sent at chaos ${each.chaos}`).toBe(true);
   expect(stop).not.toBeNull();
-  expect(sentAfterStop).toBe(0);
-  expect(startedAfterStop).toBe(0);
-  // Under 50 within the report's bound, and the decay (0.0001 a second) from the chaos where the measure stopped.
+  const stopAtMs = stop?.atMs ?? Number.POSITIVE_INFINITY;
+  // Past it, none on the stopped measure: a run starts only after a decision sends it, its measure paying above 50.
+  // Raid's own chaos (+1–5% an attempt, `Bladeburner.ts:846`) can take the chaos back over 50, and the measure pays
+  // again: a new decision, not the stopped one's.
+  const sentAfter = (fromMs: number, toMs = Number.POSITIVE_INFINITY) =>
+    sends.filter((each) => each.atMs > fromMs && each.atMs <= toMs);
+  for (const each of sentAfter(stopAtMs)) expect(each.chaos).toBeGreaterThan(50);
+  for (const atMs of starts.filter((each) => each > stopAtMs)) {
+    expect(sentAfter(stopAtMs, atMs).length, `a Diplomacy started at ${atMs}`).toBeGreaterThan(0);
+  }
+  // Under 50 within the report's bound, and the decay (0.0001 a second) from the chaos where the measure stopped. On
+  // this path it never stopped above 50: the last paying run took it under.
   const decayMs = (Math.max(0, (stop?.chaos ?? 0) - 50) / 0.0001) * 1000;
-  expect(chaosOf(worked)).toBeLessThan(50);
+  expect(chaosWhenUnder).toBeLessThan(50);
   expect(underAfterMs).toBeLessThanOrEqual(boundMs + decayMs);
+
+  // B4's break-even (#390's review): every city at 50.2, where one more Diplomacy (to 49.70) costs its 60 s and the
+  // chaos it takes off (0.2 over 50) loses little as the decay brings it down: weighed, not paying, none sent.
+  for (const city of BLADEBURNER_CITIES)
+    await fresh.simulation.diagnostics.setBladeburnerFigures({ city, chaos: 50.2 });
+  const nearAtMs = fresh.game.clock.now();
+  await fresh.game.runUntil(() => {
+    observe();
+    return fresh.game.clock.now() >= nearAtMs + 3 * MINUTE;
+  }, 4 * MINUTE);
+  const nearUnpaid = unpaid.filter((each) => each.atMs > nearAtMs);
+  console.log(
+    `every city at 50.2: weighed ${nearUnpaid.length} times, not paying (the first: gain ${nearUnpaid[0]?.gain.toFixed(3)}, ` +
+      `cost ${nearUnpaid[0]?.cost.toFixed(3)} at chaos ${nearUnpaid[0]?.chaos.toFixed(3)}); sent after: ` +
+      `${
+        sentAfter(nearAtMs)
+          .map((each) => `${each.chaos.toFixed(3)} (gain ${each.gain.toFixed(3)}, cost ${each.cost.toFixed(3)})`)
+          .join(", ") || "none"
+      }`,
+  );
+  expect(nearUnpaid.length).toBeGreaterThan(0);
+  const first = nearUnpaid[0];
+  expect(first?.chaos).toBeGreaterThan(50.1);
+  expect(first?.chaos).toBeLessThan(50.21);
+  for (const each of nearUnpaid) expect(each.gain).toBeLessThan(each.cost);
+  // One sent later only on its own decision's paying measure: its cost is the forecast's 60 s at that reading's
+  // stamina and figures, so it moves (the sends' gain and cost logged).
+  for (const atMs of starts.filter((each) => each > nearAtMs)) {
+    expect(sentAfter(nearAtMs, atMs).length, `a Diplomacy started at ${atMs}`).toBeGreaterThan(0);
+  }
   // Then the hour, the division where the chaos is under 50.
   await fresh.game.run(HOUR - (fresh.game.clock.now() - startedAtMs));
   expect(chaosOf(reading()?.city)).toBeLessThan(50);

@@ -8,9 +8,12 @@
 // - CyberSec joined (#377's review), so A5 has faction work to hold for the actions.
 // Then: the plan's work and rest by the worker, A5's faction work held for them; home's batches leaving the worker's
 // RAM (#377's review); the stamina under ½ max rested back to the max; no stop at stamina 0; and (#386) under the
-// faction's 25, each minute's plan the least expected time to it of every plan the rule weighs (core's
-// `bladeburnerPlansToTarget`, none ruled out); the steady part's rank (Field Analysis and the contracts) within its own
-// Bernstein bound at section 8's α, as B3's hour (#381's review); the whole's within its bound; the report passing.
+// faction's 25 all 60 minutes, each minute's plan the least expected time to it of every plan the rule weighs (core's
+// `bladeburnerPlansToTarget`, none ruled out). That runs the same chain on the same plans, so it guards the pruning and
+// the brain's inputs, not the chain: the independent evidence is core's simulated walks
+// (packages/core/test/bladeburner-targets.test.ts). The steady part's rank (Field Analysis and the contracts) within
+// its own Bernstein bound at section 8's α, as B3's hour (#381's review), which can't fail here (Raid ran 44 of the
+// 60 minutes, so the steady forecast is too small for its bound to bite); the whole's within its bound; the report.
 // The hour isn't asked to reach 25 (#386's amendment): at rank 0 a failure loses nothing, so the least expected time
 // can be Raid's lottery, whose hour can end anywhere.
 import {
@@ -103,6 +106,8 @@ test("BN6.1, an hour from a harness join: each plan the least time to 25, the st
     `under the target at ${underTarget} of 60 minutes, each the least time of every plan; chosen: ` +
       [...chosen].map(([name, minutes]) => `${name} ${minutes}`).join(", "),
   );
+  // Under the faction's 25 the whole hour (#390's review): the check ran at every minute.
+  expect(underTarget).toBe(60);
   // Worked to under ½ max, then rested.
   expect(rested).toBe(true);
   expect(lowest).toBeLessThan(0.5);

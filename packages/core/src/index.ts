@@ -360,6 +360,7 @@ export {
 } from "./bladeburner-skills.ts";
 export {
   BLADEBURNER_TARGET_CELLS,
+  BLADEBURNER_TARGET_CELLS_A_STEP,
   type BladeburnerRankStep,
   bladeburnerAttemptsInCount,
   bladeburnerCycleStep,
@@ -367,6 +368,7 @@ export {
   bladeburnerRestStep,
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
+  bladeburnerTargetCells,
 } from "./bladeburner-targets.ts";
 export {
   CAMPAIGN_ORDER,
