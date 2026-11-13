@@ -479,6 +479,22 @@ describe("the run report's Black Ops (#392)", () => {
     expect(waiting.text).toContain(": waiting (the bound ");
   });
 
+  test("a Black Op under way is an attempt in the actions' forecast: a failure's loss within its bound", () => {
+    // Typhoon under way for its attempt's seconds, then failed: 10 rank lost (its mean), within its Bernstein bound.
+    const seconds = Math.ceil((200 / (0.5 * (100 ** 0.04 + 100 ** 0.035 + 0.02))) * 1.5);
+    const readings = Math.ceil(seconds / 10) + 1;
+    const mediums = run(
+      Array.from({ length: readings + 1 }, (_, index) => ({
+        rank: index < readings ? 2500 : 2490,
+        blackOp: typhoon,
+        current: index < readings ? underWay : null,
+      })),
+    );
+    const { text, failures } = fold(mediums);
+    expect(failures).toEqual([]);
+    expect(text).toMatch(/\n {6}Operation Typhoon: about 1 attempts, 0 successes; -10\.00 measured against /);
+  });
+
   test("an older Agent's reading: said; all 21 done: said", () => {
     expect(fold(run([{ rank: 10 }])).text).toContain("  the Black Ops (#392): no reading with them (an older Agent's)");
     expect(fold(run([{ rank: 500_000, blackOp: null }])).text).toContain(

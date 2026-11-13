@@ -838,7 +838,7 @@ export class BladeburnerRule {
       then +
       describeActionPlan(plan, resting, stamina, maxStamina) +
       (cities === null || readCity === null ? "" : `; ${describeCityChoice(cities, readCity)}`) +
-      (next === undefined ? "" : `; ${check === null ? "all 21 Black Ops done" : describeBlackOpCheck(check)}`);
+      (next === null ? "; all 21 Black Ops done" : check === null ? "" : `; ${describeBlackOpCheck(check)}`);
     // The rule chose the chaos action under way again at its run's first reading (#385's review): kept to that run's end.
     const since = this.#chaosSince;
     if (since !== null && kept === null && order.type === "General" && order.name === since.name) {

@@ -497,7 +497,11 @@ export function blackOpChanceLow(read: readonly [number, number], penalty: numbe
  * (`cheapestBladeburnerSkillLevel`, at least 1), at the plan's rank a second, then attempting at the chance and seconds
  * after B3's plan spends them. Run it when now's expected time is no more than the wait's; `bound` is the least chance
  * that holds (bisected: now's falls with the chance, as 1/chance). Without B3's skills read (an older Agent), run it at
- * any chance over 0.
+ * any chance over 0. The look-ahead is optimal where the problem is monotone (once stopping is best it stays best),
+ * which is taken, not proved: each point's levels cost more as they rise (`Skill.ts:76-80`), so the chance a wait buys
+ * falls, and the rule re-checks at each reading.
+ * The time waiting earns rank toward the next Black Op too, which this measure (the time to this one done) counts as a
+ * cost: it errs toward running now, the order the epic sets (#359).
  * Left out, and labelled: the rank over its requirement, so each failure's rebuild is from its rank less the loss (a
  * failure from higher needs less, so the rebuild errs long); the ±10% on the loss (its mean); the rebuild's own
  * speed-up from the skills awaited; the points' fraction already earned toward the next (the max rank isn't read, so
