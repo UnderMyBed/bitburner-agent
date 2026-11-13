@@ -58,7 +58,9 @@ import {
 } from "./bladeburner-skills.ts";
 import {
   type BladeburnerRankStep,
+  bladeburnerAttemptsInCount,
   bladeburnerCycleStep,
+  bladeburnerRestStep,
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
 } from "./bladeburner-targets.ts";
@@ -750,7 +752,41 @@ export interface BladeburnerActionPlan {
  * defense 100), the money traded for rank the planner's (decision 67); money (contracts pay as a by-product); teams;
  * the chaos and population the actions themselves move (B4's, read, not forecast).
  */
-export function chooseBladeburnerAction({
+export function chooseBladeburnerAction(input: BladeburnerActionInput): BladeburnerActionPlan {
+  const candidates = planCandidates(input);
+  const { target } = input;
+  if (target === undefined || !(target.rank < target.target)) {
+    // Rank a second: the first with the most, in the game's order (resting alone first).
+    let best = (candidates[0] as PlanCandidate).plan;
+    for (const { plan } of candidates) if (plan.rankPerSecond > best.rankPerSecond) best = plan;
+    return best;
+  }
+  return fastestToTarget(candidates, target, true)[0] as BladeburnerActionPlan;
+}
+
+/**
+ * Every plan the rule weighs under `input.target` (#386), in the game's order (resting alone first), each with its
+ * expected time to the target (`toTarget`), none ruled out by Wald's bound: what the tests check the choice against.
+ * Empty with no target, or one met.
+ */
+export function bladeburnerPlansToTarget(input: BladeburnerActionInput): BladeburnerActionPlan[] {
+  const { target } = input;
+  if (target === undefined || !(target.rank < target.target)) return [];
+  return fastestToTarget(planCandidates(input), target, false);
+}
+
+/** `chooseBladeburnerAction`'s input. */
+export type BladeburnerActionInput = Parameters<typeof planCandidates>[0];
+
+/** A plan weighed: its plan, its walk's step (null: resting alone), and its action's name (null: resting alone). */
+interface PlanCandidate {
+  plan: BladeburnerActionPlan;
+  step: BladeburnerRankStep | null;
+  name: string | null;
+}
+
+/** Every plan `chooseBladeburnerAction` weighs, in the game's order, resting alone first. */
+function planCandidates({
   readings,
   person,
   stamina,
@@ -759,7 +795,6 @@ export function chooseBladeburnerAction({
   speed,
   skills = {},
   city,
-  target,
 }: {
   readings: readonly BladeburnerActionReading[];
   person: BladeburnerPerson;
@@ -774,13 +809,25 @@ export function chooseBladeburnerAction({
   city?: { ratio: number; raid: boolean };
   /** The rank now and the next current-rank target (#386, ./bladeburner-targets.ts): under it, the least time to it. */
   target?: { rank: number; target: number };
-}): BladeburnerActionPlan {
+}): PlanCandidate[] {
   const readMults = bladeburnerSkillMultsOf(skills.read ?? {});
   const mults = skills.planned === undefined ? readMults : bladeburnerSkillMultsOf(skills.planned);
   const maxPlanned =
     skills.planned === undefined ? maxStamina : maxStaminaAtSkills(person, maxStamina, readMults, mults);
   const regain = staminaGainPerSecond(person, maxPlanned, mults);
   const rests = bladeburnerRests(regain, maxPlanned, rankMultiplier);
+  // A rest with no more stamina and no more rank a second than another is never the better (#386): Training's, beside
+  // Field Analysis's (its cost from the same regain, and no rank).
+  const worthResting = rests.filter(
+    (rest) =>
+      !rests.some(
+        (other) =>
+          other !== rest &&
+          other.staminaPerSecond >= rest.staminaPerSecond &&
+          other.rankPerSecond >= rest.rankPerSecond &&
+          (other.staminaPerSecond > rest.staminaPerSecond || other.rankPerSecond > rest.rankPerSecond),
+      ),
+  );
   const penalty = staminaPenalty(stamina, maxStamina);
   const restAlone = rests.reduce((best, each) => (each.rankPerSecond > best.rankPerSecond ? each : best));
   const alone: BladeburnerActionPlan = {
@@ -791,7 +838,7 @@ export function chooseBladeburnerAction({
     regain,
   };
   // Every plan weighed, in the game's order (resting alone first): its step to a target with it (#386).
-  const candidates: { plan: BladeburnerActionPlan; step: BladeburnerRankStep | null }[] = [{ plan: alone, step: null }];
+  const candidates: PlanCandidate[] = [{ plan: alone, step: null, name: null }];
   for (const read of readings) {
     const action = bladeburnerLevelledAction(read.type, read.name);
     if (action === null) continue;
@@ -813,12 +860,24 @@ export function chooseBladeburnerAction({
       const rate = mean / seconds;
       const cost = actionStaminaCost(action, level);
       const drain = cost / seconds - regain;
-      for (const rest of rests) {
+      for (const rest of worthResting) {
         const duty =
           drain <= 0 ? 1 : rest.staminaPerSecond > 0 ? rest.staminaPerSecond / (drain + rest.staminaPerSecond) : 0;
         const cycle = duty * rate + (1 - duty) * rest.rankPerSecond;
         if (duty === 0) continue;
-        const step = bladeburnerCycleStep({ chance, gain, loss, seconds, duty, restRankPerSecond: rest.rankPerSecond });
+        const cycleStep = bladeburnerCycleStep({
+          chance,
+          gain,
+          loss,
+          seconds,
+          duty,
+          restRankPerSecond: rest.rankPerSecond,
+        });
+        // Its count bounds its attempts (#386's amendment): the next-best's after them (`fastestToTarget`).
+        const step = {
+          ...cycleStep,
+          attempts: bladeburnerAttemptsInCount(read.count, countGrowthPerSecond(action), cycleStep.seconds),
+        };
         const plan: BladeburnerActionPlan = {
           work: {
             type: action.type,
@@ -838,50 +897,99 @@ export function chooseBladeburnerAction({
           rankPerSecond: cycle,
           regain,
         };
-        candidates.push({ plan, step });
+        candidates.push({ plan, step, name: action.name });
       }
     }
   }
-  if (target === undefined || !(target.rank < target.target)) {
-    // Rank a second: the first with the most, in the game's order.
-    let best = alone;
-    for (const { plan } of candidates) if (plan.rankPerSecond > best.rankPerSecond) best = plan;
-    return best;
-  }
-  return fastestToTarget(candidates, target);
+  return candidates;
 }
 
 /**
- * Under a target (#386): the plan with the least expected time to it (`bladeburnerSecondsToRank`), the first in the
- * game's order on a tie. Resting alone is Field Analysis's steady rate, (target − rank) over it. Each candidate's
- * Wald bound (`bladeburnerSecondsToRankAtLeast`) is taken first, and the walk solved only for those whose bound is
- * under the best found: the same choice, solved for fewer.
+ * Under a target (#386): the plans by their expected time to it (`bladeburnerSecondsToRank`), the least first and the
+ * first in the game's order on a tie. Resting alone is Field Analysis's steady rate, (target − rank) over it.
+ * - **The counts** (#386's amendment): a plan whose count runs out before the target is reached
+ *   (`bladeburnerAttemptsInCount`) is followed, as a sequence, by the next-best: the plan with another action (or
+ *   resting alone) with the least expected time from the rank now, its own count unbounded.
+ * - **Pruned** (`prune`): each plan's Wald bound (`bladeburnerSecondsToRankAtLeast`; with a count, the distance over
+ *   the faster rise of it and its next-best) is taken first, and the walk solved only for those
+ *   it can't rule out; just the best returned. Unpruned, every plan, sorted.
  */
 function fastestToTarget(
-  candidates: readonly { plan: BladeburnerActionPlan; step: BladeburnerRankStep | null }[],
+  candidates: readonly PlanCandidate[],
   { rank, target }: { rank: number; target: number },
-): BladeburnerActionPlan {
-  const ranked = candidates
-    .map(({ plan, step }, order) => {
-      const least =
-        step === null
-          ? plan.rankPerSecond > 0
-            ? (target - rank) / plan.rankPerSecond
-            : Number.POSITIVE_INFINITY
-          : bladeburnerSecondsToRankAtLeast(step, rank, target);
-      return { plan, step, order, least };
-    })
-    .sort((a, b) => a.least - b.least || a.order - b.order);
-  let best: { plan: BladeburnerActionPlan; seconds: number; order: number } | null = null;
-  for (const { plan, step, order, least } of ranked) {
-    if (best !== null && least > best.seconds) break;
-    const seconds = step === null ? least : bladeburnerSecondsToRank(step, rank, target);
-    if (best === null || seconds < best.seconds || (seconds === best.seconds && order < best.order)) {
-      best = { plan, seconds, order };
+  prune: boolean,
+): BladeburnerActionPlan[] {
+  const distance = target - rank;
+  const aloneSeconds = (plan: BladeburnerActionPlan) =>
+    plan.rankPerSecond > 0 ? distance / plan.rankPerSecond : Number.POSITIVE_INFINITY;
+  const unbounded = ({ attempts: _attempts, next: _next, ...step }: BladeburnerRankStep) => step;
+  // A plan's fastest rise a second: a step's chance × gain + rest over its seconds (Wald's), or resting alone's.
+  const riseOf = (step: BladeburnerRankStep) => (step.chance * step.gain + step.rest) / step.seconds;
+  const leastOf = (candidate: PlanCandidate, bounded: boolean) => {
+    const { plan, step, name } = candidate;
+    if (step === null) return aloneSeconds(plan);
+    if (!bounded || name === null || !((step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY)) {
+      return bladeburnerSecondsToRankAtLeast(step, rank, target);
     }
-  }
-  const chosen = best ?? { plan: candidates[0]?.plan as BladeburnerActionPlan, seconds: Number.POSITIVE_INFINITY };
-  return { ...chosen.plan, toTarget: { target, seconds: chosen.seconds } };
+    // A sequence rises no faster than the faster of its two.
+    const next = nextAfter(name);
+    const fastest = Math.max(riseOf(step), next === undefined ? 0 : riseOf(next));
+    return fastest > 0 ? distance / fastest : Number.POSITIVE_INFINITY;
+  };
+  // The best among `pool` by `secondsOf`, Wald's bound (`leastOf`) ruling out the rest when pruned.
+  const search = (
+    pool: readonly { candidate: PlanCandidate; order: number }[],
+    bounded: boolean,
+    secondsOf: (candidate: PlanCandidate) => number,
+    all: boolean,
+  ) => {
+    const ranked = pool
+      .map((each) => ({ ...each, least: leastOf(each.candidate, bounded) }))
+      .sort((x, y) => x.least - y.least || x.order - y.order);
+    const solved: { candidate: PlanCandidate; order: number; seconds: number }[] = [];
+    let best = Number.POSITIVE_INFINITY;
+    for (const { candidate, order, least } of ranked) {
+      if (!all && solved.length > 0 && least > best) break;
+      const seconds = secondsOf(candidate);
+      best = Math.min(best, seconds);
+      solved.push({ candidate, order, seconds });
+    }
+    return solved.sort((x, y) => x.seconds - y.seconds || x.order - y.order);
+  };
+  const pool = candidates.map((candidate, order) => ({ candidate, order }));
+  // The next-best after an action's count (cached by the action spent): its step, unbounded.
+  const nextBest = new Map<string, BladeburnerRankStep | undefined>();
+  const nextAfter = (name: string) => {
+    if (!nextBest.has(name)) {
+      const others = pool.filter(({ candidate }) => candidate.name !== name);
+      const [best] = search(
+        others,
+        false,
+        ({ plan, step }) =>
+          step === null ? aloneSeconds(plan) : bladeburnerSecondsToRank(unbounded(step), rank, target),
+        false,
+      );
+      const step = best === undefined || !Number.isFinite(best.seconds) ? undefined : best.candidate.step;
+      nextBest.set(
+        name,
+        best === undefined || !Number.isFinite(best.seconds)
+          ? undefined
+          : step === null || step === undefined
+            ? bladeburnerRestStep(best.candidate.plan.rankPerSecond)
+            : unbounded(step),
+      );
+    }
+    return nextBest.get(name);
+  };
+  const secondsOf = ({ plan, step, name }: PlanCandidate) => {
+    if (step === null) return aloneSeconds(plan);
+    const bounded = (step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY && name !== null;
+    if (!bounded) return bladeburnerSecondsToRank(unbounded(step), rank, target);
+    const next = nextAfter(name);
+    return bladeburnerSecondsToRank({ ...step, ...(next === undefined ? {} : { next }) }, rank, target);
+  };
+  const solved = search(pool, true, secondsOf, !prune);
+  return solved.map(({ candidate, seconds }) => ({ ...candidate.plan, toTarget: { target, seconds } }));
 }
 
 /** What the rule's forecast reads (#375): `chooseBladeburnerAction`'s figures but the skills. */

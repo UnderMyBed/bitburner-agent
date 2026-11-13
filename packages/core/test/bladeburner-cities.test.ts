@@ -11,6 +11,7 @@ import {
   type BladeburnerActionReading,
   type BladeburnerCityFigures,
   type BladeburnerPerson,
+  bladeburnerPlansToTarget,
   chaosDifficultyFactor,
   chooseBladeburnerAction,
 } from "../src/bladeburner-actions.ts";
@@ -275,6 +276,39 @@ describe("the rule's choice (#383): the city, Diplomacy and Incite Violence by B
     expect(aevum.work?.name).not.toBe("Raid");
     expect(at(choice?.byCity ?? [], "Aevum").rankPerSecond).toBeCloseTo(aevum.rankPerSecond, 12);
     expect(choice?.city).toBe("Sector-12");
+  });
+
+  test("under a target (#386): the least time to it, of every city's every plan; the most ratio, or with Raid", () => {
+    const strong = person(1000);
+    // Ishima's estimate the largest but no communities (no Raid); Aevum's the next, with them.
+    const all = cities(
+      {},
+      { Ishima: { population: 1.3e9, communities: 0 }, Aevum: { population: 1.2e9 }, Volhaven: { population: 0.8e9 } },
+    );
+    for (const rank of [0, 12, 23]) {
+      const target = { rank, target: 25 };
+      const choice = chooseBladeburnerCity({ ...input(strong, all), target }, { city: "Sector-12", cities: all });
+      // Every city solved by hand, every plan there, the least time of all.
+      const each = all.map((there) => {
+        const ratio = (there.population / 1e9) ** 0.7;
+        const plans = bladeburnerPlansToTarget({
+          ...input(strong, all),
+          target,
+          city: { ratio, raid: there.communities > 0 },
+        });
+        return { name: there.name, seconds: plans[0]?.toTarget?.seconds ?? Number.POSITIVE_INFINITY };
+      });
+      const least = Math.min(...each.map((city) => city.seconds));
+      expect(choice?.plan.toTarget?.seconds, `at rank ${rank}`).toBeCloseTo(least, 9);
+      expect(["Ishima", "Aevum"]).toContain(choice?.city);
+      expect(at(choice?.byCity ?? [], choice?.city ?? "").toTarget?.seconds).toBeCloseTo(least, 9);
+    }
+    // Met, rank a second as before.
+    const met = chooseBladeburnerCity(
+      { ...input(strong, all), target: { rank: 25, target: 25 } },
+      { city: "Sector-12", cities: all },
+    );
+    expect(met).toEqual(chooseBladeburnerCity(input(strong, all), { city: "Sector-12", cities: all }));
   });
 
   /** Every city at `chaos`, read in Sector-12. */

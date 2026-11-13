@@ -279,6 +279,7 @@ export {
   BLADEBURNER_READING_SECONDS,
   BLADEBURNER_REST_SECONDS,
   BLADEBURNER_TRAINING,
+  type BladeburnerActionInput,
   type BladeburnerActionPlan,
   type BladeburnerActionReading,
   type BladeburnerActionType,
@@ -293,6 +294,7 @@ export {
   type BladeburnerWork,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
+  bladeburnerPlansToTarget,
   bladeburnerRankMultiplierOf,
   bladeburnerResting,
   bladeburnerRests,
@@ -338,14 +340,6 @@ export {
   isBladeburnerCity,
 } from "./bladeburner-cities.ts";
 export {
-  BLADEBURNER_TARGET_CELLS,
-  type BladeburnerRankStep,
-  bladeburnerCycleStep,
-  bladeburnerRankTarget,
-  bladeburnerSecondsToRank,
-  bladeburnerSecondsToRankAtLeast,
-} from "./bladeburner-targets.ts";
-export {
   BLADEBURNER_RANK_SKILLS,
   BLADEBURNER_SKILL_NAMES,
   BLADEBURNER_SKILLS,
@@ -364,6 +358,16 @@ export {
   NO_BLADEBURNER_SKILLS,
   planBladeburnerSkills,
 } from "./bladeburner-skills.ts";
+export {
+  BLADEBURNER_TARGET_CELLS,
+  type BladeburnerRankStep,
+  bladeburnerAttemptsInCount,
+  bladeburnerCycleStep,
+  bladeburnerRankTarget,
+  bladeburnerRestStep,
+  bladeburnerSecondsToRank,
+  bladeburnerSecondsToRankAtLeast,
+} from "./bladeburner-targets.ts";
 export {
   CAMPAIGN_ORDER,
   type CampaignStep,

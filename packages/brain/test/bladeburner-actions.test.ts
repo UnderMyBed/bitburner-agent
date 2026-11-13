@@ -15,6 +15,7 @@ import {
   BLADEBURNER_READING_SECONDS,
   type BladeburnerActionReading,
   type BladeburnerPerson,
+  bladeburnerPlansToTarget,
   CONTROL_PROTOCOL_VERSION,
   chooseBladeburnerAction,
   type DesiredState,
@@ -83,10 +84,18 @@ function reading({
   return { rank, problems: [], stamina, maxStamina: MAX_STAMINA, bonusSeconds, found, current, actions };
 }
 
-/** A medium snapshot in the division with `reading`, home 128 GB, the player's figures as `getPlayer()` has them. */
+/**
+ * A medium snapshot in the division with `reading`, home 128 GB, the player's figures as `getPlayer()` has them; in the
+ * Bladeburners faction (#386), so no current-rank target until B5's Black Ops: the rule by rank a second.
+ */
 function medium(
   bladeburner: unknown,
-  { factions = ["CyberSec"] as string[], inBladeburner = true, hp = { current: 20, max: 20 }, money = 1e6 } = {},
+  {
+    factions = ["CyberSec", "Bladeburners"] as string[],
+    inBladeburner = true,
+    hp = { current: 20, max: 20 },
+    money = 1e6,
+  } = {},
 ) {
   return {
     player: {
@@ -159,7 +168,7 @@ describe("the rule (#375)", () => {
     expect(rule.acting()).toBe(true);
     expect(rule.view().actions).toMatchObject({ order: WORK, resting: false, plan: { work: WORK } });
     expect(rule.view().line).toBe(
-      "Bladeburner: in the division, rank 0.0; Bladeburners at rank 25; Bounty Hunter level 1 (21.2% at the " +
+      "Bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1 (21.2% at the " +
         "estimate's low end, 0.54 rank/min worked), resting with Field Analysis; stamina 39.8 / 39.8; worked 29% of a " +
         "cycle, 0.30 rank/min over it",
     );
@@ -242,8 +251,8 @@ describe("the rule (#375)", () => {
     decide(rule, medium(reading({ stamina: MAX_STAMINA * 0.4, rank: 3 })));
     decide(rule, medium(reading({ stamina: MAX_STAMINA * 0.45, rank: 3.1 })));
     expect(lines.map((line) => line.split(" (")[0])).toEqual([
-      "bladeburner: in the division, rank 0.0; Bladeburners at rank 25; Bounty Hunter level 1",
-      "bladeburner: in the division, rank 3.0; Bladeburners at rank 25; resting with Field Analysis for Bounty Hunter level 1",
+      "bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1",
+      "bladeburner: in the division, rank 3.0; Bladeburners joined; resting with Field Analysis for Bounty Hunter level 1",
     ]);
   });
 });
@@ -346,6 +355,50 @@ describe("the controller (#375)", () => {
     expect(last()?.bladeburner).toBeUndefined();
     expect(last()?.work).toMatchObject({ kind: "faction", faction: "CyberSec" });
     expect(controller.bladeburnerView().stage).toBe("notManaged");
+  });
+
+  // #386: Bounty Hunter at 20% and Raid at a 5.5% low end (55 a success, 2.5 a failure), their counts plenty: by rank a
+  // second Raid; to the faction's 25 Raid's wait from far under it, Bounty Hunter's steady rise from near it.
+  const targetReadings = (): BladeburnerActionReading[] => [
+    { type: "Contracts", name: "Bounty Hunter", level: 1, maxLevel: 1, count: 1e6, chance: [0.2, 0.2] },
+    { type: "Operations", name: "Raid", level: 1, maxLevel: 1, count: 1e6, chance: [0.055, 0.055] },
+  ];
+  const RAID = { type: "Operations", name: "Raid", level: 1 };
+  const BOUNTY_HUNTER = { type: "Contracts", name: "Bounty Hunter", level: 1 };
+  test("under the faction's 25 (#386): the least expected time to it, the steady action near it; past it, rank a second", () => {
+    const { controller, send, last } = connected();
+    send("slow", withCyberSec(6));
+    const at = (rank: number, factions: string[] = ["CyberSec"]) => {
+      send("medium", medium(reading({ rank, actions: targetReadings() }), { factions }));
+      return { action: last()?.bladeburner?.action, plan: controller.bladeburnerView().actions?.plan };
+    };
+    const forecast = { readings: targetReadings(), person: PERSON, stamina: MAX_STAMINA, maxStamina: MAX_STAMINA };
+    const byRate = chooseBladeburnerAction({ ...forecast, rankMultiplier: 1, speed: 1 });
+    expect(byRate.work).toMatchObject(RAID);
+    // Far under it, Raid's wait is the shorter (a failure at the floor loses nothing); near it, the steady rise.
+    const far = at(0);
+    expect(far.action).toEqual(RAID);
+    expect(far.plan?.toTarget?.target).toBe(25);
+    const near = at(20);
+    expect(near.action).toEqual(BOUNTY_HUNTER);
+    // Each the least of every plan the rule weighs, from core's own list.
+    for (const rank of [0, 20]) {
+      const every = bladeburnerPlansToTarget({
+        ...forecast,
+        rankMultiplier: 1,
+        speed: 1,
+        target: { rank, target: 25 },
+      });
+      expect(at(rank).plan).toEqual(every[0]);
+    }
+    expect(controller.bladeburnerView().line).toContain("rank 25 in about");
+    // Past it, in the faction: rank a second decides, Raid at 20 too; and at 25 unjoined, the target met.
+    const joined = at(20, ["CyberSec", "Bladeburners"]);
+    expect(joined.action).toEqual(RAID);
+    expect(joined.plan?.toTarget).toBeUndefined();
+    expect(controller.bladeburnerView().line).not.toContain("rank 25 in about");
+    expect(at(25).plan?.toTarget).toBeUndefined();
+    expect(last()?.bladeburner).toMatchObject({ joinTheFaction: true, action: RAID });
   });
 });
 

@@ -64,6 +64,7 @@ import {
   BLADEBURNER_JOIN_LEVEL,
   BLADEBURNER_SKILL_NAMES,
   BLADEBURNER_WORKER_RAM_GB,
+  type BladeburnerActionInput,
   type BladeburnerActionOrder,
   type BladeburnerActionPlan,
   type BladeburnerActionReading,
@@ -87,6 +88,7 @@ import {
   chooseBladeburnerAction,
   chooseBladeburnerCity,
   chooseBladeburnerSkills,
+  cityCompetenceRatio,
   classLabel,
   combatPersonOf,
   combatTrained,
@@ -335,6 +337,8 @@ export interface BladeburnerView {
     resting: boolean;
     cities?: BladeburnerCityChoice | null;
     kept?: BladeburnerChaosActionName | null;
+    /** What the plan was chosen from (#386): the forecast's input in the city chosen, its target with it. */
+    input?: BladeburnerActionInput;
   } | null;
   /** In the division with B3's reading (#379): the skills' plan; null without it. */
   skills?: BladeburnerSkillPlan | null;
@@ -355,7 +359,8 @@ export function describeActionPlan(
   const toTarget = plan.toTarget === undefined ? "" : `; ${describeToTarget(plan.toTarget)}`;
   if (work === null) {
     return (
-      `${plan.rest.name} (no contract or operation beats it; ${perMinute(plan.rankPerSecond)}; ${staminaText})` + toTarget
+      `${plan.rest.name} (no contract or operation beats it; ${perMinute(plan.rankPerSecond)}; ${staminaText})` +
+      toTarget
     );
   }
   const working =
@@ -700,6 +705,13 @@ export class BladeburnerRule {
         ? null
         : chooseBladeburnerCity(forecast, { city: readCity, cities: reading.cities });
     const plan = cities?.plan ?? chooseBladeburnerAction(forecast);
+    // The input in the city chosen, as core's `chooseBladeburnerCity` weighs it there.
+    const here = reading.cities?.find((each) => each.name === readCity);
+    const there = reading.cities?.find((each) => each.name === cities?.city);
+    const input: BladeburnerActionInput =
+      cities === null || here === undefined || there === undefined
+        ? forecast
+        : { ...forecast, city: { ratio: cityCompetenceRatio(here, there) ?? 0, raid: there.communities > 0 } };
     const resting = this.#resting || plan.work === null;
     const chaosAction = kept ?? cities?.chaosAction ?? null;
     const order: BladeburnerActionOrder =
@@ -720,7 +732,7 @@ export class BladeburnerRule {
     if (since !== null && kept === null && order.type === "General" && order.name === since.name) {
       since.keptRun = this.#chaosRunOf(reading, nowMs);
     }
-    return { sent: { plan, order, resting, cities, kept }, text, city };
+    return { sent: { plan, order, resting, cities, kept, input }, text, city };
   }
 
   /**

@@ -225,18 +225,48 @@ export function chooseBladeburnerCity(
     const ratio = cityCompetenceRatio(here, { population: there.population, chaos }) ?? 0;
     return chooseBladeburnerAction({ ...from, readings, city: { ratio, raid: there.communities > 0 } });
   };
-  const byCity = cities.map((each) => ({ ...each, plan: forecastIn(each) }));
-  // Under a target (#386), the least time to it; else the most rank a second. The current city on a tie.
+  // The chaos actions are weighed by rank a second (#386: a target aside, labelled), and each city's rate shown.
+  const rateInput = { ...input, target: undefined };
+  const byCity: (BladeburnerCityReading & { plan: BladeburnerActionPlan })[] = cities.map((each) => ({
+    ...each,
+    plan: forecastIn(each, each.chaos, input.readings, rateInput),
+  }));
+  const target = input.target;
+  if (target !== undefined && target.rank < target.target) {
+    // Under a target (#386), the least time to it, the current city on a tie. Every chance there is the one read times
+    // the city's ratio, and a walk's time falls as its chance rises (each success at the lower chance is one at the
+    // higher, the floor and the target the same), so only the cities with the most ratio can be fastest: the most of
+    // all, the most with Raid there (communities), and the current one tied with either.
+    const ratioOf = (there: BladeburnerCityReading) =>
+      cityCompetenceRatio(here, { population: there.population, chaos: there.chaos }) ?? 0;
+    const most = (pool: typeof byCity) =>
+      pool.reduce<(typeof byCity)[number] | null>(
+        (best, each) => (best === null || ratioOf(each) > ratioOf(best) ? each : best),
+        null,
+      );
+    const top = most(byCity);
+    const topWithRaid = most(byCity.filter((each) => each.communities > 0));
+    const current = byCity.find((each) => each.name === city);
+    const weighed = byCity.filter(
+      (each) =>
+        each === top ||
+        each === topWithRaid ||
+        (each === current && [top, topWithRaid].some((other) => other !== null && ratioOf(other) === ratioOf(each))),
+    );
+    for (const each of weighed) each.plan = forecastIn(each);
+  }
+  // Under a target, the least time to it among the cities weighed; else the most rank a second. The current city on a
+  // tie.
   const better = (a: BladeburnerActionPlan, b: BladeburnerActionPlan) =>
     a.toTarget !== undefined && b.toTarget !== undefined
       ? a.toTarget.seconds < b.toTarget.seconds
-      : a.rankPerSecond > b.rankPerSecond;
+      : a.toTarget !== undefined || b.toTarget !== undefined
+        ? a.toTarget !== undefined
+        : a.rankPerSecond > b.rankPerSecond;
   let best = byCity.find((each) => each.name === city) as (typeof byCity)[number];
   for (const each of byCity) if (better(each.plan, best.plan)) best = each;
   const chosen = best;
   const { chaosThreshold } = BLADEBURNER_CONSTANTS;
-  // The chaos actions are weighed by rank a second (#386: a target aside, labelled).
-  const rateInput = { ...input, target: undefined };
   const atChaos = (chaos: number, readings = input.readings) =>
     forecastIn(chosen, chaos, readings, rateInput).rankPerSecond;
   const charisma = input.person.skills.charisma;
@@ -259,7 +289,8 @@ export function chooseBladeburnerCity(
   let incite: BladeburnerCityChoice["incite"] = null;
   const unboundedReadings = input.readings.map((each) => ({ ...each, count: Number.POSITIVE_INFINITY }));
   const unbounded = forecastIn(chosen, chosen.chaos, unboundedReadings, rateInput);
-  const nowPlan = chosen.plan.toTarget === undefined ? chosen.plan : forecastIn(chosen, chosen.chaos, input.readings, rateInput);
+  const nowPlan =
+    chosen.plan.toTarget === undefined ? chosen.plan : forecastIn(chosen, chosen.chaos, input.readings, rateInput);
   const now = nowPlan.rankPerSecond;
   const work = unbounded.work;
   const action = work === null ? null : bladeburnerLevelledAction(work.type, work.name);

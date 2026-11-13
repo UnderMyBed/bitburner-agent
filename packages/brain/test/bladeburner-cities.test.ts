@@ -120,8 +120,11 @@ function reading({
   };
 }
 
-/** A medium snapshot in the division with `bladeburner`, home 128 GB, the player's figures as `getPlayer()` has them. */
-function medium(bladeburner: unknown, { factions = ["CyberSec"] as string[], who = PERSON } = {}) {
+/**
+ * A medium snapshot in the division with `bladeburner`, home 128 GB, the player's figures as `getPlayer()` has them;
+ * in the Bladeburners faction (#386), so no current-rank target until B5's Black Ops: the rule by rank a second.
+ */
+function medium(bladeburner: unknown, { factions = ["CyberSec", "Bladeburners"] as string[], who = PERSON } = {}) {
   return {
     player: {
       skills: who.skills,
@@ -395,9 +398,9 @@ describe("the rule (#383)", () => {
     decide(rule, medium(reading({ all: cities(0, { "Sector-12": { chaos: 80 } }) })));
     decide(rule, medium(reading({ all: cities(52) })));
     expect(lines.map((line) => line.split(" (")[0])).toEqual([
-      "bladeburner: in the division, rank 0.0; Bladeburners at rank 25; Bounty Hunter level 1",
-      "bladeburner: in the division, rank 0.0; Bladeburners at rank 25; Bounty Hunter level 1",
-      "bladeburner: in the division, rank 0.0; Bladeburners at rank 25; Diplomacy, then: Tracking level 1",
+      "bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1",
+      "bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1",
+      "bladeburner: in the division, rank 0.0; Bladeburners joined; Diplomacy, then: Tracking level 1",
     ]);
     expect(lines[1]).toContain("; in Aevum (");
   });
@@ -536,7 +539,10 @@ describe("the run report's cities (#383)", () => {
       const read = reading(each);
       const bounty = read.actions.find((action) => action.name === "Bounty Hunter") as BladeburnerActionReading;
       previous = { offsetMs, perSecond: each.current?.name === "Bounty Hunter" ? (bounty.chance[0] * 0.9) / 21 : 0 };
-      return [T0 + offsetMs, medium(reading({ ...each, rank }), { factions: [] })] as [number, MediumSnapshotData];
+      return [T0 + offsetMs, medium(reading({ ...each, rank }), { factions: ["Bladeburners"] })] as [
+        number,
+        MediumSnapshotData,
+      ];
     });
   };
 

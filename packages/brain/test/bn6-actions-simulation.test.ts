@@ -7,12 +7,22 @@
 // - home at 128 GB, B1's hours of home RAM purchases: the reading worker's 50.6 GB beyond the 65.9 GB home keeps;
 // - CyberSec joined (#377's review), so A5 has faction work to hold for the actions.
 // Then: the plan's work and rest by the worker, A5's faction work held for them; home's batches leaving the worker's
-// RAM (#377's review); the stamina under ½ max rested back to
-// the max; no stop at stamina 0; the rank within the bound of the forecast of the actions run (section 8's own check);
-// and the whole report passing.
-import { type MediumSnapshotData, skillExpFor } from "@bitburner-agent/core";
+// RAM (#377's review); the stamina under ½ max rested back to the max; no stop at stamina 0; and (#386) under the
+// faction's 25, each minute's plan the least expected time to it of every plan the rule weighs (core's
+// `bladeburnerPlansToTarget`, none ruled out); the steady part's rank (Field Analysis and the contracts) within its own
+// Bernstein bound at section 8's α, as B3's hour (#381's review); the whole's within its bound; the report passing.
+// The hour isn't asked to reach 25 (#386's amendment): at rank 0 a failure loses nothing, so the least expected time
+// can be Raid's lottery, whose hour can end anywhere.
+import {
+  BLADEBURNER_CONTRACTS,
+  type BladeburnerActionPlan,
+  bladeburnerPlansToTarget,
+  type MediumSnapshotData,
+  skillExpFor,
+} from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import { BLADEBURNER_ACTIONS_HOLD } from "../src/bladeburner.ts";
+import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-actions-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
@@ -22,7 +32,11 @@ const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
-test("BN6.1, an hour from a harness join: work and rest by stamina, no stop at 0, the rank within its bound; the report passes", async () => {
+/** "Raid level 1 with Hyperbolic Regeneration Chamber": a plan's work and rest. */
+const planName = (plan: BladeburnerActionPlan) =>
+  `${plan.work === null ? "resting alone" : `${plan.work.name} level ${plan.work.level}`} with ${plan.rest.name}`;
+
+test("BN6.1, an hour from a harness join: each plan the least time to 25, the steady part within its bound; the report passes", async () => {
   const fresh = await freshStartOf({
     withDesiredState: true,
     fixture: { kind: "bitnode", n: 6, sourceFiles: SOURCE_FILES },
@@ -43,16 +57,17 @@ test("BN6.1, an hour from a harness join: work and rest by stamina, no stop at 0
   const startedAtMs = fresh.game.clock.now();
   const first = fresh.controller().bladeburnerView();
   console.log(first.line);
-  expect(first.actions?.order).toMatchObject({ type: "Contracts" });
   // No brain's work, which would stop the action: A5's, with a faction to work for, held for it.
   expect(fresh.controller().workView().desired).toBeNull();
   const factions = fresh.controller().factionsView();
   expect(factions.choice).not.toBeNull();
   expect(factions).toMatchObject({ sent: false, waitingFor: BLADEBURNER_ACTIONS_HOLD });
-  // The hour: the action under way each minute, and the stamina's lowest.
+  // The hour: the action under way each minute, the stamina's lowest, and each minute's plan against every plan.
   const seen = new Set<string>();
+  const chosen = new Map<string, number>();
   let lowest = 1;
   let rested = false;
+  let underTarget = 0;
   const batcherRuns = new Set<string>();
   let lastReading = "";
   for (let minute = 0; minute < 60; minute++) {
@@ -62,11 +77,21 @@ test("BN6.1, an hour from a harness join: work and rest by stamina, no stop at 0
     if (reading?.stamina !== undefined && reading.maxStamina !== undefined) {
       lowest = Math.min(lowest, reading.stamina / reading.maxStamina);
     }
-    if (fresh.controller().bladeburnerView().actions?.resting) rested = true;
+    const sent = fresh.controller().bladeburnerView().actions;
+    if (sent?.resting) rested = true;
+    // Under the target (#386): the plan sent is the first of every plan by its time to the target, each solved.
+    if (sent?.input !== undefined && sent.plan.toTarget !== undefined) {
+      underTarget += 1;
+      const every = bladeburnerPlansToTarget(sent.input);
+      expect(every.length, `the plans at minute ${minute}`).toBeGreaterThan(1);
+      expect(sent.plan, `the plan at minute ${minute}`).toEqual(every[0]);
+      const name = planName(sent.plan);
+      chosen.set(name, (chosen.get(name) ?? 0) + 1);
+    }
     expect(fresh.controller().workView().desired, `the brain's work at minute ${minute}`).toBeNull();
     // Beside home's batches (#377's review): the worker reads afresh each minute (its counts grow every second).
-    const sent = fresh.controller().batcherView().sent;
-    if (sent !== null) batcherRuns.add(`${sent.runOn}, ${sent.hosts} hosts`);
+    const batch = fresh.controller().batcherView().sent;
+    if (batch !== null) batcherRuns.add(`${batch.runOn}, ${batch.hosts} hosts`);
     const now = JSON.stringify(reading);
     expect(now, `the reading at minute ${minute}`).not.toBe(lastReading);
     lastReading = now;
@@ -74,13 +99,14 @@ test("BN6.1, an hour from a harness join: work and rest by stamina, no stop at 0
   console.log(`the batcher: ${[...batcherRuns].join("; ") || "not sent"}`);
   console.log(fresh.controller().bladeburnerView().line);
   console.log(`under way: ${[...seen].join(", ")}; the stamina's lowest ${(100 * lowest).toFixed(0)}% of the max`);
-  // Worked to under ½ max, then rested: both a contract or operation and a rest seen.
+  console.log(
+    `under the target at ${underTarget} of 60 minutes, each the least time of every plan; chosen: ` +
+      [...chosen].map(([name, minutes]) => `${name} ${minutes}`).join(", "),
+  );
+  // Worked to under ½ max, then rested.
   expect(rested).toBe(true);
   expect(lowest).toBeLessThan(0.5);
   expect(lowest).toBeGreaterThan(0.4);
-  expect(
-    [...seen].some((name) => ["Field Analysis", "Hyperbolic Regeneration Chamber", "Training"].includes(name)),
-  ).toBe(true);
 
   const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() } as const;
   const { text, failures } = runReport(fresh.data.store, window, { verbose: true });
@@ -95,8 +121,28 @@ test("BN6.1, an hour from a harness join: work and rest by stamina, no stop at 0
   expect(measured).not.toBeNull();
   const [rank, forecast, sigma, bound] = (measured ?? []).slice(1).map(Number) as [number, number, number, number];
   console.log(`rank ${rank} against the forecast ${forecast} (σ ${sigma}), its bound ${bound}`);
-  expect(forecast).toBeGreaterThan(0);
   expect(rank).toBeGreaterThanOrEqual(bound);
+  // The steady part on its own (#386, as #381's review): Field Analysis and the contracts, their rank against their
+  // forecast's Bernstein bound at the same α, from section 8's lines by action.
+  const byAction = [
+    ...section.matchAll(
+      /\n {6}([^:\n]+): about \d+ attempts, \d+ successes; (-?[\d.]+) measured against (-?[\d.]+) forecast \(σ ([\d.]+), at most ([\d.]+) under an attempt's mean, cuts ([\d.]+)\)/g,
+    ),
+  ].map((match) => ({ name: match[1] as string, figures: match.slice(2).map(Number) as number[] }));
+  const steady = byAction.filter((each) =>
+    ["Field Analysis", ...BLADEBURNER_CONTRACTS.map((contract) => contract.name)].includes(each.name),
+  );
+  expect(steady.length).toBeGreaterThan(0);
+  const sum = (index: number) => steady.reduce((total, each) => total + (each.figures[index] ?? 0), 0);
+  const steadyVariance = steady.reduce((total, each) => total + (each.figures[2] ?? 0) ** 2, 0);
+  const steadyBelow = Math.max(...steady.map((each) => each.figures[3] ?? 0));
+  const steadyBound = sum(1) - bernsteinMargin(steadyVariance, steadyBelow, BLADEBURNER_RANK_ALPHA) - sum(4);
+  console.log(
+    `Field Analysis and the contracts (${steady.map((each) => each.name).join(", ")}): ${sum(0).toFixed(2)} measured ` +
+      `against ${sum(1).toFixed(2)} forecast (σ ${Math.sqrt(steadyVariance).toFixed(2)}), their bound ` +
+      `${steadyBound.toFixed(2)} at α ${BLADEBURNER_RANK_ALPHA}`,
+  );
+  expect(sum(0)).toBeGreaterThanOrEqual(steadyBound);
   expect(section).toContain("  an action stopped at stamina 0 at any reading:\n    none\n");
   expect(section).toContain("  the rank from the actions run below its forecast's bound:\n    none");
   expect(failures).toEqual([]);

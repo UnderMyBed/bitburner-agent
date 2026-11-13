@@ -10,14 +10,18 @@ import {
   BLADEBURNER_LEVELLED_ACTIONS,
   type BladeburnerActionReading,
   type BladeburnerPerson,
+  bladeburnerPlansToTarget,
   chooseBladeburnerAction,
+  countGrowthPerSecond,
   maxStaminaOf,
 } from "../src/bladeburner-actions.ts";
 import {
   BLADEBURNER_TARGET_CELLS,
   type BladeburnerRankStep,
+  bladeburnerAttemptsInCount,
   bladeburnerCycleStep,
   bladeburnerRankTarget,
+  bladeburnerRestStep,
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
 } from "../src/bladeburner-targets.ts";
@@ -39,25 +43,29 @@ function seeded(seed: number): () => number {
 
 /**
  * The walk run `runs` times from `rank`, each gain and loss ±10% uniform as the game's (`Bladeburner.ts:951`, `:980`):
- * its steps to the target, their mean and the mean's standard error.
+ * its seconds to the target (a step's `attempts`, then its `then`), their mean and the mean's standard error.
  */
-function simulate(step: BladeburnerRankStep, rank: number, target: number, runs: number, seed: number) {
+function simulate(first: BladeburnerRankStep, rank: number, target: number, runs: number, seed: number) {
   const random = seeded(seed);
   let sum = 0;
   let squares = 0;
   for (let run = 0; run < runs; run++) {
     let x = rank;
-    let steps = 0;
+    let seconds = 0;
+    let step = first;
+    let attempts = 0;
     while (x < target) {
+      if (attempts >= (step.attempts ?? Number.POSITIVE_INFINITY) && step.next !== undefined) {
+        step = step.next;
+        attempts = 0;
+      }
       const offset = 0.9 + 0.2 * random();
-      x =
-        random() < step.chance
-          ? x + step.gain * offset + step.rest
-          : Math.max(0, x - step.loss * offset) + step.rest;
-      steps += 1;
+      x = random() < step.chance ? x + step.gain * offset + step.rest : Math.max(0, x - step.loss * offset) + step.rest;
+      seconds += step.seconds;
+      attempts += 1;
     }
-    sum += steps;
-    squares += steps * steps;
+    sum += seconds;
+    squares += seconds * seconds;
   }
   const mean = sum / runs;
   return { mean, standardError: Math.sqrt((squares / runs - mean * mean) / runs) };
@@ -127,17 +135,44 @@ describe("the expected time to a target", () => {
     { name: "steady", step: { chance: 0.4, gain: 0.9, loss: 0.05, rest: 0.05, seconds: 30 }, rank: 0 },
     { name: "floored", step: { chance: 0.45, gain: 3, loss: 2.5, rest: 0, seconds: 40 }, rank: 0 },
     { name: "floored, from 20", step: { chance: 0.45, gain: 3, loss: 2.5, rest: 0, seconds: 40 }, rank: 20 },
+    // The counts (#386's amendment): Raid's 12 attempts, then the steady action from wherever the walk is.
+    {
+      name: "Raid-like for 12 attempts, then steady",
+      step: {
+        chance: 0.055,
+        gain: 55,
+        loss: 2.5,
+        rest: 0.14,
+        seconds: 116,
+        attempts: 12,
+        next: { chance: 0.4, gain: 0.9, loss: 0.05, rest: 0.05, seconds: 60 },
+      },
+      rank: 3,
+    },
+    {
+      name: "steady for 30 attempts, then resting alone",
+      step: {
+        chance: 0.4,
+        gain: 0.9,
+        loss: 0.05,
+        rest: 0.05,
+        seconds: 60,
+        attempts: 30,
+        next: bladeburnerRestStep(0.1 / 30),
+      },
+      rank: 0,
+    },
   ];
   test.each(cases)("$name: the chain's against a simulated walk of 20,000 runs", ({ step, rank }) => {
     const target = 25;
-    const model = bladeburnerSecondsToRank(step, rank, target) / step.seconds;
+    const model = bladeburnerSecondsToRank(step, rank, target);
     const { mean, standardError } = simulate(step, rank, target, 20_000, 386);
-    // Within four standard errors (seeded, so the same each run) and 0.5% for the grid's smoothing
-    // (BLADEBURNER_TARGET_CELLS: under 0.3% in these walks).
-    expect(BLADEBURNER_TARGET_CELLS).toBe(400);
-    const grid = 0.005 * mean;
+    // Within four standard errors (seeded, so the same each run) and 1% for the grid's smoothing
+    // (BLADEBURNER_TARGET_CELLS: under 0.8% in these walks).
+    expect(BLADEBURNER_TARGET_CELLS).toBe(200);
+    const grid = 0.01 * mean;
     console.log(
-      `${rank} → ${target}: the chain ${model.toFixed(2)} steps, the walk ${mean.toFixed(2)} ± ${standardError.toFixed(2)}`,
+      `${rank} → ${target}: the chain ${model.toFixed(0)} s, the walk ${mean.toFixed(2)} ± ${standardError.toFixed(2)}`,
     );
     expect(Math.abs(model - mean)).toBeLessThanOrEqual(4 * standardError + grid);
   });
@@ -151,6 +186,31 @@ describe("the expected time to a target", () => {
     const none = { chance: 0, gain: 5, loss: 0, rest: 0, seconds: 10 };
     expect(bladeburnerSecondsToRankAtLeast(none, 0, 25)).toBe(Number.POSITIVE_INFINITY);
     expect(bladeburnerSecondsToRankAtLeast(none, 25, 25)).toBe(0);
+  });
+
+  test("the counts: 1 + (count − 1)/(1 − growth × a step's seconds) attempts, unbounded where the growth keeps up", () => {
+    // The game's growth: a random tenth of its range each 480 s (`Bladeburner.ts:1388-1393`), Raid's [2, 40] (#383).
+    expect(gameSource("Bladeburner/Bladeburner.ts")).toContain("/ BladeburnerConstants.ActionCountGrowthPeriod");
+    const raid = action("Raid");
+    if (raid === undefined) throw new Error("Raid");
+    const growth = countGrowthPerSecond(raid);
+    expect(growth).toBeCloseTo(21 / 10 / 480, 12);
+    // Count 10, 100 s a step: 2.1/480 × 100 = 0.4375 grown an attempt, so 1 + 9/0.5625 = 17 attempts.
+    expect(bladeburnerAttemptsInCount(10, growth, 100)).toBe(17);
+    expect(bladeburnerAttemptsInCount(1, growth, 100)).toBe(1);
+    expect(bladeburnerAttemptsInCount(0.9, growth, 100)).toBe(0);
+    expect(bladeburnerAttemptsInCount(10, growth, 480 / 2.1)).toBe(Number.POSITIVE_INFINITY);
+    // A step bounded: slower than unbounded when the next is slower, the next's time when none can be made.
+    const raidStep = { chance: 0.055, gain: 55, loss: 2.5, rest: 0.14, seconds: 116 };
+    const steady = { chance: 0.4, gain: 0.9, loss: 0.05, rest: 0.05, seconds: 60 };
+    const free = bladeburnerSecondsToRank(raidStep, 0, 25);
+    const bounded = bladeburnerSecondsToRank({ ...raidStep, attempts: 5, next: steady }, 0, 25);
+    expect(bounded).toBeGreaterThan(free);
+    expect(bounded).toBeLessThan(bladeburnerSecondsToRank(steady, 0, 25));
+    expect(bladeburnerSecondsToRank({ ...raidStep, attempts: 0, next: steady }, 0, 25)).toBe(
+      bladeburnerSecondsToRank(steady, 0, 25),
+    );
+    expect(bladeburnerSecondsToRank({ ...raidStep, attempts: 5 }, 0, 25)).toBe(Number.POSITIVE_INFINITY);
   });
 
   test("the cycle's step: an attempt and its share of the rest, s·(1 − duty)/duty, at the rest's rate", () => {
@@ -198,9 +258,10 @@ const action = (name: string) => BLADEBURNER_LEVELLED_ACTIONS.find((each) => eac
 
 describe("the rule's choice under a target", () => {
   // Bounty Hunter at 20% and Raid at a 5.5% low end, level 1 each, as the hour's after B4's move.
+  // Their counts a million: unbounded over any walk here, but where a test sets them.
   const readings = (raidChance: number): BladeburnerActionReading[] => [
-    { type: "Contracts", name: "Bounty Hunter", level: 1, maxLevel: 1, count: 100, chance: [0.2, 0.2] },
-    { type: "Operations", name: "Raid", level: 1, maxLevel: 1, count: 100, chance: [raidChance, raidChance] },
+    { type: "Contracts", name: "Bounty Hunter", level: 1, maxLevel: 1, count: 1e6, chance: [0.2, 0.2] },
+    { type: "Operations", name: "Raid", level: 1, maxLevel: 1, count: 1e6, chance: [raidChance, raidChance] },
   ];
   const max = maxStaminaOf(WHO, 0);
   const choose = (target?: { rank: number; target: number }, raidChance = 0.055) =>
@@ -263,6 +324,50 @@ describe("the rule's choice under a target", () => {
     expect(near.toTarget?.seconds).toBeLessThan(seconds(alone(1, crossing)));
     // At a 1% low end Raid loses from 0 too: the steady action all the way.
     expect(choose({ rank: 0, target: 25 }, 0.01).work?.name).toBe("Bounty Hunter");
+  });
+
+  test("the counts: Raid's spent, the next-best after it; every plan solved gives the same choice as the pruned", () => {
+    for (const raidCount of [100, 3, 1.2]) {
+      for (const rank of [0, 10, 16, 20, 24]) {
+        const input = {
+          readings: readings(0.055).map((each) => (each.name === "Raid" ? { ...each, count: raidCount } : each)),
+          person: WHO,
+          stamina: max,
+          maxStamina: max,
+          rankMultiplier: 1,
+          speed: 1,
+          target: { rank, target: 25 },
+        };
+        const all = bladeburnerPlansToTarget(input);
+        const chosen = chooseBladeburnerAction(input);
+        expect(all.length).toBeGreaterThan(3);
+        expect(chosen).toEqual(all[0]);
+        for (const each of all) {
+          expect(each.toTarget?.seconds).toBeGreaterThanOrEqual(chosen.toTarget?.seconds ?? Number.NaN);
+        }
+      }
+    }
+    // Raid's count spent after 1 attempt: its time is the attempt and Bounty Hunter's after, more than unbounded.
+    const at = (count: number) =>
+      bladeburnerPlansToTarget({
+        readings: readings(0.055).map((each) => (each.name === "Raid" ? { ...each, count } : each)),
+        person: WHO,
+        stamina: max,
+        maxStamina: max,
+        rankMultiplier: 1,
+        speed: 1,
+        target: { rank: 0, target: 25 },
+      }).find((each) => each.work?.name === "Raid")?.toTarget?.seconds ?? Number.NaN;
+    expect(at(1.2)).toBeGreaterThan(at(100));
+    expect(
+      bladeburnerPlansToTarget({
+        ...{ readings: [], person: WHO },
+        stamina: max,
+        maxStamina: max,
+        rankMultiplier: 1,
+        speed: 1,
+      }),
+    ).toEqual([]);
   });
 
   test("the target met: rank a second, as without one", () => {
