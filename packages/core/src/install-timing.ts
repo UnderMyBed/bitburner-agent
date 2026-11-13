@@ -14,34 +14,30 @@
  * last one worth waiting for: at 29 of 30, the last 17 minutes off, waiting wins (decision 56's case, with no rule of
  * its own).
  * Each later cycle is priced from the countables left (#389; before it, each was this one's shape, T, and ran 2.8-3.1
- * times optimistic at BN4.2's c6 and c7, 46 min against 128 and 31 against 96): the rebuild R, then the work for its
- * own countables at the rate after the installs before it, R + W_j / r_j (`laterCyclesMs`):
+ * times optimistic at BN4.2's c6 and c7, 46 min against 128 and 31 against 96), from its install
+ * (`laterCyclesMs`):
  * - **R, the rebuild:** measured, this cycle's own: its time online before faction work (A5's or the owner's) first
- *   went on (the brain's, `CycleWork`), the invitations, the hacking level and A5's start in it (BN4.2's c2-c9: 4-5
- *   min);
- * - **r_0, the rate measured:** the reputation earned this cycle at the joined factions over T − R (decision 67's rates
- *   fitted online);
- * - **r_j, after each install:** r_0 times the hacking and faction_rep multipliers of what each install before cycle j
- *   installs, this one's first (`LaterCycles.installing`), then each later cycle's own countables (`installGain`):
- *   hacking work's reputation is the hacking level times faction_rep (`PersonObjects/formulas/reputation.ts:18-19`),
- *   the level taken as its multiplier's (`PersonObjects/formulas/skill.ts:7-15`);
+ *   went on (the brain's), the invitations, the hacking level and A5's start in it (BN4.2's c2-c9: 4-5 min);
+ * - **the level's path** (#401, core's level-rise.ts): from no experience after each install, κ (the brain's: the
+ *   rate measured now or carried over the last install, per level + 50) times the `hacking_exp` and `hacking_speed`
+ *   of every install before the cycle, m times their `hacking` (`laterCycleRise`, `levellingInstallMultipliers`:
+ *   this one's first, `LaterCycles.installing`, then each later cycle's own countables), flat first for the measured
+ *   ramp's dead time (#405);
+ * - **the work:** from R, each faction in turn (`factionsOneAtATime`), to its reputation along the path at the work's
+ *   rate at each level (the caller's `rateAt`: the game's formula, favour, the share's mean), times the installs'
+ *   `faction_rep` (`reputation.ts:16-52`);
  * - **W_j, the countables:** `countablesLeft`, cheapest first (the A5 hook works for the first countable it waits for,
  *   #344, and BN4.2's c7-c9 bought the 4 cheapest left after c6 in that order), n a cycle as this one: the factions
- *   joined, and Tian Di Hui's and the city factions' (#228: a city and money), each cycle's one faction at a time.
- * With the countables left costing what this cycle earned and installs of no such multiplier, each is T again, the
- * estimate before #389. Unpriced (no R measured: a cycle first seen past its first work, or a restart before it;
- * nothing earned; or T ≤ R), it's this one's shape (T, or T + τ_k after a wait); a cycle past the countables known is
- * the last priced one again (labelled: either way). BN4.2's hindcast (core's test): within ×2 at c3-c8, 6 of 7 with c9
- * against 5 of 7 before; c2 3.80 times its actual, the residual below.
+ *   joined, and Tian Di Hui's and the city factions' (#228: a city and money).
+ * Unpriced (no R measured: a cycle first seen past its first work, or a restart before it; no rate known, κ 0), each is
+ * this one's shape (T, or T + τ_k after a wait), as before #389; a cycle past the countables known is the last priced
+ * one again (labelled: either way). BN4.2's hindcast is core's test (level-rise.test.ts's fixture).
  * Left out, each labelled:
- * - the level's rebuild, home RAM and the share beyond the multipliers: BN4.2's rate rose about 5 times from c2 to c8
- *   (3.6 to 18.6 rep/s), the multipliers 1.86 times (hacking 1.48 to 2.75); cautious for "install now", 3.80 times at
- *   c2 (#336's level fit, a follow-up slice under roadmap 1b);
- * - the experience multipliers' part of the level (`skill.ts`: 32 ln of the experience): cautious; the favour gained:
- *   cautious; the passive reputation favour earns (`Faction/FactionHelpers.tsx`, `processPassiveFactionRepGain`) in
- *   what's earned: optimistic, small;
- * - the work at factions bought nothing from: the rate is what was earned, W_j what's needed (BN4.2's needed over
- *   earned 0.67-0.87): optimistic for "install now";
+ * - level-rise.ts's own (home RAM and servers bought later, the share's change, the batcher's target): see there;
+ * - the favour gained at the install and after: the caller's rate at the favour after this install, none after it
+ *   (cautious for "install now"); a faction not joined at none (cautious);
+ * - the work at factions bought nothing from (BN4.2's needed over earned 0.67-0.87): optimistic for "install now";
+ * - the factions within a cycle worked dearest first, each from where the last ended: either way;
  * - the city groups' exclusion (`CITY_FACTION_GROUPS`: one group a cycle), so a cycle may take two groups' countables:
  *   optimistic; the cities' and Tian Di Hui's invitations' money and travel: optimistic; the hacking factions not
  *   joined yet: cautious;
@@ -85,6 +81,8 @@ import {
 } from "./augmentations.ts";
 import { THE_RED_PILL } from "./bitnodes.ts";
 import { CITY_FACTION_GROUPS, TIAN_DI_HUI } from "./factions.ts";
+import { type LevelRise, laterCycleRise, workSecondsAlong } from "./level-rise.ts";
+import { levellingInstallMultipliers } from "./levelling.ts";
 
 /** One of the next countables (`nextCountables`), with the time and money of it and those before it together. */
 export type NextCountable = CountableWithMoney & {
@@ -225,81 +223,89 @@ export function countablesLeft({
 export function reputationOneFactionAtATime(
   countables: readonly { reputation: number; sellers: readonly string[] }[],
 ): number {
+  return factionsOneAtATime(countables).reduce((sum, each) => sum + each.reputation, 0);
+}
+
+/**
+ * The factions `countables` are worked at, one at a time (#389), and each one's reputation: `reputationOneFactionAtATime`'s
+ * choice, the dearest first.
+ */
+export function factionsOneAtATime(
+  countables: readonly { reputation: number; sellers: readonly string[] }[],
+): { faction: string; reputation: number }[] {
   const dearest = [...countables].sort((a, b) => b.reputation - a.reputation);
   const sells = (faction: string) => countables.filter((each) => each.sellers.includes(faction)).length;
-  const worked = new Set<string>();
-  let reputation = 0;
+  const worked: { faction: string; reputation: number }[] = [];
   for (const each of dearest) {
-    if (each.sellers.length === 0 || each.sellers.some((faction) => worked.has(faction))) continue;
+    if (each.sellers.length === 0 || each.sellers.some((faction) => worked.some((one) => one.faction === faction))) {
+      continue;
+    }
     const seller = each.sellers.reduce((best, faction) => (sells(faction) > sells(best) ? faction : best));
-    worked.add(seller);
-    reputation += each.reputation;
+    worked.push({ faction: seller, reputation: each.reputation });
   }
-  return reputation;
+  return worked;
 }
 
 /**
- * This cycle's work (#389), what the later cycles are priced at: R, its time online before faction work first went on
- * (the rebuild), and the reputation earned this cycle at the joined factions, r_0's measure over T − R.
- */
-export interface CycleWork {
-  rebuildMs: number;
-  reputation: number;
-}
-
-/**
- * What prices the later cycles (#389): the countables left (`countablesLeft`), this cycle's work, and what this
- * install installs (each NeuroFlux Governor level an entry): its multipliers raise the rate after it.
+ * What prices the later cycles (#389): the countables left (`countablesLeft`); R, an install's time online to its first
+ * faction work (the brain's, measured; null not); the hacking level's path now (#401, `LevelRise`, κ the brain's) and
+ * the dead time each cycle after an install starts flat for (the brain's measured ramp, #405); the work's rate at a
+ * faction at a level, rep/s, before the installs' faction_rep (the caller's: favour, the share's mean, the
+ * conditions); and what this install installs (each NeuroFlux Governor level an entry).
  */
 export interface LaterCycles {
   left: readonly CountableLeft[];
-  work: CycleWork | null;
-  installing?: readonly string[];
+  rebuildMs: number | null;
+  rise: LevelRise | null;
+  deadSeconds: number;
+  rateAt: (faction: string, level: number) => number;
+  installing: readonly string[];
 }
 
-/**
- * The rate's gain from installing `names` (#389): each one's hacking and faction_rep multipliers multiplied, as hacking
- * work's reputation is the hacking level times faction_rep (`PersonObjects/formulas/reputation.ts:18-19`), the level
- * taken as its multiplier's (`PersonObjects/formulas/skill.ts:7-15`; the experience's part left out, cautious).
- */
-export function installGain(names: readonly string[]): number {
+/** Whether `later` prices the later cycles (#389): R measured, and a level that rises (κ and m above 0). */
+function pricedBy(later: LaterCycles | undefined): later is LaterCycles & { rebuildMs: number; rise: LevelRise } {
+  return (
+    later !== undefined &&
+    later.rebuildMs !== null &&
+    later.rise !== null &&
+    later.rise.kappa > 0 &&
+    later.rise.levelMult > 0
+  );
+}
+
+/** The faction_rep multiplier of installing `names` (#389): each one's, multiplied (`reputation.ts:16-52`). */
+export function factionRepGain(names: readonly string[]): number {
   let gain = 1;
   for (const name of names) {
     const multipliers = (AUGMENTATIONS[name] as { multipliers?: Readonly<Record<string, number>> } | undefined)
       ?.multipliers;
-    gain *= (multipliers?.hacking ?? 1) * (multipliers?.faction_rep ?? 1);
+    gain *= multipliers?.faction_rep ?? 1;
   }
   return gain;
 }
 
-/** Whether `work` prices the later cycles (#389): R measured, reputation earned and T past R. */
-function pricedBy(work: CycleWork | null | undefined, onlineMs: number): work is CycleWork {
-  return work != null && work.reputation > 0 && onlineMs > work.rebuildMs;
-}
-
 /**
  * The later cycles' lengths, ms (#389): ⌈`count` / `perCycle`⌉ cycles, each the next `perCycle` of `left` (the last
- * one the rest), R + W_j / r_j: r_0 this cycle's earned over T − R (`onlineMs` T), times `installing`'s gain, then
- * each cycle's own countables' after it. Unpriced, `shapeMs` (this one's shape); past the countables known, the last
- * priced cycle again (none priced, `shapeMs`).
+ * one the rest). Cycle j runs from its install: the level's path after every install before it (`laterCycleRise` at
+ * their multipliers, `levellingInstallMultipliers`, flat for the dead time), the work from R at each faction in turn
+ * (`factionsOneAtATime`), each to its reputation along the path (`workSecondsAlong`) at the work's rate times their
+ * faction_rep. Unpriced (`pricedBy`), `shapeMs` each (this one's shape); past the countables known, the last priced
+ * cycle again (none priced, `shapeMs`).
  */
 export function laterCyclesMs({
   count,
   perCycle,
-  onlineMs,
   shapeMs,
   later,
 }: {
   count: number;
   perCycle: number;
-  onlineMs: number;
   shapeMs: number;
   later?: LaterCycles | undefined;
 }): number[] {
   const cycles: number[] = [];
-  const work = later?.work;
-  const priced = pricedBy(work, onlineMs);
-  let rate = priced ? (work.reputation / (onlineMs - work.rebuildMs)) * installGain(later?.installing ?? []) : 0;
+  const priced = pricedBy(later);
+  const installed = [...(later?.installing ?? [])];
   let last: number | null = null;
   for (let start = 0; start < count; start += perCycle) {
     const size = Math.min(perCycle, count - start);
@@ -312,9 +318,15 @@ export function laterCyclesMs({
       cycles.push(last ?? shapeMs);
       continue;
     }
-    last = work.rebuildMs + reputationOneFactionAtATime(group) / rate;
+    const rise = laterCycleRise(later.rise, levellingInstallMultipliers(0, installed), later.deadSeconds);
+    const repGain = factionRepGain(installed);
+    let seconds = later.rebuildMs / 1000;
+    for (const { faction, reputation } of factionsOneAtATime(group)) {
+      seconds = workSecondsAlong(rise, (level) => later.rateAt(faction, level) * repGain, reputation, seconds);
+    }
+    last = seconds * 1000;
     cycles.push(last);
-    rate *= installGain(group.map((each) => each.augmentation));
+    installed.push(...group.map((each) => each.augmentation));
   }
   return cycles;
 }
@@ -334,7 +346,7 @@ export function installNowEstimateMs(
 ): number | null {
   if (adding >= needed) return 0;
   if (!(adding > 0)) return null;
-  return sum(laterCyclesMs({ count: needed - adding, perCycle: adding, onlineMs, shapeMs: onlineMs, later }));
+  return sum(laterCyclesMs({ count: needed - adding, perCycle: adding, shapeMs: onlineMs, later }));
 }
 
 /**
@@ -352,13 +364,7 @@ export function waitEstimateMs(
 ): number | null {
   if (!Number.isFinite(tauMs)) return null;
   if (adding + k >= needed) return tauMs;
-  const cycles = laterCyclesMs({
-    count: needed - adding - k,
-    perCycle: adding + k,
-    onlineMs,
-    shapeMs: onlineMs + tauMs,
-    later,
-  });
+  const cycles = laterCyclesMs({ count: needed - adding - k, perCycle: adding + k, shapeMs: onlineMs + tauMs, later });
   return tauMs + sum(cycles);
 }
 
@@ -385,8 +391,8 @@ export interface InstallTiming {
   heldForInvitation: boolean;
   /** The factor each wait's τ was scaled by (an overdue wait's measured error), 1 for none. */
   tauScale: number;
-  /** This cycle's work, where it priced the later cycles from the countables left (#389); absent, unpriced. */
-  work?: CycleWork;
+  /** What priced the later cycles from the countables left (#389): R, the dead time and κ; absent, unpriced. */
+  later?: { rebuildMs: number; deadSeconds: number; kappa: number };
 }
 
 /**
@@ -417,10 +423,10 @@ export function installTiming({
   tauScale?: number;
   later?: LaterCycles;
 }): InstallTiming {
-  const priced = pricedBy(later?.work, onlineMs);
+  const priced = pricedBy(later);
   /** A candidate's later cycles, where they're priced and there are any: `cyclesMs`. */
   const cyclesOf = (count: number, perCycle: number, shapeMs: number, after: LaterCycles | undefined) =>
-    priced && count > 0 ? { cyclesMs: laterCyclesMs({ count, perCycle, onlineMs, shapeMs, later: after }) } : {};
+    priced && count > 0 ? { cyclesMs: laterCyclesMs({ count, perCycle, shapeMs, later: after }) } : {};
   const candidates: InstallTimingCandidate[] = [];
   const now = installNowEstimateMs(needed, adding, onlineMs, later);
   if (now !== null) {
@@ -433,7 +439,7 @@ export function installTiming({
     const waitedFor = next.slice(0, k).map((one) => one.augmentation);
     const left = (later?.left ?? []).filter((one) => !waitedFor.includes(one.augmentation));
     const installing = [...(later?.installing ?? []), ...next.slice(0, k).flatMap((one) => one.augmentation ?? [])];
-    const afterWait = later === undefined ? undefined : { left, work: later.work, installing };
+    const afterWait = later === undefined ? undefined : { ...later, left, installing };
     const estimateMs = waitEstimateMs(needed, adding, k, tauMs, onlineMs, afterWait);
     if (estimateMs !== null) {
       candidates.push({
@@ -457,6 +463,9 @@ export function installTiming({
   const heldForInvitation = held && invitationHeld;
   const choice =
     heldForIncome || heldForInvitation ? (least((candidate) => candidate.k > 0)?.k ?? null) : (best?.k ?? null);
-  const work = priced && later?.work != null ? { work: later.work } : {};
+  const work =
+    priced && later.rebuildMs !== null
+      ? { later: { rebuildMs: later.rebuildMs, deadSeconds: later.deadSeconds, kappa: later.rise?.kappa ?? 0 } }
+      : {};
   return { needed, adding, onlineMs, candidates, choice, heldForIncome, heldForInvitation, tauScale, ...work };
 }

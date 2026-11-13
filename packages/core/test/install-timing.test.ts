@@ -11,6 +11,8 @@ import {
 import {
   type CountableLeft,
   countablesLeft,
+  type InstallTiming,
+  type LaterCycles,
   installNowEstimateMs,
   installTiming,
   LATER_CYCLE_FACTIONS,
@@ -19,8 +21,12 @@ import {
   reputationOneFactionAtATime,
   waitEstimateMs,
 } from "../src/install-timing.ts";
+import { BN4_2, BN4_FACTION_WORK_REP_GAIN, type Cycle, deadFor, endRise, measuredFactor, multipliers } from "./bn4-2-fixture.ts";
+import { favorAfterInstall, repToFavor } from "../src/donations.ts";
+import { factionReputationPerSecond } from "../src/faction-work.ts";
 
 const MINUTE = 60_000;
+const NEUROFLUX = "NeuroFlux Governor";
 const STATE: AugmentationPurchaseState = {
   installed: {},
   queued: [],
@@ -462,102 +468,187 @@ describe("the later cycles priced from the countables left (#389)", () => {
     expect(installTiming({ ...base, later: { left: dear, work: null } })).toEqual(installTiming(base));
   });
 
-  test("BN4.2's c6 and c7 hindcast: 46 and 31 min against 128 and 96 before #389; within ×2 priced from those left", () => {
-    // From scratchpad/m4/predaedalus (the read-only store copy of 2026-11-12: cycles2-BN4.2.txt, augs.txt): the 24
-    // installed at c6's choice (c1-c5's purchases, NeuroFlux Governor once), each choice's set and joined factions,
-    // N, n and T (its install timing line), R (its "first work", 4 min), and the time online from the choice to the
-    // count met.
-    const C1_TO_C5 = [
-      "Artificial Synaptic Potentiation",
-      "Cranial Signal Processors - Gen I",
-      "Speech Processor Implant",
-      "Neurotrainer II",
-      "INFRARET Enhancement",
-      "Social Negotiation Assistant (S.N.A)",
-      "Combat Rib I",
-      "Nuoptimal Nootropic Injector Implant",
-      "ADR-V1 Pheromone Gene",
-      "Augmented Targeting I",
-      "Speech Enhancement",
-      "BitWire",
-      "Synaptic Enhancement Implant",
-      "Neurotrainer I",
-      "Wired Reflexes",
-      "NeuroFlux Governor",
-      "NutriGen Implant",
-      "Neural-Retention Enhancement",
-      "Embedded Netburner Module",
-      "Cranial Signal Processors - Gen II",
-      "Neural Wit Amplifier",
-      "Magnetism Amplifier",
-      "Cranial Signal Processors - Gen III",
-      "CRTX42-AA Gene Modification",
-    ];
-    const C6_SET = ["CashRoot Starter Kit", "Augmented Targeting II"];
-    const C7_SET = ["Combat Rib II", "DermaForce Particle Barrier"];
-    const HACKERS = ["BitRunners", "The Black Hand", "NiteSec", "Tian Di Hui", "CyberSec"];
-    const bn42 = (installed: string[]): AugmentationPurchaseState => ({
-      ...STATE,
-      installed: Object.fromEntries(installed.map((name) => [name, 1])),
-      bitNodeMultipliers: augmentationBitNodeMultipliers(4, { 4: 1 }),
-    });
-    const hindcast = [
+});
+
+/**
+ * BN4.2's choices c2-c9 (#389's bar, the coordinator's decision on #389): at each, install now's estimate before #389
+ * (this cycle's shape) and priced from the countables left along the level's path (#401), against the time online from
+ * the choice to the count met, and the planner's choice under each. From `m4/predaedalus` (the read-only store copy of
+ * 2026-11-12): the trail's N, T and the next countables' τ (`cycles2-BN4.2.txt`'s install timing lines, the level now,
+ * flat: the same τ in both columns, so the pricing alone differs), each cycle's set, NeuroFlux Governor's levels, joined
+ * factions, first work (R), end rate and ramp from #401's fixture (`bn4-2-fixture.ts`).
+ */
+const CHOICES: {
+  index: number;
+  T: number;
+  next: [string, number][];
+  actual: number;
+}[] = [
+  {
+    index: 1,
+    T: 37,
+    next: [
+      ["Embedded Netburner Module", 60],
+      ["Magnetism Amplifier", 132],
+      ["Cranial Signal Processors - Gen II", 148],
+    ],
+    actual: 325,
+  },
+  {
+    index: 2,
+    T: 66,
+    next: [
+      ["Magnetism Amplifier", 45],
+      ["CRTX42-AA Gene Modification", 110],
+      ["Cranial Signal Processors - Gen III", 123],
+    ],
+    actual: 257,
+  },
+  {
+    index: 3,
+    T: 36,
+    next: [
+      ["CRTX42-AA Gene Modification", 69],
+      ["Nanofiber Weave", 140],
+      ["Neuralstimulator", 217],
+    ],
+    actual: 220,
+  },
+  {
+    index: 4,
+    T: 65,
+    next: [
+      ["Nanofiber Weave", 60],
+      ["Neuregen Gene Modification", 131],
+      ["Neuralstimulator", 207],
+    ],
+    actual: 153,
+  },
+  {
+    index: 5,
+    T: 23,
+    next: [
+      ["Nanofiber Weave", 54],
+      ["Neuralstimulator", 119],
+      ["Neuroreceptor Management Implant", 174],
+    ],
+    actual: 128,
+  },
+  {
+    index: 6,
+    T: 31,
+    next: [
+      ["Nanofiber Weave", 49],
+      ["Neuralstimulator", 99],
+    ],
+    actual: 96,
+  },
+  { index: 7, T: 44, next: [["Neuroreceptor Management Implant", 46]], actual: 50 },
+];
+
+/** Choice `index`'s two timings: before #389, and priced along the level's path, as the brain would take them. */
+function hindcastAt({ index, T, next }: (typeof CHOICES)[number]) {
+  const cycle = BN4_2[index] as Cycle;
+  const installedBefore = [...BN4_2.slice(0, index).flatMap((each) => each.bought), NEUROFLUX];
+  const state: AugmentationPurchaseState = {
+    ...STATE,
+    installed: Object.fromEntries(installedBefore.map((name) => [name, 1])),
+    bitNodeMultipliers: augmentationBitNodeMultipliers(4, { 4: 1 }),
+  };
+  const needed = 30 - installedBefore.length;
+  const joined = Object.keys(cycle.earned);
+  const base = {
+    needed,
+    adding: cycle.bought.length,
+    onlineMs: T * MINUTE,
+    next: next.map(([augmentation, minutes]) => ({ augmentation, tauMs: minutes * MINUTE })),
+  };
+  // The work's rate at a faction: the game's hacking work at the level, this cycle's faction_rep (the installs' own
+  // applied by core), the faction's favour after this install where it's joined (`favorAfterInstall`), none where it
+  // isn't (the brain reads only the joined), and this cycle's measured factor in the share's place (#401's hindcast).
+  const before = (faction: string) =>
+    BN4_2.slice(0, index).reduce((sum, each) => sum + (each.earned[faction] ?? 0), 0);
+  const favorOf = (faction: string) =>
+    joined.includes(faction) ? favorAfterInstall(repToFavor(before(faction)), cycle.earned[faction] ?? 0) : 0;
+  const factor = measuredFactor(index);
+  const rateAt = (faction: string, level: number) =>
+    factionReputationPerSecond(
       {
-        installed: C1_TO_C5,
-        set: C6_SET,
-        joined: [...HACKERS, "Aevum", "Sector-12"],
-        needed: 6,
-        onlineMs: 23 * MINUTE,
-        oldMs: 46 * MINUTE,
-        actualMs: 128 * MINUTE,
+        skills: { hacking: level, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+        mults: { faction_rep: multipliers[index]?.factionRep ?? 1 },
       },
+      "hacking",
       {
-        installed: [...C1_TO_C5, ...C6_SET],
-        set: C7_SET,
-        joined: [...HACKERS, "Volhaven"],
-        needed: 4,
-        onlineMs: 31 * MINUTE,
-        oldMs: 31 * MINUTE,
-        actualMs: 96 * MINUTE,
+        favor: favorOf(faction),
+        sourceFile15Level: 0,
+        focused: true,
+        implant: false,
+        factionWorkRepGain: BN4_FACTION_WORK_REP_GAIN,
+        shareBonus: factor,
       },
-    ];
-    const results = hindcast.map(({ installed, set, joined, needed, onlineMs, oldMs, actualMs }) => {
-      expect(installed).toHaveLength(30 - needed);
-      const state = bn42(installed);
-      // W_0: the set's reputation, one faction at a time at its joined sellers (BN4's AugmentationRepCost 1).
-      const setLeft = countablesLeft({ factions: joined, bitNode: 4, state, set: [] }).filter((one) =>
-        set.includes(one.augmentation),
-      );
-      expect(setLeft).toHaveLength(2);
-      const work = { rebuildMs: 4 * MINUTE, reputation: reputationOneFactionAtATime(setLeft) };
-      const left = countablesLeft({ factions: [...joined, ...LATER_CYCLE_FACTIONS], bitNode: 4, state, set });
-      const old = installNowEstimateMs(needed, set.length, onlineMs) as number;
-      const priced = installNowEstimateMs(needed, set.length, onlineMs, { left, work }) as number;
-      return { work, left: left.slice(0, needed - set.length), old, priced, oldMs, actualMs };
-    });
-    const [c6, c7] = results;
-    // c6: W_0 Sector-12's 12,500 (CashRoot); left, the 4 cheapest, as c7-c9 bought them: Volhaven's two (18,750),
-    // then Nanofiber Weave and Neuregen Gene Modification, two factions (75,000). 4 + 19 · 1.5, then 4 + 19 · 6.
-    expect(c6?.work.reputation).toBe(12_500);
-    expect(c6?.left.map((one) => one.augmentation)).toEqual([
-      "DermaForce Particle Barrier",
-      "Combat Rib II",
-      "Nanofiber Weave",
-      "Neuregen Gene Modification",
-    ]);
-    expect((c6?.priced as number) / MINUTE).toBeCloseTo(4 + 28.5 + 4 + 114, 6);
-    // c7: W_0 Volhaven's 18,750; left, Nanofiber Weave and Neuregen Gene Modification (75,000): 4 + 27 · 4.
-    expect(c7?.work.reputation).toBe(18_750);
-    expect(c7?.left.map((one) => one.augmentation)).toEqual(["Nanofiber Weave", "Neuregen Gene Modification"]);
-    expect((c7?.priced as number) / MINUTE).toBeCloseTo(112, 6);
-    for (const { old, priced, oldMs, actualMs } of results) {
-      // Before #389: the store's figures again, 0.32-0.36 of the actual. Priced: within ×2 (owner decision 68).
-      expect(old).toBe(oldMs);
-      expect(old / actualMs).toBeLessThan(0.5);
-      expect(priced / actualMs).toBeGreaterThan(0.5);
-      expect(priced / actualMs).toBeLessThan(2);
+    );
+  const later: LaterCycles = {
+    left: countablesLeft({ factions: [...joined, ...LATER_CYCLE_FACTIONS], bitNode: 4, state, set: cycle.bought }),
+    rebuildMs: cycle.firstWork * MINUTE,
+    rise: endRise(index),
+    deadSeconds: deadFor(index + 1).minutes * 60,
+    rateAt,
+    installing: [...cycle.bought, ...Array.from({ length: cycle.neuroFlux }, () => NEUROFLUX)],
+  };
+  // Exploration: the later cycles grouped by a partition of the cheapest first that minimises the total (a DP).
+  const dp = (count: number, left: typeof later.left, installing: readonly string[]) => {
+    const best: number[] = [0];
+    for (let j = 1; j <= count; j++) {
+      best[j] = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < j; i++) {
+        const group = laterCyclesMs({
+          count: j - i,
+          perCycle: j - i,
+          shapeMs: Number.POSITIVE_INFINITY,
+          later: { ...later, left: left.slice(i, j), installing: [...installing, ...left.slice(0, i).map((x) => x.augmentation)] },
+        });
+        best[j] = Math.min(best[j] as number, (best[i] as number) + (group[0] as number));
+      }
     }
-    // The ratios, for the report: c6 150.5 / 128 = 1.18, c7 112 / 96 = 1.17.
-    expect(results.map(({ priced, actualMs }) => Number((priced / actualMs).toFixed(2)))).toEqual([1.18, 1.17]);
+    return best[count] as number;
+  };
+  const n = cycle.bought.length;
+  const options = [[0, dp(needed - n, later.left, later.installing)]];
+  for (const [k] of next.entries()) {
+    const names = next.slice(0, k + 1).map(([name]) => name);
+    const tau = (next[k]?.[1] ?? 0) * MINUTE;
+    const rest = needed - n - (k + 1);
+    options.push([k + 1, tau + (rest <= 0 ? 0 : dp(rest, later.left.filter((x) => !names.includes(x.augmentation)), [...later.installing, ...names]))]);
+  }
+  const least = options.reduce((a, b) => ((b[1] as number) < (a[1] as number) ? b : a));
+  console.log(`c${index + 1} DP: ${options.map(([k, ms]) => `k${k} ${((ms as number) / MINUTE).toFixed(1)}`).join(", ")}; choice ${least[0]}`);
+  return { before389: installTiming(base), priced: installTiming({ ...base, later }) };
+}
+
+describe("BN4.2's choices c2-c9 hindcast (#389): install now along the level's path, and the planner's choice", () => {
+  test("every row, before #389 and priced, against the actual", () => {
+    const rows = CHOICES.map((choice) => {
+      const { before389, priced } = hindcastAt(choice);
+      const now = (timing: InstallTiming) => (timing.candidates.find((each) => each.k === 0)?.estimateMs ?? 0) / MINUTE;
+      const chosen = (timing: InstallTiming) => timing.candidates.find((each) => each.k === timing.choice);
+      return {
+        cycle: `c${choice.index + 1}`,
+        actual: choice.actual,
+        before: { now: now(before389), choice: before389.choice, chosenMs: (chosen(before389)?.estimateMs ?? 0) / MINUTE },
+        priced: { now: now(priced), choice: priced.choice, chosenMs: (chosen(priced)?.estimateMs ?? 0) / MINUTE },
+        candidates: priced.candidates.map((each) => [each.k, Math.round(each.estimateMs / MINUTE)]),
+      };
+    });
+    console.log(
+      rows
+        .map(
+          (row) =>
+            `${row.cycle} actual ${row.actual}: before #389 install now ${row.before.now.toFixed(1)} ` +
+            `(${(row.before.now / row.actual).toFixed(2)}), choice ${row.before.choice}; priced install now ` +
+            `${row.priced.now.toFixed(1)} (${(row.priced.now / row.actual).toFixed(2)}), choice ${row.priced.choice} ` +
+            `(${row.priced.chosenMs.toFixed(1)}) [${row.candidates.map(([k, ms]) => `k${k} ${ms}`).join(", ")}]`,
+        )
+        .join("\n"),
+    );
   });
 });

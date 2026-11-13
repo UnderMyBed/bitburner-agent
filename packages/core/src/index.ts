@@ -892,8 +892,9 @@ export { HOME_RAM_LIMIT, homeRamUpgradePrice, isUpgradableHomeRam, UPGRADE_HOME_
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";
 export {
   type CountableLeft,
-  type CycleWork,
   countablesLeft,
+  factionRepGain,
+  factionsOneAtATime,
   type InstallTiming,
   type InstallTimingCandidate,
   installNowEstimateMs,
