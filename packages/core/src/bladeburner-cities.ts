@@ -169,12 +169,15 @@ export interface BladeburnerChaosMeasure {
 
 /** The rule's choice of city and chaos action (#383), from one reading. */
 export interface BladeburnerCityChoice {
-  /** The city to work in: the most rank a second by B2's forecast, the current one on a tie. */
+  /**
+   * The city to work in: the most rank a second by B2's forecast, the current one on a tie; under a current-rank target
+   * (#386), the least expected time to it.
+   */
   city: string;
   /** B2's plan there (its forecast's work and rest, at that city's estimate and chaos). */
   plan: BladeburnerActionPlan;
   /** Each city's estimate, communities, chaos and B2's forecast there, in the game's order. */
-  byCity: (BladeburnerCityReading & { rankPerSecond: number })[];
+  byCity: (BladeburnerCityReading & { rankPerSecond: number; toTarget?: { target: number; seconds: number } })[];
   /** Diplomacy in the city chosen, its chaos over 50; else null. */
   diplomacy: (BladeburnerChaosMeasure & { attemptsTo50: number }) | null;
   /** Incite Violence, the counts binding (the forecast with them unbounded over it); else null. */
@@ -191,6 +194,8 @@ export type BladeburnerCityForecastInput = Omit<Parameters<typeof chooseBladebur
  * (its ranges read there) and every city's figures (`cities`). None of it takes a picked threshold:
  * - **The city:** each city's forecast, its ranges scaled by `cityCompetenceRatio` from the city read (Raid out with no
  *   communities, `Actions/Operation.ts:63-68`); the most rank a second, the current city on a tie. Switching is free.
+ *   Under a current-rank target (#386, `input.target`), the least expected time to it. The chaos actions below are
+ *   weighed by rank a second still: their effect on the time to a target is left out, and labelled.
  * - **Diplomacy,** the city chosen at a chaos c over 50: one more, to c' = `chaosAfterDiplomacy`, pays when its 60 s
  *   (what they forgo of the cycle at 50 or under, `chaosActionForgone`) cost less than the rank the chaos from c' to c
  *   loses as the decay would bring it down (`chaosRankLoss`, against R0, the forecast there at 50 or under): the path
@@ -211,21 +216,34 @@ export function chooseBladeburnerCity(
 ): BladeburnerCityChoice | null {
   const here = cities.find((each) => each.name === city);
   if (here === undefined || !(here.population > 0)) return null;
-  const forecastIn = (there: BladeburnerCityReading, chaos = there.chaos, readings = input.readings) => {
+  const forecastIn = (
+    there: BladeburnerCityReading,
+    chaos = there.chaos,
+    readings = input.readings,
+    from: BladeburnerCityForecastInput = input,
+  ) => {
     const ratio = cityCompetenceRatio(here, { population: there.population, chaos }) ?? 0;
-    return chooseBladeburnerAction({ ...input, readings, city: { ratio, raid: there.communities > 0 } });
+    return chooseBladeburnerAction({ ...from, readings, city: { ratio, raid: there.communities > 0 } });
   };
   const byCity = cities.map((each) => ({ ...each, plan: forecastIn(each) }));
+  // Under a target (#386), the least time to it; else the most rank a second. The current city on a tie.
+  const better = (a: BladeburnerActionPlan, b: BladeburnerActionPlan) =>
+    a.toTarget !== undefined && b.toTarget !== undefined
+      ? a.toTarget.seconds < b.toTarget.seconds
+      : a.rankPerSecond > b.rankPerSecond;
   let best = byCity.find((each) => each.name === city) as (typeof byCity)[number];
-  for (const each of byCity) if (each.plan.rankPerSecond > best.plan.rankPerSecond) best = each;
+  for (const each of byCity) if (better(each.plan, best.plan)) best = each;
   const chosen = best;
   const { chaosThreshold } = BLADEBURNER_CONSTANTS;
-  const atChaos = (chaos: number, readings = input.readings) => forecastIn(chosen, chaos, readings).rankPerSecond;
+  // The chaos actions are weighed by rank a second (#386: a target aside, labelled).
+  const rateInput = { ...input, target: undefined };
+  const atChaos = (chaos: number, readings = input.readings) =>
+    forecastIn(chosen, chaos, readings, rateInput).rankPerSecond;
   const charisma = input.person.skills.charisma;
   let diplomacy: BladeburnerCityChoice["diplomacy"] = null;
   if (chosen.chaos > chaosThreshold) {
     const after = chaosAfterDiplomacy(chosen.chaos, charisma);
-    const atFifty = forecastIn(chosen, chaosThreshold);
+    const atFifty = forecastIn(chosen, chaosThreshold, input.readings, rateInput);
     const baseline = atFifty.rankPerSecond;
     const gain = chaosRankLoss((chaos) => atChaos(chaos), baseline, after, chosen.chaos);
     const cost = BLADEBURNER_CHAOS_ACTION_SECONDS * chaosActionForgone(atFifty);
@@ -240,8 +258,9 @@ export function chooseBladeburnerCity(
   }
   let incite: BladeburnerCityChoice["incite"] = null;
   const unboundedReadings = input.readings.map((each) => ({ ...each, count: Number.POSITIVE_INFINITY }));
-  const unbounded = forecastIn(chosen, chosen.chaos, unboundedReadings);
-  const now = chosen.plan.rankPerSecond;
+  const unbounded = forecastIn(chosen, chosen.chaos, unboundedReadings, rateInput);
+  const nowPlan = chosen.plan.toTarget === undefined ? chosen.plan : forecastIn(chosen, chosen.chaos, input.readings, rateInput);
+  const now = nowPlan.rankPerSecond;
   const work = unbounded.work;
   const action = work === null ? null : bladeburnerLevelledAction(work.type, work.name);
   if (work !== null && action !== null && unbounded.rankPerSecond > now && unbounded.duty > 0) {
@@ -250,7 +269,7 @@ export function chooseBladeburnerCity(
     const gain = countGain * (work.seconds / unbounded.duty) * (unbounded.rankPerSecond - now);
     const baseline = atChaos(chaosThreshold, unboundedReadings);
     const chaosCost = chaosRankLoss((chaos) => atChaos(chaos, unboundedReadings), baseline, chosen.chaos, after);
-    const cost = BLADEBURNER_CHAOS_ACTION_SECONDS * chaosActionForgone(chosen.plan) + chaosCost;
+    const cost = BLADEBURNER_CHAOS_ACTION_SECONDS * chaosActionForgone(nowPlan) + chaosCost;
     incite = {
       chaos: chosen.chaos,
       after,
@@ -265,7 +284,11 @@ export function chooseBladeburnerCity(
   return {
     city: chosen.name,
     plan: chosen.plan,
-    byCity: byCity.map(({ plan, ...each }) => ({ ...each, rankPerSecond: plan.rankPerSecond })),
+    byCity: byCity.map(({ plan, ...each }) => ({
+      ...each,
+      rankPerSecond: plan.rankPerSecond,
+      ...(plan.toTarget === undefined ? {} : { toTarget: plan.toTarget }),
+    })),
     diplomacy,
     incite,
     chaosAction: diplomacy?.pays ? DIPLOMACY : incite?.pays ? INCITE_VIOLENCE : null,

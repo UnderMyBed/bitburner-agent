@@ -76,6 +76,7 @@ import {
   type BladeburnerState,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
+  bladeburnerRankTarget,
   bladeburnerResting,
   bladeburnerSkillCostMultiplierOf,
   bladeburnerWorkerFits,
@@ -99,6 +100,7 @@ import {
   type SlowSnapshotData,
 } from "@bitburner-agent/core";
 import { bitNodeOfSlow } from "./gang.ts";
+import { formatDuration } from "./gap-report.ts";
 import type { OwnersWork } from "./work.ts";
 
 /** The training's held for the owner's work (#367's review), or not: at each change, for the report's overdue clock. */
@@ -350,16 +352,26 @@ export function describeActionPlan(
 ): string {
   const work = plan.work;
   const staminaText = `stamina ${stamina.toFixed(1)} / ${max.toFixed(1)}`;
+  const toTarget = plan.toTarget === undefined ? "" : `; ${describeToTarget(plan.toTarget)}`;
   if (work === null) {
-    return `${plan.rest.name} (no contract or operation beats it; ${perMinute(plan.rankPerSecond)}; ${staminaText})`;
+    return (
+      `${plan.rest.name} (no contract or operation beats it; ${perMinute(plan.rankPerSecond)}; ${staminaText})` + toTarget
+    );
   }
   const working =
     `${work.name} level ${work.level} (${(work.chance * 100).toFixed(1)}% at the estimate's low end, ` +
     `${perMinute(work.rankPerSecond)} worked)`;
   return (
     `${resting ? `resting with ${plan.rest.name} for ${working}` : `${working}, resting with ${plan.rest.name}`}; ` +
-    `${staminaText}; worked ${(plan.duty * 100).toFixed(0)}% of a cycle, ${perMinute(plan.rankPerSecond)} over it`
+    `${staminaText}; worked ${(plan.duty * 100).toFixed(0)}% of a cycle, ${perMinute(plan.rankPerSecond)} over it` +
+    toTarget
   );
+}
+
+/** "rank 25 in about 41 min expected, the least of the plans (#386)": a plan's expected time to its target. */
+export function describeToTarget({ target, seconds }: { target: number; seconds: number }): string {
+  const time = Number.isFinite(seconds) ? `about ${formatDuration(seconds * 1000)}` : "never";
+  return `rank ${target} in ${time} expected, the least of the plans (#386)`;
 }
 
 /**
@@ -373,9 +385,13 @@ export function describeCityChoice(choice: BladeburnerCityChoice, readCity: stri
     choice.city !== readCity && from !== undefined
       ? `, moving from ${readCity} (chaos ${from.chaos.toFixed(2)}, ${perMinute(from.rankPerSecond)})`
       : "";
+  const toTarget = there?.toTarget;
   let text =
-    `in ${choice.city} (chaos ${(there?.chaos ?? 0).toFixed(2)}, ${perMinute(there?.rankPerSecond ?? 0)}: the most of ` +
-    `the six${moving})`;
+    toTarget === undefined
+      ? `in ${choice.city} (chaos ${(there?.chaos ?? 0).toFixed(2)}, ${perMinute(there?.rankPerSecond ?? 0)}: the most ` +
+        `of the six${moving})`
+      : `in ${choice.city} (chaos ${(there?.chaos ?? 0).toFixed(2)}, rank ${toTarget.target} in about ` +
+        `${formatDuration(toTarget.seconds * 1000)} expected: the least of the six${moving})`;
   const diplomacy = choice.diplomacy;
   if (diplomacy !== null) {
     text +=
@@ -576,6 +592,8 @@ export class BladeburnerRule {
       bitNode,
       ownersWork,
       nowMs,
+      rank === null ? null : bladeburnerRankTarget({ rank, factionJoined: inFaction }),
+      rank,
     );
     const skills = this.#skills(reading.kind === "read" ? reading.actions : null, mediumData, bitNode);
     const line =
@@ -648,6 +666,9 @@ export class BladeburnerRule {
     bitNode: number,
     ownersWork: boolean,
     nowMs: number | null,
+    /** The next current-rank target (#386, core's `bladeburnerRankTarget`), or null: none, or met. */
+    target: number | null = null,
+    rank: number | null = null,
   ): { sent: NonNullable<BladeburnerView["actions"]> | null; text: string | null; city?: string | null } {
     if (reading === null) return { sent: null, text: null };
     const kept = this.#keptChaosAction(reading, nowMs);
@@ -672,6 +693,7 @@ export class BladeburnerRule {
       rankMultiplier,
       speed: bladeburnerSpeedOf(reading.bonusSeconds),
       skills: { read: reading.skills?.levels ?? {} },
+      ...(target === null || rank === null ? {} : { target: { rank, target } }),
     };
     const cities =
       readCity === null || reading.cities === null

@@ -56,6 +56,12 @@ import {
   NO_BLADEBURNER_SKILLS,
   planBladeburnerSkills,
 } from "./bladeburner-skills.ts";
+import {
+  type BladeburnerRankStep,
+  bladeburnerCycleStep,
+  bladeburnerSecondsToRank,
+  bladeburnerSecondsToRankAtLeast,
+} from "./bladeburner-targets.ts";
 
 /** A contract's or operation's type, as the NS API names it (`Bladeburner/Enums.ts`). */
 export type BladeburnerLevelledType = "Contracts" | "Operations";
@@ -713,6 +719,8 @@ export interface BladeburnerActionPlan {
   rankPerSecond: number;
   /** The stamina regained a second, whatever the action. */
   regain: number;
+  /** Under a current-rank target (#386): the target, and the expected game seconds to it with this plan. */
+  toTarget?: { target: number; seconds: number };
 }
 
 /**
@@ -751,6 +759,7 @@ export function chooseBladeburnerAction({
   speed,
   skills = {},
   city,
+  target,
 }: {
   readings: readonly BladeburnerActionReading[];
   person: BladeburnerPerson;
@@ -763,6 +772,8 @@ export function chooseBladeburnerAction({
   skills?: { read?: BladeburnerSkillLevels; planned?: BladeburnerSkillLevels };
   /** Another city or chaos than the one read (#383): the competence there over the competence read, and Raid there. */
   city?: { ratio: number; raid: boolean };
+  /** The rank now and the next current-rank target (#386, ./bladeburner-targets.ts): under it, the least time to it. */
+  target?: { rank: number; target: number };
 }): BladeburnerActionPlan {
   const readMults = bladeburnerSkillMultsOf(skills.read ?? {});
   const mults = skills.planned === undefined ? readMults : bladeburnerSkillMultsOf(skills.planned);
@@ -772,13 +783,15 @@ export function chooseBladeburnerAction({
   const rests = bladeburnerRests(regain, maxPlanned, rankMultiplier);
   const penalty = staminaPenalty(stamina, maxStamina);
   const restAlone = rests.reduce((best, each) => (each.rankPerSecond > best.rankPerSecond ? each : best));
-  let best: BladeburnerActionPlan = {
+  const alone: BladeburnerActionPlan = {
     work: null,
     rest: restAlone,
     duty: 0,
     rankPerSecond: restAlone.rankPerSecond,
     regain,
   };
+  // Every plan weighed, in the game's order (resting alone first): its step to a target with it (#386).
+  const candidates: { plan: BladeburnerActionPlan; step: BladeburnerRankStep | null }[] = [{ plan: alone, step: null }];
   for (const read of readings) {
     const action = bladeburnerLevelledAction(read.type, read.name);
     if (action === null) continue;
@@ -794,11 +807,9 @@ export function chooseBladeburnerAction({
       if (chance === null) continue;
       const seconds = actionSeconds(action, level, person, mults);
       if (read.count < 1 + (BLADEBURNER_READING_SECONDS * speed) / seconds) continue;
-      const { mean, variance } = attemptRankMoments(
-        chance,
-        actionRankGain(action, level, rankMultiplier),
-        actionRankLoss(action, level),
-      );
+      const gain = actionRankGain(action, level, rankMultiplier);
+      const loss = actionRankLoss(action, level);
+      const { mean, variance } = attemptRankMoments(chance, gain, loss);
       const rate = mean / seconds;
       const cost = actionStaminaCost(action, level);
       const drain = cost / seconds - regain;
@@ -806,8 +817,9 @@ export function chooseBladeburnerAction({
         const duty =
           drain <= 0 ? 1 : rest.staminaPerSecond > 0 ? rest.staminaPerSecond / (drain + rest.staminaPerSecond) : 0;
         const cycle = duty * rate + (1 - duty) * rest.rankPerSecond;
-        if (!(cycle > best.rankPerSecond) || duty === 0) continue;
-        best = {
+        if (duty === 0) continue;
+        const step = bladeburnerCycleStep({ chance, gain, loss, seconds, duty, restRankPerSecond: rest.rankPerSecond });
+        const plan: BladeburnerActionPlan = {
           work: {
             type: action.type,
             name: action.name,
@@ -826,14 +838,54 @@ export function chooseBladeburnerAction({
           rankPerSecond: cycle,
           regain,
         };
+        candidates.push({ plan, step });
       }
     }
   }
-  return best;
+  if (target === undefined || !(target.rank < target.target)) {
+    // Rank a second: the first with the most, in the game's order.
+    let best = alone;
+    for (const { plan } of candidates) if (plan.rankPerSecond > best.rankPerSecond) best = plan;
+    return best;
+  }
+  return fastestToTarget(candidates, target);
+}
+
+/**
+ * Under a target (#386): the plan with the least expected time to it (`bladeburnerSecondsToRank`), the first in the
+ * game's order on a tie. Resting alone is Field Analysis's steady rate, (target − rank) over it. Each candidate's
+ * Wald bound (`bladeburnerSecondsToRankAtLeast`) is taken first, and the walk solved only for those whose bound is
+ * under the best found: the same choice, solved for fewer.
+ */
+function fastestToTarget(
+  candidates: readonly { plan: BladeburnerActionPlan; step: BladeburnerRankStep | null }[],
+  { rank, target }: { rank: number; target: number },
+): BladeburnerActionPlan {
+  const ranked = candidates
+    .map(({ plan, step }, order) => {
+      const least =
+        step === null
+          ? plan.rankPerSecond > 0
+            ? (target - rank) / plan.rankPerSecond
+            : Number.POSITIVE_INFINITY
+          : bladeburnerSecondsToRankAtLeast(step, rank, target);
+      return { plan, step, order, least };
+    })
+    .sort((a, b) => a.least - b.least || a.order - b.order);
+  let best: { plan: BladeburnerActionPlan; seconds: number; order: number } | null = null;
+  for (const { plan, step, order, least } of ranked) {
+    if (best !== null && least > best.seconds) break;
+    const seconds = step === null ? least : bladeburnerSecondsToRank(step, rank, target);
+    if (best === null || seconds < best.seconds || (seconds === best.seconds && order < best.order)) {
+      best = { plan, seconds, order };
+    }
+  }
+  const chosen = best ?? { plan: candidates[0]?.plan as BladeburnerActionPlan, seconds: Number.POSITIVE_INFINITY };
+  return { ...chosen.plan, toTarget: { target, seconds: chosen.seconds } };
 }
 
 /** What the rule's forecast reads (#375): `chooseBladeburnerAction`'s figures but the skills. */
-export type BladeburnerForecastInput = Omit<Parameters<typeof chooseBladeburnerAction>[0], "skills">;
+export type BladeburnerForecastInput = Omit<Parameters<typeof chooseBladeburnerAction>[0], "skills" | "target">;
 
 /**
  * The skills to buy (#379): core's `planBladeburnerSkills` from the levels and points read, each set of levels

@@ -338,6 +338,14 @@ export {
   isBladeburnerCity,
 } from "./bladeburner-cities.ts";
 export {
+  BLADEBURNER_TARGET_CELLS,
+  type BladeburnerRankStep,
+  bladeburnerCycleStep,
+  bladeburnerRankTarget,
+  bladeburnerSecondsToRank,
+  bladeburnerSecondsToRankAtLeast,
+} from "./bladeburner-targets.ts";
+export {
   BLADEBURNER_RANK_SKILLS,
   BLADEBURNER_SKILL_NAMES,
   BLADEBURNER_SKILLS,
