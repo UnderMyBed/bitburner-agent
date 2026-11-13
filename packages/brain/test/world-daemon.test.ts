@@ -307,7 +307,7 @@ describe("the destroy", () => {
 
   test("past the BitNodes the brain can't play yet (#323): BN2.3 into BN5 again, the skipped logged and in the view", () => {
     const skipped =
-      "BN6 skipped: no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+      "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
       "BN3 skipped: no hacking multipliers or prices yet";
     const bn23 = { currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } };
     expect(update({ slowData: slow(bn23) })).toBe(true);
@@ -696,7 +696,7 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
     "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
     "Source-File 5 at 3), but the run";
   const SKIPPED =
-    "BN6 skipped: no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+    "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
     "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 " +
     "and BN12 skipped: no hacking multipliers or prices yet";
   const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
@@ -776,7 +776,7 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
       "on (into BitNode 2)",
     );
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } }))).toBe(
-      "on (into BitNode 5 (BN6 skipped: no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: " +
+      "on (into BitNode 5 (BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: " +
         "no hacking multipliers or prices yet))",
     );
     expect(describeWorldDaemonSwitch(true, slow({ ownedSF: CAPS }))).toBe(
@@ -1097,6 +1097,8 @@ describe("the Black Ops' route (#398): BN6", () => {
     rankPerSecond: 1,
     etaSeconds: 99_500,
     estimate: { steps: [], seconds: 120_000, rate: 1 },
+    grown: null,
+    grownAtMs: null,
     redPillSeconds: 1e70,
     choice: chooseWinRoute({ blackOpsSeconds: 120_000, redPillSeconds: 1e70, soFarSeconds: 36_000 }),
     rankStallMs: 20 * MINUTE,
@@ -1138,6 +1140,14 @@ describe("the Black Ops' route (#398): BN6", () => {
     expect(describeWorldDaemonPath({ ...path, blackOps: view({ choice: redPill }) })[1]).toMatch(
       /The Red Pill chosen \(The Red Pill's the shorter\); shown, not acted on: this BitNode plays the Black Ops$/,
     );
+    // With the competence's growth (#408): the planner's, B6's at the competence now beside it.
+    const grownStep = { name: "Operation Daedalus", chance: 0.052 } as NonNullable<
+      BlackOpsRouteView["grown"]
+    >["steps"][number];
+    const grown = { steps: [grownStep], seconds: 36_000, rate: 1, path: [], solves: 10 };
+    expect(describeWorldDaemonPath({ ...path, blackOps: view({ grown, grownAtMs: 0 }) })[1]).toMatch(
+      /^the planner \(#398\): the Black Ops' about 10.0 h with the competence's growth \(#408: the skills from the rank, the stats from the actions, the levels from the successes; the last one at 5\.2%\), about 33\.3 h at the competence now \(B6's\); /,
+    );
     // Unread: said.
     expect(describeWorldDaemonPath({ ...path, blackOps: null })[0]).toBe(
       "the Black Ops (#398): no reading yet (the division joined, and home's RAM for its reader)",
@@ -1162,7 +1172,7 @@ describe("the Black Ops' route (#398): BN6", () => {
     expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(5));
     expect(lines).toEqual([
       "world daemon: all 21 Black Ops done (#398): destroying the BitNode, into BitNode 5 (BN6 skipped: no win route " +
-        "yet: the Black Ops' estimate with installs is past the campaign's bar (#404); BN7 skipped: no win route yet (the " +
+        "yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the " +
         "Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: no hacking multipliers or prices yet) (the " +
         "gate, then a save backup first)",
     ]);

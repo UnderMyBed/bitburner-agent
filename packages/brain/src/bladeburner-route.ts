@@ -7,9 +7,11 @@
 //   400,000 at the rank a second measured over the readings.
 // - **The planner's estimates** (decision 67): the Black Ops' (core's `blackOpsRouteEstimate`: the next one's rank by
 //   B5's stock and tail, the Bladeburner rule's own time where it has it; each later one's at the sustainable rate; each
-//   one's attempts) and The Red Pill's (core's `redPillLevelSeconds`: w0r1d_d43m0n's hacking level alone at the
-//   measured experience rate, at least), and the choice between them (core's `chooseWinRoute`, The Red Pill's hopeless
-//   past the BitNode's time so far).
+//   one's attempts), with the competence's growth along the route (#408, core's `blackOpsRouteGrownEstimate`: the skills
+//   from the rank, the stats from the actions, the levels from the successes) where the player's combat figures are
+//   read, B6's at the competence now beside it; and The Red Pill's (core's `redPillLevelSeconds`: w0r1d_d43m0n's
+//   hacking level alone at the measured experience rate, at least), and the choice between them (core's
+//   `chooseWinRoute`, The Red Pill's hopeless past the BitNode's time so far).
 // - **The stall bounds** (decision 45, #400's review), keyed by where the rank is:
 //   - **The climb** (under the next Black Op's rank: none attempted, contracts' failures in B2's own bound): the rank
 //     must rise by `climbRise` within `climbWindowMs`. The window is `rankStallMs`, twice the longest the rule's
@@ -37,6 +39,8 @@ import {
   actionRankLoss,
   BLACK_OPS_COUNT,
   BLADEBURNER_BLACK_OPS,
+  type BlackOpsGrownTime,
+  type BlackOpsGrowthAt,
   type BlackOpsRouteAt,
   type BlackOpsRouteTime,
   type BladeburnerActionInput,
@@ -45,10 +49,12 @@ import {
   blackOpSeconds,
   blackOpStaminaCost,
   blackOpsRouteEstimate,
+  blackOpsRouteGrownEstimate,
   bladeburnerBlackOp,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
+  bladeburnerSkillCostMultiplierOf,
   bladeburnerSkillMultsOf,
   type ClimbAttempts,
   type CombatPerson,
@@ -82,8 +88,14 @@ export interface BlackOpsRouteView {
   /** The rank measured a second over the readings, and the ETA to the last one's rank at it; null unmeasured. */
   rankPerSecond: number | null;
   etaSeconds: number | null;
-  /** The planner's estimate of the Black Ops' route, game seconds (core's); null unread. */
+  /** B6's estimate of the Black Ops' route at the competence now, game seconds (core's); null unread. Its ρ the climb's. */
   estimate: BlackOpsRouteTime | null;
+  /**
+   * The planner's estimate (#408): the route with the competence's growth (core's `blackOpsRouteGrownEstimate`), game
+   * seconds, as of `grownAtMs` (`GrownEstimateMemo`'s); null unread or the combat figures not in the snapshot.
+   */
+  grown: BlackOpsGrownTime | null;
+  grownAtMs: number | null;
   /** The Red Pill's hacking level by the formulas, at least, game seconds; Infinity never; null unmeasured. */
   redPillSeconds: number | null;
   /** The planner's choice between them (core's `chooseWinRoute`). */
@@ -129,7 +141,10 @@ export function blackOpsRouteOf({
   soFarMs,
   firstToRankSeconds,
   plan,
+  grownMemo,
 }: {
+  /** Where the grown estimate is kept between solves (#408) and the time now; absent, solved each call (the report's). */
+  grownMemo?: { memo: GrownEstimateMemo; nowMs: number };
   /** The Bladeburner rule's plan (its view's), for the climb's bound; absent, the forecast's best by rank a second. */
   plan?: BladeburnerActionPlan | null;
   mediumData: MediumSnapshotData | null;
@@ -174,6 +189,29 @@ export function blackOpsRouteOf({
       : input === null || op === null || nextRead === null || rank === null
         ? null
         : blackOpsRouteEstimate(input, { rank, next: op, chanceRead: nextRead.chance, firstToRankSeconds });
+  const combat = mediumData === null ? null : combatPersonOf(mediumData.player);
+  const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode);
+  const solveGrown = (): BlackOpsGrownTime | null =>
+    input === null || op === null || nextRead === null || rank === null || combat === null || costMultiplier === null
+      ? null
+      : blackOpsRouteGrownEstimate(
+          input,
+          // The first one's rank: B6's time to it (B5's stock where solved) where shorter than the growth's tail.
+          {
+            rank,
+            next: op,
+            chanceRead: nextRead.chance,
+            firstToRankSeconds: estimate?.steps[0]?.toRankSeconds ?? null,
+          },
+          { combat, costMultiplier, points: actions?.skills?.points ?? 0 },
+        );
+  const grownKept =
+    done === BLACK_OPS_COUNT
+      ? { value: { steps: [], seconds: 0, rate: 0, path: [], solves: 0 }, atMs: null }
+      : grownMemo === undefined
+        ? { value: solveGrown(), atMs: null }
+        : grownMemo.memo.get(`${bitNode} ${op?.name ?? "none"}`, grownMemo.nowMs, solveGrown);
+  const grown = grownKept.value;
   const first = estimate?.steps[0];
   let rankStallMs: number | null = null;
   let climbRise: number | null = null;
@@ -234,8 +272,14 @@ export function blackOpsRouteOf({
         ? null
         : Math.max(0, BLACK_OPS_LAST_RANK - rank) / rankPerSecond,
     estimate,
+    grown,
+    grownAtMs: grownKept.atMs,
     redPillSeconds,
-    choice: chooseWinRoute({ blackOpsSeconds: estimate?.seconds ?? null, redPillSeconds, soFarSeconds }),
+    choice: chooseWinRoute({
+      blackOpsSeconds: grown?.seconds ?? estimate?.seconds ?? null,
+      redPillSeconds,
+      soFarSeconds,
+    }),
     rankStallMs,
     climbWindowMs,
     climbRise,
@@ -254,6 +298,8 @@ export interface BlackOpsInstallFigures {
     input: Omit<BladeburnerActionInput, "target">;
     at: BlackOpsRouteAt;
     combat: CombatPerson;
+    /** The grown estimate's (#408): the BitNode's skill cost and the points unspent read. */
+    growth: BlackOpsGrowthAt;
     /** A rebuild under way (#407's review): its targets, the levels both of the planner's sides are priced at. */
     levels?: Record<CombatStat, number>;
   } | null;
@@ -270,7 +316,8 @@ export function blackOpsInstallFiguresOf(
   rebuildTargets: Record<CombatStat, number> | null = null,
 ): BlackOpsInstallFigures | null {
   const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
-  if (winRouteOf(bitNode) !== "blackOps" || rankMultiplier === null) return null;
+  const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode);
+  if (winRouteOf(bitNode) !== "blackOps" || rankMultiplier === null || costMultiplier === null) return null;
   const { joined, reading } = bladeburnerSnapshotOf(mediumData);
   if (joined !== true) return null;
   const actions = reading.kind === "read" ? reading.actions : null;
@@ -295,7 +342,39 @@ export function blackOpsInstallFiguresOf(
       },
       at: { rank, next, chanceRead: nextRead.chance },
       combat,
+      growth: { costMultiplier, points: actions.skills?.points ?? 0 },
       ...(rebuildTargets === null ? {} : { levels: rebuildTargets }),
     },
   };
+}
+
+/**
+ * The grown estimate's figures stand this long between solves (#408): it solves the tail's linear programme about 500
+ * times and B3's rule at each step, about 0.15 s at a BN6.1 start (core's bladeburner-growth.test.ts), against a route
+ * of tens of hours, which 10 min of play moves by under 1%, its own step's error (2%). A new Black Op next solves it
+ * at once.
+ */
+export const BLACK_OPS_GROWN_REFRESH_MS = 10 * 60_000;
+
+/**
+ * One grown estimate kept (#408): solved again when its key (the BitNode and the next Black Op) changes, when
+ * `BLACK_OPS_GROWN_REFRESH_MS` has passed since its solve, or when the time goes back (a restart's clock, a new
+ * BitNode); else its figures as of their solve. A null (unread) is never kept.
+ */
+export class GrownEstimateMemo {
+  #kept: { key: string; atMs: number; value: BlackOpsGrownTime } | null = null;
+
+  get(
+    key: string,
+    nowMs: number,
+    solve: () => BlackOpsGrownTime | null,
+  ): { value: BlackOpsGrownTime | null; atMs: number | null } {
+    const kept = this.#kept;
+    if (kept !== null && kept.key === key && nowMs >= kept.atMs && nowMs - kept.atMs < BLACK_OPS_GROWN_REFRESH_MS) {
+      return { value: kept.value, atMs: kept.atMs };
+    }
+    const value = solve();
+    this.#kept = value === null ? null : { key, atMs: nowMs, value };
+    return { value, atMs: value === null ? null : nowMs };
+  }
 }

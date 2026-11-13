@@ -25,6 +25,7 @@ import { BLADEBURNER_ACTIONS_HOLD } from "../src/bladeburner.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
+import { grownHindcast } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -53,6 +54,10 @@ test("BN6.1, an hour from a harness join at rank 2,500: Typhoon done, then Zero 
   const reading = () => (fresh.medium() as MediumSnapshotData | null)?.bladeburner;
   await fresh.game.runUntil(() => reading()?.blackOp !== undefined, 2 * MINUTE);
   const startedAtMs = fresh.game.clock.now();
+  // #408's hindcasts' starts: this reading (Typhoon's rank met), and the first at Zero's rank less 100.
+  const startMedium = fresh.medium() as MediumSnapshotData | null;
+  let zeroMedium: MediumSnapshotData | null = null;
+  let zeroFromMs: number | null = null;
   expect(reading()?.blackOp?.name).toBe(TYPHOON.name);
   console.log(fresh.controller().bladeburnerView().line);
   const events: string[] = [];
@@ -83,6 +88,10 @@ test("BN6.1, an hour from a harness join at rank 2,500: Typhoon done, then Zero 
         note(`the rank set to ${ZERO.rank - 100}`);
       }
       lastNext = next.name;
+    }
+    if (zeroMedium === null && typhoonDoneAtMs !== null && next?.name === ZERO.name && rank >= ZERO.rank - 101) {
+      zeroMedium = fresh.medium() as MediumSnapshotData | null;
+      zeroFromMs = fresh.game.clock.now();
     }
     if (actions == null) continue;
     // The target: the next one's rank, under it.
@@ -121,6 +130,18 @@ test("BN6.1, an hour from a harness join at rank 2,500: Typhoon done, then Zero 
     }
   }
   console.log(`${sent} readings sending a Black Op; ${waited} at its rank waiting (the look-ahead)`);
+  // #408's hindcasts: Typhoon done from its rank, and Zero's rank from 100 under it, against the grown estimate.
+  console.log(
+    grownHindcast("B5's Typhoon", startMedium, (typhoonDoneAtMs ?? Number.NaN) - startedAtMs, "next done").line,
+  );
+  console.log(
+    grownHindcast(
+      "B5's climb to Zero",
+      zeroMedium,
+      (zeroRankAtMs ?? Number.NaN) - (zeroFromMs ?? Number.NaN),
+      ZERO.rank,
+    ).line,
+  );
   // Typhoon done; Zero sent once its rank came, within the readings' cadence.
   expect(typhoonDoneAtMs).not.toBeNull();
   expect(zeroRankAtMs).not.toBeNull();

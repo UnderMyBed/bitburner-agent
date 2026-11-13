@@ -17,7 +17,7 @@
  *   `bladeburner_max_stamina` and `bladeburner_stamina_gain`. The Bladeburners faction sells 18
  *   (`Augmentation/Augmentations.ts:190-300` and on, core's `AUGMENTATIONS`): together ×1.92 on the success chance,
  *   ×1.17 to ×1.23 on the combat levels, ×1.21 on the max stamina and ×1.17 on its regain; The Blade's Simulacrum
- *   ($150b) moves none of them: its value is 0 at flat competence, its focus value left out (it lifts the one focus,
+ *   ($150b) moves none of them: its value is 0 on the route's estimate, its focus value left out (it lifts the one focus,
  *   `Bladeburner.ts:178-180`, so the gym or faction work could run beside the actions; the planner's, later).
  *   NeuroFlux Governor's levels add 1.01 each to the levels and experience.
  * - **The rebuild** (the install's time cost): the brain trains the four combat stats back to their levels before the
@@ -30,25 +30,23 @@
  *   multiplier of 2.5, but it costs $2,400 a second and the player's one focus, and the install leaves $1,000. Training
  *   costs 0.1425 stamina an attempt (`Bladeburner.ts:1095`), under the natural regain's 0.255 at agility 1, so it never
  *   rests. Its time is game seconds (bonus time's ×5 left out: cautious).
- * - **The route after it** (`bladeburnerPersonAfterInstall`, `blackOpsInstallTiming`): B6's estimate
- *   (`blackOpsRouteEstimate`) at the install's person: the rank kept, the combat stats at their levels before, the
- *   success chance and stamina times the gain; the actions' and Black Ops' chances scaled by the competence there over
- *   the competence read, their times, ρ and the stamina computed there.
- * - **The choice:** keeping, B6's estimate now; installing now, the rebuild and the estimate after it; the least, a tie to
- *   keeping (an install is irreversible); installing now only with something to install. Both estimates take the next
- *   one's rank by the tail alone (the counts' stock now left out of both alike). While a rebuild is under way
- *   (`levels`, its targets, #407's review), both are priced at those levels: keeping finishes it (Training from the
- *   levels now) and then B6's estimate there; installing now rebuilds to them from 0 at the gain.
- * - **Biased towards installing, so untrusted until #408** (#407's review): B6's estimate holds the competence flat,
- *   which makes the route about 10³ times too long early on (the skill points a rank of 3 brings alone make it about
- *   ×1,000 faster by rank 400,000, the reviewer's figures), so each augmentation's share of it is overpriced by that
- *   factor against a rebuild that isn't: EsperTech's 7% of a realistic route of about 466 h is 33 h, against a 133 h
- *   rebuild at combat 300, yet it installs. BN6 is unplayable (./bitnodes.ts), so the campaign never runs this live; in
- *   a BN6 entered by hand it installs too eagerly. #408, the competence's growth in the estimate, is what corrects it.
+ * - **The route after it** (`bladeburnerPersonAfterInstall`, `blackOpsInstallTiming`): the route's grown estimate
+ *   (#408, ./bladeburner-growth.ts) at the install's person: the rank, skills and max levels kept, the combat stats at
+ *   their levels before with their experience from 0 at the multipliers times the gain (so the actions' experience
+ *   after it counts the gain), the success chance and stamina times the gain; the actions' and Black Ops' chances
+ *   scaled by the competence there over the competence read, their times, ρ and the stamina computed there.
+ * - **The choice:** keeping, the grown estimate now; installing now, the rebuild and the grown estimate after it; the
+ *   least, a tie to keeping (an install is irreversible); installing now only with something to install. Both take the
+ *   next one's rank by the growth's tail alone (the counts' stock now left out of both alike). While a rebuild is under
+ *   way (`levels`, its targets, #407's review), both are priced at those levels: keeping finishes it (Training from the
+ *   levels now) and then the grown estimate there; installing now rebuilds to them from 0 at the gain.
+ * - **Its bias towards installing is gone** (#408): #407's review found B6's flat estimate made the route about 10³
+ *   times too long, so an augmentation's share of it was overpriced against a rebuild that isn't (EsperTech's 7% of
+ *   the route against a 133 h rebuild at combat 300, installed). On the grown estimate the route is 78.6 h there,
+ *   EsperTech's value within the estimate's own step (−0.4%), and keeping is chosen; the Bladeburners' shop at combat
+ *   100, its rebuild half an hour against 30 h saved, is installed (core's bladeburner-growth.test.ts).
  * Left out, and labelled:
- * - the competence's rise over the route on either side (B6's estimate holds it): the stats the actions and Training add
- *   after the rebuild, and the level multipliers' share of that later experience (×gain); on balance towards
- *   installing, as above;
+ * - the grown estimate's own (./bladeburner-growth.ts), on both sides alike;
  * - hacking and charisma, which the install also resets: taken at 1 after it (nothing in the route rebuilds them on
  *   purpose), against installing; their weights are small (the contracts' charisma 0.1, hacking 0);
  * - the rank the actions gain during the rebuild (Training gains none, `Bladeburner.ts:1094-1105`), cautious;
@@ -67,7 +65,7 @@ import {
   trainingExpPerAttempt,
 } from "./bladeburner-actions.ts";
 import type { BladeburnerBlackOp } from "./bladeburner-black-ops.ts";
-import { type BlackOpsRouteTime, blackOpsRouteEstimate } from "./bladeburner-route.ts";
+import { blackOpsRouteGrownEstimate } from "./bladeburner-growth.ts";
 
 /** What an install gives the route (#404): each combat stat's level and experience multiplier, and Bladeburner's. */
 export interface BladeburnerInstallGain {
@@ -197,11 +195,11 @@ export interface BlackOpsRouteAt {
 
 /** The planner's install timing on the Black Ops' route (#404): each candidate's estimate, game seconds, and the choice. */
 export interface BlackOpsInstallTiming {
-  /** Keeping the cycle: B6's estimate now (Infinity: never at the competence now). */
+  /** Keeping the cycle: the route's grown estimate now (#408; Infinity: never). */
   keepSeconds: number;
   /** The rebuild after installing now (`bladeburnerRebuildSeconds` from 0, at the gain). */
   rebuildSeconds: number;
-  /** B6's estimate at the install's person, after the rebuild. */
+  /** The route's grown estimate at the install's person, after the rebuild. */
   afterSeconds: number;
   /** Installing now: the rebuild and the estimate after it; null with nothing to install. */
   installNowSeconds: number | null;
@@ -210,22 +208,58 @@ export interface BlackOpsInstallTiming {
   gain: BladeburnerInstallGain;
 }
 
-/** B6's estimate at the input's person, or at `forecast`, the next one's rank by the tail alone (#404). */
-function routeSeconds(
-  input: Omit<BladeburnerActionInput, "target">,
-  at: BlackOpsRouteAt,
-  forecast?: BladeburnerPerson,
-): BlackOpsRouteTime {
-  return blackOpsRouteEstimate(forecast === undefined ? input : { ...input, forecast }, {
-    ...at,
-    firstToRankSeconds: null,
-  });
+/** What the grown estimate reads beside B6's (#408): the BitNode's skill cost and the skill points unspent. */
+export interface BlackOpsGrowthAt {
+  costMultiplier: number;
+  points?: number;
 }
 
 /**
- * The planner's install timing on the Black Ops' route (#404, see above): keep (B6's estimate now) against install now
- * (the rebuild at `gain`, then B6's estimate at the person after it), the least chosen, a tie to keeping; installing
- * now only with something to install (`installable`). Game seconds.
+ * `combat` with each stat at `levels` at least (#407's review: a rebuild's targets, its experience the least for them),
+ * and its level and experience multipliers times `gain` (#408: an install's, its experience from 0).
+ */
+function combatAt(
+  combat: CombatPerson,
+  levels: Readonly<Record<CombatStat, number>>,
+  gain: Readonly<BladeburnerInstallGain> | null,
+): CombatPerson {
+  const skills = { ...combat.skills };
+  const exp = { ...combat.exp };
+  const mults = { ...combat.mults };
+  for (const stat of COMBAT_STATS) {
+    mults[stat] = combat.mults[stat] * (gain?.levels[stat] ?? 1);
+    mults[`${stat}_exp`] = combat.mults[`${stat}_exp`] * (gain?.exp[stat] ?? 1);
+    const level = gain === null ? Math.max(skills[stat], levels[stat]) : levels[stat];
+    const least = level <= 1 ? 0 : skillExpFor(level, mults[stat]);
+    skills[stat] = level;
+    exp[stat] = gain === null ? Math.max(exp[stat], least) : least;
+  }
+  return { skills, exp, mults };
+}
+
+/**
+ * The route's grown estimate (#408, ./bladeburner-growth.ts) at the input's person, or at `forecast` with its combat
+ * figures `combat`; the next one's rank by the growth's tail alone (B5's stock now left out of both sides alike).
+ */
+function routeSeconds(
+  input: Omit<BladeburnerActionInput, "target">,
+  at: BlackOpsRouteAt,
+  combat: CombatPerson,
+  growth: BlackOpsGrowthAt,
+  forecast?: BladeburnerPerson,
+): number {
+  return blackOpsRouteGrownEstimate(forecast === undefined ? input : { ...input, forecast }, at, {
+    combat,
+    costMultiplier: growth.costMultiplier,
+    points: growth.points ?? 0,
+  }).seconds;
+}
+
+/**
+ * The planner's install timing on the Black Ops' route (#404, see above): keep (the grown estimate now, #408) against
+ * install now (the rebuild at `gain`, then the grown estimate at the person after it, its experience from 0 at the
+ * multipliers times the gain), the least chosen, a tie to keeping; installing now only with something to install
+ * (`installable`). Game seconds.
  */
 export function blackOpsInstallTiming({
   input,
@@ -234,6 +268,7 @@ export function blackOpsInstallTiming({
   gain,
   installable,
   levels,
+  growth,
 }: {
   input: Omit<BladeburnerActionInput, "target">;
   at: BlackOpsRouteAt;
@@ -242,41 +277,60 @@ export function blackOpsInstallTiming({
   installable: boolean;
   /** A rebuild under way (#407's review): its targets, the levels both sides are priced at. Absent, the levels now. */
   levels?: Readonly<Record<CombatStat, number>>;
+  growth: BlackOpsGrowthAt;
 }): BlackOpsInstallTiming {
   const priced = levels === undefined ? input.person : personAtLevels(input.person, levels);
   // Keeping finishes a rebuild under way first (Training from the levels now), then the route at its targets.
   const finish = levels === undefined ? 0 : bladeburnerRebuildSeconds(combat, { targets: levels }).seconds;
-  const keepSeconds = finish + routeSeconds(input, at, levels === undefined ? undefined : priced).seconds;
-  const rebuildSeconds = bladeburnerRebuildSeconds(combat, {
-    targets: levels ?? combat.skills,
-    gain,
-    fromZero: true,
-  }).seconds;
-  const afterSeconds = routeSeconds(input, at, bladeburnerPersonAfterInstall(priced, gain)).seconds;
+  const keepSeconds =
+    finish +
+    (levels === undefined
+      ? routeSeconds(input, at, combat, growth)
+      : routeSeconds(input, at, combatAt(combat, levels, null), growth, priced));
+  const targets = levels ?? combat.skills;
+  const rebuildSeconds = bladeburnerRebuildSeconds(combat, { targets, gain, fromZero: true }).seconds;
+  const afterSeconds = routeSeconds(
+    input,
+    at,
+    combatAt(combat, targets, gain),
+    growth,
+    bladeburnerPersonAfterInstall(priced, gain),
+  );
   const installNowSeconds = installable ? rebuildSeconds + afterSeconds : null;
   const choice = installNowSeconds !== null && installNowSeconds < keepSeconds ? "install" : "keep";
   return { keepSeconds, rebuildSeconds, afterSeconds, installNowSeconds, choice, gain };
 }
 
 /**
- * Each augmentation's value on the route (#404): B6's estimate after an install of nothing (hacking and charisma at 1,
- * the combat stats rebuilt) less B6's estimate after an install of it alone (its gain, `bladeburnerInstallGain`), game
- * seconds saved, the rebuild left out (the install's, common to a set). 0 for one that moves none of the route's
- * multipliers; NaN where both are never.
+ * Each augmentation's value on the route (#404): the grown estimate (#408) after an install of nothing (hacking and
+ * charisma at 1, the combat stats rebuilt) less the grown estimate after an install of it alone (its gain,
+ * `bladeburnerInstallGain`), game seconds saved, the rebuild left out (the install's, common to a set). 0 for one that
+ * moves none of the route's multipliers; NaN where both are never.
  */
 export function bladeburnerAugmentationValues({
   input,
   at,
+  combat,
+  growth,
   augmentations,
 }: {
   input: Omit<BladeburnerActionInput, "target">;
   at: BlackOpsRouteAt;
+  combat: CombatPerson;
+  growth: BlackOpsGrowthAt;
   augmentations: readonly string[];
 }): { augmentation: string; savedSeconds: number }[] {
-  const now = routeSeconds(input, at, bladeburnerPersonAfterInstall(input.person, NO_INSTALL_GAIN)).seconds;
-  return augmentations.map((augmentation) => {
-    const gain = bladeburnerInstallGain(0, [augmentation]);
-    const after = routeSeconds(input, at, bladeburnerPersonAfterInstall(input.person, gain)).seconds;
-    return { augmentation, savedSeconds: now - after };
-  });
+  const after = (gain: BladeburnerInstallGain) =>
+    routeSeconds(
+      input,
+      at,
+      combatAt(combat, combat.skills, gain),
+      growth,
+      bladeburnerPersonAfterInstall(input.person, gain),
+    );
+  const now = after(NO_INSTALL_GAIN);
+  return augmentations.map((augmentation) => ({
+    augmentation,
+    savedSeconds: now - after(bladeburnerInstallGain(0, [augmentation])),
+  }));
 }

@@ -66,6 +66,7 @@ import {
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
   bladeburnerStepRise,
+  bladeburnerSustainableMix,
   bladeburnerSustainableRate,
 } from "./bladeburner-targets.ts";
 
@@ -805,6 +806,43 @@ export function bladeburnerTailRate(input: BladeburnerActionInput): number {
   return bladeburnerSustainableRate(supply, first.step === null ? first.plan.rankPerSecond : 0);
 }
 
+/** One action worked in the tail's mix (#408): its level, an attempt's chance, seconds and rise, its attempts a second. */
+export interface BladeburnerTailWork {
+  type: BladeburnerLevelledType;
+  name: string;
+  level: number;
+  chance: number;
+  attemptSeconds: number;
+  attemptsPerSecond: number;
+  /** An attempt's mean rank with its share of its rest's (the cycle's rise, `bladeburnerStepRise`). */
+  rise: number;
+}
+
+/**
+ * The tail's mix at `input` (#408): `bladeburnerTailRate`'s linear programme's primal (core's
+ * `bladeburnerSustainableMix`), each action worked, at its level, and its attempts a second; the rest of the second
+ * resting alone. `rate` is the primal's, the tail rate's within the dual's bracket.
+ */
+export function bladeburnerTailMix(input: BladeburnerActionInput): { rate: number; work: BladeburnerTailWork[] } {
+  const { candidates, supply } = planCandidates(input);
+  const first = candidates[0] as PlanCandidate;
+  const { rate, parts } = bladeburnerSustainableMix(supply, first.step === null ? first.plan.rankPerSecond : 0);
+  const work = parts.map(({ source, option, perSecond }): BladeburnerTailWork => {
+    const each = supply[source] as BladeburnerRankSource;
+    const way = each.options[option] as Required<BladeburnerRankSource["options"][number]>;
+    return {
+      type: each.type as BladeburnerLevelledType,
+      name: each.name as string,
+      level: way.level,
+      chance: way.chance,
+      attemptSeconds: way.attemptSeconds,
+      attemptsPerSecond: perSecond,
+      rise: way.rise,
+    };
+  });
+  return { rate, work };
+}
+
 /** `chooseBladeburnerAction`'s input. */
 export type BladeburnerActionInput = Parameters<typeof planCandidates>[0];
 
@@ -886,8 +924,8 @@ function planCandidates({
     const action = bladeburnerLevelledAction(read.type, read.name);
     if (action === null) continue;
     if (city !== undefined && !city.raid && action.name === "Raid") continue;
-    const options: { rise: number; seconds: number }[] = [];
-    supply.push({ growthPerSecond: countGrowthPerSecond(action), options });
+    const options: { rise: number; seconds: number; level: number; chance: number; attemptSeconds: number }[] = [];
+    supply.push({ growthPerSecond: countGrowthPerSecond(action), options, type: action.type, name: action.name });
     const readCompetence = actionSkillCompetence(action, person, readMults);
     const skillRatio =
       !scaled || !(readCompetence > 0) ? 1 : (actionSkillCompetence(action, at, mults) / readCompetence) * personRatio;
@@ -916,7 +954,13 @@ function planCandidates({
           duty,
           restRankPerSecond: rest.rankPerSecond,
         });
-        options.push({ rise: bladeburnerStepRise(cycleStep), seconds: cycleStep.seconds });
+        options.push({
+          rise: bladeburnerStepRise(cycleStep),
+          seconds: cycleStep.seconds,
+          level,
+          chance,
+          attemptSeconds: seconds,
+        });
         if (short) continue;
         // Its count bounds its attempts (#386's amendment): the next-best's after them (`fastestToTarget`).
         const step = {
@@ -1125,8 +1169,79 @@ export function chooseBladeburnerSkills(
     levels,
     points,
     costMultiplier,
-    rankPerSecond: (planned) => chooseBladeburnerAction({ ...input, skills: { read: levels, planned } }).rankPerSecond,
+    rankPerSecond: bladeburnerForecastRater(input, levels),
   });
+}
+
+/**
+ * B3's forecast (#408: the route's estimate runs B3's rule at each step): `chooseBladeburnerAction`'s rank a second at
+ * skill levels `planned` over `read`, the same figure to the bit (tested), with what the skills don't move (each
+ * level's rank, loss and stamina) worked out once a reading, and no plan built: the most of resting alone and each
+ * contract's and operation's cycle at each level and rest, its count not short.
+ */
+export function bladeburnerForecastRater(
+  { readings, person, stamina, maxStamina, rankMultiplier, speed, city, forecast }: BladeburnerForecastInput,
+  read: BladeburnerSkillLevels,
+): (planned: BladeburnerSkillLevels) => number {
+  const readMults = bladeburnerSkillMultsOf(read);
+  const at = forecast ?? person;
+  const penalty = staminaPenalty(stamina, maxStamina);
+  const personRatio = forecast === undefined ? 1 : personCompetenceFactor(forecast) / personCompetenceFactor(person);
+  const rows = readings.flatMap((reading) => {
+    const action = bladeburnerLevelledAction(reading.type, reading.name);
+    if (action === null || (city !== undefined && !city.raid && action.name === "Raid")) return [];
+    const levels: { level: number; baseTime: number; gain: number; loss: number; cost: number }[] = [];
+    for (let level = 1; level <= Math.max(1, reading.maxLevel); level++) {
+      levels.push({
+        level,
+        baseTime: actionDifficulty(action, level) / BLADEBURNER_CONSTANTS.difficultyToTimeFactor,
+        gain: actionRankGain(action, level, rankMultiplier),
+        loss: actionRankLoss(action, level),
+        cost: actionStaminaCost(action, level),
+      });
+    }
+    return [{ action, reading, readCompetence: actionSkillCompetence(action, person, readMults), levels }];
+  });
+  return (planned) => {
+    const mults = bladeburnerSkillMultsOf(planned);
+    const maxPlanned = maxStaminaAtSkills(person, maxStamina, readMults, mults, at);
+    const regain = staminaGainPerSecond(at, maxPlanned, mults);
+    const rests = bladeburnerRests(regain, maxPlanned, rankMultiplier);
+    const worthResting = rests.filter(
+      (rest) =>
+        !rests.some(
+          (other) =>
+            other !== rest &&
+            other.staminaPerSecond >= rest.staminaPerSecond &&
+            other.rankPerSecond >= rest.rankPerSecond &&
+            (other.staminaPerSecond > rest.staminaPerSecond || other.rankPerSecond > rest.rankPerSecond),
+        ),
+    );
+    let best = rests.reduce((most, each) => (each.rankPerSecond > most.rankPerSecond ? each : most)).rankPerSecond;
+    const statFactor = actionStatFactor(at, mults);
+    for (const { action, reading, readCompetence, levels } of rows) {
+      const skillRatio = !(readCompetence > 0)
+        ? 1
+        : (actionSkillCompetence(action, at, mults) / readCompetence) * personRatio;
+      const ratio = skillRatio * (city?.ratio ?? 1);
+      for (const { level, baseTime, gain, loss, cost } of levels) {
+        const chance = chanceLowAt(action, reading, level, penalty, ratio);
+        if (chance === null) continue;
+        const seconds = Math.ceil(Math.max(1, (baseTime * mults.actionTime) / statFactor));
+        if (reading.count < 1 + (BLADEBURNER_READING_SECONDS * speed) / seconds) continue;
+        const rate = (chance * gain - (1 - chance) * loss) / seconds;
+        const drain = cost / seconds - regain;
+        for (const rest of worthResting) {
+          const duty =
+            drain <= 0 ? 1 : rest.staminaPerSecond > 0 ? rest.staminaPerSecond / (drain + rest.staminaPerSecond) : 0;
+          if (duty === 0) continue;
+          const cycle = duty * rate + (1 - duty) * rest.rankPerSecond;
+          if (cycle > best) best = cycle;
+        }
+      }
+    }
+    return best;
+  };
 }
 
 /**

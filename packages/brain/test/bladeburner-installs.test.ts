@@ -374,7 +374,7 @@ describe("the controller (#404): the planner's install timing on the Black Ops' 
     return { controller, send, last, lines, play, installAsked };
   }
 
-  test("install now: EsperTech queued at combat 100 (the route's 5 million h against its rebuild's 3 h): at once", () => {
+  test("install now: EsperTech queued at combat 100 (it saves the grown route more than its rebuild's 3 h): at once", () => {
     const { controller, play, installAsked } = connected();
     const events: { type: string; reason?: string; timing?: InstallTimingView }[] = [];
     controller.subscribe((event) => events.push(event as (typeof events)[number]));
@@ -389,11 +389,43 @@ describe("the controller (#404): the planner's install timing on the Black Ops' 
     expect(view?.rebuildMs).toBeCloseTo(skillExpFor(100, 1) * 1000, 0);
     expect(view?.installNowMs as number).toBeLessThan(view?.keepMs as number);
     expect(view?.gain.successChance).toBe(1.03);
-    expect(timing?.words).toContain("the Black Ops' route (#404), B6's estimate of the time to the destroy: keep ");
+    expect(timing?.words).toContain(
+      "the Black Ops' route (#404), the grown estimate of the time to the destroy (#408): keep ",
+    );
     expect(events.filter((event) => event.type === "augmentationInstallChosen")).toEqual([
       expect.objectContaining({ reason: "the Black Ops' route" }),
     ]);
     expect(installAsked()).toBe(true);
+  });
+
+  test("its figures solved again 10 min of game time on, or at a new Black Op next (#408: the grown estimate's cost)", () => {
+    const { controller, play } = connected();
+    const keepMs = () => controller.augmentationsView().progress?.timing?.blackOps?.keepMs;
+    const bitWire = () => slow(6, { queued: ["BitWire"] });
+    play(1, bitWire, () => medium(100));
+    const first = keepMs();
+    expect(first).toEqual(expect.any(Number));
+    // Within 10 min the figures stand, the rank risen or not.
+    play(5, bitWire, () => medium(100, { rank: 2000 }), HOUR + 60_000);
+    expect(keepMs()).toBe(first);
+    // 10 min on, solved again: the rank risen (its points not read here, so fewer to come).
+    play(10, bitWire, () => medium(100, { rank: 2000 }), HOUR + 6 * 60_000);
+    const again = keepMs() as number;
+    expect(again).not.toBe(first);
+    // A new Black Op next: solved again at once.
+    const zero = BLADEBURNER_BLACK_OPS[1] as (typeof BLADEBURNER_BLACK_OPS)[number];
+    const chance = blackOpSuccessChance(zero, personAt(100), { penalty: 1 });
+    play(
+      1,
+      bitWire,
+      () => {
+        const data = medium(100, { rank: 2600 });
+        (data.bladeburner as { blackOp: unknown }).blackOp = { name: zero.name, chance: [chance, chance] };
+        return data;
+      },
+      HOUR + 16 * 60_000,
+    );
+    expect(keepMs()).not.toBe(again);
   });
 
   test("keep: a hacking augmentation alone (its rebuild for nothing on the route): no install, decided at each update", () => {

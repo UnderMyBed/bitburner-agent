@@ -511,6 +511,18 @@ describe("BN6's route, the Black Ops' (#398)", () => {
     expect(estimate).toMatchObject({ remainingMs: 600 * MINUTE, totalMs: 720 * MINUTE, atLeast: false, never: false });
     // Daedalus's 35 and w0r1d_d43m0n's 6,000 as BN6 has them, for the record.
     expect(estimate).toMatchObject({ required: 35, requiredLevel: 6000 });
+    // With the competence's growth (#408): said so, its step erring long.
+    const grown = destroyEstimate({
+      ...bn6,
+      blackOps: { done: 3, ms: 60 * MINUTE, grown: true, redPillMs: 1e73, choice },
+    });
+    expect(grown.terms[0]).toMatchObject({ term: "BO", ms: 60 * MINUTE, label: "cautious" });
+    expect(grown.terms[0]?.source).toContain(
+      "3 of 21 done; with the competence's growth (#408): each step of rank at ρ there, the skills its points buy by " +
+        "B3's rule, the stats the actions' experience gives and the levels their successes open, each one's attempts " +
+        "at the competence then (cautious on balance: its step errs long;",
+    );
+    expect(grown.terms[0]?.source).not.toContain("its rise left out");
   });
 
   test("none before the division's reading (at least); never at a chance of 0 now; 0 with all 21 done", () => {

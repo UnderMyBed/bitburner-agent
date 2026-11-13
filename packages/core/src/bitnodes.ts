@@ -191,21 +191,27 @@ export function knownBitNodes(): number[] {
  * level multiplier of 0.35 (`BitNode.tsx:694-769`), 17,143 at ×1, against BN4's 9,000. BN6's is built (B6, #398), and
  * its installs (B7, #404), but BN6 is played only once the route's estimate with installs is within the campaign's bar:
  * ×2 the slowest destroy measured so far (BN4.1's 27 h 5 min online, the campaign report of 2026-11-12), 54 h 10 min.
- * At B6's BN6.1 states (rank 0, no skills) the estimate with the Bladeburners faction's whole shop installed is
- * 1,023,000 h at combat 100 and 117,400 h at 300; with every augmentation in the game that moves the route's
- * multipliers, an upper bound (BigD's Big ... Brain among them, sold by no faction in BN6), 165,100 h and 27,090 h (core's
- * bladeburner-installs.test.ts). Far past: B6's estimate holds the
- * competence (the skill points a rank of 3 brings, the stats the actions add), cautious on balance, so a later slice's
- * estimate of that rise decides it. BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is
- * B8's.
+ * The estimate counts the competence's growth along the route since #408 (./bladeburner-growth.ts: the skills from the
+ * rank, the stats from the actions, the levels from the successes). At B7's BN6.1 states (rank 0, no skills) it is
+ * 98.2 h at combat 100 and 78.6 h at 300; with the Bladeburners faction's whole shop installed, 67.7 h at combat 100
+ * (its rebuild half an hour) and 104.8 h at 300 (its rebuild 42 h, so keeping's 78.6 h is the better); with every
+ * augmentation in the game that moves the route's multipliers, an upper bound (BigD's Big ... Brain among them, sold by
+ * no faction in BN6, and none of their prices counted), 31.0 h (core's bladeburner-growth.test.ts). So 67.7 h at
+ * best, ×1.25 the bar: still past it. What's left, each a later slice's: the other factions' augmentations that move
+ * the route (the upper bound's 31 h) and the money for them; more than one install; the Black Ops' own chances (B3's
+ * rule buys the skills for the actions' rank a second, so the last Black Ops run at 5% and their attempts are a large
+ * part of the route); teams. BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is B8's.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
-  [6, "no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404)"],
+  [
+    6,
+    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408)",
+  ],
   [7, "no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8)"],
 ]);
 /** Why BN7 is skipped until Bladeburner's B8 (#367, #398). */
 export const BITNODE_NO_WIN_ROUTE_REASON = NO_WIN_ROUTE.get(7) as string;
-/** Why BN6 is skipped (#398, #404): the Black Ops' estimate with installs past the campaign's bar. */
+/** Why BN6 is skipped (#398, #404, #408): the Black Ops' grown estimate past the campaign's bar, the shop installed. */
 export const BITNODE_BLACK_OPS_ESTIMATE_REASON = NO_WIN_ROUTE.get(6) as string;
 
 /** The BitNodes the brain plays (#323): those core knows (`knownBitNodes`) with a win route (#367), in order. */
