@@ -9,9 +9,12 @@
 // - Typhoon run at its rank: one attempt, its stamina and rank, the action stopped after it, and its count 0 once done;
 //   Zero's count 1 then.
 import {
+  actionRankGain,
+  actionRankLoss,
   actionSuccessRange,
   BLACK_OPERATIONS,
   BLADEBURNER_BLACK_OPS,
+  BLADEBURNER_LEVELLED_ACTIONS,
   type BladeburnerPerson,
   type BladeburnerSkillLevels,
   blackOpRankGain,
@@ -20,7 +23,9 @@ import {
   blackOpStaminaCost,
   blackOpSuccessChance,
   bladeburnerBlackOp,
+  bladeburnerLevelledAction,
   bladeburnerPersonOf,
+  bladeburnerRankMultiplierOf,
   bladeburnerSkillMultsOf,
   skillExpFor,
   staminaGainPerSecond,
@@ -213,4 +218,47 @@ for (let tick = 0; tick < 2000; tick++) {
     `Typhoon at rank 3,000: ${after.count === 0 ? "done" : "failed"}, rank ${before.rank.toFixed(2)} → ` +
       `${after.rank.toFixed(2)}; ${compared} ranges compared inside (0, 1)`,
   );
+}, 240_000);
+
+test("BN7 (#395's review): every Black Op's and action's rank × its BladeburnerRank 0.6, the losses unscaled", async () => {
+  const sim = await start({
+    seed: 1,
+    epochMs: Date.UTC(2026, 0, 1),
+    fixture: { kind: "bitnode", n: 7, sourceFiles: { 1: 3, 5: 1 } },
+  });
+  await sim.diagnostics.setHomeRam(128);
+  await sim.diagnostics.gainCombatExp(skillExpFor(400, 1.28));
+  const joined = await runScript(sim, "out(ns.bladeburner.joinBladeburnerDivision());");
+  expect(joined.out).toEqual([true]);
+  const multiplier = bladeburnerRankMultiplierOf(7);
+  expect(multiplier).toBe(0.6);
+  const actions = JSON.stringify([
+    ...BLADEBURNER_BLACK_OPS.map((op) => ({ type: BLACK_OPERATIONS, name: op.name })),
+    ...BLADEBURNER_LEVELLED_ACTIONS.map(({ type, name }) => ({ type, name })),
+  ]);
+  const { out, log } = await runScript(
+    sim,
+    `out(${actions}.map(({ type, name }) => ({
+  type,
+  name,
+  gain: ns.bladeburner.getActionRankGain(type, name, 3),
+  loss: ns.bladeburner.getActionRankLoss(type, name, 3),
+})));`,
+  );
+  expect(log.filter((line) => !line.startsWith("out:"))).toEqual([]);
+  const read = out[0] as { type: string; name: string; gain: number; loss: number }[];
+  expect(read).toHaveLength(21 + BLADEBURNER_LEVELLED_ACTIONS.length);
+  for (const each of read) {
+    const op = each.type === BLACK_OPERATIONS ? bladeburnerBlackOp(each.name) : null;
+    const action = op === null ? bladeburnerLevelledAction(each.type, each.name) : null;
+    if (op !== null) {
+      expect(blackOpRankGain(op, multiplier as number), `${each.name}'s gain`).toBeCloseTo(each.gain, 9);
+      expect(blackOpRankLoss(op), `${each.name}'s loss`).toBeCloseTo(each.loss, 9);
+    } else if (action !== null) {
+      // Level 3 asked of the API: the gain × rewardFac² × 0.6, the loss × rewardFac², not scaled.
+      expect(actionRankGain(action, 3, multiplier as number), `${each.name}'s gain`).toBeCloseTo(each.gain, 9);
+      expect(actionRankLoss(action, 3), `${each.name}'s loss`).toBeCloseTo(each.loss, 9);
+    } else throw new Error(`no ${each.name}`);
+  }
+  console.log(`BN7: ${read.length} ranks gained and lost compared at BladeburnerRank ${multiplier}`);
 }, 240_000);

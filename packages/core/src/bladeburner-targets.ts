@@ -148,7 +148,9 @@ export interface BladeburnerRankStep {
   /**
    * After its attempts with no `next` (#392's decision): the rest of the walk at this rank a second, the sustainable
    * rate (`bladeburnerSustainableRate`), (target − x)/rate from where the stock left it (Wald's identity: Durrett,
-   * Theorem 4.8.6, a far target's first passage the distance over the drift).
+   * Theorem 4.8.6, a far target's first passage the distance over the drift). Left out, and labelled (#395's review):
+   * the tail's own spread (its variance moves no mean, as the tail is linear in the rank) and its overshoot past the
+   * target (at most a step: the time's error at most a step's seconds), and its floor (none: the tail is far from 0).
    */
   tailRate?: number;
 }
@@ -172,37 +174,66 @@ export function bladeburnerAttemptsInCount(count: number, growthPerSecond: numbe
   return count < 1 ? 0 : Math.floor(1 + (count - 1) / net);
 }
 
-/** An action's long-run supply (#392): its best plan's rank a second of cycle time, an attempt's cycle seconds, and its
- * count's mean growth a second. */
+/**
+ * An action's long-run supply (#392): its count's mean growth a second, and each way to work it (a level and a rest):
+ * an attempt's mean rise with its share of the rest (`rise`) over its cycle seconds (`seconds`).
+ */
 export interface BladeburnerRankSource {
-  rankPerSecond: number;
-  seconds: number;
   growthPerSecond: number;
+  options: readonly { rise: number; seconds: number }[];
 }
 
 /**
  * The sustainable rank a second once the counts are spent (#392's decision): each action's count regrows its mean
  * growth a second (`Bladeburner.ts:1388-1393`, `growthFunction`'s range over 10 each 480 s, core's
- * `countGrowthPerSecond`), so in the long run it can be attempted that often, each attempt its plan's cycle seconds
- * (the attempt and its share of the rests: the stamina's). The second's budget is filled greedily by rank a second of
- * that time, the most first (a fractional knapsack, which the greedy order solves: Dantzig, "Discrete-variable extremum
- * problems", Operations Research 5, 1957), each action up to its growth × its cycle seconds, what's left resting alone
- * (`restRankPerSecond`, Field Analysis's). Left out, and labelled: the regrowth's randomness (a tenth of a random
- * integer a second, its mean taken) and the chances' change over the tail (the levels opened, the skills bought).
+ * `countGrowthPerSecond`), so in the long run it can be attempted that often, each attempt one of its ways (a level and
+ * a rest: its cycle's seconds with its share of the stamina's rests, and its rise with the rest's rank). A second is the
+ * budget, what's left of it resting alone (`restRankPerSecond`, Field Analysis's). The best mix is a linear programme:
+ * the most Σ xₒ·riseₒ + r₀·(1 − Σ xₒ·secondsₒ) with each action's attempts a second Σ xₒ at most its growth and the
+ * time Σ xₒ·secondsₒ at most 1. Its dual (#395's review: one way an action, a greedy fill by rank a second is optimal,
+ * but levels trade rise against time) is the least over λ ≥ r₀ of λ + Σₐ growthₐ·max(0, maxₒ(riseₒ − λ·secondsₒ)):
+ * λ the second's worth, each action worked its best way against it (Bertsimas and Tsitsiklis, "Introduction to Linear
+ * Optimization", 1997, §4.2, strong duality). Convex and piecewise linear in λ, so its least is where its slope,
+ * 1 − Σ growthₐ·secondsₒ of the ways worked, turns from negative: bisected. Left out, and labelled: the regrowth's
+ * randomness (a tenth of a random integer a second, its mean taken) and the chances' change over the tail (the levels
+ * opened, the skills bought).
  */
 export function bladeburnerSustainableRate(
   sources: readonly BladeburnerRankSource[],
   restRankPerSecond: number,
 ): number {
-  let budget = 1;
-  let rate = 0;
-  for (const source of [...sources].sort((a, b) => b.rankPerSecond - a.rankPerSecond)) {
-    if (!(source.rankPerSecond > restRankPerSecond) || !(budget > 0)) break;
-    const share = Math.min(budget, source.growthPerSecond * source.seconds);
-    rate += share * source.rankPerSecond;
-    budget -= share;
+  const floor = Math.max(0, restRankPerSecond);
+  const value = (lambda: number) => {
+    let total = lambda;
+    let slope = 1;
+    for (const { growthPerSecond, options } of sources) {
+      let best = 0;
+      let seconds = 0;
+      for (const option of options) {
+        const worth = option.rise - lambda * option.seconds;
+        if (worth > best) {
+          best = worth;
+          seconds = option.seconds;
+        }
+      }
+      total += growthPerSecond * best;
+      slope -= growthPerSecond * seconds;
+    }
+    return { total, slope };
+  };
+  // Past the best way's rise a second, no action is worth working: the slope 1.
+  let high = floor;
+  for (const { options } of sources) {
+    for (const option of options) if (option.seconds > 0) high = Math.max(high, option.rise / option.seconds);
   }
-  return rate + Math.max(0, budget) * Math.max(0, restRankPerSecond);
+  if (!(value(floor).slope < 0)) return value(floor).total;
+  let low = floor;
+  for (let step = 0; step < 100; step++) {
+    const middle = (low + high) / 2;
+    if (value(middle).slope < 0) low = middle;
+    else high = middle;
+  }
+  return Math.min(value(low).total, value(high).total);
 }
 
 /** Resting alone at `rankPerSecond` (Field Analysis's) as a walk's step: 30 s of it, no attempt. */
@@ -290,6 +321,9 @@ export function bladeburnerSecondsToRank(step: BladeburnerRankStep, rank: number
       ? tailSeconds(step, rank, target)
       : bladeburnerSecondsToRank(step.next, rank, target);
   }
+  // Far from both the target and the floor (#395's review: the chain's cost), the stock in closed form.
+  const closed = stockInClosedForm(step, rank, target);
+  if (closed !== null) return closed;
   // Each walk on its own grid, by its own steps, over the one window (the next-best's taken onto the first's).
   const bounded = attempts < Number.POSITIVE_INFINITY;
   // The next-best, and (#392) what follows its own count: the window under them all.
@@ -395,6 +429,76 @@ export function bladeburnerSecondsToRank(step: BladeburnerRankStep, rank: number
     if (mass !== 0) after += mass * nextAt(grid.low + (i / cells) * (target - grid.low));
   }
   return seconds + after;
+}
+
+/**
+ * How unlikely a stock's reaching the target or the floor must be for its closed form (#395's review): 1e-9, so the
+ * time it leaves out is at most that share of the walk's.
+ */
+export const BLADEBURNER_STOCK_ALPHA = 1e-9;
+
+/**
+ * A stock that won't reach the target nor the floor, in closed form (#395's review: the chain's cost at a far target):
+ * a sequence of counted walks ending in the analytic tail. Its rank's path, centred, is a martingale with each attempt
+ * at most `up` over its mean and `down` under it (a success's or a failure's at the ±10%'s top, and the rest), its
+ * variances summing to V; by Freedman's inequality (Freedman, "On tail probabilities for martingales", 1975, a maximal
+ * Bernstein) its highest point passes its mean drift by t with chance at most exp(−t²/(2(V + b·t/3))), b the larger
+ * step. With that t at `BLADEBURNER_STOCK_ALPHA` on each side and the drift's own highest and lowest, or with every
+ * attempt at its own most (all successes, or all failures, at the ±10%'s top), the path stays under the target and over
+ * 0: no attempt absorbed or floored. Then its time is its attempts' seconds and the tail's from
+ * its mean end, the tail linear in the rank: Σ kᵢ·sᵢ + (target − rank − Σ kᵢ·μᵢ)/rate, μᵢ a step's mean rise
+ * (`bladeburnerStepRise`; Wald's identity over a fixed number of steps), which the chain would give for a grid's work
+ * (each landing split to keep its mean, the tail linear). Null where it doesn't apply.
+ */
+function stockInClosedForm(step: BladeburnerRankStep, rank: number, target: number): number | null {
+  let variance = 0;
+  let up = 0;
+  let down = 0;
+  let seconds = 0;
+  let mean = 0;
+  let highest = 0;
+  let lowest = 0;
+  // The path's own most: each attempt a success, or a failure, at the ±10%'s top.
+  let most = 0;
+  let least = 0;
+  for (let each: BladeburnerRankStep | undefined = step; ; each = each.next) {
+    if (each === undefined) return null;
+    const attempts = each.attempts ?? Number.POSITIVE_INFINITY;
+    if (!(attempts < Number.POSITIVE_INFINITY)) return null;
+    const count = Math.max(0, Math.floor(attempts));
+    const chance = Math.min(1, each.chance);
+    const rise = bladeburnerStepRise(each);
+    // E[U²] for U uniform on [0.9, 1.1]: 1 + 0.1²/3.
+    const square =
+      (chance * (each.gain + 0) ** 2 + (1 - chance) * each.loss ** 2) * (1 + 0.01 / 3) +
+      2 * each.rest * (chance * each.gain - (1 - chance) * each.loss) +
+      each.rest ** 2;
+    variance += count * Math.max(0, square - rise * rise);
+    if (count > 0) {
+      up = Math.max(up, each.gain * 1.1 + each.rest - rise);
+      down = Math.max(down, rise + each.loss * 1.1 - each.rest);
+    }
+    most += count * Math.max(0, each.gain * 1.1 + each.rest);
+    least += count * Math.min(0, each.rest - each.loss * 1.1);
+    seconds += count * each.seconds;
+    mean += count * rise;
+    highest = Math.max(highest, mean);
+    lowest = Math.min(lowest, mean);
+    if (each.next === undefined) {
+      const rate = each.tailRate;
+      if (rate === undefined || !(rate > 0)) return null;
+      const margin = (b: number) => {
+        const logs = Math.log(1 / BLADEBURNER_STOCK_ALPHA);
+        const linear = (logs * b) / 3;
+        return linear + Math.sqrt(linear * linear + 2 * logs * variance);
+      };
+      // Each side by the path's own most, or Freedman's.
+      const under = rank + most < target || rank + highest + margin(up) < target;
+      const over = rank + least > 0 || rank + lowest - margin(down) > 0;
+      if (!under || !over) return null;
+      return seconds + (target - rank - mean) / rate;
+    }
+  }
 }
 
 /** The next-best's seconds from each grid point, solved once a step, target and grid (the rule weighs many before it). */
