@@ -12,30 +12,43 @@
 //   past the BitNode's time so far).
 // - **The stall bounds** (decision 45, #400's review), keyed by where the rank is:
 //   - **The climb** (under the next Black Op's rank: none attempted, contracts' failures in B2's own bound): the rank
-//     must rise by `climbRise`, a tenth of what the sustainable rate gives over the bound, within `rankStallMs`: twice
-//     the longest the rule's cycle holds the rank flat (a rest from ½ max stamina at the natural regain alone, the
-//     slowest rest; the next Black Op's attempt; its failure's loss rebuilt at the sustainable rate) and
-//     `BLADEBURNER_REST_SLACK_MS`, as B2's stuck resting is bounded. A tenth catches a crawl (1% of the rate) and a flat
-//     rank, and leaves the rate's own spread over the bound room. The rate 0, the rebuild is left out and the rise is
-//     any: the bound stays finite, so a dead route is loud.
+//     must rise by `climbRise` within `climbWindowMs`. The window is `rankStallMs`, twice the longest the rule's
+//     cycle holds the rank flat (a rest from ½ max stamina at the natural regain alone, the slowest rest; the next
+//     Black Op's attempt; its failure's loss rebuilt at the sustainable rate) and `BLADEBURNER_REST_SLACK_MS`, as B2's
+//     stuck resting is bounded. The rise is a lower bound at a false failure's chance α `BLADEBURNER_RANK_ALPHA` (0.001,
+//     B2's): the sustainable rate's rise over the window, less Bernstein's margin for the plan's attempts there (core's
+//     `climbRiseLowerBound`: each attempt at most its mean and a failure's loss at 110% under its mean, B2's, with its
+//     variance; Freedman's inequality for the attempts as they come, as B2's and B5's `stockInClosedForm`), floored at
+//     0. Where it's 0 at `rankStallMs` (a plan too lumpy for that window), the window is the smallest longer one where
+//     it's positive (core's `climbWindowSeconds`), said in the stall. So a flat rank and a crawl are loud, and a run at
+//     the rate with its ordinary failures isn't, but at chance α. The plan is the Bladeburner rule's (its view's), else
+//     its forecast's best. The rate 0, the rebuild is left out and any rise counts: a dead route is loud. Judged from the
+//     faction's 25 (under it the plan can be #386's lottery: B2's bound judges the rank there).
 //   - **The attempts** (the next one's rank met): the Black Ops done must rise within `attemptsStallMs`, N attempts
 //     each with a failure's rebuild at the sustainable rate, a rest to the max, and the slack: N = ⌈ln α / ln(1 − p)⌉,
 //     the attempts by which a success is all but sure at the low end's chance p, α `BLADEBURNER_RANK_ALPHA` (0.001, a
 //     false failure's chance, B2's). So a Black Op stuck failing (each rebuild a rise) is loud. None at a chance of 0
 //     (#360's estimate is never then, a failure of its own).
 import {
+  actionRankLoss,
   BLACK_OPS_COUNT,
   BLADEBURNER_BLACK_OPS,
   type BlackOpsRouteTime,
   type BladeburnerActionInput,
+  type BladeburnerActionPlan,
   blackOpRankLoss,
   blackOpSeconds,
   blackOpsRouteEstimate,
   bladeburnerBlackOp,
+  bladeburnerLevelledAction,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
   bladeburnerSkillMultsOf,
+  type ClimbAttempts,
+  chooseBladeburnerAction,
   chooseWinRoute,
+  climbRiseLowerBound,
+  climbWindowSeconds,
   type MediumSnapshotData,
   redPillLevelSeconds,
   staminaGainPerSecond,
@@ -65,9 +78,11 @@ export interface BlackOpsRouteView {
   redPillSeconds: number | null;
   /** The planner's choice between them (core's `chooseWinRoute`). */
   choice: WinRouteChoice;
-  /** The climb's bound (#400's review): how long the rank may go without rising by `climbRise`, ms; null unread. */
+  /** The climb's base window (#400's review): twice a rest, an attempt and a rebuild, and the slack, ms; null unread. */
   rankStallMs: number | null;
-  /** The climb's least rise within `rankStallMs`: a tenth of the sustainable rate's over it (0: any rise). */
+  /** The climb's window: `rankStallMs`, or the smallest longer one where `climbRise` is positive; ms. */
+  climbWindowMs: number | null;
+  /** The climb's least rise within `climbWindowMs` at α 0.001 (Bernstein's lower bound; 0: any rise). */
   climbRise: number | null;
   /** The attempts' bound (#400's review): how long the Black Ops done may stand at the next one's rank, ms; null none. */
   attemptsStallMs: number | null;
@@ -103,7 +118,10 @@ export function blackOpsRouteOf({
   expPerSecond,
   soFarMs,
   firstToRankSeconds,
+  plan,
 }: {
+  /** The Bladeburner rule's plan (its view's), for the climb's bound; absent, the forecast's best by rank a second. */
+  plan?: BladeburnerActionPlan | null;
   mediumData: MediumSnapshotData | null;
   bitNode: number;
   ownedSF: Readonly<Record<string, number>>;
@@ -149,6 +167,7 @@ export function blackOpsRouteOf({
   const first = estimate?.steps[0];
   let rankStallMs: number | null = null;
   let climbRise: number | null = null;
+  let climbWindowMs: number | null = null;
   let attemptsStallMs: number | null = null;
   if (input !== null && op !== null && actions !== null) {
     const mults = bladeburnerSkillMultsOf(input.skills?.read ?? {});
@@ -158,7 +177,25 @@ export function blackOpsRouteOf({
     const rebuild = rate > 0 ? blackOpRankLoss(op) / rate : 0;
     const attempt = blackOpSeconds(op, input.person, mults);
     rankStallMs = 2 * (rest + attempt + rebuild) * 1000 + BLADEBURNER_REST_SLACK_MS;
-    climbRise = (rate * rankStallMs) / 1000 / 10;
+    const climbing = plan ?? chooseBladeburnerAction(input);
+    const work = climbing.work;
+    const action = work === null ? null : bladeburnerLevelledAction(work.type, work.name);
+    const attempts: ClimbAttempts =
+      work === null || action === null
+        ? { perSecond: 0, variance: 0, below: 0 }
+        : {
+            perSecond: climbing.duty / work.seconds,
+            variance: work.rankVariance,
+            below: work.rankMean + 1.1 * actionRankLoss(action, work.level),
+          };
+    if (rate > 0) {
+      const window = climbWindowSeconds(rate, rankStallMs / 1000, attempts, BLADEBURNER_RANK_ALPHA);
+      climbWindowMs = window * 1000;
+      climbRise = Number.isFinite(window) ? climbRiseLowerBound(rate, window, attempts, BLADEBURNER_RANK_ALPHA) : 0;
+    } else {
+      climbWindowMs = rankStallMs;
+      climbRise = 0;
+    }
     const chance = first?.chance ?? 0;
     if (chance > 0) {
       const attempts = chance >= 1 ? 1 : Math.ceil(Math.log(BLADEBURNER_RANK_ALPHA) / Math.log(1 - chance));
@@ -179,6 +216,7 @@ export function blackOpsRouteOf({
     redPillSeconds,
     choice: chooseWinRoute({ blackOpsSeconds: estimate?.seconds ?? null, redPillSeconds, soFarSeconds }),
     rankStallMs,
+    climbWindowMs,
     climbRise,
     attemptsStallMs,
   };

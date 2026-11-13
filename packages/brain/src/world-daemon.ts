@@ -1071,6 +1071,7 @@ export class WorldDaemonRule {
               : last;
       const clock = this.#rankHigh;
       const attemptsMs = route.attemptsStallMs;
+      const climbMs = route.climbWindowMs ?? rankStallMs;
       if (clock.attempts && attemptsMs !== null) {
         steps.set("blackOpsRank", {
           detail:
@@ -1085,10 +1086,11 @@ export class WorldDaemonRule {
           detail:
             `Bladeburner's rank not climbing (${count(rank)} now, ${count(clock.value)} at the clock's start) toward ` +
             `${count(nextRank)} on the Black Ops' route (#398, ${done} of ${BLACK_OPS_COUNT} done): ` +
-            `${count(rise)} wanted within ${formatDuration(rankStallMs)}, a tenth of the sustainable rate's; the bound ` +
-            "twice a rest to the max, the next Black Op's attempt and a failure's rebuild, and 10 min",
+            `${count(rise)} wanted within ${formatDuration(climbMs)}, the sustainable rate's rise less Bernstein's ` +
+            "margin at α 0.001; the window twice a rest to the max, the next Black Op's attempt and a failure's rebuild, " +
+            `and 10 min${climbMs > rankStallMs ? `, lengthened from ${formatDuration(rankStallMs)} to where that rise is positive` : ""}`,
           sinceMs: clock.sinceMs,
-          withinMs: rankStallMs,
+          withinMs: climbMs,
         });
       }
     } else if (!this.#ready.get("blackOpsRank")?.stored) {

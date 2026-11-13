@@ -234,3 +234,58 @@ export function chooseWinRoute({
         : "The Red Pill's the shorter",
   };
 }
+
+/** An attempt's rise, as the climb's bound takes it (#400's review): attempts a second, its variance, its most under. */
+export interface ClimbAttempts {
+  /** Attempts a second over the plan's cycle (its duty over an attempt's seconds); 0 resting alone. */
+  perSecond: number;
+  /** An attempt's rank variance (core's `attemptRankMoments`). */
+  variance: number;
+  /** How far under its mean an attempt's rank can fall: its mean and a failure's loss at 110% (B2's). */
+  below: number;
+}
+
+/**
+ * Bernstein's margin (Boucheron, Lugosi and Massart, "Concentration Inequalities", 2013, Corollary 2.11; as B2's
+ * `bernsteinMargin`): for attempts each at most `below` under its mean, their variances summing to `variance`,
+ * P(sum < mean − t) ≤ exp(−t² / (2(variance + below·t/3))), set to `alpha`: t = L·below/3 + √((L·below/3)² +
+ * 2·L·variance), L = ln(1/alpha). The attempts' figures are fixed by what came before, so Freedman's inequality
+ * (Freedman, 1975) gives the same tail with the variances summed as they came.
+ */
+export function climbMargin(variance: number, below: number, alpha: number): number {
+  const logs = Math.log(1 / alpha);
+  const linear = (logs * below) / 3;
+  return linear + Math.sqrt(linear * linear + 2 * logs * variance);
+}
+
+/**
+ * The climb's least rise over `seconds` at a false failure's chance `alpha` (#400's review): the expected rise at the
+ * sustainable rate, `rate` × `seconds`, less Bernstein's margin for the plan's attempts over them; floored at 0.
+ */
+export function climbRiseLowerBound(rate: number, seconds: number, attempts: ClimbAttempts, alpha: number): number {
+  const count = attempts.perSecond * seconds;
+  return Math.max(0, rate * seconds - climbMargin(count * attempts.variance, attempts.below, alpha));
+}
+
+/**
+ * The climb's window (#400's review): `seconds`, or where its lower bound is 0 there (a plan too lumpy for it), the
+ * smallest longer one where it's positive (the margin grows as √t, the mean as t), found by doubling and bisection;
+ * Infinity at no rate.
+ */
+export function climbWindowSeconds(rate: number, seconds: number, attempts: ClimbAttempts, alpha: number): number {
+  if (!(rate > 0)) return Number.POSITIVE_INFINITY;
+  if (climbRiseLowerBound(rate, seconds, attempts, alpha) > 0) return seconds;
+  let low = seconds;
+  let high = seconds * 2;
+  while (!(climbRiseLowerBound(rate, high, attempts, alpha) > 0)) {
+    low = high;
+    high *= 2;
+    if (high > 1e12) return Number.POSITIVE_INFINITY;
+  }
+  for (let step = 0; step < 50; step++) {
+    const middle = (low + high) / 2;
+    if (climbRiseLowerBound(rate, middle, attempts, alpha) > 0) high = middle;
+    else low = middle;
+  }
+  return high;
+}

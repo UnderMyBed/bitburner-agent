@@ -9,6 +9,7 @@ import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
+  actionRankLoss,
   actionSuccessChance,
   BLADEBURNER_BLACK_OPS,
   BLADEBURNER_LEVELLED_ACTIONS,
@@ -17,8 +18,12 @@ import {
   blackOpRankLoss,
   blackOpSeconds,
   blackOpsRouteEstimate,
+  bladeburnerLevelledAction,
   bladeburnerSkillMultsOf,
   CONTROL_PROTOCOL_VERSION,
+  chooseBladeburnerAction,
+  climbRiseLowerBound,
+  climbWindowSeconds,
   encodeControlMessage,
   type Intent,
   type MediumSnapshotData,
@@ -144,8 +149,26 @@ describe("the route from the reading (#398)", () => {
     const rest = r.maxStamina / 2 / staminaGainPerSecond(PERSON, r.maxStamina, mults);
     const bound = 2 * (rest + blackOpSeconds(CENTURION, PERSON, mults) + blackOpRankLoss(CENTURION) / estimate.rate);
     expect(view.rankStallMs).toBeCloseTo(bound * 1000 + BLADEBURNER_REST_SLACK_MS, 3);
-    // The climb's least rise: a tenth of the sustainable rate's over its bound (#400's review).
-    expect(view.climbRise).toBeCloseTo((estimate.rate * (view.rankStallMs as number)) / 1000 / 10, 6);
+    // The climb's least rise (#400's review): Bernstein's lower bound at α 0.001 over its window, the plan's attempts
+    // (the forecast's best: no rule's plan given) each at most its mean and a failure's loss at 110% under it.
+    const climbing = chooseBladeburnerAction(input);
+    const work = climbing.work as NonNullable<typeof climbing.work>;
+    const action = bladeburnerLevelledAction(work.type, work.name) as NonNullable<
+      ReturnType<typeof bladeburnerLevelledAction>
+    >;
+    const climbAttempts = {
+      perSecond: climbing.duty / work.seconds,
+      variance: work.rankVariance,
+      below: work.rankMean + 1.1 * actionRankLoss(action, work.level),
+    };
+    const window = climbWindowSeconds(estimate.rate, (view.rankStallMs as number) / 1000, climbAttempts, 0.001);
+    expect(view.climbWindowMs).toBeCloseTo(window * 1000, 3);
+    expect(view.climbRise).toBeCloseTo(climbRiseLowerBound(estimate.rate, window, climbAttempts, 0.001), 6);
+    expect(view.climbRise).toBeGreaterThan(0);
+    console.log(
+      `the climb at combat 5,000: window ${(window / 60).toFixed(1)} min (base ${((view.rankStallMs as number) / 60_000).toFixed(1)}), ` +
+        `least rise ${(view.climbRise as number).toFixed(0)} of the rate's ${(estimate.rate * window).toFixed(0)}`,
+    );
     // The attempts' bound: ⌈ln 0.001 / ln(1 − 0.3)⌉ = 20 attempts, each with a failure's rebuild, a rest and 10 min.
     const attempts = Math.ceil(Math.log(0.001) / Math.log(1 - 0.3));
     expect(attempts).toBe(20);

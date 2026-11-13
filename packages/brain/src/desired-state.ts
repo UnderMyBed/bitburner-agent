@@ -1937,7 +1937,17 @@ export class DesiredStateController {
     // Solved once a medium snapshot and its rates (the far target's solve isn't cheap): the controller updates on every
     // snapshot and event.
     return ({ rankPerSecond, expPerSecond }) => {
-      const key = [bitNode, rankPerSecond, expPerSecond, soFarMs, firstToRankSeconds].join();
+      const plan = actions?.plan ?? null;
+      const key = [
+        bitNode,
+        rankPerSecond,
+        expPerSecond,
+        soFarMs,
+        firstToRankSeconds,
+        plan?.work?.name,
+        plan?.work?.level,
+        plan?.duty,
+      ].join();
       const cached = this.#blackOpsRouteCache;
       if (cached !== null && cached.mediumData === mediumData && cached.key === key) return cached.view;
       const view = blackOpsRouteOf({
@@ -1948,6 +1958,8 @@ export class DesiredStateController {
         expPerSecond,
         soFarMs,
         firstToRankSeconds,
+        // The climb's bound on the plan the Bladeburner rule runs (#400's review).
+        plan,
       });
       this.#blackOpsRouteCache = { mediumData, key, view };
       return view;

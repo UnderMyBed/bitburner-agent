@@ -5,6 +5,8 @@ import {
   augmentationCost,
   augmentationsSoldBy,
   chooseWinRoute,
+  climbRiseLowerBound,
+  climbWindowSeconds,
   countablesWithinReach,
   isWorthInstalling,
   type MediumSnapshotData,
@@ -1098,6 +1100,7 @@ describe("the Black Ops' route (#398): BN6", () => {
     redPillSeconds: 1e70,
     choice: chooseWinRoute({ blackOpsSeconds: 120_000, redPillSeconds: 1e70, soFarSeconds: 36_000 }),
     rankStallMs: 20 * MINUTE,
+    climbWindowMs: 20 * MINUTE,
     climbRise: 0,
     attemptsStallMs: 60 * MINUTE,
     ...fields,
@@ -1202,10 +1205,10 @@ describe("the Black Ops' route (#398): BN6", () => {
       expect(rule.stall()).toBeNull();
     });
 
-    test("a crawl at 1% of the rate (0.01 rank/s against 1): a stall at the climb's bound", () => {
+    test("the climb's least rise (120 a 20 min window here): short of it within the window, a stall; past it, none", () => {
       for (let at = 0; at <= CLIMB; at += MINUTE) climbing(290_000 + (0.01 * at) / 1000, at);
       expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
-      // At the rate a tenth of it would pass: none.
+      // Past the least rise within each window: none.
       rule = new WorldDaemonRule({});
       for (let at = 0; at <= 3 * CLIMB; at += MINUTE) climbing(290_000 + (0.2 * at) / 1000, at);
       expect(rule.stall()).toBeNull();
@@ -1255,6 +1258,67 @@ describe("the Black Ops' route (#398): BN6", () => {
       }
       expect(rule.stall()).toBeNull();
       expect(events).toEqual([]);
+    });
+
+    test("Bernstein's climb at α 0.001: a seeded run at the rate, its ordinary failures in it, passes; a crawl at 1% fails", () => {
+      // The plan: attempts at 0.6 gaining 40 and losing 30 (each ±10%), 5 s each, worked 90% of the time: its bound positive
+      // at the 20 min window itself (a lumpier plan's window is lengthened: core's test).
+      const PLAN = { chance: 0.6, gain: 40, loss: 30, seconds: 5, duty: 0.9 };
+      const mean = PLAN.chance * PLAN.gain - (1 - PLAN.chance) * PLAN.loss;
+      const second = (PLAN.chance * PLAN.gain ** 2 + (1 - PLAN.chance) * PLAN.loss ** 2) * (1 + 0.01 / 3);
+      const attempts = {
+        perSecond: PLAN.duty / PLAN.seconds,
+        variance: second - mean ** 2,
+        below: mean + 1.1 * PLAN.loss,
+      };
+      const rate = (PLAN.duty * mean) / PLAN.seconds;
+      const window = climbWindowSeconds(rate, CLIMB / 1000, attempts, 0.001);
+      const fields = {
+        climbRise: climbRiseLowerBound(rate, window, attempts, 0.001),
+        climbWindowMs: window * 1000,
+        rankStallMs: CLIMB,
+        attemptsStallMs: ATTEMPTS,
+      };
+      expect(window).toBe(CLIMB / 1000);
+      expect(fields.climbRise).toBeGreaterThan(0.01 * rate * window);
+      // A seeded walk of the plan, a reading each minute, over five windows.
+      let state = 400;
+      const random = () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let x = state;
+        x = Math.imul(x ^ (x >>> 15), x | 1);
+        x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+        return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+      };
+      const every = PLAN.seconds / PLAN.duty;
+      let rank = 100_000;
+      let nextAttemptS = every;
+      for (let at = 0; at <= 5 * window * 1000; at += MINUTE) {
+        for (; nextAttemptS * 1000 <= at; nextAttemptS += every) {
+          const offset = 0.9 + 0.2 * random();
+          rank += random() < PLAN.chance ? PLAN.gain * offset : -PLAN.loss * offset;
+        }
+        bn6({ rank, ...fields }, { nowMs: at });
+      }
+      expect(rule.stall()).toBeNull();
+      expect(events).toEqual([]);
+      // A crawl at 1% of the rate: a stall within the window.
+      rule = new WorldDaemonRule({});
+      for (let at = 0; at <= window * 1000 + MINUTE; at += MINUTE) {
+        bn6({ rank: 100_000 + (0.01 * rate * at) / 1000, ...fields }, { nowMs: at });
+      }
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      expect(rule.stall()?.detail).toContain("Bernstein's margin at α 0.001");
+    });
+
+    test("a lengthened window (Bernstein's bound 0 at the base): the climb judged over it, not the base", () => {
+      const fields = { climbRise: 50, climbWindowMs: 2 * CLIMB, rankStallMs: CLIMB, attemptsStallMs: ATTEMPTS };
+      bn6({ rank: 290_000, ...fields }, { nowMs: 0 });
+      bn6({ rank: 290_000, ...fields }, { nowMs: 2 * CLIMB - 1 });
+      expect(rule.stall()).toBeNull();
+      bn6({ rank: 290_000, ...fields }, { nowMs: 2 * CLIMB });
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      expect(rule.stall()?.detail).toContain("lengthened from 20 min");
     });
 
     test("not judged: the rule not acting (the owner's work), all 21 done with the switch off, or under the faction's 25", () => {

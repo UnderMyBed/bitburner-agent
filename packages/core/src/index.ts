@@ -377,7 +377,11 @@ export {
   type BlackOpsRouteTime,
   blackOpsRouteEstimate,
   blackOpsRouteSeconds,
+  type ClimbAttempts,
   chooseWinRoute,
+  climbMargin,
+  climbRiseLowerBound,
+  climbWindowSeconds,
   redPillLevelSeconds,
   type WinRouteChoice,
 } from "./bladeburner-route.ts";

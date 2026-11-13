@@ -25,6 +25,9 @@ import {
   blackOpsRouteEstimate,
   blackOpsRouteSeconds,
   chooseWinRoute,
+  climbMargin,
+  climbRiseLowerBound,
+  climbWindowSeconds,
   redPillLevelSeconds,
 } from "../src/bladeburner-route.ts";
 import { bladeburnerSkillMultsOf } from "../src/bladeburner-skills.ts";
@@ -271,5 +274,70 @@ describe("The Red Pill's route in BN6 (#398, #359): hopeless by the formulas", (
     expect(
       chooseWinRoute({ blackOpsSeconds: Number.POSITIVE_INFINITY, redPillSeconds: 3600, soFarSeconds: 36_000 }).route,
     ).toBe("redPill");
+  });
+});
+
+describe("the climb's stall bound (#400's review): Bernstein's lower bound at α 0.001", () => {
+  /** A plan's cycle: attempts at chance 0.6 gaining 40, losing 30, 20 s each, worked 70% of the time, resting at 0. */
+  const PLAN = { chance: 0.6, gain: 40, loss: 30, seconds: 20, duty: 0.7 };
+  // An attempt's mean and variance with each rank ±10% uniform (core's `attemptRankMoments`, B2's).
+  const mean = PLAN.chance * PLAN.gain - (1 - PLAN.chance) * PLAN.loss;
+  const second = PLAN.chance * PLAN.gain ** 2 * (1 + 0.01 / 3) + (1 - PLAN.chance) * PLAN.loss ** 2 * (1 + 0.01 / 3);
+  const attempts = {
+    perSecond: PLAN.duty / PLAN.seconds,
+    variance: second - mean * mean,
+    below: mean + 1.1 * PLAN.loss,
+  };
+  const rate = (PLAN.duty * mean) / PLAN.seconds;
+
+  test("the formula: the rate's rise less Bernstein's margin, floored at 0; the window lengthened where it's 0", () => {
+    const seconds = 1200;
+    const count = attempts.perSecond * seconds;
+    const logs = Math.log(1000);
+    const linear = (logs * attempts.below) / 3;
+    const margin = linear + Math.sqrt(linear ** 2 + 2 * logs * count * attempts.variance);
+    expect(climbMargin(count * attempts.variance, attempts.below, 0.001)).toBeCloseTo(margin, 9);
+    expect(climbRiseLowerBound(rate, seconds, attempts, 0.001)).toBeCloseTo(Math.max(0, rate * seconds - margin), 9);
+    // Long enough to be positive (2 h): the formula itself, not its floor.
+    const long = attempts.perSecond * 7200;
+    const longMargin = linear + Math.sqrt(linear ** 2 + 2 * logs * long * attempts.variance);
+    expect(rate * 7200 - longMargin).toBeGreaterThan(0);
+    expect(climbRiseLowerBound(rate, 7200, attempts, 0.001)).toBeCloseTo(rate * 7200 - longMargin, 9);
+    // 60 s: the margin over the mean, 0; the window the smallest longer where it's positive.
+    expect(climbRiseLowerBound(rate, 60, attempts, 0.001)).toBe(0);
+    const window = climbWindowSeconds(rate, 60, attempts, 0.001);
+    expect(window).toBeGreaterThan(60);
+    expect(climbRiseLowerBound(rate, window, attempts, 0.001)).toBeGreaterThan(0);
+    expect(climbRiseLowerBound(rate, window * 0.99, attempts, 0.001)).toBe(0);
+    // Long enough already: kept; no rate: never.
+    expect(climbWindowSeconds(rate, 4 * window, attempts, 0.001)).toBe(4 * window);
+    expect(climbWindowSeconds(0, 60, attempts, 0.001)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test("against a seeded walk's 0.1% quantile: the bound under it, and a crawl at 1% of the rate under the bound", () => {
+    const random = seeded(400);
+    const seconds = 3 * climbWindowSeconds(rate, 60, attempts, 0.001);
+    const count = Math.round(attempts.perSecond * seconds);
+    const runs = 20_000;
+    const rises: number[] = [];
+    for (let run = 0; run < runs; run++) {
+      let rise = 0;
+      for (let attempt = 0; attempt < count; attempt++) {
+        const offset = 0.9 + 0.2 * random();
+        rise += random() < PLAN.chance ? PLAN.gain * offset : -PLAN.loss * offset;
+      }
+      rises.push(rise);
+    }
+    rises.sort((a, b) => a - b);
+    const quantile = rises[Math.floor(runs * 0.001)] as number;
+    const bound = climbRiseLowerBound(rate, count / attempts.perSecond, attempts, 0.001);
+    console.log(
+      `the climb over ${(seconds / 60).toFixed(1)} min: the rate's ${(rate * seconds).toFixed(0)}, the walk's 0.1% ` +
+        `quantile ${quantile.toFixed(0)}, Bernstein's bound ${bound.toFixed(0)}`,
+    );
+    expect(bound).toBeGreaterThan(0);
+    expect(bound).toBeLessThanOrEqual(quantile);
+    // A crawl at 1% of the rate rises under the bound: a stall.
+    expect(0.01 * rate * seconds).toBeLessThan(bound);
   });
 });
