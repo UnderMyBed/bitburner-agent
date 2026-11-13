@@ -11,7 +11,7 @@
 //   (competence ×87 by the skills, `Bladeburner.ts:776-786`), as B7's augmentations would bring it.
 // Then the brain's own: Daedalus run by B5's check, done; the World Daemon's destroy asked for with all 21 done, through
 // the gate and a save backup, by Singularity's `destroyW0r1dD43m0n` (`NetscriptFunctions/Singularity.ts:1176-1183`)
-// into the order's next, BN5.2 (BN6 waits for B7, #400's review), SF6.1 gained; the next Agent connects; the run report
+// into the order's next, BN5.2 (BN6's estimate with installs past the bar, #404), SF6.1 gained; the next Agent connects; the run report
 // passes, with the route's lines,
 // and the campaign report counts BN6.1.
 import {
@@ -73,7 +73,7 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
   await game.runUntil(() => reading()?.blackOp !== undefined && slow() !== null, 2 * MINUTE);
   expect(reading()?.blackOp?.name).toBe(DAEDALUS.name);
   const nodeResetBefore = slow()?.resetInfo.lastNodeReset as number;
-  // The order's next from BN6.1: BN5, BN6 (until B7), BN7 and BN3 skipped.
+  // The order's next from BN6.1: BN5, BN6 (its estimate past the bar, #404), BN7 and BN3 skipped.
   expect(nextBitNodeOf({ currentNode: 6, ownedSF: SOURCE_FILES }).bitNode).toBe(5);
   // The World Daemon's path is the route's: 20 of 21 done, Daedalus next, the planner's estimates, The Red Pill's off.
   await game.run(READING_MS);
@@ -132,7 +132,7 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
       nextBitNode: 5,
       replay: null,
       skipped:
-        "BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: no hacking multipliers or prices yet",
+        "BN6 skipped: no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: no hacking multipliers or prices yet",
     },
   ]);
   expect(brain.logLines).toContainEqual(

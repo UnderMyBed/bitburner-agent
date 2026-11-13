@@ -85,6 +85,13 @@
 //   only in a cycle where p was never known do the rules decide there, as before: nothing banked is growing, and a
 //   hold would only stall. The A/B's baseline
 //   (`bn2Route` "rules") keeps the count rule and G5's hold.
+// - The Black Ops' route (#404, BN6 and BN7, core's `winRouteOf`), in the division (the controller's
+//   `blackOpsInstall`, from ./bladeburner-route.ts): the planner chooses keep the cycle or install now, by B6's estimate
+//   of the time to the destroy (core's `blackOpsInstallTiming`: keeping, the estimate now; installing now, the rebuild
+//   of the combat stats by Training and the estimate at the install's multipliers, the rank kept), in place of the count
+//   rule, decided again at every update. Installing now goes at once (`reason` "the Black Ops' route"), through the
+//   controller's gate, only with something to install; keeping is a wait with no countdown and no money held. With the
+//   reading not in (or all 21 done), no estimate and no install. Before the join, the count rule as before (labelled).
 //   Once the count is met (Daedalus inviting or joined), or never short (The Red Pill elsewhere), the count rule times
 //   installs as before (amended #343: until the planner's next slice, the Daedalus/Red Pill stretch), with The Red
 //   Pill's way, Daedalus donations and levelling. The count rule short of the count stays only as the A/B's baseline
@@ -98,8 +105,11 @@ import {
   augmentationCost,
   augmentationEndgame,
   augmentationShops,
+  type BlackOpsInstallTiming,
   type Bn2Route,
   bitNodeHackingMultipliers,
+  blackOpsInstallTiming,
+  bladeburnerInstallGain,
   type CountableToCome,
   type CountableWithinReach,
   chooseAugmentationsToBuy,
@@ -159,6 +169,8 @@ import {
   THE_RED_PILL,
   winRouteOf,
 } from "@bitburner-agent/core";
+import { BLADEBURNER_PRICED_REBUILD_SETTING } from "./bladeburner.ts";
+import type { BlackOpsInstallFigures } from "./bladeburner-route.ts";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
 import { workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
@@ -320,7 +332,7 @@ export type InstallTimingView = InstallTiming & {
    * BN2 before the gang (#357's (1)): its candidates in place of #343's, install now (k 0) and wait for the gang (k 1),
    * each by the time to the gang formed; absent, #343's.
    */
-  route?: typeof GANG_FORMING_ROUTE | typeof GANG_FORMED_ROUTE;
+  route?: typeof GANG_FORMING_ROUTE | typeof GANG_FORMED_ROUTE | typeof BLACK_OPS_ROUTE;
   /** (1)'s figures (#357): τ_g, R, the level, avmnite-02h's roll, the rate and the install's multipliers. */
   gang?: GangFormingTiming;
   /**
@@ -328,7 +340,72 @@ export type InstallTimingView = InstallTiming & {
    * candidates are k 0 install now, 1 bank R* then install (its τ the time to R*), 2 keep the cycle.
    */
   gangInstall?: GangInstallTiming;
+  /**
+   * The Black Ops' route's figures (#404, `route` "the Black Ops' route"): keeping and installing now, each by B6's
+   * estimate of the time to the destroy. Its candidates are k 0 install now, 1 keep the cycle.
+   */
+  blackOps?: BlackOpsInstallView;
 };
+
+/** The planner's route on the Black Ops (#404, BN6 and BN7, in the division): keep the cycle or install now. */
+export const BLACK_OPS_ROUTE = "the Black Ops' route";
+
+/**
+ * The install timing on the Black Ops' route as the view and the events keep it (#404, core's `blackOpsInstallTiming`):
+ * ms, null for never (JSON has no Infinity), or for installing now with nothing to install.
+ */
+export interface BlackOpsInstallView {
+  keepMs: number | null;
+  rebuildMs: number | null;
+  afterMs: number | null;
+  installNowMs: number | null;
+  choice: "keep" | "install";
+  /** What the install gives the route: the success chance's, the max stamina's and its regain's factors. */
+  gain: { successChance: number; maxStamina: number; staminaGain: number };
+}
+
+/** Core's timing as the view keeps it (#404). */
+export function blackOpsInstallViewOf(timing: BlackOpsInstallTiming): BlackOpsInstallView {
+  const ms = (seconds: number | null) => (seconds === null || !Number.isFinite(seconds) ? null : seconds * 1000);
+  const { successChance, maxStamina, staminaGain } = timing.gain;
+  return {
+    keepMs: ms(timing.keepSeconds),
+    rebuildMs: ms(timing.rebuildSeconds),
+    afterMs: ms(timing.afterSeconds),
+    installNowMs: ms(timing.installNowSeconds),
+    choice: timing.choice,
+    gain: { successChance, maxStamina, staminaGain },
+  };
+}
+
+/** The Black Ops' route's install timing in words (#404), for the log, the dashboard and the run report. */
+export function describeBlackOpsInstallTiming(view: BlackOpsInstallView | null): string {
+  if (view === null) {
+    return "the Black Ops' route (#404): no estimate yet (nothing to install, or the Bladeburner reading not in yet)";
+  }
+  const time = (ms: number | null) => (ms === null ? "never" : formatEta(ms));
+  const gain =
+    `the success chance ×${view.gain.successChance.toFixed(3)}, the max stamina ×${view.gain.maxStamina.toFixed(3)} ` +
+    `and its regain ×${view.gain.staminaGain.toFixed(3)}`;
+  const install =
+    view.installNowMs === null && view.afterMs === null
+      ? "install now never"
+      : `install now ${time(view.installNowMs)} (the stats rebuilt by Training in ${time(view.rebuildMs)}, then the ` +
+        `route ${time(view.afterMs)} at ${gain})`;
+  return (
+    `the Black Ops' route (#404), B6's estimate of the time to the destroy: keep ${time(view.keepMs)}, ${install}: ` +
+    (view.choice === "install" ? "installing now" : "keeping")
+  );
+}
+
+/** The reason of the planner's install now on `route` (#343, #357, #404). */
+function plannedReasonOf(route: InstallTimingView["route"]): InstallReason {
+  return route === GANG_FORMED_ROUTE
+    ? "the gang's favour"
+    : route === BLACK_OPS_ROUTE
+      ? "the Black Ops' route"
+      : "Daedalus's count";
+}
 
 /** The planner's route before the gang in BN2 (#357's (1)), as the timing view, the wait and the events name it. */
 export const GANG_FORMING_ROUTE = "gang forming";
@@ -655,6 +732,13 @@ export interface AugmentationInputs {
    */
   gangInstall?: GangInstallFigures | null;
   /**
+   * The Black Ops' route in the division (#404, the controller's from ./bladeburner-route.ts's
+   * `blackOpsInstallFiguresOf`): the planner times installs there, keep or install now by B6's estimate, in place of
+   * the count rule; its `route` null (the reading not in), no install. Absent or null: off the route, or before the
+   * join (the count rule, as before #404).
+   */
+  blackOpsInstall?: BlackOpsInstallFigures | null;
+  /**
    * Netburners before it's joined (#387, the controller's from ./hacknet.ts's `netburnersRoute`): the planner's
    * countables count its five, by A5's work there after its Hacknet setup's money and its invitation. Absent or null,
    * none of them (it's joined, invited and joined next, hacking under 80, or Hacknet servers in the BitNode).
@@ -954,6 +1038,12 @@ export function describeReason(reason: InstallReason | string, figures: Partial<
     return (
       `the gang's favour: in BN2 with the gang, the planner's shortest time to ${THE_RED_PILL}'s reputation is ` +
       "installing now, its reputation turned into favour (#357)"
+    );
+  }
+  if (reason === "the Black Ops' route") {
+    return (
+      "the Black Ops' route: the planner's shortest time to the destroy is installing now, the combat stats rebuilt by " +
+      "Training after it (#404)"
     );
   }
   if (reason === "the hacking level") {
@@ -1928,6 +2018,7 @@ export class AugmentationRule {
         gangForming: inputs.gangForming ?? null,
         gangInstall: inputs.gangInstall ?? null,
         netburners: inputs.netburners ?? null,
+        blackOpsInstall: inputs.blackOpsInstall ?? null,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -2312,6 +2403,7 @@ export class AugmentationRule {
     gangForming,
     gangInstall,
     netburners,
+    blackOpsInstall,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -2333,6 +2425,7 @@ export class AugmentationRule {
     gangForming: { required: number; unread?: boolean } | null;
     gangInstall: GangInstallFigures | null;
     netburners: NetburnersRoute | null;
+    blackOpsInstall: BlackOpsInstallFigures | null;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -2609,9 +2702,25 @@ export class AugmentationRule {
             })
           : null;
       const gangPlanned = endgame.kind === "gang" && gangTiming !== null;
+      // On the Black Ops' route in the division (#404): keep or install now, by B6's estimate, the planner's; core's
+      // endgame is none there. What the install gives: the queue, the set and NeuroFlux Governor's levels.
+      const blackOpsPlanned =
+        this.#timingPolicy === "planner" &&
+        blackOpsInstall !== null &&
+        winRouteOf(currentNode) === "blackOps" &&
+        endgame.kind === "none";
+      const blackOpsTiming =
+        blackOpsPlanned && blackOpsInstall.route !== null && anything
+          ? this.#blackOpsTiming(
+              blackOpsInstall.route,
+              installable.filter((name) => name === NEUROFLUX_GOVERNOR).length + counts.neuroFluxLevels,
+              [...installable, ...setNames].filter((name) => name !== NEUROFLUX_GOVERNOR),
+            )
+          : null;
       // Short of Daedalus's count, the planner times installs (#343): install now, or wait for the next k countables,
       // the least estimated time to the count chosen, decided again at every update. With the gang, (3) (#357).
-      const planned = gangPlanned || (this.#timingPolicy === "planner" && short && endgame.kind === "none");
+      const planned =
+        gangPlanned || blackOpsPlanned || (this.#timingPolicy === "planner" && short && endgame.kind === "none");
       let timing: InstallTimingView | null = null;
       if (!planned) {
         if (readInstallWait(this.#store) !== null) writeInstallWait(this.#store, null);
@@ -2655,7 +2764,32 @@ export class AugmentationRule {
         // BN2 before the gang (#357's (1)): wait for the gang or install now, in place of #343's candidates.
         const gangRoute = this.#bn2Route === "planner" && gangForming !== null ? gangForming : null;
         let next: NextCountable[] = [];
-        if (gangPlanned && gangTiming !== null && gangFaction !== null) {
+        if (blackOpsPlanned) {
+          // The Black Ops' route (#404): keep or install now, decided again at every update from the reading; no wait is
+          // kept (the World Daemon's stalls watch the rank, the Bladeburner rule's rebuild after an install).
+          if (stored !== null) writeInstallWait(this.#store, null);
+          const view = blackOpsTiming === null ? null : blackOpsInstallViewOf(blackOpsTiming);
+          const figures: Omit<InstallTimingView, "words"> = {
+            needed,
+            adding,
+            onlineMs: cycleMs,
+            candidates: [
+              ...(view?.installNowMs == null ? [] : [{ k: 0, tauMs: 0, estimateMs: view.installNowMs }]),
+              ...(view?.keepMs == null ? [] : [{ k: 1, tauMs: view.keepMs, estimateMs: view.keepMs }]),
+            ],
+            choice: view === null ? null : view.choice === "install" ? 0 : 1,
+            heldForIncome: false,
+            heldForInvitation: false,
+            tauScale: 1,
+            next: [],
+            timeOnlineMs: onlineMs,
+            ...unseen,
+            route: BLACK_OPS_ROUTE,
+            ...(view === null ? {} : { blackOps: view }),
+          };
+          timing = { ...figures, words: withTParts(describeBlackOpsInstallTiming(view), figures) };
+          this.#incomeHeld = null;
+        } else if (gangPlanned && gangTiming !== null && gangFaction !== null) {
           // With the gang (#357's (3)): keep, install now, or bank R*, decided again at every update from the
           // reputation, so no wait is kept (a stalled reputation is the World Daemon's stall to raise).
           if (stored !== null) writeInstallWait(this.#store, null);
@@ -2801,7 +2935,9 @@ export class AugmentationRule {
               ? "the planner waits for the gang"
               : timing.route === GANG_FORMED_ROUTE
                 ? "the planner times installs with the gang"
-                : "the planner times installs short of Daedalus's count",
+                : timing.route === BLACK_OPS_ROUTE
+                  ? "the planner times installs on the Black Ops' route"
+                  : "the planner times installs short of Daedalus's count",
           );
           // Keeping or banking with the gang (#357's (3)): installs held for The Red Pill there, the World Daemon's
           // stall to watch (its reputation not rising), a pause to train included (#372's re-review): while the plan
@@ -2826,12 +2962,14 @@ export class AugmentationRule {
                 ? `the planner's time to the gang formed: ${timing.words}`
                 : timing.route === GANG_FORMED_ROUTE
                   ? `the planner's time to ${THE_RED_PILL}'s reputation: ${timing.words}`
-                  : `the planner's time to Daedalus's count: ${timing.words}`,
+                  : timing.route === BLACK_OPS_ROUTE
+                    ? `the planner's time to the destroy: ${timing.words}`
+                    : `the planner's time to Daedalus's count: ${timing.words}`,
           });
         }
         // Installing now: the progress it's chosen on, for the run report (the counts and donations, as a countdown's).
         this.#recordProgress(
-          progress(null, timing.route === GANG_FORMED_ROUTE ? "the gang's favour" : "Daedalus's count", null, timing),
+          progress(null, plannedReasonOf(timing.route), null, timing),
           `timing: ${timing.route ?? "count"} ${timing.choice}`,
           atMs,
         );
@@ -2928,11 +3066,16 @@ export class AugmentationRule {
       } else if (planned) {
         // The planner's install for Daedalus's count (#343): at once, as levelling's; never with nothing new to it. With
         // the gang (#357's (3)), for its favour, at once too.
-        const forFavour = timing?.route === GANG_FORMED_ROUTE;
-        this.#cancelCountdown(
-          `the planner's install for ${forFavour ? "the gang's favour" : "Daedalus's count"}, at once`,
-        );
-        reason = forFavour ? "the gang's favour" : "Daedalus's count";
+        reason = plannedReasonOf(timing?.route);
+        this.#cancelCountdown(`the planner's install for ${reason}, at once`);
+        // The rebuild it priced (#407's review): the Bladeburner rule's bound on the rebuild after it.
+        const rebuildMs = timing?.blackOps?.rebuildMs ?? null;
+        if (timing?.route === BLACK_OPS_ROUTE && rebuildMs !== null) {
+          this.#store.setSetting(
+            BLADEBURNER_PRICED_REBUILD_SETTING,
+            JSON.stringify({ lastAugReset: resetInfo.lastAugReset, seconds: rebuildMs / 1000 }),
+          );
+        }
       } else if (countdownReason === null) {
         this.#cancelCountdown(`the rule no longer says install: ${describeCounts(rule)}`);
         // Held back from cloud servers only for an install the rule would choose with A2's payback limit's more income:
@@ -3267,6 +3410,35 @@ export class AugmentationRule {
       waiting: false,
     };
     return { intent: null, install: true, committed: true };
+  }
+
+  /** The Black Ops' route's timing last solved (#404): its figures (the controller's, one a medium snapshot) and set. */
+  #blackOpsTimingCache: {
+    route: NonNullable<BlackOpsInstallFigures["route"]>;
+    key: string;
+    timing: BlackOpsInstallTiming;
+  } | null = null;
+
+  /**
+   * Core's `blackOpsInstallTiming` on the route's figures and what the install would install (#404): NeuroFlux
+   * Governor's `levels` and `augmentations`. Solved once a reading and set (B6's estimate twice, each with ρ's linear
+   * programme): A6 updates on every snapshot and event.
+   */
+  #blackOpsTiming(
+    route: NonNullable<BlackOpsInstallFigures["route"]>,
+    levels: number,
+    augmentations: readonly string[],
+  ): BlackOpsInstallTiming {
+    const key = JSON.stringify([levels, [...augmentations].sort()]);
+    const cached = this.#blackOpsTimingCache;
+    if (cached !== null && cached.route === route && cached.key === key) return cached.timing;
+    const timing = blackOpsInstallTiming({
+      ...route,
+      gain: bladeburnerInstallGain(levels, augmentations),
+      installable: true,
+    });
+    this.#blackOpsTimingCache = { route, key, timing };
+    return timing;
   }
 
   /**

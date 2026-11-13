@@ -35,7 +35,13 @@ import {
   type SlowSnapshotData,
   slowestTrainingSeconds,
 } from "@bitburner-agent/core";
-import { BLADEBURNER_TRAINING_HELD_EVENT_KIND, bladeburnerSnapshotOf, homeMaxRamOf } from "./bladeburner.ts";
+import {
+  BLADEBURNER_REBUILD_EVENT_KIND,
+  BLADEBURNER_TRAINING_HELD_EVENT_KIND,
+  bladeburnerSnapshotOf,
+  describeRebuildBound,
+  homeMaxRamOf,
+} from "./bladeburner.ts";
 import { BladeburnerActionsFold } from "./bladeburner-actions-report.ts";
 import { BladeburnerBlackOpsFold } from "./bladeburner-black-ops-report.ts";
 import { BladeburnerCitiesFold } from "./bladeburner-cities-report.ts";
@@ -107,12 +113,64 @@ export class BladeburnerFold {
   /** When the training was held for the owner's work, and let go: the rule's events, in order. */
   readonly #holds: { atMs: number; held: boolean }[];
 
-  /** `events`: the window's, for the rule's `bladeburnerTrainingHeld` (its overdue clock stops while held). */
+  /** The rebuilds after an install (#404), from the rule's `bladeburnerRebuild` events: each start, and its end. */
+  readonly #rebuilds: {
+    fromMs: number;
+    toMs: number | null;
+    targets: string;
+    seconds: number | null;
+    /** Past its bound at its first sighting (#407's review): not run, a failure; its bound and price then. */
+    skipped: { boundSeconds: number; pricedSeconds: number | null } | null;
+  }[] = [];
+
+  /**
+   * `events`: the window's, for the rule's `bladeburnerTrainingHeld` (its overdue clock stops while held) and (#404)
+   * `bladeburnerRebuild` (Training then is the rebuild, not B2's stuck resting).
+   */
   constructor(events: readonly { kind: string; atMs: number; detail: unknown }[] = []) {
     this.#holds = events
       .filter((event) => event.kind === BLADEBURNER_TRAINING_HELD_EVENT_KIND)
       .map((event) => ({ atMs: event.atMs, held: (event.detail as { held?: unknown } | null)?.held === true }))
       .sort((a, b) => a.atMs - b.atMs);
+    const rebuilds = events
+      .filter((event) => event.kind === BLADEBURNER_REBUILD_EVENT_KIND)
+      .sort((a, b) => a.atMs - b.atMs);
+    for (const { atMs, detail } of rebuilds) {
+      const fields = (detail ?? {}) as {
+        started?: unknown;
+        targets?: unknown;
+        seconds?: unknown;
+        skipped?: unknown;
+        boundSeconds?: unknown;
+        pricedSeconds?: unknown;
+      };
+      const finite = (value: unknown): number | null =>
+        typeof value === "number" && Number.isFinite(value) ? value : null;
+      const open = this.#rebuilds.at(-1);
+      if (fields.started === true) {
+        const targets = (fields.targets ?? {}) as Record<string, unknown>;
+        this.#rebuilds.push({
+          fromMs: atMs,
+          toMs: null,
+          targets: COMBAT_STATS.map((stat) => `${stat} ${String(targets[stat] ?? "?")}`).join(", "),
+          seconds: finite(fields.seconds),
+          skipped:
+            fields.skipped === true
+              ? { boundSeconds: finite(fields.boundSeconds) ?? 0, pricedSeconds: finite(fields.pricedSeconds) }
+              : null,
+        });
+      } else if (open !== undefined && open.toMs === null) {
+        open.toMs = atMs;
+      }
+    }
+    this.#actions = new BladeburnerActionsFold((atMs) => this.#rebuildingAt(atMs));
+  }
+
+  /** Whether a rebuild was under way at `atMs` (#404): started by then, not ended before. */
+  #rebuildingAt(atMs: number): boolean {
+    return this.#rebuilds.some(
+      (each) => each.skipped === null && each.fromMs <= atMs && (each.toMs === null || atMs <= each.toMs),
+    );
   }
 
   /** The time from `fromMs` to `toMs` the training was held for the owner's work. */
@@ -147,7 +205,7 @@ export class BladeburnerFold {
   readonly #unread = new Stretches();
   readonly #factionWaiting = new Stretches();
   /** The actions (#375), from the readings in the division. */
-  readonly #actions = new BladeburnerActionsFold();
+  readonly #actions: BladeburnerActionsFold;
   /** The cities and the chaos (#383), from the readings in the division with them. */
   readonly #cities = new BladeburnerCitiesFold();
   /** The Black Ops (#392), from the readings in the division with the next. */
@@ -309,6 +367,30 @@ export class BladeburnerFold {
         `    from ${formatIsoTime(each.fromMs)} (${each.fromLevels}): ${estimate}; overdue past ` +
           `${formatDuration(each.boundMs)}; ${end}`,
       );
+    }
+    // The rebuilds after an install (#404): shown; overdue is the World Daemon's stall (section 4), failed there; one past
+    // its bound at its first sighting (#407's review), not run, a failure here.
+    if (this.#rebuilds.length > 0) {
+      lines.push("  the rebuilds after an install (#404), Training back to the combat levels before it:");
+      for (const each of this.#rebuilds) {
+        const estimate = each.seconds === null ? "no estimate" : `estimated ${formatDuration(each.seconds * 1000)}`;
+        const end =
+          each.toMs === null
+            ? "under way at the window's end"
+            : `done ${formatIsoTime(each.toMs)}, after ${formatDuration(each.toMs - each.fromMs)}` +
+              (each.seconds === null || !(each.seconds > 0)
+                ? ""
+                : ` (${((each.toMs - each.fromMs) / (each.seconds * 1000)).toFixed(2)} of the estimate)`);
+        if (each.skipped !== null && each.seconds !== null) {
+          const line =
+            `the rebuild after an install (#404) from ${formatIsoTime(each.fromMs)} to ${each.targets} not run: ` +
+            describeRebuildBound({ firstSeconds: each.seconds, ...each.skipped });
+          lines.push(`    ${line}`);
+          failures.push(line);
+          continue;
+        }
+        lines.push(`    from ${formatIsoTime(each.fromMs)} to ${each.targets}: ${estimate}; ${end}`);
+      }
     }
     lines.push(
       this.#joined === null

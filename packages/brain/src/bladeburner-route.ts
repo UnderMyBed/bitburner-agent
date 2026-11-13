@@ -37,6 +37,7 @@ import {
   actionRankLoss,
   BLACK_OPS_COUNT,
   BLADEBURNER_BLACK_OPS,
+  type BlackOpsRouteAt,
   type BlackOpsRouteTime,
   type BladeburnerActionInput,
   type BladeburnerActionPlan,
@@ -50,14 +51,18 @@ import {
   bladeburnerRankMultiplierOf,
   bladeburnerSkillMultsOf,
   type ClimbAttempts,
+  type CombatPerson,
+  type CombatStat,
   chooseBladeburnerAction,
   chooseWinRoute,
   climbRiseLowerBound,
   climbWindowSeconds,
+  combatPersonOf,
   type MediumSnapshotData,
   redPillLevelSeconds,
   staminaGainPerSecond,
   type WinRouteChoice,
+  winRouteOf,
   worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import { bladeburnerSnapshotOf, bladeburnerSpeedOf } from "./bladeburner.ts";
@@ -235,5 +240,62 @@ export function blackOpsRouteOf({
     climbWindowMs,
     climbRise,
     attemptsStallMs,
+  };
+}
+
+/**
+ * What A6's install timing on the route reads (#404): B6's estimate's inputs from the medium snapshot (the actions read,
+ * the person, the stamina, the skills), the next Black Op and its chance read, and the combat figures (each stat's
+ * level, experience and multipliers) for the rebuild. `route` null where the reading doesn't give them: unread, no
+ * Black Op next (all 21 done: the destroy, no install), or the player's figures not in the snapshot.
+ */
+export interface BlackOpsInstallFigures {
+  route: {
+    input: Omit<BladeburnerActionInput, "target">;
+    at: BlackOpsRouteAt;
+    combat: CombatPerson;
+    /** A rebuild under way (#407's review): its targets, the levels both of the planner's sides are priced at. */
+    levels?: Record<CombatStat, number>;
+  } | null;
+}
+
+/**
+ * A6's figures on the Black Ops' route (#404), in the division only (`inBladeburner`): null outside it (before the join
+ * an install loses the training to join, B1's, as before #404), or off the route (core's `winRouteOf`).
+ */
+export function blackOpsInstallFiguresOf(
+  mediumData: MediumSnapshotData | null,
+  bitNode: number,
+  /** The Bladeburner rule's rebuild under way (its `rebuilding`'s targets), or null. */
+  rebuildTargets: Record<CombatStat, number> | null = null,
+): BlackOpsInstallFigures | null {
+  const rankMultiplier = bladeburnerRankMultiplierOf(bitNode);
+  if (winRouteOf(bitNode) !== "blackOps" || rankMultiplier === null) return null;
+  const { joined, reading } = bladeburnerSnapshotOf(mediumData);
+  if (joined !== true) return null;
+  const actions = reading.kind === "read" ? reading.actions : null;
+  const rank = reading.kind === "read" ? reading.rank : null;
+  const nextRead = actions?.blackOp ?? null;
+  const next = nextRead === null ? null : bladeburnerBlackOp(nextRead.name);
+  const person = mediumData === null ? null : bladeburnerPersonOf(mediumData.player);
+  const combat = mediumData === null ? null : combatPersonOf(mediumData.player);
+  if (actions === null || rank === null || nextRead === null || next === null || person === null || combat === null) {
+    return { route: null };
+  }
+  return {
+    route: {
+      input: {
+        readings: actions.actions,
+        person,
+        stamina: actions.stamina,
+        maxStamina: actions.maxStamina,
+        rankMultiplier,
+        speed: bladeburnerSpeedOf(actions.bonusSeconds),
+        skills: { read: actions.skills?.levels ?? {} },
+      },
+      at: { rank, next, chanceRead: nextRead.chance },
+      combat,
+      ...(rebuildTargets === null ? {} : { levels: rebuildTargets }),
+    },
   };
 }

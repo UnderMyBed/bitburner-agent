@@ -212,7 +212,7 @@ export {
   threadsThatFit,
 } from "./batcher.ts";
 export {
-  BITNODE_BLACK_OPS_B7_REASON,
+  BITNODE_BLACK_OPS_ESTIMATE_REASON,
   BITNODE_COUNT,
   BITNODE_NO_WIN_ROUTE_REASON,
   type BitNodeHackingMultipliers,
@@ -322,6 +322,7 @@ export {
   maxStaminaAtSkills,
   maxStaminaOf,
   memoizedBladeburnerChoice,
+  personCompetenceFactor,
   populationSuccessFactor,
   REGENERATION_CHAMBER,
   staminaGainPerSecond,
@@ -371,6 +372,19 @@ export {
   inciteCountGain,
   isBladeburnerCity,
 } from "./bladeburner-cities.ts";
+export {
+  type BlackOpsInstallTiming,
+  type BlackOpsRouteAt,
+  type BladeburnerInstallGain,
+  type BladeburnerRebuild,
+  blackOpsInstallTiming,
+  bladeburnerAugmentationValues,
+  bladeburnerInstallGain,
+  bladeburnerPersonAfterInstall,
+  bladeburnerRebuildSeconds,
+  NO_INSTALL_GAIN,
+  trainingExpPerSecond,
+} from "./bladeburner-installs.ts";
 export {
   type BlackOpsRouteOp,
   type BlackOpsRouteStep,
