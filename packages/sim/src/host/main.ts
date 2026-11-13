@@ -244,8 +244,9 @@ async function start(options: HostOptions): Promise<Host> {
     },
     "diagnostics.setBladeburnerFigures": ({ figures }) => {
       booted();
+      if (figures.city !== undefined && typeof figures.city !== "string") throw new RangeError("city must be a name");
       for (const [name, value] of Object.entries({ ...figures, ...(figures.maxLevels ?? {}) })) {
-        if (name === "maxLevels") continue;
+        if (name === "maxLevels" || name === "city") continue;
         if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
           throw new RangeError(`${name} must be finite and 0 or more, not ${value}`);
         }

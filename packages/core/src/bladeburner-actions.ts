@@ -44,8 +44,9 @@
  * - **The skills** (B3, #379; ./bladeburner-skills.ts): the success skills on competence, Reaper and Evasive System on
  *   the combat stats it, the time and the stamina read (`getEffectiveSkillLevel`, `:759-774`), Overclock on the time,
  *   Cyber's Edge on the max stamina and its regain; each at 1 with no levels (`getSkillMult`'s default, `:755-757`).
- * Left out, and labelled: the cities and chaos (B4), Black Ops (B5), teams (an operation's team bonus at 0 members: 1)
- * and random events.
+ * - **The city** (B4, #383; ./bladeburner-cities.ts): its population and chaos are in the range read; the forecast in
+ *   another city, or at another chaos, scales it (`chooseBladeburnerAction`'s `city`).
+ * Left out, and labelled: Black Ops (B5), teams (an operation's team bonus at 0 members: 1) and random events.
  */
 import {
   type BladeburnerSkillLevels,
@@ -731,11 +732,15 @@ export interface BladeburnerActionPlan {
  *   regain computed here. At other levels (`skills.planned`: the skills' forecast, ./bladeburner-skills.ts), each
  *   action's low end scales with its competence (`actionSkillCompetence`), the time and the regain are computed at
  *   those levels, and the max stamina with them (`maxStaminaAtSkills`). No skills given: none read or planned.
+ * - **The city** (#383, ./bladeburner-cities.ts): in another city than the one read, or at another chaos, each
+ *   action's low end scales by `city.ratio` (core's `cityCompetenceRatio`: the estimates' and the chaos factors'),
+ *   as with the skills; Raid out where `city.raid` is false (no communities, `Actions/Operation.ts:63-68`). None
+ *   given: the city read.
  * Left out, and labelled: a failure's HP (#377's review), which costs money at the hospital, not rank (its mean is
  * `hpLoss`; the run report shows the visits and their money): so the choice is optimistic for the actions that lose
  * the most HP (Raid about 386 a failure, Stealth Retirement 85, Assassination 50, Bounty Hunter 5, against 20 HP at
- * defense 100), the money traded for rank the planner's (decision 67); money (contracts pay as a by-product); teams
- * and chaos (B4).
+ * defense 100), the money traded for rank the planner's (decision 67); money (contracts pay as a by-product); teams;
+ * the chaos and population the actions themselves move (B4's, read, not forecast).
  */
 export function chooseBladeburnerAction({
   readings,
@@ -745,6 +750,7 @@ export function chooseBladeburnerAction({
   rankMultiplier,
   speed,
   skills = {},
+  city,
 }: {
   readings: readonly BladeburnerActionReading[];
   person: BladeburnerPerson;
@@ -755,6 +761,8 @@ export function chooseBladeburnerAction({
   speed: number;
   /** The skill levels read (none: all 0), and those to forecast at (none: the levels read). */
   skills?: { read?: BladeburnerSkillLevels; planned?: BladeburnerSkillLevels };
+  /** Another city or chaos than the one read (#383): the competence there over the competence read, and Raid there. */
+  city?: { ratio: number; raid: boolean };
 }): BladeburnerActionPlan {
   const readMults = bladeburnerSkillMultsOf(skills.read ?? {});
   const mults = skills.planned === undefined ? readMults : bladeburnerSkillMultsOf(skills.planned);
@@ -774,11 +782,13 @@ export function chooseBladeburnerAction({
   for (const read of readings) {
     const action = bladeburnerLevelledAction(read.type, read.name);
     if (action === null) continue;
+    if (city !== undefined && !city.raid && action.name === "Raid") continue;
     const readCompetence = actionSkillCompetence(action, person, readMults);
-    const ratio =
+    const skillRatio =
       skills.planned === undefined || !(readCompetence > 0)
         ? 1
         : actionSkillCompetence(action, person, mults) / readCompetence;
+    const ratio = skillRatio * (city?.ratio ?? 1);
     for (let level = 1; level <= Math.max(1, read.maxLevel); level++) {
       const chance = chanceLowAt(action, read, level, penalty, ratio);
       if (chance === null) continue;

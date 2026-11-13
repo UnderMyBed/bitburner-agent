@@ -155,7 +155,7 @@ describe("the rule (#375)", () => {
   test("at full stamina: the plan's work, at its level, as the worker's action; A5 held for it", () => {
     expect(PLAN.work).toMatchObject(WORK);
     const rule = new BladeburnerRule();
-    expect(decide(rule, medium(reading())).state).toEqual({ joinTheFaction: false, action: WORK });
+    expect(decide(rule, medium(reading())).state).toEqual({ joinTheFaction: false, action: WORK, city: null });
     expect(rule.acting()).toBe(true);
     expect(rule.view().actions).toMatchObject({ order: WORK, resting: false, plan: { work: WORK } });
     expect(rule.view().line).toBe(
@@ -188,7 +188,7 @@ describe("the rule (#375)", () => {
 
   test("the owner's work holds the actions, said; A5 not held for them", () => {
     const rule = new BladeburnerRule();
-    expect(decide(rule, medium(reading()), 6, true).state).toEqual({ joinTheFaction: false });
+    expect(decide(rule, medium(reading()), 6, true).state).toEqual({ joinTheFaction: false, city: null });
     expect(rule.view().line).toContain("; actions held for your work on the dashboard");
     expect(rule.acting()).toBe(false);
   });
@@ -229,7 +229,7 @@ describe("the rule (#375)", () => {
     ]) {
       expect(bladeburnerSnapshotOf(medium(bad)).reading).toEqual({
         kind: "unread",
-        problem: "the Bladeburner reading's stamina, actions or skills aren't figures",
+        problem: "the Bladeburner reading's stamina, actions, skills or cities aren't figures",
       });
     }
   });
@@ -322,21 +322,21 @@ describe("the controller (#375)", () => {
     expect(last()?.bladeburner).toEqual({ joinTheFaction: false });
     expect(last()?.work).toMatchObject({ kind: "faction", faction: "CyberSec" });
     send("medium", medium(reading({ stamina: MAX_STAMINA / 2 })));
-    expect(last()?.bladeburner).toEqual({ joinTheFaction: false, action: WORK });
+    expect(last()?.bladeburner).toEqual({ joinTheFaction: false, action: WORK, city: null });
     expect(controller.factionsView()).toMatchObject({ sent: false, waitingFor: BLADEBURNER_ACTIONS_HOLD });
     expect(last()?.work ?? null).toBeNull();
     expect(controller.workView().desired).toBeNull();
     send("medium", medium(reading({ stamina: MAX_STAMINA / 2 - 0.01 })));
-    expect(last()?.bladeburner).toEqual({ joinTheFaction: false, action: REST });
+    expect(last()?.bladeburner).toEqual({ joinTheFaction: false, action: REST, city: null });
     expect(last()?.work ?? null).toBeNull();
     // The owner's work: no action; the owner's work sent.
     controller.setWork({ kind: "crime", crime: "Shoplift" });
     send("medium", medium(reading({ stamina: MAX_STAMINA })));
-    expect(last()?.bladeburner).toEqual({ joinTheFaction: false });
+    expect(last()?.bladeburner).toEqual({ joinTheFaction: false, city: null });
     expect(last()?.work).toMatchObject({ kind: "crime", crime: "Shoplift" });
     controller.setWork(null);
     send("medium", medium(reading({ stamina: MAX_STAMINA })));
-    expect(last()?.bladeburner).toEqual({ joinTheFaction: false, action: WORK });
+    expect(last()?.bladeburner).toEqual({ joinTheFaction: false, action: WORK, city: null });
   });
 
   test("outside BN6 and BN7, with SF6 and SF7 and a reading: no action, A5's work goes", () => {

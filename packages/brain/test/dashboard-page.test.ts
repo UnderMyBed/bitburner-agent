@@ -585,8 +585,15 @@ describe("the brain's joins and faction work (#203)", () => {
   });
 
   test("Netburners' Hacknet setup (#387): buying it, bought, invited, or why not", async () => {
-    const hacknet = { wanted: true, cost: 170_000, buying: false, bought: false, invited: false, waitingFor: null };
-    const line = async (view: Partial<typeof hacknet> & { waitingFor?: string | null }) => {
+    const hacknet = {
+      wanted: true,
+      cost: 170_000,
+      buying: false,
+      bought: false,
+      invited: false,
+      waitingFor: null as string | null,
+    };
+    const line = async (view: Partial<typeof hacknet>) => {
       const { document } = await openPage(() => ({
         status: 200,
         body: withRule({ hacknet: { ...hacknet, ...view } }),

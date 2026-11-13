@@ -4,8 +4,15 @@
 // - its reading kept for the medium snapshot (`reading`); null while none is asked for, and before the first;
 // - none asked for (null), nothing runs; no instructions (no brain, or one that hasn't sent any), likewise. Not in safe
 //   mode: Bladeburner waits for the brain, as the gang does.
+// - With a city in the state (#383: one of the six, or null for none to move to; absent from a B3 brain, which runs
+//   nothing more), `bladeburner-city.js` (../entries/bladeburner-city.ts) first, which moves the division there and
+//   reads the six cities: so `bladeburner.js`'s ranges are read in the city set. The runner waits for each to exit
+//   (./run-worker.ts), so they never hold home's RAM at once. Its city and cities go into the reading, and its problems
+//   with the other's. A run of either that doesn't report is tried again, both, next round.
 import {
+  BLADEBURNER_CITY_WORKER_NAME,
   BLADEBURNER_WORKER_NAME,
+  type BladeburnerCityWorkerReading,
   type BladeburnerReading,
   type BladeburnerState,
   deployedFilePath,
@@ -41,21 +48,36 @@ export function createBladeburnerActivity(
       reading = null;
     },
 
-    /** Runs the worker if it's due, within `deadlineMs`; one that doesn't report is tried again next round. */
+    /** Runs the workers if they're due, within `deadlineMs`; one that doesn't report is tried again next round. */
     async convergeIfDue(deadlineMs: number): Promise<void> {
       if (desired === null) return;
       if (!schedule.takeRound()) return;
+      let cities: BladeburnerCityWorkerReading | null = null;
+      if (desired.city !== undefined) {
+        const cityFile = deployedFilePath(deploymentId, BLADEBURNER_CITY_WORKER_NAME);
+        const cityRun = await workerRunner.runWorker(cityFile, [JSON.stringify(desired.city)], deadlineMs);
+        if (cityRun.outcome !== "reported") {
+          logOutcome(`${whyNoReport(cityRun, cityFile)}; trying again next round`);
+          return;
+        }
+        cities = cityRun.report.data as BladeburnerCityWorkerReading;
+      }
       const workerFile = deployedFilePath(deploymentId, BLADEBURNER_WORKER_NAME);
       const workerRun = await workerRunner.runWorker(workerFile, [JSON.stringify(desired)], deadlineMs);
       if (workerRun.outcome !== "reported") {
         logOutcome(`${whyNoReport(workerRun, workerFile)}; trying again next round`);
         return;
       }
-      reading = workerRun.report.data as BladeburnerReading;
+      const read = workerRun.report.data as BladeburnerReading;
+      reading =
+        cities === null || read.rank === null
+          ? read
+          : { ...read, problems: [...cities.problems, ...read.problems], city: cities.city, cities: cities.cities };
       schedule.dueAfter(BLADEBURNER_ROUNDS_BETWEEN);
       const { rank, problems } = reading;
       logOutcome(
         `${rank === null ? "not in the division" : `rank ${rank.toFixed(1)}`}` +
+          `${reading.city == null ? "" : `, in ${reading.city}`}` +
           `${problems.length > 0 ? `; ${problems.join("; ")}` : ""}`,
       );
     },

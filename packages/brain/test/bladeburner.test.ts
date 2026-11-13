@@ -576,8 +576,8 @@ describe("the run report's section 8 (#367)", () => {
 
   test("outside BN6 and BN7: none played", () => {
     expect(fold([[0, medium()]], 2).text).toBe(
-      "8. Bladeburner (#367, #375: the training to join, the division, the faction and the actions; played in BN6 and " +
-        "BN7 only)\n" +
+      "8. Bladeburner (#367, #375, #383: the training to join, the division, the faction, the actions and the cities; " +
+        "played in BN6 and BN7 only)\n" +
         "  not in BN6 or BN7 in the window: no Bladeburner played",
     );
   });

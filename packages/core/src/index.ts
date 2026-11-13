@@ -231,6 +231,8 @@ export {
 } from "./bitnodes.ts";
 export {
   BLADEBURNER_BITNODES,
+  BLADEBURNER_CITY_WORKER_NAME,
+  BLADEBURNER_CITY_WORKER_RAM_GB,
   BLADEBURNER_FACTION,
   BLADEBURNER_FACTION_RANK,
   BLADEBURNER_JOIN_LEVEL,
@@ -239,6 +241,7 @@ export {
   BLADEBURNER_WORKER_NAME,
   BLADEBURNER_WORKER_RAM_GB,
   type BladeburnerActionOrder,
+  type BladeburnerCityWorkerReading,
   type BladeburnerReading,
   type BladeburnerState,
   bladeburnerWorkerFileNames,
@@ -317,6 +320,29 @@ export {
   successesForNextLevel,
   trainingExpPerAttempt,
 } from "./bladeburner-actions.ts";
+export {
+  BLADEBURNER_CHAOS_ACTION_SECONDS,
+  BLADEBURNER_CITIES,
+  type BladeburnerChaosActionName,
+  type BladeburnerChaosMeasure,
+  type BladeburnerCityChoice,
+  type BladeburnerCityForecastInput,
+  type BladeburnerCityName,
+  type BladeburnerCityReading,
+  CHAOS_DECAY_PER_SECOND,
+  chaosActionForgone,
+  chaosAfterDiplomacy,
+  chaosAfterIncite,
+  chaosRankLoss,
+  chooseBladeburnerCity,
+  cityCompetenceRatio,
+  DIPLOMACY,
+  diplomaciesTo50,
+  diplomacyPercent,
+  INCITE_VIOLENCE,
+  inciteCountGain,
+  isBladeburnerCity,
+} from "./bladeburner-cities.ts";
 export {
   BLADEBURNER_RANK_SKILLS,
   BLADEBURNER_SKILL_NAMES,

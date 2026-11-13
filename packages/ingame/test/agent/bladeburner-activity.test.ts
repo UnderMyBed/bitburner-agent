@@ -1,8 +1,11 @@
 // The Agent's Bladeburner activity (#367): the worker run on the brain's state when it changes and every 10 s, its
-// reading kept for the medium snapshot, nothing with none asked for; and the workers themselves on a stand-in NS: the
-// division's join, the reading with the faction's and (#375) the action's, and (#379) a skill raised to a level. The simulator runs the real ones
-// (packages/brain/test/bladeburner-effectors.test.ts).
+// reading kept for the medium snapshot, nothing with none asked for, and (#383) the city worker run first with a city
+// in the state; and the workers themselves on a stand-in NS: the division's join, the reading with the faction's and
+// (#375) the action's, (#379) a skill raised to a level, and (#383) the division moved and the cities read. The
+// simulator runs the real ones (packages/brain/test/bladeburner-effectors.test.ts).
 import {
+  BLADEBURNER_CITIES,
+  BLADEBURNER_CITY_WORKER_NAME,
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_READING_SECONDS,
   BLADEBURNER_SKILL_NAMES,
@@ -15,6 +18,7 @@ import { BLADEBURNER_ROUNDS_BETWEEN, createBladeburnerActivity } from "../../src
 import type { WorkerRunner } from "../../src/agent/run-worker.ts";
 import { SNAPSHOT_ROUND_MS } from "../../src/agent/snapshotter.ts";
 import type { NS } from "../../src/ns.ts";
+import { bladeburnerCityReading } from "../../src/workers/bladeburner-city.ts";
 import { bladeburnerDivisionJoin } from "../../src/workers/bladeburner-division.ts";
 import { bladeburnerReading } from "../../src/workers/bladeburner-reading.ts";
 import { bladeburnerSkillRaise } from "../../src/workers/bladeburner-skill.ts";
@@ -293,4 +297,132 @@ test("bladeburner-skill.js (#379): at the level or over, done with nothing bough
       problem: `no Bladeburner skill ${JSON.stringify(skill)} at level ${level} to raise`,
     });
   }
+});
+
+/** The activity with both workers stood in (#383): what each was run with, in order, and what each reports. */
+function withCities() {
+  const runs: { file: string; arg: unknown }[] = [];
+  const reports = { city: true, reading: true };
+  const ns = { print: () => {} } as unknown as NS;
+  const workerRunner = {
+    runWorker: async (file: string, args: unknown[]) => {
+      runs.push({ file, arg: JSON.parse(args[0] as string) });
+      if (file === deployedFilePath("0123456789ab", BLADEBURNER_CITY_WORKER_NAME)) {
+        return reports.city
+          ? {
+              outcome: "reported",
+              report: { pid: 1, data: { city: "Aevum", cities: [CITY_READ], problems: ["a city problem"] } },
+            }
+          : { outcome: "noReport" };
+      }
+      expect(file).toBe(deployedFilePath("0123456789ab", BLADEBURNER_WORKER_NAME));
+      return reports.reading
+        ? { outcome: "reported", report: { pid: 2, data: { rank: 5, problems: ["a reading problem"] } } }
+        : { outcome: "noReport" };
+    },
+  } as unknown as WorkerRunner;
+  const bladeburner = createBladeburnerActivity(ns, { deploymentId: "0123456789ab", workerRunner });
+  return { bladeburner, runs, reports, round: () => bladeburner.convergeIfDue(Number.POSITIVE_INFINITY) };
+}
+const CITY_READ = { name: "Aevum", population: 1.2e9, communities: 40, chaos: 3 };
+
+test("with a city in the state (#383): bladeburner-city.js first, then bladeburner.js; the cities in the reading", async () => {
+  const { bladeburner, runs, round } = withCities();
+  bladeburner.desire({ joinTheFaction: false, city: "Aevum" });
+  await round();
+  expect(runs.map((run) => run.file.split("/").at(-1))).toEqual([
+    BLADEBURNER_CITY_WORKER_NAME,
+    BLADEBURNER_WORKER_NAME,
+  ]);
+  expect(runs[0]?.arg).toBe("Aevum");
+  expect(bladeburner.reading()).toEqual({
+    rank: 5,
+    problems: ["a city problem", "a reading problem"],
+    city: "Aevum",
+    cities: [CITY_READ],
+  });
+  // Null: the cities read, none to move to.
+  bladeburner.desire({ joinTheFaction: false, city: null });
+  await round();
+  expect(runs[2]?.arg).toBeNull();
+  // No city in the state (a B3 brain): bladeburner.js alone, as before.
+  bladeburner.desire({ joinTheFaction: true });
+  await round();
+  expect(runs.slice(4).map((run) => run.file.split("/").at(-1))).toEqual([BLADEBURNER_WORKER_NAME]);
+  expect(bladeburner.reading()).toEqual({ rank: 5, problems: ["a reading problem"] });
+});
+
+test("a city run that doesn't report: no reading run, both tried again next round", async () => {
+  const { bladeburner, runs, reports, round } = withCities();
+  reports.city = false;
+  bladeburner.desire({ joinTheFaction: false, city: "Aevum" });
+  await round();
+  expect(runs.map((run) => run.file.split("/").at(-1))).toEqual([BLADEBURNER_CITY_WORKER_NAME]);
+  expect(bladeburner.reading()).toBeNull();
+  reports.city = true;
+  reports.reading = false;
+  await round();
+  expect(runs).toHaveLength(3);
+  expect(bladeburner.reading()).toBeNull();
+  reports.reading = true;
+  await round();
+  expect(runs).toHaveLength(5);
+  expect(bladeburner.reading()?.city).toBe("Aevum");
+});
+
+/** A stand-in NS's Bladeburner for the cities (#383): in the division or not, its city, and whether a switch takes. */
+function cityStandIn({ inDivision = true, city = "Sector-12", switches = true } = {}) {
+  const calls: string[] = [];
+  let at = city;
+  const ns = {
+    bladeburner: {
+      inBladeburner: () => inDivision,
+      getCity: () => at,
+      switchCity: (name: string) => {
+        calls.push(`switchCity(${name})`);
+        if (switches) at = name;
+        return switches;
+      },
+      getCityEstimatedPopulation: (name: string) => 1e9 + name.length,
+      getCityCommunities: (name: string) => name.length,
+      getCityChaos: (name: string) => (name === at ? 7 : 0),
+    },
+  } as unknown as NS;
+  return { ns, calls };
+}
+
+test("bladeburner-city.js (#383): moved unless there, then the six read; null moves nothing; refusals", () => {
+  const moving = cityStandIn();
+  const reading = bladeburnerCityReading(moving.ns, "Aevum");
+  expect(moving.calls).toEqual(["switchCity(Aevum)"]);
+  expect(reading).toEqual({
+    city: "Aevum",
+    cities: BLADEBURNER_CITIES.map((name) => ({
+      name,
+      population: 1e9 + name.length,
+      communities: name.length,
+      chaos: name === "Aevum" ? 7 : 0,
+    })),
+    problems: [],
+  });
+  const there = cityStandIn({ city: "Aevum" });
+  expect(bladeburnerCityReading(there.ns, "Aevum").city).toBe("Aevum");
+  expect(there.calls).toEqual([]);
+  const none = cityStandIn();
+  expect(bladeburnerCityReading(none.ns, null).city).toBe("Sector-12");
+  expect(none.calls).toEqual([]);
+  const refused = cityStandIn({ switches: false });
+  expect(bladeburnerCityReading(refused.ns, "Ishima")).toMatchObject({
+    city: "Sector-12",
+    problems: ["the game didn't move the division to Ishima"],
+  });
+  const unknown = cityStandIn();
+  expect(bladeburnerCityReading(unknown.ns, "Tokyo")).toMatchObject({
+    city: "Sector-12",
+    problems: ['no city "Tokyo" to work in'],
+  });
+  expect(unknown.calls).toEqual([]);
+  const out = cityStandIn({ inDivision: false });
+  expect(bladeburnerCityReading(out.ns, "Aevum")).toEqual({ city: null, cities: [], problems: [] });
+  expect(out.calls).toEqual([]);
 });
