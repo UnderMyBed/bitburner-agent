@@ -784,6 +784,17 @@ export function bladeburnerPlansToTarget(input: BladeburnerActionInput): Bladebu
   return fastestToTarget(candidates, supply, target, false);
 }
 
+/**
+ * The sustainable rank a game second at `input` (#398): the tail's rate under a target (#392's decision,
+ * `bladeburnerSustainableRate`), the linear programme over every way to work each action read within its count's
+ * regrowth, the rest resting alone (Field Analysis's). Its target is ignored: the rate is the state's.
+ */
+export function bladeburnerTailRate(input: BladeburnerActionInput): number {
+  const { candidates, supply } = planCandidates(input);
+  const first = candidates[0] as PlanCandidate;
+  return bladeburnerSustainableRate(supply, first.step === null ? first.plan.rankPerSecond : 0);
+}
+
 /** `chooseBladeburnerAction`'s input. */
 export type BladeburnerActionInput = Parameters<typeof planCandidates>[0];
 

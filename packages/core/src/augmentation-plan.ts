@@ -17,7 +17,7 @@ import {
   NEUROFLUX_GOVERNOR,
   purchaseSequenceCost,
 } from "./augmentations.ts";
-import { THE_RED_PILL } from "./bitnodes.ts";
+import { THE_RED_PILL, winRouteOf } from "./bitnodes.ts";
 import { donationToReach } from "./donations.ts";
 import { HACKING_MULTIPLIERS, hackingValue } from "./faction-work.ts";
 import { DAEDALUS, daedalusAugmentationsRequired, FACTION_NAMES } from "./factions.ts";
@@ -59,7 +59,8 @@ export interface DaedalusCount {
    * Short of it: Daedalus neither joined nor invited, and fewer installed than required
    * (`Faction/FactionJoinCondition.ts:130`, `p.augmentations.length >= n`). Then any augmentation is worth installing
    * (`isWorthInstalling(name, true)`). Never with The Red Pill sold elsewhere (#334, `redPillElsewhere`: the gang's
-   * faction in BN2, core's `gangSellsRedPill`): Daedalus isn't needed then.
+   * faction in BN2, core's `gangSellsRedPill`): Daedalus isn't needed then. Nor on the Black Ops' route (#398, BN6:
+   * core's `winRouteOf`), where The Red Pill's holds are off.
    */
   short: boolean;
 }
@@ -84,7 +85,8 @@ export function daedalusCountOf({
   const count = Object.keys(installed).length;
   const required = daedalusAugmentationsRequired(currentNode, ownedSF);
   const met = joined.some((faction) => faction.name === DAEDALUS) || invitations.includes(DAEDALUS);
-  return { installed: count, required, short: !met && !redPillElsewhere && count < required };
+  const blackOps = winRouteOf(currentNode) === "blackOps";
+  return { installed: count, required, short: !met && !redPillElsewhere && !blackOps && count < required };
 }
 
 /** The multipliers an install brings, each the product over `names` (each NeuroFlux Governor copy listed counts). */

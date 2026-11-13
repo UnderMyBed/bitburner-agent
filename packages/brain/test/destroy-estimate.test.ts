@@ -5,7 +5,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { FactionWorkChoice, SlowSnapshotData } from "@bitburner-agent/core";
+import {
+  chooseWinRoute,
+  type DestroyBlackOpsInputs,
+  type FactionWorkChoice,
+  type SlowSnapshotData,
+} from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { InstallTimingView } from "../src/augmentations.ts";
 import {
@@ -1214,7 +1219,7 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
     update(rule, 1, 0);
     update(rule, 2, 1, {}, BITWIRE);
     expect(log).toContain(
-      "destroy estimate: the start in BN2 dropped, still waiting for its figure at the next cycle (#357)",
+      "destroy estimate: the start in BN2 dropped, still waiting for its figure at the next cycle (#357, #398)",
     );
     update(rule, 3, 1, { timing: forming(13) }, BITWIRE);
     expect(events.map((each) => each.moment)).toEqual(["install"]);
@@ -1258,4 +1263,76 @@ test("levelling's first look (#382's review): a choice, or an estimate at levell
       event("brainStarted", 5, {}),
     ]),
   ).toEqual([1, 2]);
+});
+
+describe("BN6's route, the Black Ops' (#398)", () => {
+  const ruleOf = () => {
+    const events: DestroyEstimateEvent[] = [];
+    const log: string[] = [];
+    const rule = new DestroyEstimateRule({
+      store,
+      log: (line) => log.push(line),
+      emit: (e) => events.push(e),
+      seedOf: () => ({ prior: null, onlineMs: 0, countMetOnlineMs: null, seenBefore: false }),
+    });
+    return { rule, events, log };
+  };
+  const choice = chooseWinRoute({ blackOpsSeconds: 36_000, redPillSeconds: 1e70, soFarSeconds: 3600 });
+  /** The route's figures as the World Daemon's path reads them: `done` of 21, `hours` to go. */
+  const blackOps = (done: number, hours: number): DestroyBlackOpsInputs => ({
+    done,
+    ms: hours * 3_600_000,
+    redPillMs: 1e73,
+    choice,
+  });
+  /** One update at `minute` of BN6, the cycle from `aug`, the route's figures (null: no reading yet). */
+  const update = (rule: DestroyEstimateRule, minute: number, aug: number, figures: DestroyBlackOpsInputs | null) =>
+    rule.update({
+      slowData: slow(minute, resetInfo(0, aug, 6, { 1: 3, 2: 3, 4: 3, 5: 1 }, {})),
+      slowGameTimeMs: m(minute),
+      slowAtMs: m(minute),
+      factionChoice: null,
+      levelling: levellingView(),
+      nowMs: m(minute),
+      blackOps: figures,
+    });
+
+  test("the start waits for the division's reading, said once; then BO, the route's time, The Red Pill's beside it", () => {
+    const { rule, events, log } = ruleOf();
+    update(rule, 1, 0, null);
+    update(rule, 2, 0, null);
+    expect(events).toEqual([]);
+    expect(log).toEqual([
+      "destroy estimate: the start in BN6 waits for the division's reading (#398), 13 min online at most",
+    ]);
+    update(rule, 3, 0, blackOps(0, 300));
+    expect(events.map((each) => [each.moment, each.stage, minutes(each.remainingMs)])).toEqual([
+      ["start", "start", 300 * 60],
+    ]);
+    expect(events[0]?.terms).toHaveLength(1);
+    expect(events[0]?.terms[0]).toMatchObject({ term: "BO", label: "cautious", never: false });
+    expect(events[0]?.terms[0]?.source).toContain("the planner's choice: the Black Ops");
+  });
+
+  test("each Black Op done is a moment of its own, the route's time from there; the first reading only counts", () => {
+    const { rule, events } = ruleOf();
+    update(rule, 1, 0, blackOps(5, 200));
+    update(rule, 2, 0, blackOps(5, 199));
+    update(rule, 3, 0, blackOps(6, 150));
+    update(rule, 4, 0, blackOps(6, 149));
+    update(rule, 5, 0, blackOps(21, 0));
+    expect(events.map((each) => [each.moment, each.stage, minutes(each.remainingMs)])).toEqual([
+      ["start", "start", 200 * 60],
+      ["black op", "black op", 150 * 60],
+      ["black op", "black op", 0],
+    ]);
+    expect(events.at(-1)?.terms[0]).toMatchObject({ term: "BO", label: "done", ms: 0 });
+  });
+
+  test("no reading past the wait's bound (13 min online): the start goes with BO none, at least", () => {
+    const { rule, events } = ruleOf();
+    for (let minute = 1; minute <= 15; minute++) update(rule, minute, 0, null);
+    expect(events.map((each) => [each.moment, each.atLeast])).toEqual([["start", true]]);
+    expect(events[0]?.terms[0]).toMatchObject({ term: "BO", ms: null });
+  });
 });

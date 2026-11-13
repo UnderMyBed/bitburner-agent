@@ -23,10 +23,12 @@ import {
   type IntentRequest,
   intentId,
   isWorthInstalling,
+  levelRiseOf,
   newBatcherHealth,
   PORT_OPENER_PROGRAMS,
   type SnapshotTier,
   type StaticSnapshotData,
+  workSecondsAlong,
 } from "@bitburner-agent/core";
 import { holdsOf, installDecision, NO_HOLDS, nextPurchase, type Purchase, type Purse } from "@bitburner-agent/model";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -1471,6 +1473,59 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         });
       });
 
+      test("the experience the medium snapshots measure reaches the planner's τ by work (#401): flat, today's; rising, less", () => {
+        // The Black Hand 120 minutes off by A5's work (hacking 300, favour 0, no share), its money in hand.
+        const rate = factionReputationPerSecond(
+          { skills: richMedium(0).player.skills, mults: { faction_rep: 1 } },
+          "hacking",
+          { favor: 0, sourceFile15Level: 0, factionWorkRepGain: 1, focused: true, implant: false },
+        );
+        const blackHand = 100_000 - rate * 120 * 60;
+        const tauOf = (perSecond: number) => {
+          const { controller, connection } = connectedWithLoopOff("planner");
+          // The medium snapshots' experience rising at `perSecond` (under a level's worth in 10 minutes: hacking 300).
+          for (let minute = 0; minute <= 10; minute += 1) {
+            const medium = richMedium(1e12);
+            const exp = { hacking: medium.player.exp.hacking + perSecond * 60 * minute };
+            for (const [tier, data] of [
+              ["slow", plannerSlow({ minute, blackHand })],
+              ["medium", { ...medium, player: { ...medium.player, exp } }],
+            ] as const) {
+              connection.receive(
+                encodeControlMessage({
+                  protocolVersion: CONTROL_PROTOCOL_VERSION,
+                  type: "snapshot",
+                  agentSessionId: "session-1",
+                  tier,
+                  sequenceNumber: ++sequenceNumber,
+                  gameTimeMs: 10 * 3_600_000 + minute * MINUTE,
+                  data,
+                }),
+              );
+            }
+          }
+          return controller.augmentationsView().progress?.timing;
+        };
+        const flat = tauOf(0);
+        expect(flat?.next[0]).toMatchObject({
+          augmentation: TBH,
+          way: "work",
+          tauMs: expect.closeTo(120 * MINUTE, -3),
+        });
+        expect(flat?.levelRise).toBeUndefined();
+        const rising = tauOf(250);
+        expect(rising?.levelRise).toEqual({ expPerSecond: expect.closeTo(250, 6), from: "measured now" });
+        // Along the level's path from the last snapshot's experience: core's, and shorter than the flat 120 minutes.
+        const along =
+          workSecondsAlong(
+            levelRiseOf({ exp: 6_106_794 + 250 * 600, level: 300, levelMult: 1, expPerSecond: 250 }),
+            (level) => rate * (level / 300),
+            rate * 120 * 60,
+          ) * 1000;
+        expect(rising?.next[0]?.tauMs).toBeCloseTo(along, -3);
+        expect(rising?.next[0]?.tauMs).toBeLessThan(120 * MINUTE - MINUTE);
+      });
+
       test("a wait at 29 of 30, The Black Hand's money 5 min off: nothing goes; restarted, no income measured, still none", () => {
         const { controller, connection, sentIds } = connectedWithLoopOff("planner");
         // Ten minutes of slow snapshots measure the income; meanwhile installing now is held for it.
@@ -2507,7 +2562,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         ]);
       });
 
-      test("from BN2.3 (#323, #334): into BN5 again, past the BitNodes the brain can't play yet, in the view and stored", async () => {
+      test("from BN2.3 (#323, #334, #398): into BN5 again, BN6 skipped for B7 with its reason, in the view and stored", async () => {
         const { controller, sentIds, settleBackup, daemonMedium } = withTheRedPill({
           ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 },
           currentNode: 2,
@@ -2516,7 +2571,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
         daemonMedium();
         const skipped =
-          "BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); " +
+          "BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
           "BN3 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({ nextBitNode: 5, replay: null, skipped });
         daemonMedium();
@@ -2573,7 +2628,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
           "Source-File 5 at 3), but the run";
         const skipped =
-          "BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); " +
+          "BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
           "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({
           destroying: true,

@@ -517,9 +517,9 @@ test.each(
         new RegExp(
           "^augmentations: the planner's install timing: 25 of 30 installed, 4 new at an install, \\d+ min this cycle " +
             "\\(T[^)]*\\); to Daedalus's count: install now \\d+ min, wait for The Black Hand \\(1\\d min, by work at " +
-            // #389: the harness's cycle first seen with reputation earned, R not measured: this one's shape, said so.
-            "The Black Hand\\) 1\\d min; later cycles this one's shape: R not measured \\(the cycle first seen with " +
-            "reputation earned\\); chosen: wait for 1$",
+            "The Black Hand\\) 1\\d min" +
+            // #389: how the later cycles are priced; #401: τ by work along the level's rise (the harness's experience).
+            "(; later cycles [^;]*)?(; τ by work along the level's rise, [\\d,]+ exp/s now \\([^)]+\\))?; chosen: wait for 1$",
         ),
       ),
     ]);
