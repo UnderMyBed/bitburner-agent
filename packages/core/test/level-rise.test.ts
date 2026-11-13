@@ -560,6 +560,37 @@ const deadFor = (index: number): { minutes: number; measured: boolean } => {
   return { minutes: RAMP_FALLBACK_MINUTES, measured: false };
 };
 
+/** Cycle `index`'s experience at `minutes` as measured: linear between the levels the report gives. */
+const measuredExpAt = (index: number, minutes: number) => {
+  const points = measuredExp(index);
+  const at = points.findIndex(([each]) => each >= minutes);
+  const [t0, e0] = points[Math.max(0, at - 1)] as [number, number];
+  const [t1, e1] = points[at] as [number, number];
+  return t1 === t0 ? e1 : e0 + ((e1 - e0) * (minutes - t0)) / (t1 - t0);
+};
+
+/**
+ * Cycle `index`'s mean work rate as the brain takes it (#405's second review): at the cycle's first work, from the
+ * experience and the level then (as measured), the carried κ after what's left of the dead time, the level held at
+ * what it is meanwhile; the work from then to T.
+ */
+const brainMean = (index: number) => {
+  const before = BN4_2[index - 1] as Cycle;
+  const cycle = BN4_2[index] as Cycle;
+  const gain = levellingInstallMultipliers(before.neuroFlux, before.bought);
+  const exp = measuredExpAt(index, cycle.firstWork);
+  const levelMult = multipliers[index]?.hacking ?? 1;
+  const rise = {
+    exp,
+    level: levelMult * (32 * Math.log(exp + 534.6) - 200),
+    levelMult,
+    kappa: endRise(index - 1).kappa * gain.hackingExp * gain.hackingSpeed,
+    delaySeconds: Math.max(0, deadFor(index).minutes - cycle.firstWork) * MINUTE,
+  };
+  const workSeconds = (cycle.T - cycle.firstWork) * MINUTE;
+  return reputationAlong(rise, rateIn(index, measuredFactor(index - 1)), 0, workSeconds) / (cycle.T * MINUTE);
+};
+
 const predictedMean = (index: number, dead = true) => {
   const before = BN4_2[index - 1] as Cycle;
   const cycle = BN4_2[index] as Cycle;
@@ -598,12 +629,16 @@ describe("the hindcast (#401): BN4.2's work rate each cycle, predicted from the 
    * Since #405's review the path starts after the measured dead time: the cycle before's ramp (`rampOf`), else the
    * last measured before it, else the brain's fallback, 10 minutes. The evidence's levels are coarse (100, 300, 500,
    * 1,000 and the peak), so a ramp is to the quarter minute between them; c1 has none carried in, and c2, c4 and c6
-   * never reached the κ carried into them. Without the dead time, as the PR's first round: `without`.
+   * never reached the κ carried into them. Without the dead time, as the PR's first round: `without`. The ramps are
+   * coarse: c3's 19.25 minutes is mostly straight lines between its marks (300 at 3, 500 at 15, 724 at 67 minutes).
+   * `ratio` is the model from the install (c4's 0.53 is that model's: c3's 19.25 minutes is half of c4's 37); `brain` is
+   * the model as the brain takes it (`brainMean`: from the first work, the level held at what it is for what's left of
+   * the dead time): 0.86–1.03.
    */
   test.each([
-    { cycle: 2, dead: "10 (fallback)", deadMinutes: 10, measured: false, ratio: 0.92, without: 1.148 },
-    { cycle: 3, dead: "10 (fallback)", deadMinutes: 10, measured: false, ratio: 0.852, without: 0.972 },
-    { cycle: 4, dead: "19.25 (c3's)", deadMinutes: 19.25, measured: true, ratio: 0.532, without: 1.08 },
+    { cycle: 2, dead: "10 (fallback)", deadMinutes: 10, measured: false, ratio: 0.92, without: 1.148, brain: 1.034 },
+    { cycle: 3, dead: "10 (fallback)", deadMinutes: 10, measured: false, ratio: 0.852, without: 0.972, brain: 0.909 },
+    { cycle: 4, dead: "19.25 (c3's)", deadMinutes: 19.25, measured: true, ratio: 0.532, without: 1.08, brain: 0.911 },
     {
       cycle: 5,
       dead: "19.25 (c3's, the last measured)",
@@ -611,20 +646,36 @@ describe("the hindcast (#401): BN4.2's work rate each cycle, predicted from the 
       measured: true,
       ratio: 0.659,
       without: 0.915,
+      brain: 0.86,
     },
-    { cycle: 6, dead: "4.5 (c5's)", deadMinutes: 4.5, measured: true, ratio: 0.998, without: 1.069 },
-    { cycle: 7, dead: "4.5 (c5's, the last measured)", deadMinutes: 4.5, measured: true, ratio: 0.864, without: 0.92 },
-    { cycle: 8, dead: "3.75 (c7's)", deadMinutes: 3.75, measured: true, ratio: 0.943, without: 0.968 },
-  ])("c$cycle: dead time $dead min, predicted over measured $ratio ($without without it), within ×2", (row) => {
-    const index = row.cycle - 1;
-    expect(deadFor(index)).toEqual({ minutes: row.deadMinutes, measured: row.measured });
-    const measured = (BN4_2[index] as Cycle).mean;
-    const ratio = predictedMean(index) / measured;
-    expect(ratio).toBeGreaterThan(0.5);
-    expect(ratio).toBeLessThan(2);
-    expect(ratio).toBeCloseTo(row.ratio, 2);
-    expect(predictedMean(index, false) / measured).toBeCloseTo(row.without, 2);
-  });
+    { cycle: 6, dead: "4.5 (c5's)", deadMinutes: 4.5, measured: true, ratio: 0.998, without: 1.069, brain: 1.026 },
+    {
+      cycle: 7,
+      dead: "4.5 (c5's, the last measured)",
+      deadMinutes: 4.5,
+      measured: true,
+      ratio: 0.864,
+      without: 0.92,
+      brain: 0.923,
+    },
+    { cycle: 8, dead: "3.75 (c7's)", deadMinutes: 3.75, measured: true, ratio: 0.943, without: 0.968, brain: 0.959 },
+  ])(
+    "c$cycle: dead time $dead min, predicted over measured $ratio from the install ($without without it), $brain as the brain takes it",
+    (row) => {
+      const index = row.cycle - 1;
+      expect(deadFor(index)).toEqual({ minutes: row.deadMinutes, measured: row.measured });
+      const measured = (BN4_2[index] as Cycle).mean;
+      const ratio = predictedMean(index) / measured;
+      expect(ratio).toBeGreaterThan(0.5);
+      expect(ratio).toBeLessThan(2);
+      expect(ratio).toBeCloseTo(row.ratio, 2);
+      expect(predictedMean(index, false) / measured).toBeCloseTo(row.without, 2);
+      const brain = brainMean(index) / measured;
+      expect(brain).toBeCloseTo(row.brain, 2);
+      expect(brain).toBeGreaterThan(0.5);
+      expect(brain).toBeLessThan(2);
+    },
+  );
 
   test("the rise across the BitNode: c2 to c8 measured ×5.2, predicted within ×2 of it", () => {
     const measured = (BN4_2[7] as Cycle).mean / (BN4_2[1] as Cycle).mean;

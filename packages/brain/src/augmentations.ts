@@ -164,7 +164,7 @@ import { workConditionsOf, workingPersonOf } from "./factions.ts";
 import { chooseHomeRamUpgrade } from "./home-ram.ts";
 import { readSwitch, writeSwitch } from "./switches.ts";
 import type { Environment, TelemetryStore } from "./telemetry-store.ts";
-import { HACKING_EXP_WINDOW_MS, HackingExpRate } from "./world-daemon.ts";
+import { HACKING_EXP_GAP_MS, HACKING_EXP_WINDOW_MS, HackingExpRate } from "./world-daemon.ts";
 
 // What's within reach beyond a joined seller's reputation moved to core (#260); these names stay here for the brain's
 // other modules and tests.
@@ -1114,7 +1114,10 @@ export interface CarriedLevelRise {
 /**
  * A cycle's ramp after its install (#405's review), as #389 keeps its rebuild: the time online from the install until
  * the experience rate measured (`HackingExpRate`, from its first minute) first reaches, per level + 50, the κ carried
- * into the cycle; its cycle's `lastAugReset`. Measured once a cycle, kept across a restart.
+ * into the cycle; its cycle's `lastAugReset`. Measured once a cycle, kept across a restart. Only for a cycle this brain
+ * watched from its install with the rate unbroken (#405's second review, as #388's `cycleSeen` guards T): a cycle first
+ * seen over a gap (`HACKING_EXP_GAP_MS`) past its install, a restart past that, or a gap or a fall in the experience
+ * mid-ramp (which empty `HackingExpRate`) store `rampMs` null, not measured, and the last measured carries.
  */
 export const AUGMENTATION_LEVEL_RAMP_SETTING = "augmentations.levelRamp";
 
@@ -1125,7 +1128,7 @@ export const AUGMENTATION_LEVEL_RAMP_SETTING = "augmentations.levelRamp";
  */
 export const LEVEL_RAMP_FALLBACK_MS = HACKING_EXP_WINDOW_MS;
 
-export function readLevelRamp(store: TelemetryStore): { lastAugReset: number; rampMs: number } | null {
+export function readLevelRamp(store: TelemetryStore): { lastAugReset: number; rampMs: number | null } | null {
   const value = store.getSetting(AUGMENTATION_LEVEL_RAMP_SETTING);
   if (value === null) return null;
   let ramp: { lastAugReset?: unknown; rampMs?: unknown } | null;
@@ -1135,10 +1138,10 @@ export function readLevelRamp(store: TelemetryStore): { lastAugReset: number; ra
     throw new Error(`the store's ${AUGMENTATION_LEVEL_RAMP_SETTING} isn't JSON`);
   }
   const { lastAugReset, rampMs } = ramp ?? {};
-  if (!isFiniteNumber(lastAugReset) || !isFiniteNumber(rampMs) || rampMs < 0) {
+  if (!isFiniteNumber(lastAugReset) || (rampMs !== null && !(isFiniteNumber(rampMs) && rampMs >= 0))) {
     throw new Error(`the store's ${AUGMENTATION_LEVEL_RAMP_SETTING} isn't a ramp the brain wrote`);
   }
-  return { lastAugReset, rampMs };
+  return { lastAugReset, rampMs: rampMs as number | null };
 }
 
 export function readCarriedLevelRise(store: TelemetryStore): CarriedLevelRise | null {
@@ -1586,6 +1589,12 @@ export class AugmentationRule {
   readonly #expRate = new HackingExpRate();
   /** The medium snapshot's game time last sampled for it: each is taken once (the rate restarts on a time not later). */
   #expSampledAtMs: number | null = null;
+  /**
+   * The cycle's ramp watch (#405's second review): its `lastAugReset` (the slow snapshot's), the last experience sample,
+   * and whether this brain has watched it from its install (its first sample within `HACKING_EXP_GAP_MS` of it) with
+   * the rate unbroken since (no gap over it, no fall). Within one brain process: a restart starts it again.
+   */
+  #rampWatch: { lastAugReset: number; lastAtMs: number; lastExp: number; unbroken: boolean } | null = null;
   /** The planner's choice and n as last decided (#343), or null when it isn't timing installs: logged on a change. */
   #timingLogged: string | null = null;
   /** Installing now held for the income (#343): the cycle, when it began (online), and whether it's been reported. */
@@ -1858,6 +1867,7 @@ export class AugmentationRule {
     if (mediumGameTimeMs !== null && mediumGameTimeMs !== this.#expSampledAtMs && isFiniteNumber(hackingExp)) {
       this.#expSampledAtMs = mediumGameTimeMs;
       this.#expRate.add(mediumGameTimeMs, hackingExp);
+      this.#watchRamp(slowData, mediumGameTimeMs, hackingExp);
     }
     this.#recordDone(doneIds, fastGameTimeMs, atMs);
     this.#watchInstallDone(doneIds, slowGameTimeMs, atMs);
@@ -3293,9 +3303,13 @@ export class AugmentationRule {
     const carried =
       stored !== null && stored.lastNodeReset === lastNodeReset && stored.lastAugReset < lastAugReset ? stored : null;
     const sinceInstallMs = this.#onlineClock?.lastAugReset === lastAugReset ? this.#onlineClock.onlineMs : 0;
-    if (carried !== null && readLevelRamp(this.#store)?.lastAugReset !== lastAugReset) {
+    const watch = this.#rampWatch?.lastAugReset === lastAugReset ? this.#rampWatch : null;
+    if (carried !== null && watch !== null && readLevelRamp(this.#store)?.lastAugReset !== lastAugReset) {
+      // Not watched from the install with the rate unbroken: not measured, once, and the last measured carries.
       const perSecond = this.#expRate.perSecond();
-      if (perSecond !== null && perSecond / (level + LEVEL_RISE_TERM) >= carried.kappa) {
+      if (!watch.unbroken) {
+        this.#store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, JSON.stringify({ lastAugReset, rampMs: null }));
+      } else if (perSecond !== null && perSecond / (level + LEVEL_RISE_TERM) >= carried.kappa) {
         this.#store.setSetting(
           AUGMENTATION_LEVEL_RAMP_SETTING,
           JSON.stringify({ lastAugReset, rampMs: sinceInstallMs }),
@@ -3311,6 +3325,24 @@ export class AugmentationRule {
       };
     }
     return { rise: measured, from: measured.kappa > 0 ? "measured now" : null, dead: {} };
+  }
+
+  /** Keeps the ramp's watch (`#rampWatch`) at each experience sample, a new cycle's on the slow snapshot's reset. */
+  #watchRamp(slowData: SlowSnapshotData | null, atMs: number, exp: number): void {
+    const lastAugReset = (slowData?.resetInfo as { lastAugReset?: unknown } | undefined)?.lastAugReset;
+    const watch = this.#rampWatch;
+    if (isFiniteNumber(lastAugReset) && watch?.lastAugReset !== lastAugReset) {
+      this.#rampWatch = {
+        lastAugReset,
+        lastAtMs: atMs,
+        lastExp: exp,
+        unbroken: atMs >= lastAugReset && atMs - lastAugReset <= HACKING_EXP_GAP_MS,
+      };
+      return;
+    }
+    if (watch === null) return;
+    const broken = atMs - watch.lastAtMs > HACKING_EXP_GAP_MS || exp < watch.lastExp;
+    this.#rampWatch = { ...watch, lastAtMs: atMs, lastExp: exp, unbroken: watch.unbroken && !broken };
   }
 
   /**
@@ -3340,7 +3372,7 @@ export class AugmentationRule {
     const ramp = readLevelRamp(this.#store);
     const before = readCarriedLevelRise(this.#store);
     const deadMs =
-      ramp?.lastAugReset === lastAugReset
+      ramp?.lastAugReset === lastAugReset && ramp.rampMs !== null
         ? ramp.rampMs
         : before !== null && before.lastNodeReset === lastNodeReset
           ? before.deadMs

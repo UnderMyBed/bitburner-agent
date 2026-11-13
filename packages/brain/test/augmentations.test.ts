@@ -806,7 +806,7 @@ describe("the level's rise carried over an install (#401)", () => {
     expect(readCarriedLevelRise(store)).toMatchObject({ lastAugReset: 0, deadMs: 4 * MINUTE });
     // None this cycle (another cycle's ramp), one carried in from the cycle before: the last measured, kept.
     store.setSetting(AUGMENTATION_CYCLE_SETTING, JSON.stringify({ lastAugReset: 0 }));
-    for (const ramp of [null, { lastAugReset: -5, rampMs: MINUTE }]) {
+    for (const ramp of [null, { lastAugReset: -5, rampMs: MINUTE }, { lastAugReset: 0, rampMs: null }]) {
       rule = newRule();
       if (ramp === null) store.deleteSetting(AUGMENTATION_LEVEL_RAMP_SETTING);
       else store.setSetting(AUGMENTATION_LEVEL_RAMP_SETTING, JSON.stringify(ramp));
@@ -3433,29 +3433,85 @@ describe("the planner times installs short of Daedalus's count (#343)", () => {
     }
   });
 
-  test("this cycle's ramp (#405's review): the time online its rate first reaches the carried κ, stored once", () => {
+  /**
+   * A cycle installed at `installMs` (the game's time): the online clock and the brain's look from then, κ carried over
+   * the install before it; a new rule. The ramp's κ: the rate over the samples, per level + 50, at E0 a minute.
+   */
+  const RAMP_KAPPA = E0 / 60 / 2_550;
+  const cycleFrom = (installMs: number) => {
+    store.setSetting(
+      AUGMENTATION_LEVEL_RISE_SETTING,
+      JSON.stringify({ lastNodeReset: 0, lastAugReset: installMs - 1, kappa: RAMP_KAPPA }),
+    );
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: installMs, onlineMs: 0, lastGameTimeMs: installMs }),
+    );
+    store.setSetting(
+      AUGMENTATION_CYCLE_SEEN_SETTING,
+      JSON.stringify({ lastAugReset: installMs, gameTimeMs: installMs }),
+    );
+    rule = newRule("planner");
+  };
+  /** `minutes` minutes on, the experience rising by `perMinute` × E0 each, from `exp`; returns the experience then. */
+  const rampOn = (installMs: number, minutes: number, perMinute: number, exp: number) => {
     const reputation = reputationFor(42 * MINUTE);
-    // The rate over its samples reaches the carried κ per level + 50 at the second minute: E0/2, then 2·E0 a minute.
-    const kappa = E0 / 60 / 2_550;
-    store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa }));
-    plannerAt(60);
-    let exp = E0;
-    const onlineAt: number[] = [];
-    for (let minute = 0; minute < 5; minute += 1) {
-      minuteOn({ reputation }, MONEY, withExp(exp));
-      onlineAt.push(rule.view().progress?.timing?.timeOnlineMs as number);
-      if (minute === 0) expect(readLevelRamp(store)).toBeNull();
-      exp += minute === 0 ? E0 / 2 : 2 * E0;
+    let now = exp;
+    for (let minute = 0; minute < minutes; minute += 1) {
+      minuteOn({ reputation, lastAugReset: installMs }, MONEY, withExp(now));
+      now += perMinute * E0;
     }
-    // The first minute's half rate: under it; over two minutes, 1.25 times it.
+    return now;
+  };
+
+  test("this cycle's ramp (#405's review): watched from its install, the time online its rate reaches the carried κ, once", () => {
+    const installMs = gameTimeMs;
+    cycleFrom(installMs);
+    // E0/2 in the first minute, then 2·E0 a minute: over two minutes, 1.25 times the κ.
+    let exp = rampOn(installMs, 1, 0.5, E0);
+    expect(readLevelRamp(store)).toBeNull();
+    const onlineAt: number[] = [];
+    for (let minute = 0; minute < 4; minute += 1) {
+      exp = rampOn(installMs, 1, 2, exp);
+      onlineAt.push(rule.view().progress?.timing?.timeOnlineMs as number);
+    }
     const ramp = readLevelRamp(store);
-    expect(ramp?.lastAugReset).toBe(0);
+    expect(ramp?.lastAugReset).toBe(installMs);
+    expect(ramp?.rampMs).toBeGreaterThan(0);
     expect(onlineAt).toContain(ramp?.rampMs);
-    expect(ramp?.rampMs).toBeGreaterThan(onlineAt[0] as number);
     // Stored once: kept as the rate goes on.
     const first = ramp?.rampMs;
-    minuteOn({ reputation }, MONEY, withExp(exp + 10 * E0));
+    rampOn(installMs, 1, 10, exp);
     expect(readLevelRamp(store)?.rampMs).toBe(first);
+  });
+
+  test("the ramp's guard (#405's second review): a restart mid-ramp, the rate reached after it: not measured", () => {
+    const installMs = gameTimeMs;
+    cycleFrom(installMs);
+    // Four minutes under the κ (a tenth of it), then a restart, then 4·E0 a minute: reached, by a brain that didn't
+    // watch the ramp from the install.
+    const exp = rampOn(installMs, 4, 0.1, E0);
+    rule = newRule("planner");
+    rampOn(installMs, 4, 4, exp);
+    expect(readLevelRamp(store)).toEqual({ lastAugReset: installMs, rampMs: null });
+  });
+
+  test("the ramp's guard (#405's second review): a cycle first seen 30 minutes past its install: not measured", () => {
+    const installMs = gameTimeMs - 30 * MINUTE;
+    cycleFrom(installMs);
+    rampOn(installMs, 4, 4, E0);
+    expect(readLevelRamp(store)).toEqual({ lastAugReset: installMs, rampMs: null });
+  });
+
+  test("the ramp's guard (#405's second review): a gap over 3 minutes in the experience mid-ramp: not measured", () => {
+    const installMs = gameTimeMs;
+    cycleFrom(installMs);
+    const exp = rampOn(installMs, 2, 0.1, E0);
+    expect(readLevelRamp(store)).toBeNull();
+    // Four minutes with no snapshot (the game closed): the rate starts again, the ramp unwatched.
+    gameTimeMs += 4 * MINUTE;
+    rampOn(installMs, 4, 4, exp);
+    expect(readLevelRamp(store)).toEqual({ lastAugReset: installMs, rampMs: null });
   });
 
   test("the level's rise (#401): the last cycle's κ carried over the install, where it's more than the window's", () => {

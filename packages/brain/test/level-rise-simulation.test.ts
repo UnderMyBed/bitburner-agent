@@ -8,7 +8,11 @@
 //   the ramp's dead time as the brain takes it (#405's review): the second cycle's from the fallback (the first had no
 //   rate carried into it to ramp to), the third's from the second's ramp, measured as the brain does (its rate from
 //   the first minute reaching the κ carried into it, per level + 50).
-// The bars, stated: over the hour, within 10% of the game's level every 10 minutes, and nearer than the level held flat.
+// The bars, stated: over the hour, within 10% of the game's level every 10 minutes (a bar chosen, not derived), and
+// nearer than the level held flat. No measured dead time runs here: A6 is off (the owner's installs), so the brain's
+// stored ramp and carried κ never run, and the first cycle had no κ carried into it to ramp to; the second never
+// reached its own, so both installs take the fallback. After them, "with the dead time" bounds the level from below only
+// as far as the fallback's flat 10 minutes, at level 1.
 // It drifts under the game's as the hour goes on, as two terms core's model leaves out grow with the level: a hack's
 // chance (failed hacks earn a quarter of the experience, `NetscriptHelpers.tsx:564-565`; the chance rises with the
 // level, `Hacking.ts:12-28`) and the batcher's move to a target worth more experience a thread. After each install,
