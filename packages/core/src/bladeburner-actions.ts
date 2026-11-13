@@ -927,8 +927,8 @@ function planCandidates({
  *   (`bladeburnerAttemptsInCount`) is followed, as a sequence, by the next-best: the plan with another action (or
  *   resting alone) with the least expected time from the rank now, for its own count too (#392); then, or straight
  *   away where no next-best beats it, the tail: the rank still needed over the sustainable rate (#392's decision,
- *   `bladeburnerSustainableRate`: each action's best plan up to its count's regrowth, the most rank a second first,
- *   the rest resting alone), common to every plan. Far from the target the choice is the stock's best rank a second.
+ *   `bladeburnerSustainableRate`: the linear programme over every way to work each action read, a level and a rest,
+ *   within its count's regrowth and the second's time, the rest resting alone), common to every plan. Far from the target the choice is the stock's best rank a second.
  * - **Pruned** (`prune`): each plan's Wald bound (`bladeburnerSecondsToRankAtLeast`; with a count, the distance over
  *   the faster rise of it and its next-best) is taken first, and the walk solved only for those
  *   it can't rule out; just the best returned. Unpruned, every plan, sorted.
@@ -1008,8 +1008,9 @@ function fastestToTarget(
     return solved.sort((x, y) => x.seconds - y.seconds || x.order - y.order);
   };
   const pool = candidates.map((candidate, order) => ({ candidate, order }));
-  // The tail after the stock (#392's decision): the sustainable rate, each action's best plan's rank a second of its
-  // cycle up to its count's growth, the rest resting alone (the first candidate's, Field Analysis's).
+  // The tail after the stock (#392's decision): the sustainable rate, the linear programme over every way to work each
+  // action read (a level and a rest) within its count's regrowth and the second, the rest resting alone (the first
+  // candidate's, Field Analysis's).
   const first = candidates[0] as PlanCandidate;
   const tailRate = bladeburnerSustainableRate(supply, first.step === null ? first.plan.rankPerSecond : 0);
   // A plan's step with its count, then the tail; unbounded where its count keeps up.

@@ -385,6 +385,7 @@ export {
   planBladeburnerSkills,
 } from "./bladeburner-skills.ts";
 export {
+  BLADEBURNER_STOCK_ALPHA,
   BLADEBURNER_TARGET_CELLS,
   BLADEBURNER_TARGET_CELLS_A_DISTANCE,
   BLADEBURNER_TARGET_CELLS_A_STEP,
@@ -400,6 +401,7 @@ export {
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
   bladeburnerStepRise,
+  bladeburnerStockInClosedForm,
   bladeburnerSustainableRate,
   bladeburnerTargetGrid,
 } from "./bladeburner-targets.ts";

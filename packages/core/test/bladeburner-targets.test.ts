@@ -18,6 +18,7 @@ import {
 } from "../src/bladeburner-actions.ts";
 import { bladeburnerSkillMultsOf } from "../src/bladeburner-skills.ts";
 import {
+  BLADEBURNER_STOCK_ALPHA,
   BLADEBURNER_TARGET_CELLS,
   BLADEBURNER_TARGET_CELLS_A_DISTANCE,
   BLADEBURNER_TARGET_CELLS_A_STEP,
@@ -31,6 +32,7 @@ import {
   bladeburnerSecondsToRank,
   bladeburnerSecondsToRankAtLeast,
   bladeburnerStepRise,
+  bladeburnerStockInClosedForm,
   bladeburnerSustainableRate,
   bladeburnerTargetGrid,
 } from "../src/bladeburner-targets.ts";
@@ -849,5 +851,73 @@ describe("the sustainable rate (#392's decision)", () => {
         `${(3600 * standardError).toFixed(2)}`,
     );
     expect(Math.abs(walked - rate)).toBeLessThanOrEqual(4 * standardError + 0.01 * rate);
+  });
+});
+
+describe("the stock in closed form (#395's review)", () => {
+  // 300 attempts then the tail: one rising steadily (Tracking-like), one with failures that lose (a fair coin, ±0.5).
+  const tail = 0.47 / 60;
+  const rising = { chance: 0.87, gain: 0.33, loss: 0, rest: 0, seconds: 8, attempts: 300, tailRate: tail };
+  const coin = { chance: 0.6, gain: 0.5, loss: 0.5, rest: 0, seconds: 8, attempts: 300, tailRate: tail };
+  /** Freedman's margin at the stock's α, by its definition: the attempts' summed variance, and the larger step. */
+  const freedman = (step: BladeburnerRankStep, b: number) => {
+    const rise = bladeburnerStepRise(step);
+    const square =
+      (step.chance * step.gain ** 2 + (1 - step.chance) * step.loss ** 2) * (1 + 0.01 / 3) +
+      2 * step.rest * (step.chance * step.gain - (1 - step.chance) * step.loss) +
+      step.rest ** 2;
+    const variance = (step.attempts as number) * (square - rise * rise);
+    const logs = Math.log(1 / BLADEBURNER_STOCK_ALPHA);
+    return (logs * b) / 3 + Math.sqrt(((logs * b) / 3) ** 2 + 2 * logs * variance);
+  };
+  const chain = (step: BladeburnerRankStep, rank: number, target: number) =>
+    bladeburnerSecondsToRank(step, rank, target, { closedForm: false });
+  const same = (closed: number | null, step: BladeburnerRankStep, rank: number, target: number) => {
+    expect(closed).not.toBeNull();
+    expect(Math.abs((closed as number) - chain(step, rank, target)) / chain(step, rank, target)).toBeLessThan(1e-4);
+    expect(bladeburnerSecondsToRank(step, rank, target)).toBe(closed);
+  };
+  const declined = (step: BladeburnerRankStep, rank: number, target: number) => {
+    expect(bladeburnerStockInClosedForm(step, rank, target)).toBeNull();
+    expect(bladeburnerSecondsToRank(step, rank, target)).toBe(chain(step, rank, target));
+  };
+
+  test("the target's side: past every attempt's most, closed; within it, by Freedman's margin, both sides", () => {
+    expect(BLADEBURNER_STOCK_ALPHA).toBe(1e-9);
+    const mean = 300 * bladeburnerStepRise(rising);
+    const most = 300 * 0.33 * 1.1;
+    const margin = freedman(rising, 0.33 * 1.1 - bladeburnerStepRise(rising));
+    // Every attempt a success at the top still short of it: closed, the chain's time.
+    same(bladeburnerStockInClosedForm(rising, 1000, 1000 + most + 1), rising, 1000, 1000 + most + 1);
+    // Within the most, over the mean drift and Freedman's margin: closed (Freedman's alone); under it: the chain.
+    expect(mean + 1.1 * margin).toBeLessThan(most);
+    same(
+      bladeburnerStockInClosedForm(rising, 1000, 1000 + mean + 1.1 * margin),
+      rising,
+      1000,
+      1000 + mean + 1.1 * margin,
+    );
+    declined(rising, 1000, 1000 + mean + 0.9 * margin);
+    console.log(
+      `the target's side: the mean ${mean.toFixed(2)}, Freedman's ${margin.toFixed(2)}, the most ${most.toFixed(2)}`,
+    );
+  });
+
+  test("the floor's side: over every attempt's fall, closed; within it, by Freedman's margin, both sides", () => {
+    const fall = 300 * 0.5 * 1.1;
+    const margin = freedman(coin, bladeburnerStepRise(coin) + 0.5 * 1.1);
+    // The path's lowest mean is its start (a rising drift): the floor's gate is Freedman's margin under the rank.
+    expect(bladeburnerStepRise(coin)).toBeGreaterThan(0);
+    same(bladeburnerStockInClosedForm(coin, fall + 1, 2500), coin, fall + 1, 2500);
+    expect(1.1 * margin).toBeLessThan(fall);
+    same(bladeburnerStockInClosedForm(coin, 1.1 * margin, 2500), coin, 1.1 * margin, 2500);
+    declined(coin, 0.9 * margin, 2500);
+    console.log(`the floor's side: Freedman's ${margin.toFixed(2)}, the most fall ${fall.toFixed(2)}`);
+  });
+
+  test("declined where it can't apply: no tail, a count unbounded, or a stock that reaches the target", () => {
+    expect(bladeburnerStockInClosedForm({ ...rising, tailRate: undefined }, 1000, 2500)).toBeNull();
+    expect(bladeburnerStockInClosedForm({ ...rising, attempts: undefined }, 1000, 2500)).toBeNull();
+    declined(rising, 1000, 1050);
   });
 });

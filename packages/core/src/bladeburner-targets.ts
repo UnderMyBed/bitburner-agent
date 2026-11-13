@@ -196,7 +196,9 @@ export interface BladeburnerRankSource {
  * Optimization", 1997, §4.2, strong duality). Convex and piecewise linear in λ, so its least is where its slope,
  * 1 − Σ growthₐ·secondsₒ of the ways worked, turns from negative: bisected. Left out, and labelled: the regrowth's
  * randomness (a tenth of a random integer a second, its mean taken) and the chances' change over the tail (the levels
- * opened, the skills bought).
+ * opened, the skills bought). Each way balances its stamina within its own cycle (its duty against its rest), not
+ * pooled across the ways worked, so a mix that could share the rests is held to each one's own: a conservative lower
+ * bound on the rate.
  */
 export function bladeburnerSustainableRate(
   sources: readonly BladeburnerRankSource[],
@@ -313,7 +315,13 @@ export function bladeburnerSecondsToRankAtLeast(step: BladeburnerRankStep, rank:
  * `bladeburnerCycleStep`), and the chances moving with the levels opened, the skills bought and the city's chaos
  * (the rule re-plans at each reading: this weighs the walk as if the step stayed as it is now).
  */
-export function bladeburnerSecondsToRank(step: BladeburnerRankStep, rank: number, target: number): number {
+export function bladeburnerSecondsToRank(
+  step: BladeburnerRankStep,
+  rank: number,
+  target: number,
+  /** The stock in closed form where it applies (`bladeburnerStockInClosedForm`); off, the chain always (the tests'). */
+  { closedForm = true }: { closedForm?: boolean } = {},
+): number {
   if (rank >= target) return 0;
   const attempts = step.attempts ?? Number.POSITIVE_INFINITY;
   if (attempts < 1) {
@@ -322,7 +330,7 @@ export function bladeburnerSecondsToRank(step: BladeburnerRankStep, rank: number
       : bladeburnerSecondsToRank(step.next, rank, target);
   }
   // Far from both the target and the floor (#395's review: the chain's cost), the stock in closed form.
-  const closed = stockInClosedForm(step, rank, target);
+  const closed = closedForm ? bladeburnerStockInClosedForm(step, rank, target) : null;
   if (closed !== null) return closed;
   // Each walk on its own grid, by its own steps, over the one window (the next-best's taken onto the first's).
   const bounded = attempts < Number.POSITIVE_INFINITY;
@@ -450,7 +458,7 @@ export const BLADEBURNER_STOCK_ALPHA = 1e-9;
  * (`bladeburnerStepRise`; Wald's identity over a fixed number of steps), which the chain would give for a grid's work
  * (each landing split to keep its mean, the tail linear). Null where it doesn't apply.
  */
-function stockInClosedForm(step: BladeburnerRankStep, rank: number, target: number): number | null {
+export function bladeburnerStockInClosedForm(step: BladeburnerRankStep, rank: number, target: number): number | null {
   let variance = 0;
   let up = 0;
   let down = 0;
