@@ -190,8 +190,9 @@ export function knownBitNodes(): number[] {
  * 6,000 (3,000, `Server/data/servers.ts:1536`, × `WorldDaemonDifficulty` 2, `Server/ServerHelpers.ts:383-385`) at a
  * level multiplier of 0.35 (`BitNode.tsx:694-769`), 17,143 at ×1, against BN4's 9,000. BN6's is built (B6, #398), but the
  * competence it needs comes from augmentations and installs on the route, B7's, so BN6 waits for B7 (#400's review:
- * the route's estimate at a BN6.1 start is 5.0 million h at combat 100 and 499,000 h at 300, an upper bound that holds
- * the rate and chances at their start, the skills the rank brings and the stats' growth left out). BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is B8's.
+ * the route's estimate at a BN6.1 start is 5.0 million h at combat 100 and 499,000 h at 300, cautious on balance: the
+ * rate and chances held at their start, the skills the rank brings and the stats' growth left out, erring long by far;
+ * the Black Ops' stamina and HP left out, erring short). BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is B8's.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [6, "no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route)"],

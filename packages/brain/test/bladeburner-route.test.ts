@@ -17,6 +17,7 @@ import {
   type BladeburnerPerson,
   blackOpRankLoss,
   blackOpSeconds,
+  blackOpStaminaCost,
   blackOpsRouteEstimate,
   bladeburnerLevelledAction,
   bladeburnerSkillMultsOf,
@@ -165,6 +166,37 @@ describe("the route from the reading (#398)", () => {
     expect(view.climbWindowMs).toBeCloseTo(window * 1000, 3);
     expect(view.climbRise).toBeCloseTo(climbRiseLowerBound(estimate.rate, window, climbAttempts, 0.001), 6);
     expect(view.climbRise).toBeGreaterThan(0);
+    // The rule's own plan where given (#400's round 2): its rate where under ρ is the mean; resting alone, not judged.
+    const slower = { ...climbing, rankPerSecond: estimate.rate / 2 };
+    const viewSlower = blackOpsRouteOf({
+      mediumData: medium(reading(295_000, blackOp)),
+      bitNode: 6,
+      ownedSF: SF,
+      rankPerSecond: 2,
+      expPerSecond: 1e4,
+      soFarMs: 10 * 3_600_000,
+      plan: slower,
+    });
+    const windowSlower = climbWindowSeconds(
+      estimate.rate / 2,
+      (view.rankStallMs as number) / 1000,
+      climbAttempts,
+      0.001,
+    );
+    expect(viewSlower.climbRise).toBeCloseTo(
+      climbRiseLowerBound(estimate.rate / 2, windowSlower, climbAttempts, 0.001),
+      6,
+    );
+    const resting = blackOpsRouteOf({
+      mediumData: medium(reading(295_000, blackOp)),
+      bitNode: 6,
+      ownedSF: SF,
+      rankPerSecond: 2,
+      expPerSecond: 1e4,
+      soFarMs: 10 * 3_600_000,
+      plan: { ...climbing, work: null },
+    });
+    expect(resting).toMatchObject({ climbRise: null, climbWindowMs: null });
     console.log(
       `the climb at combat 5,000: window ${(window / 60).toFixed(1)} min (base ${((view.rankStallMs as number) / 60_000).toFixed(1)}), ` +
         `least rise ${(view.climbRise as number).toFixed(0)} of the rate's ${(estimate.rate * window).toFixed(0)}`,
@@ -172,7 +204,11 @@ describe("the route from the reading (#398)", () => {
     // The attempts' bound: ⌈ln 0.001 / ln(1 − 0.3)⌉ = 20 attempts, each with a failure's rebuild, a rest and 10 min.
     const attempts = Math.ceil(Math.log(0.001) / Math.log(1 - 0.3));
     expect(attempts).toBe(20);
-    const each = blackOpSeconds(CENTURION, PERSON, mults) + blackOpRankLoss(CENTURION) / estimate.rate;
+    // Each attempt's own stamina regained at the natural regain (#400's round 2).
+    const regain = staminaGainPerSecond(PERSON, r.maxStamina, mults);
+    const stamina = Math.min(blackOpStaminaCost(CENTURION), r.maxStamina) / regain;
+    expect(stamina).toBeGreaterThan(0);
+    const each = blackOpSeconds(CENTURION, PERSON, mults) + blackOpRankLoss(CENTURION) / estimate.rate + stamina;
     expect(view.attemptsStallMs).toBeCloseTo((attempts * each + rest) * 1000 + BLADEBURNER_REST_SLACK_MS, 3);
     // The Red Pill's at hacking 100 against 6,000 at 0.35: hopeless by the formulas against 10 h so far.
     expect(view.redPillSeconds).toBeGreaterThan(1e30);

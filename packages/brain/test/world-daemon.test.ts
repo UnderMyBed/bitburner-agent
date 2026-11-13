@@ -1321,6 +1321,51 @@ describe("the Black Ops' route (#398): BN6", () => {
       expect(rule.stall()?.detail).toContain("lengthened from 20 min");
     });
 
+    test("the chance risen mid-attempts (#400's round 2): the time spent judged against the bound as it stood, not at once", () => {
+      // 40 min of failures at p 0.1 (its bound 66 min), then p 0.2 (31 min): 40/66 used, the rest at the new bound.
+      const at = (minute: number, boundMinutes: number) =>
+        bn6(
+          { rank: 300_000, climbRise: 120, rankStallMs: CLIMB, attemptsStallMs: boundMinutes * MINUTE },
+          { nowMs: minute * MINUTE },
+        );
+      for (let minute = 0; minute <= 40; minute++) at(minute, 66);
+      at(41, 31);
+      expect(rule.stall()).toBeNull();
+      // Used up at 40/66 + m/31 = 1: m = 12.2, so by minute 53.
+      for (let minute = 42; minute <= 52; minute++) at(minute, 31);
+      expect(rule.stall()).toBeNull();
+      at(53, 31);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+    });
+
+    test("ρ risen mid-climb (#400's round 2): the window as it stood at each reading, not the new one at once", () => {
+      const at = (minute: number, windowMinutes: number) =>
+        bn6(
+          { rank: 290_000, climbRise: 120, climbWindowMs: windowMinutes * MINUTE, rankStallMs: CLIMB },
+          { nowMs: minute * MINUTE },
+        );
+      for (let minute = 0; minute <= 40; minute++) at(minute, 60);
+      at(41, 20);
+      expect(rule.stall()).toBeNull();
+      // 40/60 + m/20 = 1: m = 6.7, so by minute 47.
+      for (let minute = 42; minute <= 46; minute++) at(minute, 20);
+      expect(rule.stall()).toBeNull();
+      at(47, 20);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+    });
+
+    test("a plan resting alone (the counts spent, #400's round 2): its readings not judged, the climb's clock not advanced", () => {
+      for (let minute = 0; minute <= 180; minute++) {
+        bn6({ rank: 290_000, climbRise: null, climbWindowMs: null, rankStallMs: CLIMB }, { nowMs: minute * MINUTE });
+      }
+      expect(rule.stall()).toBeNull();
+      // Work again: judged from the last rest-only reading on, its window whole: used up at minute 200.
+      for (let minute = 181; minute < 200; minute++) climbing(290_000, minute * MINUTE);
+      expect(rule.stall()).toBeNull();
+      climbing(290_000, 200 * MINUTE);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank" });
+    });
+
     test("not judged: the rule not acting (the owner's work), all 21 done with the switch off, or under the faction's 25", () => {
       for (let at = 0; at <= 3 * ATTEMPTS; at += MINUTE) climbing(290_000, at, { bladeburnerActing: false });
       expect(rule.stall()).toBeNull();

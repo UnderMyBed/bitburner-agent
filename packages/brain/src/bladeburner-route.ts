@@ -21,11 +21,15 @@
 //     variance; Freedman's inequality for the attempts as they come, as B2's and B5's `stockInClosedForm`), floored at
 //     0. Where it's 0 at `rankStallMs` (a plan too lumpy for that window), the window is the smallest longer one where
 //     it's positive (core's `climbWindowSeconds`), said in the stall. So a flat rank and a crawl are loud, and a run at
-//     the rate with its ordinary failures isn't, but at chance α. The plan is the Bladeburner rule's (its view's), else
+//     the rate with its ordinary failures isn't, but at chance α a window: over K windows the false failures add up to
+//     about K·α (a union bound; a time-uniform bound would hold α over all of them), stated, not bounded. The mean is
+//     min(ρ, the plan's own rate); a plan resting alone (the counts spent) has no attempts to bound, so its readings
+//     aren't judged. The plan is the Bladeburner rule's (its view's), else
 //     its forecast's best. The rate 0, the rebuild is left out and any rise counts: a dead route is loud. Judged from the
 //     faction's 25 (under it the plan can be #386's lottery: B2's bound judges the rank there).
 //   - **The attempts** (the next one's rank met): the Black Ops done must rise within `attemptsStallMs`, N attempts
-//     each with a failure's rebuild at the sustainable rate, a rest to the max, and the slack: N = ⌈ln α / ln(1 − p)⌉,
+//     each with a failure's rebuild at the sustainable rate and its own stamina regained (min(cost, max) at the natural
+//     regain), a rest to the max, and the slack: N = ⌈ln α / ln(1 − p)⌉,
 //     the attempts by which a success is all but sure at the low end's chance p, α `BLADEBURNER_RANK_ALPHA` (0.001, a
 //     false failure's chance, B2's). So a Black Op stuck failing (each rebuild a rise) is loud. None at a chance of 0
 //     (#360's estimate is never then, a failure of its own).
@@ -38,6 +42,7 @@ import {
   type BladeburnerActionPlan,
   blackOpRankLoss,
   blackOpSeconds,
+  blackOpStaminaCost,
   blackOpsRouteEstimate,
   bladeburnerBlackOp,
   bladeburnerLevelledAction,
@@ -179,6 +184,8 @@ export function blackOpsRouteOf({
     rankStallMs = 2 * (rest + attempt + rebuild) * 1000 + BLADEBURNER_REST_SLACK_MS;
     const climbing = plan ?? chooseBladeburnerAction(input);
     const work = climbing.work;
+    // The climb's mean (#400's round 2): the plan's own rate where under ρ (the LP's mix can outrun the one plan run).
+    const climbRate = Math.min(rate, climbing.rankPerSecond);
     const action = work === null ? null : bladeburnerLevelledAction(work.type, work.name);
     const attempts: ClimbAttempts =
       work === null || action === null
@@ -188,10 +195,17 @@ export function blackOpsRouteOf({
             variance: work.rankVariance,
             below: work.rankMean + 1.1 * actionRankLoss(action, work.level),
           };
-    if (rate > 0) {
-      const window = climbWindowSeconds(rate, rankStallMs / 1000, attempts, BLADEBURNER_RANK_ALPHA);
+    if (work === null && rate > 0) {
+      // Resting alone (the counts spent, #400's round 2): its rank has no attempts' spread to bound, so the reading isn't
+      // judged (null); a rest with no rate at all is the dead route's below.
+      climbWindowMs = null;
+      climbRise = null;
+    } else if (climbRate > 0) {
+      const window = climbWindowSeconds(climbRate, rankStallMs / 1000, attempts, BLADEBURNER_RANK_ALPHA);
       climbWindowMs = window * 1000;
-      climbRise = Number.isFinite(window) ? climbRiseLowerBound(rate, window, attempts, BLADEBURNER_RANK_ALPHA) : 0;
+      climbRise = Number.isFinite(window)
+        ? climbRiseLowerBound(climbRate, window, attempts, BLADEBURNER_RANK_ALPHA)
+        : 0;
     } else {
       climbWindowMs = rankStallMs;
       climbRise = 0;
@@ -199,7 +213,9 @@ export function blackOpsRouteOf({
     const chance = first?.chance ?? 0;
     if (chance > 0) {
       const attempts = chance >= 1 ? 1 : Math.ceil(Math.log(BLADEBURNER_RANK_ALPHA) / Math.log(1 - chance));
-      attemptsStallMs = (attempts * (attempt + rebuild) + rest) * 1000 + BLADEBURNER_REST_SLACK_MS;
+      // Each attempt's own stamina regained too (#400's round 2): min(its cost, the max) at the natural regain.
+      const stamina = regain > 0 ? Math.min(blackOpStaminaCost(op), actions.maxStamina) / regain : 0;
+      attemptsStallMs = (attempts * (attempt + rebuild + stamina) + rest) * 1000 + BLADEBURNER_REST_SLACK_MS;
     }
   }
   const soFarSeconds = soFarMs === null ? null : soFarMs / 1000;

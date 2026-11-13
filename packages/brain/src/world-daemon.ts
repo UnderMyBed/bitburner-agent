@@ -766,7 +766,15 @@ export class WorldDaemonRule {
    * whether its rank has been met (the attempts; kept through a failure's dip under it), and since when, with the rank
    * then (the climb's checkpoint).
    */
-  #rankHigh: { done: number; attempts: boolean; value: number; sinceMs: number } | null = null;
+  #rankHigh: {
+    done: number;
+    attempts: boolean;
+    value: number;
+    sinceMs: number;
+    /** The bound used up (#400's round 2): Σ the time between readings over the bound at each, a stall at 1. */
+    used: number;
+    lastMs: number;
+  } | null = null;
   #path: WorldDaemonPath | null = null;
   #enabled = true;
   /** The brain's next BitNode (#321), from the BitNode and Source-Files the last slow snapshot showed, or null. */
@@ -1061,36 +1069,51 @@ export class WorldDaemonRule {
       // A Black Op's end (the count risen), or the first look: the clock afresh. Its rank met: the attempts from then,
       // kept through a failure's dip under it. Under it: the climb, its checkpoint moved on by each rise of `climbRise`.
       const rise = route.climbRise ?? 0;
+      const fresh = (attempts: boolean) => ({ done, attempts, value: rank, sinceMs: nowMs, used: 0, lastMs: nowMs });
+      const attemptsMs = route.attemptsStallMs;
+      // The climb's window: null where its plan rests alone (the reading not judged).
+      const climbMs = route.climbRise === null ? null : (route.climbWindowMs ?? rankStallMs);
+      // Each reading uses up its share of the bound as it stands then (#400's round 2: the integral form), so a bound
+      // that shrinks (the chance or ρ risen) doesn't fire at once on the time already spent under a longer one.
+      const share = (clock: NonNullable<typeof last>, boundMs: number | null) =>
+        boundMs === null || !(boundMs > 0) ? 0 : Math.max(0, nowMs - clock.lastMs) / boundMs;
       this.#rankHigh =
         last === null || last.done !== done
-          ? { done, attempts: rank >= nextRank, value: rank, sinceMs: nowMs }
+          ? fresh(rank >= nextRank)
           : !last.attempts && rank >= nextRank
-            ? { done, attempts: true, value: rank, sinceMs: nowMs }
-            : !last.attempts && (rise > 0 ? rank >= last.value + rise : rank > last.value)
-              ? { done, attempts: false, value: rank, sinceMs: nowMs }
-              : last;
+            ? fresh(true)
+            : !last.attempts && climbMs !== null && (rise > 0 ? rank >= last.value + rise : rank > last.value)
+              ? fresh(false)
+              : {
+                  ...last,
+                  used: last.used + share(last, last.attempts ? attemptsMs : climbMs),
+                  lastMs: nowMs,
+                };
       const clock = this.#rankHigh;
-      const attemptsMs = route.attemptsStallMs;
-      const climbMs = route.climbWindowMs ?? rankStallMs;
+      // The #ready check stalls at elapsed ≥ withinMs: the bound used up (to a rounding) is the stall, else never yet.
+      const elapsed = nowMs - clock.sinceMs;
+      const within = clock.used >= 1 - 1e-9 ? elapsed : Number.POSITIVE_INFINITY;
       if (clock.attempts && attemptsMs !== null) {
         steps.set("blackOpsRank", {
           detail:
             `${route.next?.name ?? "the next Black Op"} not done (#398, ${done} of ${BLACK_OPS_COUNT}), its rank met, ` +
             `the bound ${formatDuration(attemptsMs)}: ⌈ln 0.001 / ln(1 − p)⌉ attempts at its low end's chance, each with ` +
-            "a failure's rebuild, a rest and 10 min",
+            "a failure's rebuild and its own stamina, a rest and 10 min (the time judged against the bound as it stood " +
+            "at each reading)",
           sinceMs: clock.sinceMs,
-          withinMs: attemptsMs,
+          withinMs: within,
         });
-      } else if (!clock.attempts) {
+      } else if (!clock.attempts && climbMs !== null) {
         steps.set("blackOpsRank", {
           detail:
             `Bladeburner's rank not climbing (${count(rank)} now, ${count(clock.value)} at the clock's start) toward ` +
             `${count(nextRank)} on the Black Ops' route (#398, ${done} of ${BLACK_OPS_COUNT} done): ` +
             `${count(rise)} wanted within ${formatDuration(climbMs)}, the sustainable rate's rise less Bernstein's ` +
             "margin at α 0.001; the window twice a rest to the max, the next Black Op's attempt and a failure's rebuild, " +
-            `and 10 min${climbMs > rankStallMs ? `, lengthened from ${formatDuration(rankStallMs)} to where that rise is positive` : ""}`,
+            `and 10 min${climbMs > rankStallMs ? `, lengthened from ${formatDuration(rankStallMs)} to where that rise is positive` : ""}` +
+            " (the time judged against the window as it stood at each reading)",
           sinceMs: clock.sinceMs,
-          withinMs: climbMs,
+          withinMs: within,
         });
       }
     } else if (!this.#ready.get("blackOpsRank")?.stored) {
