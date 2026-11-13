@@ -11,7 +11,8 @@ import {
 import { Augmentations } from "../../../../../vendor/bitburner-src/src/Augmentation/Augmentations";
 import { AugmentationName } from "../../../../../vendor/bitburner-src/src/Augmentation/Enums";
 import { currentNodeMults } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeMultipliers";
-import { getDefaultBitNodeOptions } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
+import { finishBitNode, getDefaultBitNodeOptions } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
+import { numberOfBlackOperations } from "../../../../../vendor/bitburner-src/src/Bladeburner/data/BlackOperations";
 import { BladeburnerSkillName } from "../../../../../vendor/bitburner-src/src/Bladeburner/Enums";
 import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
 import { CompanyPositions } from "../../../../../vendor/bitburner-src/src/Company/CompanyPositions";
@@ -174,6 +175,22 @@ function routeFromHome(hostname: string): string[] | null {
 /** How often the destroy's timer looks for the BitVerse, and how long past the backdoor's end it looks (#175). */
 const BITVERSE_POLL_MS = 100;
 const BITVERSE_SLACK_MS = 10_000;
+
+/**
+ * The Red Pill route's preconditions on w0r1d_d43m0n (#398), in core's words (`worldDaemonProblem`'s, copied: see
+ * `destroyWorldDaemon`): reachable, rooted, the hacking level; null once all hold.
+ */
+function redPillRouteProblem(): string | null {
+  const hostname = SpecialServers.WorldDaemon;
+  const daemon = GetServer(hostname);
+  if (daemon === null || daemon.serversOnNetwork.length === 0) {
+    return `${hostname} isn't reachable: The Red Pill isn't installed`;
+  }
+  if (!daemon.hasAdminRights) return `no root access on ${hostname} (NUKE.exe first)`;
+  const required = "requiredHackingSkill" in daemon ? (daemon.requiredHackingSkill as number) : 0;
+  if (required > Player.skills.hacking) return `hacking level ${Player.skills.hacking}: ${hostname} needs ${required}`;
+  return null;
+}
 
 /**
  * What the BitVerse's portal does once a backdoor on w0r1d_d43m0n has reached it (#175;
@@ -680,9 +697,36 @@ const effectors = {
    * enters `nextBitNode` through the portal (`enterFromBitVerseOnceThere`). Already at the BitVerse after a destroy's
    * backdoor (a save that starts there: `ui/GameRoot.tsx:160-164`), only the portal. Never done: the brain's reset
    * check says it is. Not named `destroyW0r1dD43m0n`, which is an NS function.
+   * The Black Ops' route (#398): with those preconditions short and the player in the division, the `ui` worker's
+   * other way, the Black Ops page's "Destroy w0r1d_d43m0n" (`Bladeburner/ui/BlackOpPage.tsx:39-52`), shown only with
+   * all 21 done: its handler, `finishBitNode` (`BitNode/BitNodeUtils.ts:89-95`) and the BitVerse (`flume: false`,
+   * `quick: false`), which kills every script (`ui/GameRoot.tsx:256-258`), after this try returns, as the click runs in
+   * the page's event, not in the Agent's call; then the portal's timer, as after the backdoor.
    */
   destroyWorldDaemon(nextBitNode: number, callbackScript: string): EffectorResult {
     const hostname = SpecialServers.WorldDaemon;
+    const blackOpsProblem = redPillRouteProblem();
+    if (blackOpsProblem !== null && Player.bladeburner) {
+      const entering = `entering BitNode ${nextBitNode} from the BitVerse`;
+      if (bitVerseFlume() === false) {
+        enterFromBitVerseOnceThere(nextBitNode, callbackScript, BITVERSE_SLACK_MS);
+        return result(false, entering);
+      }
+      const content = "Destroy w0r1d_d43m0n";
+      if (Player.bladeburner.numBlackOpsComplete < numberOfBlackOperations) {
+        // The `ui` worker's wording (`ingame/src/page/destroy-page.ts`, `destroyByBlackOpsOnPage`).
+        return result(
+          false,
+          `no "${content}" on the Black Ops page (it shows with all ${numberOfBlackOperations} done): ${blackOpsProblem}`,
+        );
+      }
+      setTimeout(() => {
+        finishBitNode();
+        Router.toPage(Page.BitVerse, { flume: false, quick: false });
+      });
+      enterFromBitVerseOnceThere(nextBitNode, callbackScript, BITVERSE_SLACK_MS);
+      return result(false, `${content} clicked: ${entering}`);
+    }
     const daemon = GetServer(hostname);
     // Not reachable before The Red Pill's install links it (`Prestige.ts:174-182`): the `ui` worker's `serverExists`.
     if (daemon === null || daemon.serversOnNetwork.length === 0) {

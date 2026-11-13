@@ -26,16 +26,24 @@
 //   doubled), but it would bring no progress and could repeat. So the brain's supervisor relaunches the silent game
 //   (§10.2), or the owner steps in; either way the save loaded decides, and the brain's reset check counts a destroy
 //   only once a slow snapshot shows it.
+// - The Black Ops' route (#398, `destroyByBlackOpsOnPage`): with all 21 done the Black Ops page shows "Destroy
+//   w0r1d_d43m0n" (`Bladeburner/ui/BlackOpPage.tsx:39-52`), whose click backdoors w0r1d_d43m0n (`finishBitNode`,
+//   `BitNode/BitNodeUtils.ts:89-95`) and goes to the BitVerse, a cinematic first (`flume: false, quick: false`), which
+//   kills every script (`ui/GameRoot.tsx:256-258`). So the sidebar's "Bladeburner", its "BlackOps" tab
+//   (`Bladeburner/ui/AllPages.tsx:29`), the timer armed, then the button. Its text is scrambled letter by letter as it
+//   renders (`ui/React/CorruptibleText.tsx`), so it's found by its React child's `content`. No button: not all 21 are
+//   done, said with the Red Pill route's problem. The BitVerse never showing with the Bladeburner page still there:
+//   nothing was destroyed, the timer stops.
 // - Then the shared steps: `run /agent/boot.js`, or the fallback. The dialogs the new BitNode raises (the
 //   Source-File's, and the first BitNode's congratulations 200 ms later: `RedPill.tsx:29-49`, `Prestige.ts:39-41`,
 //   `:373-376`) are
 //   left to the next Agent's dialog watcher, which closes each with its X and tells the brain what it said (owner
 //   decision 35): the terminal is typed into through React's props, which a dialog doesn't stop.
-import { WORLD_DAEMON } from "@bitburner-agent/core";
+import { BLACK_OPS_COUNT, WORLD_DAEMON } from "@bitburner-agent/core";
 import { monotonicMs } from "../clock.ts";
 import type { NS } from "../ns.ts";
 import { backdoorStanding } from "../workers/backdoor-standing.ts";
-import { findOnPage, type GamePage, pageDocument, playerEvent } from "./game-page.ts";
+import { findOnPage, type GamePage, pageDocument, playerEvent, reactPropsOf, sidebarItemXpath } from "./game-page.ts";
 import { armRestart, callHandler, SHARED_STEP_LIMITS_MS } from "./restart-timer.ts";
 import { typeBackdoor } from "./terminal-backdoor.ts";
 
@@ -59,13 +67,19 @@ const ARMED_TIMER = "__bitburnerAgentDestroyTimer";
 /**
  * Arms the restart on `page`: from now, the timer waits up to `bitVerseWithinMs` for the BitVerse's map, enters
  * `nextBitNode` through its portal, then starts `bootScript` from the terminal, or reloads. `disarm` stops it: the
- * worker calls it when the backdoor was never entered. One armed before it is disarmed.
+ * worker calls it when the backdoor was never entered. One armed before it is disarmed. `startedFrom`: the page the
+ * destroy started from, and whether it's still up when the BitVerse is late (nothing destroyed: the timer stops): the
+ * Terminal by default; the Bladeburner page for the Black Ops' button (#398).
  */
 export function armRestartAfterDestroy(
   page: Document,
   bootScript: string,
   nextBitNode: number,
   bitVerseWithinMs: number,
+  startedFrom: { name: string; there: () => boolean } = {
+    name: "the Terminal",
+    there: () => page.querySelector("#terminal-input") !== null,
+  },
 ) {
   const holder = page as unknown as Record<string, { disarm(): void } | undefined>;
   holder[ARMED_TIMER]?.disarm();
@@ -81,11 +95,11 @@ export function armRestartAfterDestroy(
     {
       limitMs: bitVerseWithinMs,
       look: () => clickIfThere(portalXpath(nextBitNode)),
-      // Still on the Terminal: the backdoor never reached the BitVerse, and every script lives.
+      // Still on the page it started from: the destroy never reached the BitVerse, and every script lives.
       late: () =>
-        page.querySelector("#terminal-input") !== null
+        startedFrom.there()
           ? { action: "stop", reason: "the BitVerse never showed: nothing was destroyed" }
-          : { action: "giveUp", reason: "the BitVerse's map never showed, and the Terminal is gone" },
+          : { action: "giveUp", reason: `the BitVerse's map never showed, and ${startedFrom.name} is gone` },
     },
     {
       limitMs: DESTROY_STEP_LIMITS_MS.enter,
@@ -142,4 +156,69 @@ export async function destroyOnPage(
   }
   const secondsLeft = Math.max(1, Math.ceil((typed.endsAtMs - monotonicMs()) / 1000));
   return `backdooring ${WORLD_DAEMON}: about ${secondsLeft} s left, then ${entering}`;
+}
+
+/** The Bladeburner page's Black Ops tab (`Bladeburner/ui/AllPages.tsx:29`): an MUI `Tab`, a button with role "tab". */
+export const BLACK_OPS_TAB_XPATH = "//button[@role='tab' and normalize-space()='BlackOps']";
+/** The Black Ops page's destroy button's text (`Bladeburner/ui/BlackOpPage.tsx:50`), its `CorruptibleText`'s content. */
+export const BLACK_OPS_DESTROY_CONTENT = "Destroy w0r1d_d43m0n";
+
+/** Whether a React node (an element, an array, text) carries a `content` prop of `content`, through its children. */
+function carriesContent(node: unknown, content: string): boolean {
+  if (Array.isArray(node)) return node.some((each) => carriesContent(each, content));
+  if (typeof node !== "object" || node === null || !("props" in node)) return false;
+  const props = (node as { props: { content?: unknown; children?: unknown } }).props;
+  return props.content === content || carriesContent(props.children, content);
+}
+
+/**
+ * The Black Ops page's "Destroy w0r1d_d43m0n" button, or null (#398): the button whose React children carry the
+ * `CorruptibleText` with that content, as its rendered letters are scrambled.
+ */
+export function blackOpsDestroyButton(gamePage: GamePage): Element | null {
+  return (
+    gamePage
+      .findAllNow("//button")
+      .find((button) => carriesContent(reactPropsOf(button)?.children, BLACK_OPS_DESTROY_CONTENT)) ?? null
+  );
+}
+
+/**
+ * The Black Ops' route's steps on the page (#398, see above), for the `ui` worker in the division: from the BitVerse
+ * already, the timer at the portal; else the sidebar's "Bladeburner", its "BlackOps" tab, the timer armed, then the
+ * button, whose BitVerse kills this worker. `problem`: the Red Pill route's, said when there's no button. What it
+ * reports, never done (the brain sees a destroy by the reset).
+ */
+export async function destroyByBlackOpsOnPage(
+  gamePage: GamePage,
+  nextBitNode: number,
+  bootScript: string,
+  problem: string,
+): Promise<string> {
+  const page = pageDocument();
+  if (page === null) return "no game page to restart from after the destroy";
+  const entering = `entering BitNode ${nextBitNode} from the BitVerse`;
+  if (gamePage.findElementNow(portalXpath(nextBitNode)) !== null) {
+    armRestartAfterDestroy(page, bootScript, nextBitNode, DESTROY_STEP_LIMITS_MS.enter);
+    return entering;
+  }
+  const opened = await gamePage.openSidebarPage("Bladeburner");
+  if (opened !== null) return opened;
+  const tab = await gamePage.clickWhenThere(BLACK_OPS_TAB_XPATH, `the Bladeburner page's "BlackOps" tab`);
+  if (tab !== null) return tab;
+  const button = blackOpsDestroyButton(gamePage);
+  if (button === null) {
+    return `no "${BLACK_OPS_DESTROY_CONTENT}" on the Black Ops page (it shows with all ${BLACK_OPS_COUNT} done): ${problem}`;
+  }
+  // Armed before the click: the BitVerse it goes to kills this worker.
+  const restart = armRestartAfterDestroy(page, bootScript, nextBitNode, DESTROY_STEP_LIMITS_MS.bitVerse, {
+    name: "the Bladeburner page",
+    there: () => findOnPage(page, sidebarItemXpath("Bladeburner")) !== null,
+  });
+  const clicked = await gamePage.clickElement(button, `"${BLACK_OPS_DESTROY_CONTENT}"`);
+  if (clicked !== null) {
+    restart.disarm();
+    return clicked;
+  }
+  return `${BLACK_OPS_DESTROY_CONTENT} clicked: ${entering}`;
 }

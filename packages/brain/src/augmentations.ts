@@ -157,6 +157,7 @@ import {
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
+  winRouteOf,
 } from "@bitburner-agent/core";
 import { CLOUD_SERVER_PAYBACK_LIMIT_MS } from "./cloud-servers.ts";
 import { workConditionsOf, workingPersonOf } from "./factions.ts";
@@ -2320,7 +2321,9 @@ export class AugmentationRule {
     // level, so the set is only what adds to levelling (core's `addsToLevelling`), NeuroFlux Governor's levels after
     // it. Any other would raise each later price 1.9 times (`AugmentationHelpers.ts:29-31`) for nothing. So (#380) for
     // those bought by a donation too: the set at any money is then (d)'s, which the commit at its M buys.
-    const forLevelOnly = destroyWanted && Object.hasOwn(ownedAugs, THE_RED_PILL);
+    // Not on the Black Ops' route (#398, core's `winRouteOf`): the hacking level isn't the destroy's there.
+    const forLevelOnly =
+      destroyWanted && Object.hasOwn(ownedAugs, THE_RED_PILL) && winRouteOf(currentNode) === "redPill";
     const toBuy = forLevelOnly ? reached.filter((name) => addsToLevelling([name])) : reached;
     // Donations (#225): planned only before the commit; committed, the note's go first, and the set is what's reached.
     const terms =

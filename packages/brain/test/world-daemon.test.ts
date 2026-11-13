@@ -4,6 +4,9 @@ import {
   AUGMENTATION_NAMES,
   augmentationCost,
   augmentationsSoldBy,
+  chooseWinRoute,
+  climbRiseLowerBound,
+  climbWindowSeconds,
   countablesWithinReach,
   isWorthInstalling,
   type MediumSnapshotData,
@@ -12,6 +15,7 @@ import {
 } from "@bitburner-agent/core";
 import { beforeEach, describe, expect, test } from "vitest";
 import type { CountFacts } from "../src/augmentations.ts";
+import type { BlackOpsRouteView } from "../src/bladeburner-route.ts";
 import {
   describeWorldDaemonPath,
   describeWorldDaemonSwitch,
@@ -240,6 +244,16 @@ describe("the path", () => {
     expect(rate.perSecond()).toBeNull();
   });
 
+  test("Bladeburner's rank a second (#398): a fall (a Black Op's failure) is measured, not a restart; a gap still is", () => {
+    const rank = new HackingExpRate({ fallsCount: true });
+    rank.add(0, 1_000);
+    rank.add(MINUTE, 1_120);
+    rank.add(2 * MINUTE, 1_020);
+    expect(rank.perSecond()).toBeCloseTo(20 / 120, 12);
+    rank.add(2 * MINUTE + 4 * MINUTE, 1_100);
+    expect(rank.perSecond()).toBeNull();
+  });
+
   test("the window full (#378's review): its samples spanning the 10 minutes, kept so; a fall starts it again", () => {
     const rate = new HackingExpRate();
     for (let minute = 0; minute <= 9; minute++) rate.add(minute * MINUTE, minute * 100);
@@ -293,7 +307,7 @@ describe("the destroy", () => {
 
   test("past the BitNodes the brain can't play yet (#323): BN2.3 into BN5 again, the skipped logged and in the view", () => {
     const skipped =
-      "BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); " +
+      "BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
       "BN3 skipped: no hacking multipliers or prices yet";
     const bn23 = { currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } };
     expect(update({ slowData: slow(bn23) })).toBe(true);
@@ -682,7 +696,7 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
     "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
     "Source-File 5 at 3), but the run";
   const SKIPPED =
-    "BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); " +
+    "BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
     "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 " +
     "and BN12 skipped: no hacking multipliers or prices yet";
   const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
@@ -762,7 +776,7 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
       "on (into BitNode 2)",
     );
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } }))).toBe(
-      "on (into BitNode 5 (BN6 and BN7 skipped: no win route yet (the Black Ops, Bladeburner's B6); BN3 skipped: " +
+      "on (into BitNode 5 (BN6 skipped: no win route yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: " +
         "no hacking multipliers or prices yet))",
     );
     expect(describeWorldDaemonSwitch(true, slow({ ownedSF: CAPS }))).toBe(
@@ -1071,4 +1085,316 @@ test("the Agent gone: The Red Pill's reputation clock starts again too, the time
   expect(rule.stall()).toBeNull();
   at(30 * MINUTE + RED_PILL_REPUTATION_STALLED_AFTER_MS);
   expect(rule.stall()).toMatchObject({ step: "redPillReputation", sinceMs: 30 * MINUTE });
+});
+
+describe("the Black Ops' route (#398): BN6", () => {
+  const BN6 = { currentNode: 6, ownedSF: { 1: 3, 2: 3, 4: 3, 5: 1 }, ownedAugs: {} as Record<string, number> };
+  /** The route as the controller's `blackOpsRouteOf` gives it: 18 of 21 done, Centurion next. */
+  const view = (fields: Partial<BlackOpsRouteView> = {}): BlackOpsRouteView => ({
+    rank: 300_500,
+    done: 18,
+    next: { name: "Operation Centurion", rank: 300_000, chance: 0.4 },
+    rankPerSecond: 1,
+    etaSeconds: 99_500,
+    estimate: { steps: [], seconds: 120_000, rate: 1 },
+    redPillSeconds: 1e70,
+    choice: chooseWinRoute({ blackOpsSeconds: 120_000, redPillSeconds: 1e70, soFarSeconds: 36_000 }),
+    rankStallMs: 20 * MINUTE,
+    climbWindowMs: 20 * MINUTE,
+    climbRise: 0,
+    attemptsStallMs: 60 * MINUTE,
+    ...fields,
+  });
+  const bn6 = (fields: Partial<BlackOpsRouteView> = {}, more: Partial<Parameters<WorldDaemonRule["update"]>[0]> = {}) =>
+    update({
+      slowData: slow({ ...BN6, daedalus: 1e6 }),
+      mediumData: medium({ hacking: 2600, daemon: "absent" }),
+      blackOps: () => view(fields),
+      bladeburnerActing: true,
+      ...more,
+    });
+
+  test("the path is the route's: the rank, the next one, both routes' estimates, and The Red Pill's path off, said", () => {
+    const path = worldDaemonPath({
+      staticData: staticData(6000),
+      mediumData: medium({ hacking: 2600, daemon: "absent" }),
+      slowData: slow({ ...BN6, daedalus: 1e6 }),
+      expPerSecond: 100,
+      blackOps: view(),
+    });
+    expect(path).toMatchObject({ bitNode: 6, route: "blackOps", daedalus: null, redPill: null, daemon: null });
+    expect(path.blackOps).toEqual(view());
+    expect(describeWorldDaemonPath(path)).toEqual([
+      "the Black Ops (#398): rank 300,500 of 400,000 (Operation Daedalus's); 18 of 21 done; next Operation Centurion " +
+        "at rank 300,000, its chance 40.0% at the low end; 400,000 about 27.6 h at the measured 60.00 rank/min",
+      "the planner (#398): the Black Ops' about 33.3 h; The Red Pill's at least 2.78e+66 h (w0r1d_d43m0n's " +
+        "hacking level alone, by the formulas), hopeless: the Black Ops chosen (The Red Pill's hopeless by the " +
+        "formulas, past the BitNode's time so far (decision 67's point 8, #359))",
+      "off on this route (#398): The Red Pill's holds (A6), levelling (#336) and A8's Red Pill path (Daedalus, The " +
+        "Red Pill, w0r1d_d43m0n's hacking level)",
+    ]);
+    // A Red Pill choice is shown, not acted on: the route played is fixed per BitNode (#400's review).
+    const redPill = chooseWinRoute({ blackOpsSeconds: 7200, redPillSeconds: 3600, soFarSeconds: 36_000 });
+    expect(describeWorldDaemonPath({ ...path, blackOps: view({ choice: redPill }) })[1]).toMatch(
+      /The Red Pill chosen \(The Red Pill's the shorter\); shown, not acted on: this BitNode plays the Black Ops$/,
+    );
+    // Unread: said.
+    expect(describeWorldDaemonPath({ ...path, blackOps: null })[0]).toBe(
+      "the Black Ops (#398): no reading yet (the division joined, and home's RAM for its reader)",
+    );
+    // In BN4, The Red Pill's, unchanged: no Black Ops part.
+    const bn4 = worldDaemonPath({
+      staticData: staticData(9000),
+      mediumData: medium({ hacking: 2600, daemon: "absent" }),
+      slowData: slow({ currentNode: 4, ownedSF: { 1: 3 }, ownedAugs: THIRTY, daedalus: 1e6 }),
+      expPerSecond: 100,
+      blackOps: view(),
+    });
+    expect(bn4).toMatchObject({ route: "redPill", blackOps: null });
+    expect(bn4.daedalus).not.toBeNull();
+    expect(bn4.redPill).not.toBeNull();
+  });
+
+  test("the destroy only with all 21 done, into the order's next (BN6.1 into BN5 while BN6 waits for B7, BN7 for B8), logged; none at 20", () => {
+    expect(bn6({ done: 20, next: { name: "Operation Daedalus", rank: 400_000, chance: 0.5 } })).toBe(false);
+    expect(rule.destroyIntent()).toBeNull();
+    expect(bn6({ done: 21, next: null, rank: 440_000 })).toBe(true);
+    expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(5));
+    expect(lines).toEqual([
+      "world daemon: all 21 Black Ops done (#398): destroying the BitNode, into BitNode 5 (BN6 skipped: no win route " +
+        "yet: the Black Ops need Bladeburner's B7 (augmentations and installs on the route); BN7 skipped: no win route yet (the " +
+        "Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: no hacking multipliers or prices yet) (the " +
+        "gate, then a save backup first)",
+    ]);
+    // Unread (no reading): none.
+    rule = new WorldDaemonRule({});
+    expect(update({ slowData: slow(BN6), mediumData: medium({ daemon: "absent" }) })).toBe(false);
+  });
+
+  test("all 21 done and not destroyed 5 minutes on: the destroy's stall, a run report failure", () => {
+    bn6({ done: 21, next: null }, { nowMs: 0 });
+    bn6({ done: 21, next: null }, { nowMs: WORLD_DAEMON_STALLED_AFTER_MS - 1 });
+    expect(rule.stall()).toBeNull();
+    bn6({ done: 21, next: null }, { nowMs: WORLD_DAEMON_STALLED_AFTER_MS });
+    const detail = "all 21 Black Ops done (#398), the BitNode not destroyed";
+    expect(rule.stall()).toEqual({ step: "destroy", sinceMs: 0, detail });
+    expect(events).toEqual([
+      { type: "worldDaemonStalled", atMs: WORLD_DAEMON_STALLED_AFTER_MS, step: "destroy", sinceMs: 0, detail },
+    ]);
+  });
+
+  describe("the stalls on the route (#400's review): the climb's and the attempts' bounds", () => {
+    const CLIMB = 20 * MINUTE;
+    const ATTEMPTS = 60 * MINUTE;
+    /** Under Centurion's 300,000: the climb, its least rise 120 a 20 min bound (a tenth of 1 rank/s over it). */
+    const climbing = (rank: number, nowMs: number, more: Partial<Parameters<WorldDaemonRule["update"]>[0]> = {}) =>
+      bn6({ rank, climbRise: 120, rankStallMs: CLIMB, attemptsStallMs: ATTEMPTS }, { nowMs, ...more });
+    const attempting = (rank: number, nowMs: number, done = 18) =>
+      bn6({ rank, done, climbRise: 120, rankStallMs: CLIMB, attemptsStallMs: ATTEMPTS }, { nowMs });
+
+    test("the climb flat: a stall at its bound, on both sides; a rise by its least, over", () => {
+      climbing(290_000, 0);
+      climbing(290_000, CLIMB - 1);
+      expect(rule.stall()).toBeNull();
+      climbing(290_000, CLIMB);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      expect(rule.stall()?.detail).toContain(
+        "Bladeburner's rank not climbing (290,000 now, 290,000 at the clock's start)",
+      );
+      climbing(290_120, CLIMB + MINUTE);
+      expect(rule.stall()).toBeNull();
+    });
+
+    test("the climb's least rise (120 a 20 min window here): short of it within the window, a stall; past it, none", () => {
+      for (let at = 0; at <= CLIMB; at += MINUTE) climbing(290_000 + (0.01 * at) / 1000, at);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      // Past the least rise within each window: none.
+      rule = new WorldDaemonRule({});
+      for (let at = 0; at <= 3 * CLIMB; at += MINUTE) climbing(290_000 + (0.2 * at) / 1000, at);
+      expect(rule.stall()).toBeNull();
+    });
+
+    test("a Black Op stuck failing, each loss rebuilt to its rank: a stall at the attempts' bound, the rebuilds no reset", () => {
+      // Centurion at 300,000: each 10 min a failure's 5,000 lost, then rebuilt (each reading a rise), each attempt a
+      // little higher than the last (the contracts' steps past the rank): the rises past a climb's least are no reset.
+      for (let failure = 0; failure * 10 * MINUTE <= ATTEMPTS; failure++) {
+        const from = failure * 10 * MINUTE;
+        const peak = 300_000 + 200 * failure;
+        attempting(peak, from);
+        for (let minute = 1; minute < 10; minute++) {
+          attempting(peak - 5_000 + (5_200 * (minute - 1)) / 9, from + minute * MINUTE);
+        }
+      }
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      expect(rule.stall()?.detail).toContain(
+        "Operation Centurion not done (#398, 18 of 21), its rank met, the bound 1 h 0 min",
+      );
+    });
+
+    test("failures in a row within the bound, each rebuilt, then the Black Op done: no stall, the clock afresh", () => {
+      for (let failure = 0; failure < 5; failure++) {
+        const from = failure * 10 * MINUTE;
+        attempting(300_000, from);
+        for (let minute = 1; minute < 10; minute++) {
+          attempting(295_000 + (5_000 * (minute - 1)) / 9, from + minute * MINUTE);
+        }
+      }
+      // Done at 55 min: the next one's climb from then.
+      bn6(
+        { rank: 310_000, done: 19, next: { name: "Operation Vindictus", rank: 350_000, chance: 0.3 }, climbRise: 120 },
+        { nowMs: 55 * MINUTE },
+      );
+      for (let at = 56; at <= 70; at++) {
+        bn6(
+          {
+            rank: 310_000 + at * 200,
+            done: 19,
+            next: { name: "Operation Vindictus", rank: 350_000, chance: 0.3 },
+            climbRise: 120,
+            rankStallMs: CLIMB,
+          },
+          { nowMs: at * MINUTE },
+        );
+      }
+      expect(rule.stall()).toBeNull();
+      expect(events).toEqual([]);
+    });
+
+    test("Bernstein's climb at α 0.001: a seeded run at the rate, its ordinary failures in it, passes; a crawl at 1% fails", () => {
+      // The plan: attempts at 0.6 gaining 40 and losing 30 (each ±10%), 5 s each, worked 90% of the time: its bound positive
+      // at the 20 min window itself (a lumpier plan's window is lengthened: core's test).
+      const PLAN = { chance: 0.6, gain: 40, loss: 30, seconds: 5, duty: 0.9 };
+      const mean = PLAN.chance * PLAN.gain - (1 - PLAN.chance) * PLAN.loss;
+      const second = (PLAN.chance * PLAN.gain ** 2 + (1 - PLAN.chance) * PLAN.loss ** 2) * (1 + 0.01 / 3);
+      const attempts = {
+        perSecond: PLAN.duty / PLAN.seconds,
+        variance: second - mean ** 2,
+        below: mean + 1.1 * PLAN.loss,
+      };
+      const rate = (PLAN.duty * mean) / PLAN.seconds;
+      const window = climbWindowSeconds(rate, CLIMB / 1000, attempts, 0.001);
+      const fields = {
+        climbRise: climbRiseLowerBound(rate, window, attempts, 0.001),
+        climbWindowMs: window * 1000,
+        rankStallMs: CLIMB,
+        attemptsStallMs: ATTEMPTS,
+      };
+      expect(window).toBe(CLIMB / 1000);
+      expect(fields.climbRise).toBeGreaterThan(0.01 * rate * window);
+      // A seeded walk of the plan, a reading each minute, over five windows.
+      let state = 400;
+      const random = () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let x = state;
+        x = Math.imul(x ^ (x >>> 15), x | 1);
+        x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+        return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+      };
+      const every = PLAN.seconds / PLAN.duty;
+      let rank = 100_000;
+      let nextAttemptS = every;
+      for (let at = 0; at <= 5 * window * 1000; at += MINUTE) {
+        for (; nextAttemptS * 1000 <= at; nextAttemptS += every) {
+          const offset = 0.9 + 0.2 * random();
+          rank += random() < PLAN.chance ? PLAN.gain * offset : -PLAN.loss * offset;
+        }
+        bn6({ rank, ...fields }, { nowMs: at });
+      }
+      expect(rule.stall()).toBeNull();
+      expect(events).toEqual([]);
+      // A crawl at 1% of the rate: a stall within the window.
+      rule = new WorldDaemonRule({});
+      for (let at = 0; at <= window * 1000 + MINUTE; at += MINUTE) {
+        bn6({ rank: 100_000 + (0.01 * rate * at) / 1000, ...fields }, { nowMs: at });
+      }
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      expect(rule.stall()?.detail).toContain("Bernstein's margin at α 0.001");
+    });
+
+    test("a lengthened window (Bernstein's bound 0 at the base): the climb judged over it, not the base", () => {
+      const fields = { climbRise: 50, climbWindowMs: 2 * CLIMB, rankStallMs: CLIMB, attemptsStallMs: ATTEMPTS };
+      bn6({ rank: 290_000, ...fields }, { nowMs: 0 });
+      bn6({ rank: 290_000, ...fields }, { nowMs: 2 * CLIMB - 1 });
+      expect(rule.stall()).toBeNull();
+      bn6({ rank: 290_000, ...fields }, { nowMs: 2 * CLIMB });
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+      expect(rule.stall()?.detail).toContain("lengthened from 20 min");
+    });
+
+    test("the chance risen mid-attempts (#400's round 2): the time spent judged against the bound as it stood, not at once", () => {
+      // 40 min of failures at p 0.1 (its bound 66 min), then p 0.2 (31 min): 40/66 used, the rest at the new bound.
+      const at = (minute: number, boundMinutes: number) =>
+        bn6(
+          { rank: 300_000, climbRise: 120, rankStallMs: CLIMB, attemptsStallMs: boundMinutes * MINUTE },
+          { nowMs: minute * MINUTE },
+        );
+      for (let minute = 0; minute <= 40; minute++) at(minute, 66);
+      at(41, 31);
+      expect(rule.stall()).toBeNull();
+      // Used up at 40/66 + m/31 = 1: m = 12.2, so by minute 53.
+      for (let minute = 42; minute <= 52; minute++) at(minute, 31);
+      expect(rule.stall()).toBeNull();
+      at(53, 31);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+    });
+
+    test("ρ risen mid-climb (#400's round 2): the window as it stood at each reading, not the new one at once", () => {
+      const at = (minute: number, windowMinutes: number) =>
+        bn6(
+          { rank: 290_000, climbRise: 120, climbWindowMs: windowMinutes * MINUTE, rankStallMs: CLIMB },
+          { nowMs: minute * MINUTE },
+        );
+      for (let minute = 0; minute <= 40; minute++) at(minute, 60);
+      at(41, 20);
+      expect(rule.stall()).toBeNull();
+      // 40/60 + m/20 = 1: m = 6.7, so by minute 47.
+      for (let minute = 42; minute <= 46; minute++) at(minute, 20);
+      expect(rule.stall()).toBeNull();
+      at(47, 20);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank", sinceMs: 0 });
+    });
+
+    test("a plan resting alone (the counts spent, #400's round 2): its readings not judged, the climb's clock not advanced", () => {
+      for (let minute = 0; minute <= 180; minute++) {
+        bn6({ rank: 290_000, climbRise: null, climbWindowMs: null, rankStallMs: CLIMB }, { nowMs: minute * MINUTE });
+      }
+      expect(rule.stall()).toBeNull();
+      // Work again: judged from the last rest-only reading on, its window whole: used up at minute 200.
+      for (let minute = 181; minute < 200; minute++) climbing(290_000, minute * MINUTE);
+      expect(rule.stall()).toBeNull();
+      climbing(290_000, 200 * MINUTE);
+      expect(rule.stall()).toMatchObject({ step: "blackOpsRank" });
+    });
+
+    test("not judged: the rule not acting (the owner's work), all 21 done with the switch off, or under the faction's 25", () => {
+      for (let at = 0; at <= 3 * ATTEMPTS; at += MINUTE) climbing(290_000, at, { bladeburnerActing: false });
+      expect(rule.stall()).toBeNull();
+      rule = new WorldDaemonRule({});
+      for (let at = 0; at <= 3 * ATTEMPTS; at += MINUTE) {
+        bn6({ rank: 440_000, done: 21, next: null }, { nowMs: at, enabled: false });
+      }
+      expect(rule.stall()).toBeNull();
+      // Under 25 the plan can be a lottery at rank 0 (#386): B2's bound judges it, not this one.
+      rule = new WorldDaemonRule({});
+      for (let at = 0; at <= 3 * CLIMB; at += MINUTE) climbing(10, at);
+      expect(rule.stall()).toBeNull();
+    });
+  });
+
+  test("The Red Pill's steps are off there (A8): Daedalus joined, its reputation flat, no stall; BN4's has it", () => {
+    for (let at = 0; at <= 3 * RED_PILL_REPUTATION_STALLED_AFTER_MS; at += MINUTE) {
+      bn6({}, { nowMs: at, bladeburnerActing: false });
+    }
+    expect(rule.stall()).toBeNull();
+    expect(events).toEqual([]);
+    // The same in BN4: its reputation's stall, as before.
+    rule = new WorldDaemonRule({});
+    const bn4 = {
+      mediumData: medium({ hacking: 2600 }),
+      slowData: slow({ currentNode: 4, ownedSF: { 1: 3 }, ownedAugs: THIRTY, daedalus: 1e6 }),
+    };
+    update({ ...bn4, nowMs: 0 });
+    update({ ...bn4, nowMs: RED_PILL_REPUTATION_STALLED_AFTER_MS });
+    expect(rule.stall()).toMatchObject({ step: "redPillReputation" });
+  });
 });
