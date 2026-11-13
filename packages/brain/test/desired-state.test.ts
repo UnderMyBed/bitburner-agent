@@ -1605,9 +1605,10 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           hacknet_node_ram_cost: 1,
           hacknet_node_core_cost: 1,
         };
-        const hacknetMedium = (money: number) => {
+        const hacknetMedium = (money: number, hacking = 300) => {
           const data = richMedium(money);
-          return { ...data, player: { ...data.player, mults: { ...data.player.mults, ...HACKNET_MULTS } } };
+          const skills = { ...data.player.skills, hacking };
+          return { ...data, player: { ...data.player, skills, mults: { ...data.player.mults, ...HACKNET_MULTS } } };
         };
         /** As `minuteAt`, the medium with the Hacknet multipliers; Netburners inviting or joined; another cycle. */
         const hacknetMinute = (
@@ -1618,11 +1619,13 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
             netburners = "none",
             ownedSF = {},
             lastAugReset = 0,
+            hacking = 300,
             ...fields
           }: Omit<Parameters<typeof plannerSlow>[0], "minute"> & {
             netburners?: "none" | "invited" | "joined";
             ownedSF?: Record<string, number>;
             lastAugReset?: number;
+            hacking?: number;
           } = {},
           agentSessionId = "session-1",
         ) => {
@@ -1645,7 +1648,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           };
           for (const [tier, snapshot] of [
             ["slow", data],
-            ["medium", hacknetMedium(money)],
+            ["medium", hacknetMedium(money, hacking)],
           ] as const) {
             connection.receive(
               encodeControlMessage({
@@ -1703,11 +1706,16 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           expect(hacknetEvents(events)).toEqual([expect.objectContaining({ phase: "wanted", estimateMs: 2_000 })]);
           // A5 works for a countable at a joined faction meanwhile, never Netburners' before it's joined.
           expect(controller.factionsView().choice?.faction).not.toBe("Netburners");
-          // Bought: still asked for (the Agent holds it done) until the invitation shows.
+          // Bought: asked for no more (#387's review), so it holds neither the purchase's turn nor money.
           hacknetDone(connection);
           hacknetMinute(connection, 1, 1e12, { blackHand: 0 });
-          expect(controller.hacknetView()).toMatchObject({ bought: true, buying: true });
-          expect(sentIds()).toContain(HACKNET.id);
+          expect(controller.hacknetView()).toMatchObject({
+            bought: true,
+            buying: false,
+            waitingFor: "Netburners' invitation (the setup bought)",
+          });
+          expect(sentIds()).not.toContain(HACKNET.id);
+          expect(controller.gangEquipmentHold().forWhat).not.toContain("Netburners");
           // Invited: the setup no longer asked for; A5 joins Netburners (no enemies).
           hacknetMinute(connection, 2, 1e12, { blackHand: 0, netburners: "invited" });
           expect(sentIds()).not.toContain(HACKNET.id);
@@ -1775,6 +1783,26 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
             wanted: false,
             waitingFor: "the planner's wait to reach Netburners' countables",
           });
+        });
+
+        test("its hold is the set's money alone, as its τ has it, not Netburners' own countables' prices after it (#387's review)", () => {
+          onlyHacknet();
+          const { controller, connection, sentIds } = connectedWithLoopOff("planner");
+          // The set's three and the setup's $169,660 in hand, not Netburners' first's price on top: ten minutes of
+          // slow snapshots measure the income ($1m a second), the planner waits for Netburners' five.
+          // At hacking 1,500, Netburners' first is within the lookahead's 15 minutes, so A6's reserve holds its price.
+          const money = THREE_EXACTLY + 200_000;
+          for (let minute = 0; minute <= 11; minute += 1) {
+            hacknetMinute(connection, minute, money, { blackHand: 0, hacking: 1_500 });
+          }
+          const timing = controller.augmentationsView().progress?.timing;
+          expect(timing?.next[0]).toMatchObject({ augmentation: NIC, faction: "Netburners" });
+          expect(timing?.choice).toBeGreaterThanOrEqual(1);
+          // A6's reserve counts the countables' prices (the set's, and those waited for, within the lookahead): over the
+          // money, so the setup would wait for money its τ never waits for.
+          expect(controller.augmentationsView().reserve).toBeGreaterThan(money);
+          expect(controller.hacknetView()).toMatchObject({ wanted: true, buying: true, waitingFor: null });
+          expect(sentIds()).toContain(HACKNET.id);
         });
 
         test("a program first, then the setup; short of the money above the holds, it waits", () => {

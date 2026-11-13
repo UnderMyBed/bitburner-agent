@@ -161,8 +161,15 @@ describe("Netburners' countables in install timing's (core's countablesToCome)",
     // Its money: its own price after the setup's, at the income (4.5m at $1,000 a second), the later.
     expect(nic?.etaMs).toBeCloseTo(Math.max(nic?.workMs as number, 4.5e6), 3);
     // Bought: the check alone before the work.
-    const bought = countablesToCome({ ...base, money: 1e9, netburners: { ...route, setupMoney: 0 } });
+    // Bought (#387's review): the check alone before the work, not the set's money still to come ($1m short here).
+    const withSet = { ...base.set, money: 1e6 };
+    const bought = countablesToCome({ ...base, set: withSet, netburners: { ...route, setupMoney: 0 } });
     expect(bought.find((each) => each.augmentation === NIC)?.beforeJoinMs).toBe(INVITATION_CHECK_MS);
+    const notBought = countablesToCome({ ...base, set: withSet, netburners: route });
+    expect(notBought.find((each) => each.augmentation === NIC)?.beforeJoinMs).toBeCloseTo(
+      ((1e6 + SETUP) / 1_000) * 1000 + INVITATION_CHECK_MS,
+      3,
+    );
     // Invited: none.
     const invited = countablesToCome({ ...base, money: 1e9, netburners: { ...route, setupMoney: 0, invited: true } });
     expect(invited.find((each) => each.augmentation === NIC)?.beforeJoinMs).toBe(0);
@@ -230,8 +237,13 @@ describe("the rule, as the controller runs it", () => {
     ]);
     at({ nowMs: MINUTE });
     expect(events).toHaveLength(1);
-    expect(at({ done: true, nowMs: 2 * MINUTE })).toEqual(HACKNET_SETUP_INTENT);
-    expect(rule.view().bought).toBe(true);
+    // Bought (#387's review): asked for no more, the invitation awaited.
+    expect(at({ done: true, nowMs: 2 * MINUTE })).toBeNull();
+    expect(rule.view()).toMatchObject({
+      bought: true,
+      buying: false,
+      waitingFor: "Netburners' invitation (the setup bought)",
+    });
     expect(rule.reserve()).toBe(0);
     expect(rule.bought(0)).toBe(true);
     expect(rule.bought(1)).toBe(false);
@@ -282,6 +294,21 @@ describe("the rule, as the controller runs it", () => {
     // Exactly the money above the hold: bought.
     const { at } = make();
     expect(at({ money: 1e9, hold: { amount: 1e9 - SETUP, forWhat: "x" } })).toEqual(HACKNET_SETUP_INTENT);
+  });
+
+  test("the worker's done and the invitation in the same update: bought, then invited (#387's review)", () => {
+    const { lines, events, at } = make();
+    at({ nowMs: 0 });
+    expect(at({ done: true, facts: { ...facts, invited: true }, nowMs: MINUTE })).toBeNull();
+    expect(events.map((event) => [event.phase, event.sinceWantedMs])).toEqual([
+      ["wanted", null],
+      ["bought", MINUTE],
+      ["invited", MINUTE],
+    ]);
+    expect(lines.slice(1)).toEqual([
+      expect.stringMatching(/^hacknet: the setup for Netburners' invitation bought/),
+      "hacknet: Netburners invited, 60 s after the setup was wanted",
+    ]);
   });
 
   test("no invitation past the estimate and 10 minutes: NOT INVITED, logged and stored once; a new cycle starts afresh", () => {

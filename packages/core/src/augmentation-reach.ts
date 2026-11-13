@@ -231,7 +231,9 @@ export function countablesToCome({
   if (netburners === null || joined.some((faction) => faction.name === NETBURNERS)) return toCome;
   if (work.owners !== null || !work.brainWorks) return toCome;
   const perSecond = bestWorkRate(person, { name: NETBURNERS, reputation: 0, favor: 0 }, conditions)?.perSecond;
-  const beforeJoinMs = netburners.invited ? 0 : moneyMsFor(netburners.setupMoney) + INVITATION_CHECK_MS;
+  // Bought (setupMoney 0, #387's review): the game's check alone, no wait for the set's money.
+  const setupMs = netburners.setupMoney > 0 ? moneyMsFor(netburners.setupMoney) : 0;
+  const beforeJoinMs = netburners.invited ? 0 : setupMs + INVITATION_CHECK_MS;
   if (perSecond === undefined || !Number.isFinite(beforeJoinMs)) return toCome;
   for (const name of netburners.sold) {
     if (name === NEUROFLUX_GOVERNOR || name === THE_RED_PILL || sold.includes(name)) continue;

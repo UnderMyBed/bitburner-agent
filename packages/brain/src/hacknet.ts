@@ -327,8 +327,9 @@ export class HacknetRule {
     if (facts.invited) return view(false, "nothing: Netburners invited (A5 joins it)");
     if (installUnderWay) return view(false, "the install under way (Hacknet is lost at it)");
     if (waitedFor === null) return view(false, "the planner's wait to reach Netburners' countables");
-    // Asked for until invited, once bought too: done, the Agent doesn't run it again.
-    if (cycle.bought || done) return view(true, null);
+    // Bought (#387's review): asked for no more, so it holds neither the purchase's turn nor any money (cloud servers,
+    // gang equipment), and the worker isn't run again; the invitation's clock goes on.
+    if (cycle.bought || done) return view(false, "Netburners' invitation (the setup bought)");
     if (other !== null) return view(false, `${other} first`);
     if (money === null) return view(false, "the player's money in the Agent's medium snapshot");
     if (money - hold.amount < facts.cost) {

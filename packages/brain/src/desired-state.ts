@@ -1236,14 +1236,24 @@ export class DesiredStateController {
 
   /**
    * Netburners' Hacknet setup (#387, ./hacknet.ts): while the planner's wait waits for its countables, after a program
-   * or home RAM (`other`), with the money above every hold cloud servers keep and home RAM's.
+   * or home RAM (`other`), with the money above every hold cloud servers keep and home RAM's, A6's as the setup's τ has
+   * it (`hacknetReserve`).
    */
   #chooseHacknet(other: Intent | null): Intent | null {
-    const reserve = this.#reserveForOtherPurchase(this.#income.rate()?.perSecond ?? 0, false, false);
-    const hold = [...(reserve === null ? [] : [reserve]), ...this.#homeRamHolds()].reduce<MoneyReserve>(
-      (most, each) => (each.amount > most.amount ? each : most),
-      { amount: 0, forWhat: "nothing" },
-    );
+    // A6's money as the setup's τ has it (#387's review): while the wait waits for Netburners' countables, the set's
+    // alone, not their own prices, which come after the setup; else its reserve and the countdown's hold.
+    const augmentations = this.#augmentations.hacknetReserve();
+    const reserve = this.#reserveForOtherPurchase(this.#income.rate()?.perSecond ?? 0, false, false, augmentations);
+    const holds: MoneyReserve[] = [
+      ...(reserve === null ? [] : [reserve]),
+      { amount: this.#augmentations.daedalusHold(), forWhat: "Daedalus's invitation" },
+      { amount: this.#augmentations.redPillHold(), forWhat: "The Red Pill's donation" },
+      { amount: this.#invitations.hold(), forWhat: "an invitation travelled for" },
+    ];
+    const hold = holds.reduce<MoneyReserve>((most, each) => (each.amount > most.amount ? each : most), {
+      amount: 0,
+      forWhat: "nothing",
+    });
     const money = this.#mediumData?.player?.money;
     return this.#hacknet.update({
       facts: this.#netburnersFacts,
@@ -1343,6 +1353,7 @@ export class DesiredStateController {
     perSecond: number,
     leaveOutNearlyAffordable = false,
     withHacknet = true,
+    augmentationReserve = this.#augmentations.reserve(),
   ): MoneyReserve | null {
     const waiting: MoneyReserve[] = [];
     // Netburners' Hacknet setup (#387) while it waits for money, as a program's: not for its own hold (`withHacknet`).
@@ -1362,7 +1373,7 @@ export class DesiredStateController {
     const shortfall = (cheaper?.amount ?? 0) - (typeof money === "number" ? money : 0);
     const nearly = shortfall <= (perSecond * CLOUD_SERVER_RESERVE_HORIZON_MS) / 1000;
     const other = !leaveOutNearlyAffordable && cheaper !== undefined && nearly ? cheaper : null;
-    const augmentations = this.#augmentations.reserve();
+    const augmentations = augmentationReserve;
     const invitation = this.#invitations.hold();
     if (invitation > Math.max(augmentations, other?.amount ?? 0)) {
       return { amount: invitation, forWhat: "an invitation travelled for (#228)" };
