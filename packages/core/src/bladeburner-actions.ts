@@ -746,6 +746,9 @@ export interface BladeburnerActionPlan {
  *   action's low end scales by `city.ratio` (core's `cityCompetenceRatio`: the estimates' and the chaos factors'),
  *   as with the skills; Raid out where `city.raid` is false (no communities, `Actions/Operation.ts:63-68`). None
  *   given: the city read.
+ * - **Under a current-rank target** (#386, `target`, ./bladeburner-targets.ts): the plan with the least expected time
+ *   to it (`fastestToTarget`), not the most rank a second; met (the rank at it), rank a second. Training never rests
+ *   better than Field Analysis (less stamina, no rank), so it isn't weighed.
  * Left out, and labelled: a failure's HP (#377's review), which costs money at the hospital, not rank (its mean is
  * `hpLoss`; the run report shows the visits and their money): so the choice is optimistic for the actions that lose
  * the most HP (Raid about 386 a failure, Stealth Retirement 85, Assassination 50, Bounty Hunter 5, against 20 HP at

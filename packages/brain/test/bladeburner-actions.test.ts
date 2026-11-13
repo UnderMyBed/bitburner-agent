@@ -458,6 +458,29 @@ describe("the run report's actions (#375)", () => {
     expect(bernsteinMargin(variance, 0.15, BLADEBURNER_RANK_ALPHA)).toBeCloseTo(margin, 12);
   });
 
+  test("the rule's forecast under the faction's 25 (#386): the brain's plan, its time to it; joined, rank a second", () => {
+    const ranks = Array.from({ length: 3 }, () => 10);
+    const under = fold(run(ranks)).text;
+    const forecastLine = (text: string) => text.split("\n").find((line) => line.includes("the rule's forecast over"));
+    const plan = chooseBladeburnerAction({
+      readings: tracking(),
+      person: PERSON,
+      stamina: MAX_STAMINA,
+      maxStamina: MAX_STAMINA,
+      rankMultiplier: 1,
+      speed: 1,
+      target: { rank: 10, target: 25 },
+    });
+    expect(plan.toTarget?.seconds).toBeGreaterThan(0);
+    expect(forecastLine(under)).toContain(
+      `(rank 25 in about ${formatDuration((plan.toTarget?.seconds ?? 0) * 1000)} expected, the least of the plans (#386))`,
+    );
+    const joined = fold(
+      run(ranks).map(([atMs, data]) => [atMs, { ...data, player: { ...data.player, factions: ["Bladeburners"] } }]),
+    ).text;
+    expect(forecastLine(joined)).not.toContain("rank 25 in about");
+  });
+
   test("Tracking for 10 min at its forecast: the lines, and no failure", () => {
     const ranks = Array.from({ length: N }, (_, index) => (index * expected) / (N - 1));
     const { text, failures } = fold(run(ranks));

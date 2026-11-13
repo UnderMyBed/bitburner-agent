@@ -135,6 +135,8 @@ describe("the expected time to a target", () => {
     { name: "steady", step: { chance: 0.4, gain: 0.9, loss: 0.05, rest: 0.05, seconds: 30 }, rank: 0 },
     { name: "floored", step: { chance: 0.45, gain: 3, loss: 2.5, rest: 0, seconds: 40 }, rank: 0 },
     { name: "floored, from 20", step: { chance: 0.45, gain: 3, loss: 2.5, rest: 0, seconds: 40 }, rank: 20 },
+    // Every attempt a success of a fifth of the distance: the ±10% decides whether the fifth reaches it (half the time).
+    { name: "the ±10% deciding", step: { chance: 1, gain: 5, loss: 0, rest: 0, seconds: 10 }, rank: 0 },
     // The counts (#386's amendment): Raid's 12 attempts, then the steady action from wherever the walk is.
     {
       name: "Raid-like for 12 attempts, then steady",
@@ -327,10 +329,15 @@ describe("the rule's choice under a target", () => {
   });
 
   test("the counts: Raid's spent, the next-best after it; every plan solved gives the same choice as the pruned", () => {
-    for (const raidCount of [100, 3, 1.2]) {
-      for (const rank of [0, 10, 16, 20, 24]) {
+    // Infinite counts: no sequence, so each plan by its own Wald bound, which the pruning stops on.
+    for (const raidCount of [Number.POSITIVE_INFINITY, 100, 3, 1.2]) {
+      for (const rank of [0, 10, 16, 17, 17.5, 18, 19, 20, 24]) {
+        const counted = (each: BladeburnerActionReading) =>
+          raidCount === Number.POSITIVE_INFINITY ? { ...each, count: raidCount } : each;
         const input = {
-          readings: readings(0.055).map((each) => (each.name === "Raid" ? { ...each, count: raidCount } : each)),
+          readings: readings(0.055).map((each) =>
+            each.name === "Raid" ? { ...each, count: raidCount } : counted(each),
+          ),
           person: WHO,
           stamina: max,
           maxStamina: max,

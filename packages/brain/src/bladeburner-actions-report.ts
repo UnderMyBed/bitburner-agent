@@ -39,7 +39,9 @@
 // - **The focus** (#377's review): A5's faction work waits all the actions' time, the rests' too, Field Analysis's rank
 //   all it gains then; the time and that rank are shown, the trade the planner's.
 // - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings): its cycle's rank a
-//   second, shown beside the rank measured over the readings; not judged, as a window cuts the cycle anywhere.
+//   second, shown beside the rank measured over the readings; not judged, as a window cuts the cycle anywhere. Under
+//   the reading's current-rank target (#386, core's `bladeburnerRankTarget`), the plan the brain chooses, the least
+//   expected time to it, and that time; the stuck-resting check takes that plan's rest too.
 // - **The skills** (B3, #379): the levels read are in the game's range read, and core's time and regain take them, so
 //   the forecast is the game's with them. Shown: the levels bought over the window, the points unspent and the rule's
 //   plan at the last reading, and its forecast there beside B2's at no skills. **Points unspent:** the rule's plan
