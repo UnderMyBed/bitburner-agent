@@ -866,10 +866,18 @@ const SETUP = hacknetSetupPlan([], NO_HACKNET_COST_MULTIPLIERS).cost;
 
 /**
  * Netburners' Hacknet totals (#387), from no node: short of the money, refused at the first purchase it can't pay,
- * saying so, what it bought kept; with the money, the rest, done; what the game took in all is core's plan's cost from
- * no node at ×1 (the game's own prices, `Hacknet/HacknetHelpers.tsx`: the parity); sent again, done, nothing paid.
+ * saying so, what it bought kept; with the money, the rest, done; what the game took in all (its own count,
+ * `getMoneySources`' `hacknet_expenses`: the nodes earn money meanwhile, so the money alone won't tell) is core's plan's
+ * cost from no node at ×1 (the game's own prices, `Hacknet/HacknetHelpers.tsx`: the parity); sent again, done, nothing
+ * paid.
  */
 async function hacknetBoughtOnce(fresh: ForServers, backend: "sim" | "ui") {
+  /** The game's Hacknet spending since the install, from the next slow snapshot (one a minute). */
+  const spentSoFar = async () => {
+    await fresh.game.run(61_000);
+    const sources = fresh.latest<{ moneySources?: Record<string, number> }>("slow")?.moneySources;
+    return -(sources?.hacknet_expenses ?? Number.NaN);
+  };
   await fresh.game.runUntil(() => fresh.money() !== null, 10_000);
   await fresh.simulation.diagnostics.setMoney(10_000);
   await fresh.game.runUntil(() => fresh.money() === 10_000, 5_000);
@@ -880,27 +888,18 @@ async function hacknetBoughtOnce(fresh: ForServers, backend: "sim" | "ui") {
     problem: `the game refused node 3 ($6,332; the setup $${Math.ceil(SETUP).toLocaleString("en-US")}): not enough money`,
     backend,
   });
-  await fresh.game.run(2_500);
-  const shortSpent = 10_000 - (fresh.money() as number);
-  expect(shortSpent).toBeCloseTo(1_000 + 1_850 + 3_422.5, 3);
   fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
-  await fresh.game.run(2_000);
+  expect(await spentSoFar()).toBeCloseTo(1_000 + 1_850 + 3_422.5, 3);
   await fresh.simulation.diagnostics.setMoney(1e10);
-  await fresh.game.runUntil(() => fresh.money() === 1e10, 5_000);
   const outcomes = await boughtEach(fresh, [HACKNET_SETUP]);
   expect(outcomes).toEqual([{ id: HACKNET_SETUP.id, done: true, tries: 1, problem: null, backend }]);
-  await fresh.game.run(2_500);
-  const spent = shortSpent + 1e10 - (fresh.money() as number);
-  expect(spent).toBeCloseTo(SETUP, 2);
-  // Sent again: the game shows the totals, done, nothing paid.
   fresh.brain.channel.setDesiredState({ hackLoop: HACK_LOOP_OFF, intents: [] });
-  await fresh.game.run(2_000);
-  const before = fresh.money() as number;
+  expect(await spentSoFar()).toBeCloseTo(SETUP, 2);
+  // Sent again: the game shows the totals, done, nothing paid.
   expect(await boughtEach(fresh, [HACKNET_SETUP])).toEqual([
     { id: HACKNET_SETUP.id, done: true, tries: 1, problem: null, backend },
   ]);
-  await fresh.game.run(2_500);
-  expect(fresh.money()).toBe(before);
+  expect(await spentSoFar()).toBeCloseTo(SETUP, 2);
 }
 
 test("Hacknet to Netburners' totals (sim, #387): short of the money, refused and kept; then done at core's plan's cost; again, nothing paid", async () => {
