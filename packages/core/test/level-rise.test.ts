@@ -551,6 +551,9 @@ describe("the hindcast (#401): BN4.2's work rate each cycle, predicted from the 
  * chosen, for 462,491 reputation (favour 150's). At the start: the experience, the level and the multipliers (the
  * medium snapshot's), Daedalus's reputation, and `HackingExpRate` over the 10 minutes before (BN1.4's over 7: its
  * install was 7.1 min before); the share's mean over the hold, the online minutes taken, and the level at the end.
+ * The cycle before (the follow-up extraction): `HackingExpRate`'s last whole 10-minute window at its install (2 s
+ * before it), with the level, the experience and `mults.hacking` then; the hold's start that long after the install.
+ * The install's gains are the hold's multipliers over the cycle before's.
  */
 const RED_PILL_HOLDS = [
   {
@@ -564,7 +567,18 @@ const RED_PILL_HOLDS = [
     reputation: 28.46,
     actual: 62.27,
     endLevel: 5188,
+    sinceInstall: 16.081,
+    before: {
+      expPerSecond: 734_704,
+      level: 3310,
+      exp: 453_162_546,
+      hacking: 7.5617,
+      hackingExp: 8.7611,
+      hackingSpeed: 3.0349,
+    },
     old: 98.0,
+    modelB: 60.0,
+    modelBFromStart: 62.4,
     window: 86.7,
   },
   {
@@ -578,7 +592,18 @@ const RED_PILL_HOLDS = [
     reputation: 24.2,
     actual: 72.35,
     endLevel: 4679,
+    sinceInstall: 17.114,
+    before: {
+      expPerSecond: 193_783,
+      level: 1715,
+      exp: 209_714_258,
+      hacking: 4.1515,
+      hackingExp: 8.0221,
+      hackingSpeed: 2.4604,
+    },
     old: 113.5,
+    modelB: 73.1,
+    modelBFromStart: 75.8,
     window: 100.1,
   },
   {
@@ -592,7 +617,18 @@ const RED_PILL_HOLDS = [
     reputation: 130.48,
     actual: 30.14,
     endLevel: 7694,
+    sinceInstall: 7.1,
+    before: {
+      expPerSecond: 148_244,
+      level: 2924,
+      exp: 99_268_741,
+      hacking: 7.5143,
+      hackingExp: 11.4086,
+      hackingSpeed: 4.8027,
+    },
     old: 33.5,
+    modelB: 27.4,
+    modelBFromStart: 28.1,
     window: 30.6,
   },
   {
@@ -606,48 +642,89 @@ const RED_PILL_HOLDS = [
     reputation: 27.05,
     actual: 98.52,
     endLevel: 4774,
+    sinceInstall: 23.1,
+    before: {
+      expPerSecond: 448_681,
+      level: 1906,
+      exp: 566_631_640,
+      hacking: 4.2855,
+      hackingExp: 8.2809,
+      hackingSpeed: 2.5398,
+    },
     old: 160.8,
+    modelB: 92.0,
+    modelBFromStart: 95.5,
     window: 144.9,
   },
 ] as const;
 
 /**
- * The holds' ETAs (#401's bar: within about 25%). Model B proper (κ from the cycle before's measured rate × its
- * install's gains, as c2–c8 above) needs the cycle before each hold, which the extraction doesn't hold: not computed.
- * What is, each against the actual: the old ETA (#351: the level now, the hold's mean share), and, for the record only,
- * κ from the window at the start. That window is the hack loop's ramp after the install 7–23 min before (15 to 800
- * times under the hold's own rate), so its level at the hold's end is 1,300–1,800 short: 1.38–1.47× at three holds,
- * outside 25%, though always between the actual and the old.
+ * The holds' ETAs against the actual (#401's bar: within about 25%), each row shown:
+ * - **model B,** as c2–c8 above: the level's path from the install, κ the cycle before's last measured rate over its
+ *   level + 50 × the install's `hacking_exp` × `hacking_speed`, m × its `hacking` (`laterCycleRise`); the work from the
+ *   hold's start, that long after the install: 0.91–1.01;
+ * - **model B from the hold's start,** as the brain takes it (the carried κ, `augmentations.levelRise`): the same κ, from
+ *   the experience and the level at the hold's start: 0.93–1.05;
+ * - **the old ETA** (#351: the level now, the hold's mean share): 1.11–1.63;
+ * - **for the record only,** κ from the window at the hold's start: the hack loop's ramp after the install, 15 to 800
+ *   times under the hold's own rate, so its level at the hold's end is 1,300–1,800 short: 1.02–1.47, between the actual
+ *   and the old.
  */
-describe("the four Red Pill holds (#401): the ETA at the level now and along the window's rise, against the actual", () => {
-  test.each(RED_PILL_HOLDS)("$node: old $old, window $window, actual $actual min", (hold) => {
-    const rateAt = (level: number) =>
-      factionReputationPerSecond(
+describe("the four Red Pill holds (#401): the ETA under model B, the level now and the window's rise, against the actual", () => {
+  test.each(RED_PILL_HOLDS)(
+    "$node: model B $modelB ($modelBFromStart from the hold's start), old $old, window $window, actual $actual min",
+    (hold) => {
+      const rateAt = (level: number) =>
+        factionReputationPerSecond(
+          {
+            skills: { hacking: level, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+            mults: { faction_rep: hold.mults.factionRep },
+          },
+          "hacking",
+          {
+            favor: 0,
+            sourceFile15Level: 0,
+            focused: true,
+            implant: false,
+            factionWorkRepGain: hold.gain,
+            shareBonus: hold.share,
+          },
+        );
+      const needed = 462_491 - hold.reputation;
+      // Model B: the cycle before's rate at its install, the path after it, the work from the hold's start.
+      const { before } = hold;
+      const after = laterCycleRise(
+        levelRiseOf({
+          exp: before.exp,
+          level: before.level,
+          levelMult: before.hacking,
+          expPerSecond: before.expPerSecond,
+        }),
         {
-          skills: { hacking: level, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
-          mults: { faction_rep: hold.mults.factionRep },
-        },
-        "hacking",
-        {
-          favor: 0,
-          sourceFile15Level: 0,
-          focused: true,
-          implant: false,
-          factionWorkRepGain: hold.gain,
-          shareBonus: hold.share,
+          hacking: hold.mults.hacking / before.hacking,
+          hackingExp: hold.mults.hackingExp / before.hackingExp,
+          hackingSpeed: hold.mults.hackingSpeed / before.hackingSpeed,
         },
       );
-    const needed = 462_491 - hold.reputation;
-    const flat = levelRiseOf({ exp: hold.exp, level: hold.level, levelMult: hold.mults.hacking, expPerSecond: null });
-    const window = levelRiseOf({ ...flat, expPerSecond: hold.windowRate });
-    const old = workSecondsAlong(flat, rateAt, needed) / MINUTE;
-    const along = workSecondsAlong(window, rateAt, needed) / MINUTE;
-    expect(old).toBeCloseTo(hold.old, 1);
-    expect(along).toBeCloseTo(hold.window, 1);
-    // Cautious both, the window's the nearer.
-    expect(along).toBeLessThan(old);
-    expect(along).toBeGreaterThan(hold.actual);
-    // The window's level at the hold's end, short of the measured.
-    expect(levelAlong(window, hold.actual * MINUTE)).toBeLessThan(hold.endLevel);
-  });
+      const startSeconds = hold.sinceInstall * MINUTE;
+      const modelB = (workSecondsAlong(after, rateAt, needed, startSeconds) - startSeconds) / MINUTE;
+      const flat = levelRiseOf({ exp: hold.exp, level: hold.level, levelMult: hold.mults.hacking, expPerSecond: null });
+      const fromStart = workSecondsAlong({ ...flat, kappa: after.kappa }, rateAt, needed) / MINUTE;
+      const window = levelRiseOf({ ...flat, expPerSecond: hold.windowRate });
+      const old = workSecondsAlong(flat, rateAt, needed) / MINUTE;
+      const along = workSecondsAlong(window, rateAt, needed) / MINUTE;
+      expect(modelB).toBeCloseTo(hold.modelB, 1);
+      expect(fromStart).toBeCloseTo(hold.modelBFromStart, 1);
+      expect(old).toBeCloseTo(hold.old, 1);
+      expect(along).toBeCloseTo(hold.window, 1);
+      // Model B within 25% both ways; the old and the window's ETAs cautious, the window's the nearer.
+      for (const eta of [modelB, fromStart]) {
+        expect(eta / hold.actual).toBeGreaterThan(0.75);
+        expect(eta / hold.actual).toBeLessThan(1.25);
+      }
+      expect(along).toBeLessThan(old);
+      expect(along).toBeGreaterThan(hold.actual);
+      expect(levelAlong(window, hold.actual * MINUTE)).toBeLessThan(hold.endLevel);
+    },
+  );
 });
