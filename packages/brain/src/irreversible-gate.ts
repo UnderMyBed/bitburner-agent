@@ -20,6 +20,7 @@
 //   so a backup that can't be taken (no Remote File API connection) is tried once a minute, not every 20 s.
 // - Everything here is in memory: a disconnect, a new Agent or a restarted brain starts every gate again, the safe way.
 import {
+  BLACK_OPS_COUNT,
   BLADEBURNER_JOIN_LEVEL,
   COMBAT_STATS,
   combatPersonOf,
@@ -32,6 +33,7 @@ import {
   WORLD_DAEMON,
   worldDaemonProblem,
 } from "@bitburner-agent/core";
+import { blackOpsDoneIn } from "./bladeburner-route.ts";
 import type { SaveBackupEvent } from "./save-backups.ts";
 
 /** Consecutive medium snapshots an irreversible intent's guard must hold on before its backup (R8). */
@@ -89,9 +91,9 @@ const newGate = (): Gate => ({
  * - Destroying the BitNode, then: w0r1d_d43m0n's preconditions (core's `worldDaemonProblem`), so it's held before any
  *   backup. Reachable: among the medium snapshot's servers, which `scan` finds from home only once The Red Pill is
  *   installed. Root, there too, and the hacking level against its required level, from the static snapshot: 3000 times
- *   the BitNode's `WorldDaemonDifficulty` (`Server/ServerHelpers.ts:383-385`), fixed for the BitNode. The game also
- *   allows a destroy with every Black Op done (`NetscriptFunctions/Singularity.ts:1176-1186`); the guard doesn't count
- *   that route, the conservative direction.
+ *   the BitNode's `WorldDaemonDifficulty` (`Server/ServerHelpers.ts:383-385`), fixed for the BitNode. Or (#398) every
+ *   Black Op done, as the game allows (`NetscriptFunctions/Singularity.ts:1176-1183`, the Black Ops page's button):
+ *   the medium snapshot's Bladeburner reading with none next (./bladeburner-route.ts's `blackOpsDoneIn`).
  * - Forming a gang (#325): its faction joined, as the game requires (`Gang/helpers.ts:22-24`).
  * - Joining the Bladeburner division (#367): all four combat stats at 100, as the game requires
  *   (`NetscriptFunctions/Bladeburner.ts:349-363`). Its access (BN6, BN7, SF6 or SF7) the rule checks; the game refuses
@@ -150,10 +152,15 @@ function bladeburnerGuardFailure(medium: MediumSnapshotData): string | null {
   return `${levels}: the division needs ${BLADEBURNER_JOIN_LEVEL} each`;
 }
 
-/** w0r1d_d43m0n's preconditions on the snapshots (#175): `worldDaemonProblem`, or what a snapshot lacks for them. */
+/**
+ * w0r1d_d43m0n's preconditions on the snapshots (#175): `worldDaemonProblem`, or what a snapshot lacks for them; all 21
+ * Black Ops done in their place (#398).
+ */
 function worldDaemonGuardFailure(medium: MediumSnapshotData, staticData: StaticSnapshotData | null): string | null {
+  const blackOpsDone = blackOpsDoneIn(medium);
+  if (blackOpsDone === BLACK_OPS_COUNT) return null;
   const daemon = medium.servers?.find((server) => server.hostname === WORLD_DAEMON);
-  if (daemon === undefined) return worldDaemonProblem(null);
+  if (daemon === undefined) return worldDaemonProblem(null, blackOpsDone);
   const hackingLevel = (medium.player?.skills as { hacking?: unknown } | undefined)?.hacking;
   if (typeof hackingLevel !== "number") return "the medium snapshot has no hacking level";
   const requiredHackingLevel = staticData?.servers?.find(
@@ -162,7 +169,10 @@ function worldDaemonGuardFailure(medium: MediumSnapshotData, staticData: StaticS
   if (typeof requiredHackingLevel !== "number") {
     return `the static snapshot has no required hacking level for ${WORLD_DAEMON}`;
   }
-  return worldDaemonProblem({ rooted: daemon.hasAdminRights === true, hackingLevel, requiredHackingLevel });
+  return worldDaemonProblem(
+    { rooted: daemon.hasAdminRights === true, hackingLevel, requiredHackingLevel },
+    blackOpsDone,
+  );
 }
 
 export class IrreversibleIntentGates {

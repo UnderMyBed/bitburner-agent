@@ -216,6 +216,8 @@ export {
   BITNODE_NO_WIN_ROUTE_REASON,
   type BitNodeHackingMultipliers,
   type BitNodePriceMultipliers,
+  BLACK_OPS_COUNT,
+  BLACK_OPS_ROUTE_BITNODES,
   bitNodeAssumptions,
   bitNodeHackingMultipliers,
   bitNodePriceMultipliers,
@@ -226,7 +228,9 @@ export {
   listedBitNodes,
   playableBitNodes,
   THE_RED_PILL,
+  type WinRoute,
   type WorldDaemonStanding,
+  winRouteOf,
   worldDaemonProblem,
 } from "./bitnodes.ts";
 export {
@@ -304,6 +308,7 @@ export {
   bladeburnerRankMultiplierOf,
   bladeburnerResting,
   bladeburnerRests,
+  bladeburnerTailRate,
   chanceLowAt,
   chaosDifficultyFactor,
   chooseBladeburnerAction,
@@ -365,6 +370,16 @@ export {
   inciteCountGain,
   isBladeburnerCity,
 } from "./bladeburner-cities.ts";
+export {
+  type BlackOpsRouteOp,
+  type BlackOpsRouteStep,
+  type BlackOpsRouteTime,
+  blackOpsRouteEstimate,
+  blackOpsRouteSeconds,
+  chooseWinRoute,
+  redPillLevelSeconds,
+  type WinRouteChoice,
+} from "./bladeburner-route.ts";
 export {
   BLADEBURNER_RANK_SKILLS,
   BLADEBURNER_SKILL_NAMES,
@@ -514,6 +529,7 @@ export {
 export {
   type DaedalusStage,
   DESTROY_ESTIMATE_BITNODES,
+  type DestroyBlackOpsInputs,
   type DestroyEstimate,
   type DestroyEstimateInputs,
   type DestroyGangInputs,

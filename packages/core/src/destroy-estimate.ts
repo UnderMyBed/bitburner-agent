@@ -42,8 +42,18 @@
  *   leaves that corner to the respect stall), said in its source.
  * - D as Daedalus's route has it: none before The Red Pill with no prior at 15,000 (BN2.1's), so "at least"; D before
  *   The Red Pill by the formulas is a later slice.
+ *
+ * **BN6, the Black Ops' route** (#398; `destroyRouteOf`'s "blackOps", core's `winRouteOf`): one term, BO, the route's
+ * time from the reading (./bladeburner-route.ts's `blackOpsRouteEstimate`: the next Black Op's rank by B5's stock and
+ * tail, each later one's at the sustainable rate, each one's attempts (T + (1 − p)·L/ρ)/p), at the competence now, so
+ * cautious (its rise left out); 0 with all 21 done; none before the division's reading; never at a chance of 0 now.
+ * Its source names The Red Pill's estimate beside it (the hacking level alone by the formulas, at least) and the
+ * planner's choice (`chooseWinRoute`): both routes' estimates, the planner's to weigh. Daedalus's A, BC and D don't
+ * apply: The Red Pill's holds are off on this route.
  */
 import { augmentationBitNodeMultipliers } from "./augmentations.ts";
+import { BLACK_OPS_COUNT, winRouteOf } from "./bitnodes.ts";
+import type { WinRouteChoice } from "./bladeburner-route.ts";
 import { daedalusAugmentationsRequired } from "./factions.ts";
 import { GANG_ROUTE_COMMIT_MS } from "./gang-route.ts";
 
@@ -59,22 +69,29 @@ export function worldDaemonRequiredLevel(currentNode: number, ownedSF: Readonly<
   return WORLD_DAEMON_BASE_LEVEL * augmentationBitNodeMultipliers(currentNode, ownedSF).WorldDaemonDifficulty;
 }
 
-/** The BitNodes whose route to the destroy the estimate models: Daedalus's (#360), and BN2's gang (#357). */
-export const DESTROY_ESTIMATE_BITNODES: readonly number[] = [1, 2, 4, 5];
+/**
+ * The BitNodes whose route to the destroy the estimate models: Daedalus's (#360), BN2's gang (#357), and BN6's Black
+ * Ops (#398).
+ */
+export const DESTROY_ESTIMATE_BITNODES: readonly number[] = [1, 2, 4, 5, 6];
 
-/** A BitNode's route to The Red Pill, as the estimate models it: Daedalus's count, or the gang's faction (BN2). */
-export type DestroyRoute = "daedalus" | "gang";
+/**
+ * A BitNode's route to the destroy, as the estimate models it: Daedalus's count to The Red Pill, the gang's faction's
+ * (BN2), or the Black Ops (BN6, #398).
+ */
+export type DestroyRoute = "daedalus" | "gang" | "blackOps";
 
 /** The route the estimate models in `currentNode` (`DESTROY_ESTIMATE_BITNODES`), or null: none modelled there. */
 export function destroyRouteOf(currentNode: number): DestroyRoute | null {
   if (!DESTROY_ESTIMATE_BITNODES.includes(currentNode)) return null;
+  if (winRouteOf(currentNode) === "blackOps") return "blackOps";
   return currentNode === 2 ? "gang" : "daedalus";
 }
 
 /** How a term bears on the total: done (0, exact), or optimistic, cautious, or either way for it. */
 export type DestroyTermLabel = "done" | "optimistic" | "cautious" | "either way";
 
-export type DestroyTermName = "A" | "BC" | "D";
+export type DestroyTermName = "A" | "BC" | "D" | "BO";
 
 /** One term of the estimate: its time, where it comes from, and how it bears on the total. */
 export interface DestroyTerm {
@@ -127,6 +144,20 @@ export interface DestroyEstimateInputs {
   prior: DestroyPrior | null;
   /** BN2's gang route (#357): its figures, required there (`destroyRouteOf`'s "gang"); ignored elsewhere. */
   gang?: DestroyGangInputs | null;
+  /** BN6's Black Ops route (#398): its figures, null before the division's reading; ignored elsewhere. */
+  blackOps?: DestroyBlackOpsInputs | null;
+}
+
+/** BN6's Black Ops route as the estimate reads it (#398): the route's time, and The Red Pill's beside it. */
+export interface DestroyBlackOpsInputs {
+  /** The Black Ops done (`BLACK_OPS_COUNT` all of them). */
+  done: number;
+  /** The route's time from the reading (`blackOpsRouteEstimate`), ms; Infinity never (a chance of 0 now). */
+  ms: number;
+  /** The Red Pill's hacking level by the formulas (`redPillLevelSeconds`), ms, at least; Infinity never; null unmeasured. */
+  redPillMs: number | null;
+  /** The planner's choice between them (`chooseWinRoute`). */
+  choice: WinRouteChoice;
 }
 
 /** BN2's gang route as the estimate reads it (#357's slice 3): the gang rule's and the planner's figures. */
@@ -331,7 +362,30 @@ function gangRedPillTerm(inputs: DestroyEstimateInputs, gang: DestroyGangInputs)
   };
 }
 
-/** The estimate (#360): each term, the remaining and the total. In BN2 the gang's route (#357) gives A and BC. */
+/** BO, BN6's Black Ops (#398): the route's time, The Red Pill's beside it in its source. */
+function blackOpsTerm(blackOps: DestroyBlackOpsInputs | null): DestroyTerm {
+  if (blackOps === null) return none("BO", "the Black Ops before the division's reading (#398): none");
+  if (blackOps.done >= BLACK_OPS_COUNT) return done("BO", `all ${BLACK_OPS_COUNT} Black Ops done: the destroy`);
+  const hours = (ms: number | null) =>
+    ms === null ? "not measured" : Number.isFinite(ms) ? `at least ${(ms / 3_600_000).toPrecision(3)} h` : "never";
+  return {
+    term: "BO",
+    ms: blackOps.ms,
+    atLeast: false,
+    source:
+      `the Black Ops (#398): ${blackOps.done} of ${BLACK_OPS_COUNT} done; the next one's rank by B5's stock and tail, each later ` +
+      "one's at the sustainable rate, each one's attempts (T + (1 − p)·L/ρ)/p, at the competence now (its rise left " +
+      `out: cautious)${Number.isFinite(blackOps.ms) ? "" : ": never at the competence now"}; The Red Pill's by the ` +
+      `formulas ${hours(blackOps.redPillMs)}; the planner's choice: ${blackOps.choice.route === "blackOps" ? "the Black Ops" : "The Red Pill"} ` +
+      `(${blackOps.choice.why})`,
+    label: "cautious",
+  };
+}
+
+/**
+ * The estimate (#360): each term, the remaining and the total. In BN2 the gang's route (#357) gives A and BC; in BN6
+ * the Black Ops' (#398) its one term, BO.
+ */
 export function destroyEstimate(inputs: DestroyEstimateInputs): DestroyEstimate {
   const required = daedalusAugmentationsRequired(inputs.currentNode, inputs.ownedSF);
   const requiredLevel = worldDaemonRequiredLevel(inputs.currentNode, inputs.ownedSF);
@@ -341,9 +395,11 @@ export function destroyEstimate(inputs: DestroyEstimateInputs): DestroyEstimate 
     throw new RangeError(`BitNode ${inputs.currentNode}'s estimate is the gang's route (#357): its figures are needed`);
   }
   const terms =
-    route === "gang" && gang !== null
-      ? [gangFormedTerm(inputs, gang), gangRedPillTerm(inputs, gang), levelTerm(inputs, requiredLevel)]
-      : [countTerm(inputs, required), redPillTerm(inputs), levelTerm(inputs, requiredLevel)];
+    route === "blackOps"
+      ? [blackOpsTerm(inputs.blackOps ?? null)]
+      : route === "gang" && gang !== null
+        ? [gangFormedTerm(inputs, gang), gangRedPillTerm(inputs, gang), levelTerm(inputs, requiredLevel)]
+        : [countTerm(inputs, required), redPillTerm(inputs), levelTerm(inputs, requiredLevel)];
   const remainingMs = terms.reduce((sum, term) => sum + (term.ms ?? 0), 0);
   return {
     terms,

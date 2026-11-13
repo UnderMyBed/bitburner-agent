@@ -15,8 +15,12 @@
 //   A brain with no note for the BitNode records its first look "first seen" unless it's the store's first slow snapshot
 //   of the BitNode (the hindcast has that start or install); a save loaded,
 //   an earlier `lastAugReset`, isn't estimated again.
-// - Daedalus's route (BN1, BN4, BN5) and BN2's gang (#357's slice 3: core's `DESTROY_ESTIMATE_BITNODES`,
-//   `destroyRouteOf`): in another BitNode, no estimate, said once in the log. Black Ops (#359) is a later slice.
+// - Daedalus's route (BN1, BN4, BN5), BN2's gang (#357's slice 3) and BN6's Black Ops (#398: core's
+//   `DESTROY_ESTIMATE_BITNODES`, `destroyRouteOf`): in another BitNode, no estimate, said once in the log.
+// - BN6, the Black Ops' route (#398): one term, BO, the route's time from the reading (the World Daemon's path's,
+//   ./bladeburner-route.ts), The Red Pill's estimate and the planner's choice in its source. A cycle's estimate waits for
+//   the division's reading, as BN2's for its figure, `DESTROY_ROUTE_WAIT_MS` online at most (past it, BO none, said);
+//   and each Black Op done is a moment of its own ("black op"), the route's time from there.
 // - BN2, the gang's route: A is the planner's τ_g (A6's timing, route "gang forming") until the gang forms, kept formed
 //   in the note (an install keeps the gang); BC is (3)'s chosen estimate (route "gang formed") and The Red Pill's
 //   install. A cycle's estimate (its start, an install, a first look) waits for its route's figure, τ_g before the gang
@@ -33,6 +37,7 @@ import {
   augmentationBitNodeMultipliers,
   DAEDALUS,
   type DaedalusStage,
+  type DestroyBlackOpsInputs,
   type DestroyEstimate,
   type DestroyGangInputs,
   type DestroyPrior,
@@ -88,7 +93,7 @@ export const DESTROY_ROUTE_WAIT_MS = HACKING_EXP_WINDOW_MS + AUGMENTATION_SLOW_G
  * first choice; or "first seen", a cycle not the BitNode's first that a brain with no note for the BitNode sees first (a
  * first deploy mid-cycle): the hindcast has its install already, so it's listed apart and left out of the summaries.
  */
-export type DestroyMoment = "start" | "install" | "first seen" | "joined" | "gang formed" | "levelling";
+export type DestroyMoment = "start" | "install" | "first seen" | "joined" | "gang formed" | "levelling" | "black op";
 
 /**
  * Where the BitNode stood at it, for the campaign report's ratios by moment: an install short of the count, the count
@@ -103,6 +108,7 @@ export type DestroyStage =
   | "donations install"
   | "The Red Pill installed"
   | "levelling"
+  | "black op"
   | "first seen";
 
 /** A term as stored: Infinity can't be JSON, so a term that's never has `never` and no ms. */
@@ -156,6 +162,7 @@ export function destroyStageOf(
     moment === "joined" ||
     moment === "gang formed" ||
     moment === "levelling" ||
+    moment === "black op" ||
     moment === "first seen"
   ) {
     return moment;
@@ -209,7 +216,7 @@ export function destroyEstimateRecord(
   };
 }
 
-const MOMENTS: readonly string[] = ["start", "install", "first seen", "joined", "gang formed", "levelling"];
+const MOMENTS: readonly string[] = ["start", "install", "first seen", "joined", "gang formed", "levelling", "black op"];
 const isTerm = (value: unknown): value is StoredDestroyTerm => {
   const term = value as Partial<StoredDestroyTerm> | null;
   return (
@@ -260,6 +267,7 @@ export function describeTerms(terms: readonly StoredDestroyTerm[]): string {
 const MOMENT_WORDS: Partial<Record<DestroyMoment, string>> = {
   levelling: "levelling's first choice",
   "gang formed": "the gang formed",
+  "black op": "a Black Op done",
 };
 
 /** The estimate in a line: the dashboard's, the log's and the run report's. */
@@ -347,6 +355,8 @@ interface DestroyNote {
   gangFormed: boolean | null;
   /** BN2 (#357): the cycle's estimate waiting for its route's figure, or null. Absent in an earlier note: none. */
   pending: PendingMoment | null;
+  /** BN6 (#398): the Black Ops done as last read, or null unread. Absent in an earlier note: unread. */
+  blackOpsDone: number | null;
 }
 
 /** A cycle's estimate waiting in BN2 (#357): its moment, `late` as its first slow snapshot had it, and since when. */
@@ -399,6 +409,7 @@ function readNote(store: TelemetryStore): DestroyNote | null {
     last: note.last === undefined || note.last === null ? null : parseDestroyEstimate(note.last),
     gangFormed: note.gangFormed === undefined ? false : note.gangFormed,
     pending: note.pending ?? null,
+    blackOpsDone: isFiniteNumber(note.blackOpsDone) ? note.blackOpsDone : null,
   };
 }
 
@@ -462,6 +473,8 @@ export interface DestroyEstimateInputs {
   nowMs: number | null;
   /** BN2's gang route (#357's slice 3), read there alone; absent or null: no gang, nothing measured. */
   gang?: DestroyGangFacts | null;
+  /** BN6's Black Ops route (#398), read there alone; absent or null: no reading yet. */
+  blackOps?: DestroyBlackOpsInputs | null;
 }
 
 interface ResetFacts {
@@ -561,6 +574,7 @@ export class DestroyEstimateRule {
         // there's one isn't known yet (#378's review): null until a reading says.
         gangFormed: inputs.gang?.unread === true ? null : inputs.gang?.formed === true,
         pending: null,
+        blackOpsDone: null,
       };
       seenBefore = seed.seenBefore;
       this.#sampledGameTimeMs = slowGameTimeMs;
@@ -579,7 +593,7 @@ export class DestroyEstimateRule {
         this.#unmodelledLogged = facts.lastNodeReset;
         this.#log(
           `destroy estimate: none in BitNode ${facts.currentNode}: its route isn't modelled (#360 models Daedalus's, ` +
-            "BN1, BN4 and BN5; #357 BN2's gang; Black Ops is #359)",
+            "BN1, BN4 and BN5; #357 BN2's gang; #398 BN6's Black Ops)",
         );
       }
       this.#save(note, changed);
@@ -624,13 +638,15 @@ export class DestroyEstimateRule {
       // A cycle's estimate still waiting is dropped, said (decision 45): its cycle is over.
       if (note.pending !== null) {
         this.#log(
-          `destroy estimate: the ${note.pending.moment} in BN2 dropped, still waiting for its figure at the next cycle (#357)`,
+          `destroy estimate: the ${note.pending.moment} in BN${facts.currentNode} dropped, still waiting for its figure ` +
+            "at the next cycle (#357, #398)",
         );
       }
       note = { ...note, lastAugReset: facts.lastAugReset, pending: null };
       changed = true;
-      // BN2 short of The Red Pill: it waits for its route's figure, kept in the note (a restart keeps it).
-      if (route === "gang" && !redPillInstalled) {
+      // BN2 short of The Red Pill, or BN6 before the division's reading (#398): it waits for its route's figure, kept in
+      // the note (a restart keeps it).
+      if ((route === "gang" && !redPillInstalled) || (route === "blackOps" && (inputs.blackOps ?? null) === null)) {
         waiting = { moment, late, sinceOnlineMs: onlineMs };
         note = { ...note, pending: waiting };
       } else moments.push({ moment, late, formed: formedBefore || formedNow });
@@ -655,6 +671,29 @@ export class DestroyEstimateRule {
             `${formatDuration(DESTROY_ROUTE_WAIT_MS)} online at most`,
         );
       }
+    }
+    // BN6 (#398): the cycle's estimate waiting goes once the reading is in, or its bound is past.
+    if (route === "blackOps" && note.pending !== null) {
+      const { pending: waitingFor } = note;
+      if ((inputs.blackOps ?? null) !== null || onlineMs - waitingFor.sinceOnlineMs >= DESTROY_ROUTE_WAIT_MS) {
+        moments.push({ moment: waitingFor.moment, late: waitingFor.late, formed: false });
+        note = { ...note, pending: null };
+        changed = true;
+      } else if (waiting !== null) {
+        this.#log(
+          `destroy estimate: the ${waiting.moment} in BN6 waits for the division's reading (#398), ` +
+            `${formatDuration(DESTROY_ROUTE_WAIT_MS)} online at most`,
+        );
+      }
+    }
+    // BN6 (#398): each Black Op done, a moment, the route's time from there; the first reading only notes the count.
+    const blackOpsDone = route === "blackOps" ? (inputs.blackOps?.done ?? null) : null;
+    if (blackOpsDone !== null && blackOpsDone !== note.blackOpsDone) {
+      if (note.blackOpsDone !== null && blackOpsDone > note.blackOpsDone && moments.length === 0) {
+        moments.push({ moment: "black op", late: false, formed: false });
+      }
+      note = { ...note, blackOpsDone };
+      changed = true;
     }
     // BN2: the gang formed, once a BitNode, short of The Red Pill; at once (its BC none while it trains first).
     if (formedNew) {
@@ -688,9 +727,9 @@ export class DestroyEstimateRule {
       const favourUnlocked =
         daedalus !== undefined &&
         donationsUnlocked(daedalus.favor, augmentationBitNodeMultipliers(facts.currentNode, facts.ownedSF));
-      // Daedalus's stage, its route alone: in BN2 The Red Pill is the gang's faction's.
+      // Daedalus's stage, its route alone: in BN2 The Red Pill is the gang's faction's; in BN6 (#398) the Black Ops'.
       const stage: DaedalusStage =
-        route === "gang"
+        route !== "daedalus"
           ? "not joined"
           : (note.joinedCycle !== null && note.joinedCycle !== facts.lastAugReset) || favourUnlocked
             ? "donations installed"
@@ -710,6 +749,7 @@ export class DestroyEstimateRule {
         levellingMs: redPillInstalled ? levellingMs : null,
         prior: note.prior,
         gang: route === "gang" ? destroyGangInputsOf(inputs.gang ?? null, formed, facts.lastAugReset) : null,
+        blackOps: route === "blackOps" ? (inputs.blackOps ?? null) : null,
       });
       const record = destroyEstimateRecord(estimate, {
         moment,

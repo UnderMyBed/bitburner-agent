@@ -537,6 +537,8 @@ export interface HostMethods {
       chaos?: number;
       stamina?: number;
       maxLevels?: Record<string, number>;
+      /** The Black Ops done (#398), a whole number to 21. */
+      blackOpsDone?: number;
     };
   }): void;
   /**

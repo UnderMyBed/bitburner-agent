@@ -25,7 +25,7 @@ import {
   missingPrerequisites,
   NEUROFLUX_GOVERNOR,
 } from "./augmentations.ts";
-import { THE_RED_PILL } from "./bitnodes.ts";
+import { THE_RED_PILL, winRouteOf } from "./bitnodes.ts";
 import { acceptsDonations, donationsUnlocked, donationToReach } from "./donations.ts";
 import type { JoinedFaction } from "./faction-state.ts";
 import { redPillTarget } from "./faction-work-choice.ts";
@@ -154,7 +154,8 @@ export type Endgame =
   | { kind: "none" };
 
 /**
- * The Red Pill's way ahead of an ordinary install (#215; the brain's `#endgame`):
+ * The Red Pill's way ahead of an ordinary install (#215; the brain's `#endgame`), none on the Black Ops' route (#398,
+ * BN6: core's `winRouteOf`, The Red Pill's holds off there, labelled):
  * - installed: a hold for the destroy (`destroyWanted`), else none;
  * - in what an install would install, or reached at a joined seller: install it;
  * - reported bought but not queued: a hold;
@@ -208,6 +209,7 @@ export function augmentationEndgame({
    */
   gangPlanned?: boolean;
 }): Endgame {
+  if (winRouteOf(currentNode) === "blackOps") return { kind: "none" };
   if (Object.hasOwn(installed, THE_RED_PILL)) {
     return destroyWanted ? { kind: "hold", why: "destroy", reserve: 0 } : { kind: "none" };
   }

@@ -5,6 +5,7 @@ import { AUGMENTATION_NAMES } from "../src/augmentations.ts";
 import {
   BITNODE_COUNT,
   BITNODE_NO_WIN_ROUTE_REASON,
+  BLACK_OPS_COUNT,
   bitNodeAssumptions,
   bitNodeHackingMultipliers,
   bitNodePriceMultipliers,
@@ -14,8 +15,10 @@ import {
   listedBitNodes,
   playableBitNodes,
   THE_RED_PILL,
+  winRouteOf,
   worldDaemonProblem,
 } from "../src/bitnodes.ts";
+import { BLADEBURNER_BLACK_OPS } from "../src/bladeburner-black-ops.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -47,6 +50,36 @@ test("worldDaemonProblem: unreachable, then no root, then the level, each saying
   expect(worldDaemonProblem({ rooted: true, hackingLevel: 14999, requiredHackingLevel: 15000 })).toBe(
     "hacking level 14999: w0r1d_d43m0n needs 15000",
   );
+});
+
+test("worldDaemonProblem with the Black Ops (#398): all 21 done is enough, as Singularity's destroy and the page's button take it", () => {
+  // The game's either-or (`NetscriptFunctions/Singularity.ts:1176-1183`), and the Black Ops page's button
+  // (`Bladeburner/ui/BlackOpPage.tsx:39-52`), each at `numberOfBlackOperations`.
+  const singularity = gameSource("NetscriptFunctions/Singularity.ts");
+  expect(singularity).toContain("return Player.bladeburner.numBlackOpsComplete >= numberOfBlackOperations;");
+  expect(singularity).toContain("if (!hackingRequirements() && !bladeburnerRequirements()) {");
+  expect(gameSource("Bladeburner/ui/BlackOpPage.tsx")).toContain(
+    "{bladeburner.numBlackOpsComplete >= numberOfBlackOperations && (",
+  );
+  expect(gameSource("Bladeburner/data/BlackOperations.ts")).toContain(
+    "export const numberOfBlackOperations = Object.keys(BladeburnerBlackOpName).length;",
+  );
+  expect(BLACK_OPS_COUNT).toBe(BLADEBURNER_BLACK_OPS.length);
+  expect(BLACK_OPS_COUNT).toBe(21);
+  expect(worldDaemonProblem(null, 21)).toBeNull();
+  expect(worldDaemonProblem({ rooted: false, hackingLevel: 1, requiredHackingLevel: 6000 }, 21)).toBeNull();
+  expect(worldDaemonProblem(null, 20)).toBe(
+    "w0r1d_d43m0n isn't reachable: The Red Pill isn't installed; and 20 of the 21 Black Ops done",
+  );
+  // Either route: the hacking one holding is enough, whatever the Black Ops.
+  expect(worldDaemonProblem({ rooted: true, hackingLevel: 6000, requiredHackingLevel: 6000 }, 3)).toBeNull();
+  // Not read (no Bladeburner): The Red Pill's route alone, worded as before.
+  expect(worldDaemonProblem(null, null)).toBe("w0r1d_d43m0n isn't reachable: The Red Pill isn't installed");
+});
+
+test("winRouteOf (#398): the Black Ops in BN6 and BN7, The Red Pill's elsewhere", () => {
+  expect([6, 7].map(winRouteOf)).toEqual(["blackOps", "blackOps"]);
+  expect([1, 2, 3, 4, 5, 8, 12].map(winRouteOf)).toEqual(Array(7).fill("redPill"));
 });
 
 test("the price multipliers the brain knows: BN1's the defaults, BN4's softcap 1.2, as the pinned game sets them", () => {
@@ -216,11 +249,12 @@ test("BN6's and BN7's rows (#367): every multiplier they set on hacking and the 
   expect(bitNodeHackingMultipliers(7)).toEqual(hackingWith({ ...hacking, ScriptHackMoney: 0.5 }));
 });
 
-test("BN6 and BN7 are known but not playable (#367): no win route until Bladeburner's B6, so the campaign skips them", () => {
+test("BN6 is playable since B6 (#398), by the Black Ops; BN7 is known but not until B8, so the campaign skips it", () => {
   expect(knownBitNodes()).toEqual([1, 2, 4, 5, 6, 7]);
-  expect(playableBitNodes()).toEqual([1, 2, 4, 5]);
-  expect([6, 7].map(bitNodeUnplayableReason)).toEqual([BITNODE_NO_WIN_ROUTE_REASON, BITNODE_NO_WIN_ROUTE_REASON]);
-  expect(BITNODE_NO_WIN_ROUTE_REASON).toBe("no win route yet (the Black Ops, Bladeburner's B6)");
+  expect(playableBitNodes()).toEqual([1, 2, 4, 5, 6]);
+  expect(bitNodeUnplayableReason(6)).toBeNull();
+  expect(bitNodeUnplayableReason(7)).toBe(BITNODE_NO_WIN_ROUTE_REASON);
+  expect(BITNODE_NO_WIN_ROUTE_REASON).toBe("no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8)");
   // The Red Pill's route there: w0r1d_d43m0n at 3,000 (`Server/data/servers.ts:1536`) × 2 (`Server/ServerHelpers.ts:
   // 383-385`), at a level multiplier of 0.35, is 17,143 at ×1, against BN4's 9,000 (3,000 × 3).
   expect(gameSource("Server/ServerHelpers.ts")).toContain(
@@ -229,8 +263,8 @@ test("BN6 and BN7 are known but not playable (#367): no win route until Bladebur
   expect(Math.round((3000 * 2) / 0.35)).toBe(17_143);
 });
 
-test("playable: BN1, BN2, BN4 and BN5, with both tables; another says what core lacks of it", () => {
-  expect(playableBitNodes()).toEqual([1, 2, 4, 5]);
+test("playable: BN1, BN2, BN4, BN5 and BN6, with both tables; another says what core lacks of it", () => {
+  expect(playableBitNodes()).toEqual([1, 2, 4, 5, 6]);
   expect(listedBitNodes([1, 2, 4, 5])).toBe("BN1, BN2, BN4 and BN5");
   expect(listedBitNodes([2, 3])).toBe("BN2 and BN3");
   expect(listedBitNodes([2])).toBe("BN2");

@@ -29,10 +29,21 @@
 //   A6 installed and its commit kept no facts. Else it's an early NeuroFlux-only install with nothing that counts
 //   within reach, as the multipliers climb to the next factions: `daedalusCountNeuroFluxOnly`, the report's
 //   information.
+// - The Black Ops' route (#398, BN6: core's `winRouteOf`): the path is the route's (./bladeburner-route.ts, from the
+//   medium snapshot, at the rates this rule measures): the rank against Operation Daedalus's 400,000, the Black Ops
+//   done, the next one's chance, the ETA at the rank measured, and the planner's estimates of both routes. Daedalus,
+//   The Red Pill and w0r1d_d43m0n's hacking level are off there, and said so, as are The Red Pill's holds (core's
+//   `augmentationEndgame` and `daedalusCountOf`) and levelling (no `daemon` on this path). The destroy is asked for once
+//   the reading shows all 21 done (none next), into the order's next BitNode, through the gate as before. Its stalls
+//   (decision 45): the rank's high not passed within the route's bound (`blackOpsRank`, ./bladeburner-route.ts's
+//   `rankStallMs`, while the Bladeburner rule acts), and all 21 done without the destroy (`destroy`, 5 minutes, the Red
+//   Pill route's own). A Black Op due and not run is B5's check (./bladeburner-black-ops-report.ts).
 import {
   augmentationBitNodeMultipliers,
   augmentationCost,
   augmentationsSoldBy,
+  BLACK_OPS_COUNT,
+  BLADEBURNER_BLACK_OPS,
   bitNodeUnplayableReason,
   CAMPAIGN_ORDER,
   DAEDALUS,
@@ -55,10 +66,13 @@ import {
   type SlowSnapshotData,
   type StaticSnapshotData,
   THE_RED_PILL,
+  type WinRoute,
   WORLD_DAEMON,
+  winRouteOf,
   worldDaemonProblem,
 } from "@bitburner-agent/core";
 import type { CountFacts } from "./augmentations.ts";
+import type { BlackOpsRouteView } from "./bladeburner-route.ts";
 import { describeEta, redPillWork, resetInfoOf, workConditionsOf, workingPersonOf } from "./factions.ts";
 import type { GangStallStretch } from "./gang-stalls.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
@@ -138,7 +152,7 @@ export type WorldDaemonEvent =
  * The steps a stall can be on; `daedalusCount` (#228) is "Daedalus count stuck": an install that added none, passing
  * over one that counts (#238).
  */
-export type StallStep = "daedalusCount" | "daedalus" | "redPill" | "redPillReputation" | "destroy";
+export type StallStep = "daedalusCount" | "daedalus" | "redPill" | "redPillReputation" | "destroy" | "blackOpsRank";
 
 /**
  * The Red Pill reached, not installed this long after (#215 review): 15 minutes, from "reached". A6's whole commit
@@ -156,6 +170,8 @@ const STALLED_AFTER_MS: Record<StallStep, number> = {
   redPill: RED_PILL_INSTALL_STALLED_AFTER_MS,
   redPillReputation: RED_PILL_REPUTATION_STALLED_AFTER_MS,
   destroy: WORLD_DAEMON_STALLED_AFTER_MS,
+  // Its own bound always comes with it (the route's `rankStallMs`).
+  blackOpsRank: WORLD_DAEMON_STALLED_AFTER_MS,
 };
 
 // Moved to core (#321), with the campaign's order; the name stays here for the campaign model and the tests.
@@ -228,6 +244,10 @@ export function sinceResetOf(slowData: SlowSnapshotData | null | undefined, game
 /** The path, as the snapshots show it (#215): each part null where the snapshots don't say. */
 export interface WorldDaemonPath {
   bitNode: number | null;
+  /** The BitNode's win route (#398, core's `winRouteOf`): The Red Pill's, or the Black Ops' (BN6). */
+  route: WinRoute;
+  /** The Black Ops' route (#398), on it: null elsewhere, or unread. */
+  blackOps: BlackOpsRouteView | null;
   /** Null once The Red Pill is installed: Daedalus is done with. */
   daedalus: {
     joined: boolean;
@@ -351,11 +371,14 @@ export function worldDaemonPath({
   cityGroup = null,
   gangShop = null,
   sinceResetMs = null,
+  blackOps = null,
 }: {
   staticData: StaticSnapshotData | null;
   mediumData: MediumSnapshotData | null;
   slowData: SlowSnapshotData | null;
   expPerSecond: number | null;
+  /** The Black Ops' route as the reading shows it (#398, ./bladeburner-route.ts), on that route; null unread. */
+  blackOps?: BlackOpsRouteView | null;
   shareBonus?: number;
   /** The city group the brain chose this cycle (#228), for the reach; null for none. */
   cityGroup?: string | null;
@@ -368,12 +391,17 @@ export function worldDaemonPath({
   const state: FactionState | null = slowData === null ? null : (factionReadingOf(slowData)?.state ?? null);
   const hacking = hackingOf(mediumData);
   const redPillInstalled = resetInfo !== null && Object.hasOwn(resetInfo.ownedAugs, THE_RED_PILL);
+  const route = resetInfo === null ? "redPill" : winRouteOf(resetInfo.currentNode);
   const path: WorldDaemonPath = {
     bitNode: resetInfo?.currentNode ?? null,
+    route,
+    blackOps: route === "blackOps" ? blackOps : null,
     daedalus: null,
     redPill: null,
     daemon: null,
   };
+  // The Black Ops' route (#398): A8's Red Pill path off, Daedalus, The Red Pill and w0r1d_d43m0n's level with it.
+  if (route === "blackOps") return path;
   if (resetInfo !== null && !redPillInstalled) {
     const required = daedalusRequirements(resetInfo.currentNode, resetInfo.ownedSF);
     // Never short with The Red Pill at the gang's faction (#335's review), as A6 has it.
@@ -494,8 +522,61 @@ export function worldDaemonPath({
   return path;
 }
 
+/** The last Black Op's rank (#398): Operation Daedalus's 400,000 (`data/BlackOperations.ts:704-735`). */
+const BLACK_OPS_LAST_RANK = (BLADEBURNER_BLACK_OPS.at(-1) as { rank: number }).rank;
+/** "1.23 rank/min". */
+const rankPerMinute = (perSecond: number) => `${(perSecond * 60).toFixed(2)} rank/min`;
+/** "about 3 h", "never", or "2.78e+66 h" past what a duration reads well. */
+function aboutSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "never";
+  return seconds > 1e9 ? `${(seconds / 3600).toPrecision(3)} h` : `about ${describeEta(seconds)}`;
+}
+
+/** The Black Ops' route in words (#398): the dashboard's and the run report's lines. */
+export function describeBlackOpsRoute(view: BlackOpsRouteView | null): string[] {
+  const off =
+    "off on this route (#398): The Red Pill's holds (A6), levelling (#336) and A8's Red Pill path (Daedalus, " +
+    `${THE_RED_PILL}, ${WORLD_DAEMON}'s hacking level)`;
+  const unread = "the Black Ops (#398): no reading yet (the division joined, and home's RAM for its reader)";
+  if (view === null) return [unread, off];
+  const allDone = view.done === BLACK_OPS_COUNT;
+  const head =
+    `the Black Ops (#398): rank ${view.rank === null ? "unread" : count(view.rank)} of ` +
+    `${count(BLACK_OPS_LAST_RANK)} (Operation Daedalus's); ` +
+    (view.done === null ? "the Black Ops done unread" : `${view.done} of ${BLACK_OPS_COUNT} done`);
+  const next = allDone
+    ? ": the destroy, by them"
+    : view.next === null
+      ? ""
+      : `; next ${view.next.name} at rank ${count(view.next.rank)}, its chance ` +
+        `${view.next.chance === null ? "unread" : `${(view.next.chance * 100).toFixed(1)}%`} at the low end`;
+  const eta = allDone
+    ? ""
+    : view.rankPerSecond === null
+      ? "; the rank's rate not measured yet"
+      : view.etaSeconds === null
+        ? `; the rank not rising (${rankPerMinute(view.rankPerSecond)} measured)`
+        : `; ${count(BLACK_OPS_LAST_RANK)} ${aboutSeconds(view.etaSeconds)} at the measured ` +
+          rankPerMinute(view.rankPerSecond);
+  const estimate = view.estimate;
+  const redPill =
+    view.redPillSeconds === null
+      ? "not measured (no hacking experience rate yet)"
+      : `at least ${aboutSeconds(view.redPillSeconds)} (${WORLD_DAEMON}'s hacking level alone, by the formulas)`;
+  const planner =
+    `the planner (#398): the Black Ops' ${estimate === null ? "not estimated yet" : aboutSeconds(estimate.seconds)}` +
+    (estimate === null || estimate.steps.length === 0
+      ? ""
+      : ` (the next one's rank by B5's stock and tail, each later one's at ${rankPerMinute(estimate.rate)} ` +
+        "sustainable, each one's attempts at the competence now)") +
+    `; ${THE_RED_PILL}'s ${redPill}${view.choice.redPillHopeless === true ? ", hopeless" : ""}: ` +
+    `${view.choice.route === "blackOps" ? "the Black Ops" : THE_RED_PILL} chosen (${view.choice.why})`;
+  return [view.rank === null && view.done === null ? unread : head + next + eta, planner, off];
+}
+
 /** The path in words, a line each (#215): the dashboard's and the run report's. */
 export function describeWorldDaemonPath(path: WorldDaemonPath): string[] {
+  if (path.route === "blackOps") return describeBlackOpsRoute(path.blackOps);
   const lines: string[] = [];
   const { daedalus, redPill, daemon } = path;
   if (daedalus !== null) {
@@ -555,14 +636,25 @@ export function describeWorldDaemonPath(path: WorldDaemonPath): string[] {
   return lines;
 }
 
-/** The hacking experience rate from snapshots (time, experience), over the window, a gap or a fall restarting it. */
+/**
+ * The hacking experience rate from snapshots (time, experience), over the window, a gap or a fall restarting it. With
+ * `fallsCount` (#398: Bladeburner's rank, which a Black Op's failure lowers), a fall is measured, not a restart.
+ */
 export class HackingExpRate {
   #samples: { atMs: number; exp: number }[] = [];
+  readonly #fallsCount: boolean;
+
+  constructor({ fallsCount = false }: { fallsCount?: boolean } = {}) {
+    this.#fallsCount = fallsCount;
+  }
 
   add(atMs: number, exp: number): void {
     const last = this.#samples.at(-1);
     // A gap, an install (the experience falls to 0) or the clock set back: measured afresh.
-    if (last !== undefined && (atMs <= last.atMs || atMs - last.atMs > HACKING_EXP_GAP_MS || exp < last.exp)) {
+    if (
+      last !== undefined &&
+      (atMs <= last.atMs || atMs - last.atMs > HACKING_EXP_GAP_MS || (exp < last.exp && !this.#fallsCount))
+    ) {
       this.#samples = [];
     }
     if (last !== undefined && atMs === last.atMs) return;
@@ -650,6 +742,13 @@ export interface WorldDaemonInputs {
    * rule's estimate of the time until it earns, and 10 minutes); null or absent while it earns.
    */
   gangPause?: Pick<GangStallStretch, "fromMs" | "withinMs" | "estimateMs"> | null;
+  /**
+   * The Black Ops' route (#398), on it: the route from the snapshots at this rule's measured rates (the controller's
+   * ./bladeburner-route.ts `blackOpsRouteOf`); none when absent (the path then says it's unread).
+   */
+  blackOps?: ((rates: { rankPerSecond: number | null; expPerSecond: number | null }) => BlackOpsRouteView) | null;
+  /** The Bladeburner rule acts (#398, its `acting`): the rank's stall is judged only then. Absent: not. */
+  bladeburnerActing?: boolean;
 }
 
 /** The World Daemon rule (#215), as the controller runs it. */
@@ -657,6 +756,10 @@ export class WorldDaemonRule {
   readonly #log: (line: string) => void;
   readonly #emit: (event: WorldDaemonEvent) => void;
   readonly #expRate = new HackingExpRate();
+  /** Bladeburner's rank a second (#398), over the medium snapshots' readings: a Black Op's failure is part of it. */
+  readonly #rankRate = new HackingExpRate({ fallsCount: true });
+  /** The rank's high on the Black Ops' route (#398), and since when, while the Bladeburner rule acts. */
+  #rankHigh: { value: number; sinceMs: number } | null = null;
   #path: WorldDaemonPath | null = null;
   #enabled = true;
   /** The brain's next BitNode (#321), from the BitNode and Source-Files the last slow snapshot showed, or null. */
@@ -759,6 +862,8 @@ export class WorldDaemonRule {
     slowGameTimeMs = null,
     redPillHeldAtGang = false,
     gangPause = null,
+    blackOps = null,
+    bladeburnerActing = false,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
     if (slowData !== null) {
@@ -768,6 +873,8 @@ export class WorldDaemonRule {
     const hacking = hackingOf(mediumData);
     if (hacking !== null && hacking.exp !== null && mediumGameTimeMs !== null)
       this.#expRate.add(mediumGameTimeMs, hacking.exp);
+    const rank = (mediumData as { bladeburner?: { rank?: unknown } | null } | null)?.bladeburner?.rank;
+    if (isFiniteNumber(rank) && mediumGameTimeMs !== null) this.#rankRate.add(mediumGameTimeMs, rank);
     const lastNodeReset = slowData?.resetInfo?.lastNodeReset;
     // A destroy asked for is over once a slow snapshot shows the BitNode reset (or the switch turns off).
     if (
@@ -783,19 +890,27 @@ export class WorldDaemonRule {
       for (const [step, ready] of this.#ready) if (!ready.stored) this.#ready.delete(step);
       // The Red Pill's reputation clock too, unless its stall is stored (#228 re-review).
       if (!this.#ready.get("redPillReputation")?.stored) this.#reputation = null;
+      // The rank's clock too (#398), unless its stall is stored.
+      if (!this.#ready.get("blackOpsRank")?.stored) this.#rankHigh = null;
       return this.#asked !== null;
     }
     let path: WorldDaemonPath;
     try {
+      const expPerSecond = this.#expRate.perSecond();
+      const onRoute = isBitNodeNumber(slowData.resetInfo?.currentNode)
+        ? winRouteOf(slowData.resetInfo.currentNode) === "blackOps"
+        : false;
       path = worldDaemonPath({
         staticData,
         mediumData,
         slowData,
-        expPerSecond: this.#expRate.perSecond(),
+        expPerSecond,
         shareBonus,
         cityGroup,
         gangShop,
         sinceResetMs: sinceResetOf(slowData, slowGameTimeMs),
+        blackOps:
+          onRoute && blackOps !== null ? blackOps({ rankPerSecond: this.#rankRate.perSecond(), expPerSecond }) : null,
       });
     } catch (error) {
       this.#log(`world daemon: the snapshots as core knows the game: ${(error as Error).message}`);
@@ -803,8 +918,12 @@ export class WorldDaemonRule {
     }
     this.#path = path;
     this.#watchCount(path, slowData, nowMs ?? 0, countFacts, augmentationsInstalling);
-    this.#watch(path, nowMs ?? 0, enabled, redPillHeldAtGang, gangPause);
-    const ready = path.daemon !== null && path.daemon.problem === null;
+    this.#watch(path, nowMs ?? 0, enabled, redPillHeldAtGang, gangPause, bladeburnerActing);
+    // On the Black Ops' route (#398), all 21 done: the reading shows none next.
+    const ready =
+      path.route === "blackOps"
+        ? path.blackOps?.done === BLACK_OPS_COUNT
+        : path.daemon !== null && path.daemon.problem === null;
     if (enabled && ready && this.#asked === null && isFiniteNumber(lastNodeReset)) {
       // The slow snapshot's BitNode or Source-Files not read (#321): no destroy into a BitNode guessed; the destroy
       // step's stall follows, 5 minutes on.
@@ -815,8 +934,11 @@ export class WorldDaemonRule {
       }
       this.#asked = { lastNodeReset, nextBitNode: this.#next.bitNode };
       this.#log(
-        `world daemon: ${WORLD_DAEMON} rooted at hacking ${path.daemon?.hackingLevel}: destroying the BitNode, ` +
-          `${describeNextBitNode(this.#next)} (the gate, then a save backup first)`,
+        `world daemon: ${
+          path.route === "blackOps"
+            ? `all ${BLACK_OPS_COUNT} Black Ops done (#398)`
+            : `${WORLD_DAEMON} rooted at hacking ${path.daemon?.hackingLevel}`
+        }: destroying the BitNode, ${describeNextBitNode(this.#next)} (the gate, then a save backup first)`,
       );
     }
     return this.#asked !== null;
@@ -904,8 +1026,37 @@ export class WorldDaemonRule {
     enabled: boolean,
     redPillHeldAtGang = false,
     gangPause: WorldDaemonInputs["gangPause"] = null,
+    bladeburnerActing = false,
   ): void {
     const steps = new Map<StallStep, { detail: string; sinceMs?: number; withinMs?: number }>();
+    // The Black Ops' route (#398): all 21 done, the destroy's step; short, the rank's, while the Bladeburner rule acts
+    // (the owner's work holds its actions: no rank is asked for), from its high's last rise, within the route's bound.
+    const route = path.route === "blackOps" ? path.blackOps : null;
+    if (route !== null && enabled && route.done === BLACK_OPS_COUNT) {
+      steps.set("destroy", { detail: `all ${BLACK_OPS_COUNT} Black Ops done (#398), the BitNode not destroyed` });
+    }
+    const rank = route?.rank ?? null;
+    const rankStallMs = route?.rankStallMs ?? null;
+    if (
+      route !== null &&
+      bladeburnerActing &&
+      route.done !== null &&
+      route.done < BLACK_OPS_COUNT &&
+      rank !== null &&
+      rankStallMs !== null
+    ) {
+      if (this.#rankHigh === null || rank > this.#rankHigh.value) this.#rankHigh = { value: rank, sinceMs: nowMs };
+      steps.set("blackOpsRank", {
+        detail:
+          `Bladeburner's rank not past its high of ${count(this.#rankHigh.value)} on the Black Ops' route (#398, ` +
+          `${route.done} of ${BLACK_OPS_COUNT} done), the bound ${formatDuration(rankStallMs)}: twice a rest to the ` +
+          "max, the next Black Op's attempt and a failure's rebuild, and 10 min",
+        sinceMs: this.#rankHigh.sinceMs,
+        withinMs: rankStallMs,
+      });
+    } else if (!this.#ready.get("blackOpsRank")?.stored) {
+      this.#rankHigh = null;
+    }
     if (gangPause === null || gangPause.withinMs === undefined) {
       // The pause over (#376's review): the members just put to work, the reputation rises only from the next process
       // on, so its 10 minutes count from now, not from its last rise before the pause, which would fail every pause.

@@ -383,9 +383,9 @@ describe("not on the wrong signals", () => {
 
 describe("the brain's replay at the campaign order's caps (#311, #321): its destroy goes, the stop on the next BN1.4", () => {
   const REPLAYED = "BN1.4 destroyed, BN1.4 seen again (a replay: no Source-File level gained)";
-  const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
+  const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3, 6: 3 };
 
-  /** BN1.4 (Source-Files 1, 2, 4 and 5 at 3) with The Red Pill installed, w0r1d_d43m0n rooted at its level. */
+  /** BN1.4 (Source-Files 1, 2, 4, 5 and 6 at 3) with The Red Pill installed, w0r1d_d43m0n rooted at its level. */
   async function replaying(ownedSF: Record<string, number> = CAPS) {
     const started = brain();
     started.send("static", network);
@@ -406,7 +406,7 @@ describe("the brain's replay at the campaign order's caps (#311, #321): its dest
         nextBitNode: 1,
         replay:
           "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
-          "Source-File 5 at 3), but the run",
+          "Source-File 5 at 3, Source-File 6 at 3), but the run",
       },
     ]);
     expect(events.filter((event) => event.type === "worldDaemonStalled")).toEqual([]);
