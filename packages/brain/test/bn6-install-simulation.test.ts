@@ -3,17 +3,22 @@
 // uses its workers as in a browser. One seed: a thin slice, no sweep. Bounded by virtual time, under a minute of CI.
 // Harness edits stand in for the route so far: home at 128 GB, CyberSec joined, the four combat stats at 100 (SF1.3's
 // ×1.28), the division joined by the owner's own script, the rank at 1,000 through the game's own change (its 333
-// points), Blade's Intuition at 10 bought by the owner's script, Tracking's max level 5, and EsperTech Bladeburner
-// Eyewear queued (the Bladeburners faction's, ×1.03 on the success chance and ×1.05 on dexterity). Then the brain's own:
-// the planner installs it (the route's estimate at combat 100 is millions of hours, its rebuild about an hour), through
-// the gate; the install keeps the rank, the skills, the max levels and the Black Ops done
+// points), Blade's Intuition at 10 bought by the owner's script, Tracking's max level 5, and the Bladeburners faction's
+// whole shop queued (its 18, core's `augmentationsSoldBy`). Until #411 it queued EsperTech Bladeburner Eyewear alone:
+// #411's estimate changes moved EsperTech to within its margin at this reading (0.9 h ahead against #406's 1.1 h at
+// ruling 3's pricing; 2.09 h against 1.77 h at ruling 4's, the true population recovered: core's
+// bladeburner-installs.test.ts). The suite tests B7's install mechanics, not that choice, so it takes a case the planner
+// installs on far past any margin: the shop, 21.7 h ahead against 0.57 h. Then the brain's own: the planner installs it
+// through the gate; the install keeps the rank, the skills, the max levels and the Black Ops done
 // (`Bladeburner.ts:259-263`), and the player's multipliers are the old ones times core's gain; the Bladeburner rule is
 // back within one reading of the first after it, Training the combat stats back to 100, 15 minutes of it with no stall
 // and no stuck resting; the run report passes, its rebuild shown.
 import {
+  augmentationsSoldBy,
   BLADEBURNER_READING_SECONDS,
   BLADEBURNER_TRAINING,
   bladeburnerInstallGain,
+  COMBAT_STATS,
   type MediumSnapshotData,
   type SlowSnapshotData,
   skillExpFor,
@@ -28,7 +33,8 @@ const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
 const MINUTE = 60_000;
 const READING_MS = BLADEBURNER_READING_SECONDS * 1000;
-const ESPERTECH = "EsperTech Bladeburner Eyewear";
+/** The Bladeburners faction's whole shop (B7's). */
+const SHOP = augmentationsSoldBy("Bladeburners", 6, null);
 
 interface Reading {
   rank: number;
@@ -39,7 +45,7 @@ interface Reading {
 }
 type Mults = Record<string, number>;
 
-test("BN6.1 mid-route: the planner installs EsperTech; the rank, skills and levels kept; Training within a reading; the report passes", async () => {
+test("BN6.1 mid-route: the planner installs the Bladeburners' shop; the rank, skills and levels kept; Training within a reading; the report passes", async () => {
   const fresh = await freshStartOf({
     withDesiredState: true,
     fixture: { kind: "bitnode", n: 6, sourceFiles: SOURCE_FILES },
@@ -57,7 +63,7 @@ test("BN6.1 mid-route: the planner installs EsperTech; the rank, skills and leve
         `export async function main(ns) { if (!ns.bladeburner.upgradeSkill("Blade's Intuition", 10)) throw new Error("no skill"); }`,
       );
       await game.simulation.diagnostics.setBladeburnerFigures({ maxLevels: { Tracking: 5 } });
-      await game.simulation.diagnostics.queueAugmentation(ESPERTECH);
+      for (const augmentation of SHOP) await game.simulation.diagnostics.queueAugmentation(augmentation);
       await withoutSimEffectors(game);
     },
   });
@@ -84,7 +90,7 @@ test("BN6.1 mid-route: the planner installs EsperTech; the rank, skills and leve
     return now !== undefined && now !== resetBefore;
   }, 10 * MINUTE);
   expect(slow()?.resetInfo.lastAugReset).not.toBe(resetBefore);
-  expect(Object.keys(slow()?.resetInfo.ownedAugs ?? {})).toContain(ESPERTECH);
+  expect(Object.keys(slow()?.resetInfo.ownedAugs ?? {})).toEqual(expect.arrayContaining(SHOP));
   note(`installed: ${JSON.stringify(slow()?.resetInfo.ownedAugs)}`);
   const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
   const chosen = fresh.data.store
@@ -114,14 +120,23 @@ test("BN6.1 mid-route: the planner installs EsperTech; the rank, skills and leve
   expect(after.blackOp?.name).toBe(last.blackOp?.name);
   expect(after.actions?.find((action) => action.name === "Tracking")?.maxLevel).toBe(5);
   // The engine's multipliers after it: the old ones times core's gain (`applyAugmentation`, by product).
-  const gain = bladeburnerInstallGain(0, [ESPERTECH]);
+  const gain = bladeburnerInstallGain(0, SHOP);
   const multsAfter = (medium() as MediumSnapshotData).player.mults as unknown as Mults;
   expect(multsAfter.bladeburner_success_chance).toBeCloseTo(
     (multsBefore.bladeburner_success_chance as number) * gain.successChance,
     12,
   );
-  expect(multsAfter.dexterity).toBeCloseTo((multsBefore.dexterity as number) * gain.levels.dexterity, 12);
-  expect(multsAfter.strength).toBeCloseTo(multsBefore.strength as number, 12);
+  expect(multsAfter.bladeburner_max_stamina).toBeCloseTo(
+    (multsBefore.bladeburner_max_stamina as number) * gain.maxStamina,
+    12,
+  );
+  for (const stat of COMBAT_STATS) {
+    expect(multsAfter[stat], stat).toBeCloseTo((multsBefore[stat] as number) * gain.levels[stat], 12);
+    expect(multsAfter[`${stat}_exp`], `${stat}_exp`).toBeCloseTo(
+      (multsBefore[`${stat}_exp`] as number) * gain.exp[stat],
+      12,
+    );
+  }
 
   // The rule back within one reading: Training, the rebuild's targets the levels before.
   await game.run(READING_MS);

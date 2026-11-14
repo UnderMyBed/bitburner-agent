@@ -589,7 +589,11 @@ export function describeBlackOpsRoute(view: BlackOpsRouteView | null): string[] 
     (grown === null || grown.steps.length === 0
       ? flat
       : `${aboutSeconds(grown.seconds)} with the competence's growth (#408: the skills from the rank, the stats from ` +
-        `the actions, the levels from the successes; the last one at ${(100 * (grown.steps.at(-1)?.chance ?? 0)).toFixed(1)}%), ` +
+        `the actions, the levels from the successes; the last one at ${(100 * (grown.steps.at(-1)?.chance ?? 0)).toFixed(1)}%; ` +
+        // #411: the chances at the true population, recovered from the Black Op's range, or the fallback (#414).
+        (grown.populationRatio === null
+          ? "the chances over the estimate's spread: the population not recovered, the fallback), "
+          : `the chances at the true population: recovered, pop/popEst ${grown.populationRatio.toFixed(3)}), `) +
         `${estimate === null ? "B6's not estimated yet" : `${aboutSeconds(estimate.seconds)} at the competence now (B6's)`}`) +
     `; ${THE_RED_PILL}'s ${redPill}${view.choice.redPillHopeless === true ? ", hopeless" : ""}: ` +
     `${view.choice.route === "blackOps" ? "the Black Ops" : THE_RED_PILL} chosen (${view.choice.why})` +

@@ -33,6 +33,7 @@ export {
 } from "./scenario/spec.ts";
 export {
   type BitNodeFixture,
+  type BladeburnerAttempt,
   type ComparisonOp,
   type EventPage,
   type Fixture,

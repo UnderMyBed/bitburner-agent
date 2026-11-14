@@ -11,6 +11,7 @@ import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-help
 import {
   actionRankLoss,
   actionSuccessChance,
+  actionSuccessRange,
   BLADEBURNER_BLACK_OPS,
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_SKILL_NAMES,
@@ -18,9 +19,11 @@ import {
   blackOpRankLoss,
   blackOpSeconds,
   blackOpStaminaCost,
+  blackOpSuccessChance,
   blackOpsRouteEstimate,
   blackOpsRouteGrownEstimate,
   bladeburnerLevelledAction,
+  bladeburnerPricedInput,
   bladeburnerSkillMultsOf,
   CONTROL_PROTOCOL_VERSION,
   chooseBladeburnerAction,
@@ -64,6 +67,14 @@ const PERSON: BladeburnerPerson = {
 const CITY = { population: 1e9, communities: 50, chaos: 0 };
 const LEVELS = { "Blade's Intuition": 40, Overclock: 50 };
 const CENTURION = BLADEBURNER_BLACK_OPS[18] as (typeof BLADEBURNER_BLACK_OPS)[number];
+/**
+ * Centurion's chance at `PERSON` and `LEVELS`, rested: its formula (#414's review: a Black Op's range has one end at its
+ * formula, `Actions/Action.ts:144-167`; the fixtures before read 0.30-0.35 against 0.023, which the game can't).
+ */
+const CENTURION_CHANCE = blackOpSuccessChance(CENTURION, PERSON, {
+  penalty: 1,
+  skills: bladeburnerSkillMultsOf(LEVELS),
+});
 
 /** The worker's reading in the division at `rank`, the next Black Op `blackOp` (null: all done). */
 function reading(rank: number, blackOp: { name: string; chance: [number, number] } | null | undefined) {
@@ -126,7 +137,7 @@ const slow = (currentNode: number, fields: Partial<SlowSnapshotData["resetInfo"]
 };
 
 describe("the route from the reading (#398)", () => {
-  const blackOp = { name: CENTURION.name, chance: [0.3, 0.35] as [number, number] };
+  const blackOp = { name: CENTURION.name, chance: [CENTURION_CHANCE, CENTURION_CHANCE] as [number, number] };
 
   test("the count, the next one, core's estimate, the ETA at the rate measured, the stall bound, both routes", () => {
     const view = blackOpsRouteOf({
@@ -157,7 +168,7 @@ describe("the route from the reading (#398)", () => {
     };
     const estimate = blackOpsRouteEstimate(input, { rank: 295_000, next: CENTURION, chanceRead: blackOp.chance });
     expect(view.estimate?.seconds).toBeCloseTo(estimate.seconds, 6);
-    expect(view.next?.chance).toBeCloseTo(0.3, 12);
+    expect(view.next?.chance).toBeCloseTo(CENTURION_CHANCE, 12);
     // The stall bound: twice a rest from ½ max at the natural regain, the attempt and a failure's rebuild, and 10 min.
     const mults = bladeburnerSkillMultsOf(LEVELS);
     const rest = r.maxStamina / 2 / staminaGainPerSecond(PERSON, r.maxStamina, mults);
@@ -214,9 +225,10 @@ describe("the route from the reading (#398)", () => {
       `the climb at combat 5,000: window ${(window / 60).toFixed(1)} min (base ${((view.rankStallMs as number) / 60_000).toFixed(1)}), ` +
         `least rise ${(view.climbRise as number).toFixed(0)} of the rate's ${(estimate.rate * window).toFixed(0)}`,
     );
-    // The attempts' bound: ⌈ln 0.001 / ln(1 − 0.3)⌉ = 20 attempts, each with a failure's rebuild, a rest and 10 min.
-    const attempts = Math.ceil(Math.log(0.001) / Math.log(1 - 0.3));
-    expect(attempts).toBe(20);
+    // The attempts' bound: ⌈ln 0.001 / ln(1 − p)⌉ attempts at Centurion's formula p (0.023: 298), each with a failure's
+    // rebuild, a rest and 10 min.
+    const attempts = Math.ceil(Math.log(0.001) / Math.log(1 - CENTURION_CHANCE));
+    expect(attempts).toBe(298);
     // Each attempt's own stamina regained at the natural regain (#400's round 2).
     const regain = staminaGainPerSecond(PERSON, r.maxStamina, mults);
     const stamina = Math.min(blackOpStaminaCost(CENTURION), r.maxStamina) / regain;
@@ -280,7 +292,65 @@ function withCombat(bladeburner: unknown): MediumSnapshotData {
 }
 
 describe("the route's grown estimate in the brain (#408)", () => {
-  const blackOp = { name: CENTURION.name, chance: [0.3, 0.35] as [number, number] };
+  const blackOp = { name: CENTURION.name, chance: [CENTURION_CHANCE, CENTURION_CHANCE] as [number, number] };
+
+  test("read through a range (#414's review): the first one's rank by B5's stock at the true population, not the low end", () => {
+    // An overcount (the estimate 1.42× the truth): each action's range and Centurion's, as the game reads them.
+    const estimate = CITY.population * 1.42;
+    const skills = bladeburnerSkillMultsOf(LEVELS);
+    const ranged = {
+      ...reading(295_000, {
+        name: CENTURION.name,
+        chance: actionSuccessRange(CENTURION_CHANCE, CENTURION_CHANCE, CITY.population, estimate),
+      }),
+      skillPoints: 4,
+    };
+    ranged.actions = BLADEBURNER_LEVELLED_ACTIONS.map((action) => {
+      const at = (population: number) =>
+        actionSuccessChance(action, 1, PERSON, { city: { ...CITY, population }, penalty: 1, skills });
+      return {
+        type: action.type,
+        name: action.name,
+        level: 1,
+        maxLevel: 5,
+        count: 50,
+        chance: actionSuccessRange(at(CITY.population), at(estimate), CITY.population, estimate),
+      };
+    });
+    const data = withCombat(ranged);
+    const view = blackOpsRouteOf({
+      mediumData: data,
+      bitNode: 6,
+      ownedSF: SF,
+      rankPerSecond: 2,
+      expPerSecond: 1e4,
+      soFarMs: 10 * 3_600_000,
+    });
+    const input = {
+      readings: ranged.actions as never,
+      person: PERSON,
+      stamina: ranged.stamina,
+      maxStamina: ranged.maxStamina,
+      rankMultiplier: 1,
+      speed: 1,
+      skills: { read: ranged.skillLevels },
+    };
+    const at = { rank: 295_000, next: CENTURION, chanceRead: ranged.blackOp?.chance as [number, number] };
+    const stock = (priced: typeof input) =>
+      chooseBladeburnerAction({ ...priced, target: { rank: 295_000, target: CENTURION.rank } }).toTarget?.seconds ??
+      null;
+    const combat = combatPersonOf(data.player) as NonNullable<ReturnType<typeof combatPersonOf>>;
+    const grownWith = (firstToRankSeconds: number | null) =>
+      blackOpsRouteGrownEstimate(input, { ...at, firstToRankSeconds }, { combat, costMultiplier: 1, points: 4 })
+        .seconds;
+    const truth = stock(bladeburnerPricedInput(input, at).input);
+    const low = stock(input);
+    expect(truth).toBeLessThan(low as number);
+    // The ratio recovered from Centurion's range: the true population over its estimate, 1/1.42.
+    expect(view.grown?.populationRatio).toBeCloseTo(1 / 1.42, 12);
+    expect(view.grown?.seconds).toBe(grownWith(truth));
+    expect(view.grown?.seconds).not.toBe(grownWith(low));
+  });
 
   test("the planner's: core's grown estimate on the reading (B6's first time to its rank), chosen over B6's", () => {
     const view = blackOpsRouteOf({
@@ -312,7 +382,12 @@ describe("the route's grown estimate in the brain (#408)", () => {
         rank: 295_000,
         next: CENTURION,
         chanceRead: blackOp.chance,
-        firstToRankSeconds: view.estimate?.steps[0]?.toRankSeconds ?? null,
+        // B5's stock to its rank at the estimate's pricing (#411): a point read, the read's own.
+        firstToRankSeconds:
+          chooseBladeburnerAction({
+            ...bladeburnerPricedInput(input, { next: CENTURION, chanceRead: blackOp.chance }).input,
+            target: { rank: 295_000, target: CENTURION.rank },
+          }).toTarget?.seconds ?? null,
       },
       { combat: combat as NonNullable<typeof combat>, costMultiplier: 1, points: 4 },
     );
@@ -366,7 +441,7 @@ describe("the route's grown estimate in the brain (#408)", () => {
   test("kept between solves: again after 10 min, at a new key (an install or Black Op next), the time gone back; null never kept", () => {
     const memo = new GrownEstimateMemo();
     let solves = 0;
-    const route = { steps: [], seconds: 1, rate: 1, path: [], solves: 1 };
+    const route = { steps: [], seconds: 1, rate: 1, path: [], solves: 1, populationRatio: null };
     const solve = () => {
       solves += 1;
       return route;
@@ -389,27 +464,38 @@ describe("the route's grown estimate in the brain (#408)", () => {
   });
 });
 
-describe("#408's hindcasts (#409's review): the BN6 suites' share within ×2, the one place it's asserted", () => {
-  test("at least decision 68's share when it was set (31 of 38): 5 of 6, B4's out on Raid's lottery", () => {
+describe("#408's hindcasts (#409's review, #411): the BN6 and BN7 suites' share within ×2, the one place it's asserted", () => {
+  test("at least decision 68's share when it was set (31 of 38), on the expected measure given the actions taken", () => {
     const rows = Object.entries(GROWN_HINDCASTS);
-    const within = rows.filter(([, row]) => row.within);
+    const within = rows.filter(([, row]) => row.expectedWithin);
+    const realised = rows.filter(([, row]) => row.within);
+    const outOf = (side: "within" | "expectedWithin", ratio: "ratio" | "expected") =>
+      rows
+        .filter(([, row]) => !row[side])
+        .map(([label, row]) => `${label} ×${row[ratio]}${row.why === undefined ? "" : ` (${row.why})`}`)
+        .join("; ") || "none";
     console.log(
-      `#408's hindcasts: ${within.length} of ${rows.length} within ×2 against decision 68's ` +
-        `${DECISION_68_SHARE.within} of ${DECISION_68_SHARE.of}; out: ` +
-        rows
-          .filter(([, row]) => !row.within)
-          .map(([label, row]) => `${label} ×${row.ratio} (${row.why})`)
-          .join("; "),
+      `#408's hindcasts, expected given the actions (#411): ${within.length} of ${rows.length} within ×2 against ` +
+        `decision 68's ${DECISION_68_SHARE.within} of ${DECISION_68_SHARE.of}; out: ${outOf("expectedWithin", "expected")}\n` +
+        `realised: ${realised.length} of ${rows.length}; out: ${outOf("within", "ratio")}`,
     );
+    // The share, on the expected measure (the coordinator's ruling on #411), over every row, BN6's and BN7's.
     expect(within.length / rows.length).toBeGreaterThanOrEqual(DECISION_68_SHARE.within / DECISION_68_SHARE.of);
-    // Each row's figure on its side; the one out B4's, with its reason (its suite's section 8 line).
-    for (const [label, row] of rows) expect(withinTwice(row.ratio), label).toBe(row.within);
-    expect(rows.filter(([, row]) => !row.within).map(([label]) => label)).toEqual(["B4's hour, its chaos edited"]);
-    expect(GROWN_HINDCASTS["B4's hour, its chaos edited"]?.why).toContain("Raid");
-    // Every row a BN6 suite's, asserted there on its side (`expectGrownHindcast`); every suite's hindcast a row.
+    // Each row's figures on their sides, each out with its cause (the realised: a lottery's draw; the expected: the
+    // one row out, B2's rank-0 hour in BN6, the first-passage time against a fixed window at a rank-0 lottery, #411).
+    for (const [label, row] of rows) {
+      expect(withinTwice(row.ratio), label).toBe(row.within);
+      expect(withinTwice(row.expected), label).toBe(row.expectedWithin);
+      if (!row.within || !row.expectedWithin) expect(row.why, label).toBeDefined();
+    }
+    expect(rows.filter(([, row]) => !row.expectedWithin).map(([label]) => label)).toEqual([
+      "B2's hour from a harness join",
+    ]);
+    expect(GROWN_HINDCASTS["B2's hour from a harness join"]?.why).toContain("first-passage");
+    // Every row a BN6 or (#411) BN7 suite's, asserted there on its side (`expectGrownHindcast`); every suite's a row.
     const directory = new URL(".", import.meta.url);
     const suites = readdirSync(directory)
-      .filter((name) => /^bn6-.*-simulation\.test\.ts$/.test(name))
+      .filter((name) => /^bn[67]-.*-simulation\.test\.ts$/.test(name))
       .map((name) => readFileSync(new URL(name, directory), "utf8"));
     for (const [label] of rows) {
       expect(
@@ -417,7 +503,9 @@ describe("#408's hindcasts (#409's review): the BN6 suites' share within ×2, th
         label,
       ).toBe(true);
     }
-    const called = suites.flatMap((source) => [...source.matchAll(/grownHindcast\(\s*("[^"]+")/g)].map((m) => m[1]));
+    const called = suites.flatMap((source) =>
+      [...source.matchAll(/grownHindcastIn\(\s*fresh,\s*("[^"]+")/g)].map((m) => m[1]),
+    );
     expect(called.map((label) => JSON.parse(label as string)).sort()).toEqual(rows.map(([label]) => label).sort());
   });
 });
@@ -536,7 +624,8 @@ describe("the controller (#398)", () => {
   test("the grown estimate (#408): the path's and the destroy estimate's, kept 10 min between solves", () => {
     const { controller, send } = connected();
     send("slow", slow(6, { lastAugReset: 1 }));
-    const centurion = { name: CENTURION.name, chance: [0.3, 0.35] as [number, number] };
+    // #414's round 2: each Black Op's range with one end at its formula (here a point: the estimate the truth).
+    const centurion = { name: CENTURION.name, chance: [CENTURION_CHANCE, CENTURION_CHANCE] as [number, number] };
     const gameAtMs = send("medium", withCombat(reading(295_000, centurion)));
     const view = controller.worldDaemonView().path?.blackOps;
     expect(view?.grown).not.toBeNull();
@@ -545,6 +634,9 @@ describe("the controller (#398)", () => {
     // Clocked by the game's time, the medium snapshot's (#409's review), not the events'.
     expect(solvedAt).toBe(gameAtMs);
     expect(controller.worldDaemonView().lines[1]).toContain("with the competence's growth (#408");
+    expect(controller.worldDaemonView().lines[1]).toContain(
+      "the chances at the true population: recovered, pop/popEst 1.000",
+    );
     // Within 10 min the figures stand (a new reading, the same Black Op next); a new Black Op next solves again.
     const readAtMs = send("medium", withCombat(reading(296_000, centurion)));
     expect(controller.worldDaemonView().path?.blackOps?.grown).toBe(view?.grown);
@@ -557,7 +649,15 @@ describe("the controller (#398)", () => {
     expect(controller.worldDaemonView().path?.blackOps?.grownAtMs).toBe(readAtMs);
     send("medium", withCombat(reading(296_000, centurion)));
     expect(controller.worldDaemonView().path?.blackOps?.grown).toBe(installed);
-    send("medium", withCombat(reading(301_000, { name: "Operation Vindictus", chance: [0.3, 0.35] })));
+    const vindictusOp = BLADEBURNER_BLACK_OPS[19] as (typeof BLADEBURNER_BLACK_OPS)[number];
+    const vindictusChance = blackOpSuccessChance(vindictusOp, PERSON, {
+      penalty: 1,
+      skills: bladeburnerSkillMultsOf(LEVELS),
+    });
+    send(
+      "medium",
+      withCombat(reading(301_000, { name: vindictusOp.name, chance: [vindictusChance, vindictusChance] })),
+    );
     const vindictus = controller.worldDaemonView().path?.blackOps?.grown;
     expect(vindictus).not.toBe(view?.grown);
     expect(vindictus?.steps[0]?.name).toBe("Operation Vindictus");

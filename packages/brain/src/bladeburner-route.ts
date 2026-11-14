@@ -1,6 +1,7 @@
 // BN6's win route (#398, Bladeburner's B6 of #359): the Black Ops to the destroy, as the World Daemon's path shows it
-// (./world-daemon.ts), from the medium snapshot's Bladeburner reading. Core has the formulas
-// (../../core/src/bladeburner-route.ts); paths are `vendor/bitburner-src/src/`'s.
+// (./world-daemon.ts), from the medium snapshot's Bladeburner reading; BN7's the same at its own `BladeburnerRank` and
+// `BladeburnerSkillCost` (#411, B8: core's `bladeburnerRankMultiplierOf`, `bladeburnerSkillCostMultiplierOf`, by the
+// BitNode). Core has the formulas (../../core/src/bladeburner-route.ts); paths are `vendor/bitburner-src/src/`'s.
 // - **Where it stands:** the rank against Operation Daedalus's 400,000, the last (`data/BlackOperations.ts:704-735`),
 //   the Black Ops done (the next one's place in the 21; none next once all are, `NetscriptFunctions/Bladeburner.ts:
 //   88-96`), the next one's rank and its chance's low end read (B5's, the stamina's penalty out), and the ETA to
@@ -53,6 +54,7 @@ import {
   bladeburnerBlackOp,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
+  bladeburnerPricedInput,
   bladeburnerRankMultiplierOf,
   bladeburnerSkillCostMultiplierOf,
   bladeburnerSkillMultsOf,
@@ -199,18 +201,26 @@ export function blackOpsRouteOf({
       ? null
       : blackOpsRouteGrownEstimate(
           input,
-          // The first one's rank: B6's time to it (B5's stock where solved) where shorter than the growth's tail.
+          // The first one's rank: B5's stock where shorter than the growth's tail, priced as the grown estimate prices
+          // the actions (#411: at the true population, recovered from the Black Op's range, core's
+          // `bladeburnerPricedInput`).
           {
             rank,
             next: op,
             chanceRead: nextRead.chance,
-            firstToRankSeconds: estimate?.steps[0]?.toRankSeconds ?? null,
+            firstToRankSeconds:
+              rank >= op.rank
+                ? 0
+                : (chooseBladeburnerAction({
+                    ...bladeburnerPricedInput(input, { next: op, chanceRead: nextRead.chance }).input,
+                    target: { rank, target: op.rank },
+                  }).toTarget?.seconds ?? null),
           },
           { combat, costMultiplier, points: actions?.skills?.points ?? 0 },
         );
   const grownKept =
     done === BLACK_OPS_COUNT
-      ? { value: { steps: [], seconds: 0, rate: 0, path: [], solves: 0 }, atMs: null }
+      ? { value: { steps: [], seconds: 0, rate: 0, path: [], solves: 0, populationRatio: null }, atMs: null }
       : grownMemo === undefined
         ? { value: solveGrown(), atMs: null }
         : grownMemo.memo.get(
@@ -357,10 +367,10 @@ export function blackOpsInstallFiguresOf(
 
 /**
  * The grown estimate's figures stand this long between solves (#408): it solves the tail's linear programme about 500
- * times and B3's rule at each step, about 0.15 s at a BN6.1 start (rank 0) and 0.05 s late (rank 295,000, 44 solves;
- * #409's review: the steps are fewer there; core's bladeburner-growth.test.ts), against a route of tens of hours,
- * which 10 min of play moves by under 1%, its own step's error (2%). A new Black Op next or an install solves it at
- * once.
+ * times and B3's rule at each step, about 0.15 s at a BN6.1 start (rank 0; about 0.2 s at BN7.1's, 570 mixes, #411)
+ * and 0.05 s late (rank 295,000, 44 solves; #409's review: the steps are fewer there; core's bladeburner-growth.test.ts),
+ * against a route of tens of hours, which 10 min of play moves by under 1%, its own step's error (2%). A new Black Op
+ * next or an install solves it at once.
  */
 export const BLACK_OPS_GROWN_REFRESH_MS = 10 * 60_000;
 

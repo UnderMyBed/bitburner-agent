@@ -247,6 +247,9 @@ test.each<[string, Fixture]>([
   ["BN1 with SF11.2", bitNode(1, { 11: 2 })],
   ["BN1 with SF11.3", bitNode(1, { 11: 3 })],
   ["BN3 (money and reputation × 3)", bitNode(3)],
+  // Bladeburner's B8 (#411): the BitNodes of the Black Ops' route, BN7's money × 3 (`BitNode/BitNode.tsx:745`).
+  ["BN6 (the defaults)", bitNode(6)],
+  ["BN7 (money × 3, reputation × 1)", bitNode(7)],
   ["BN10 (money × 5, reputation × 2)", bitNode(10)],
   ["BN12 at level 5 (× 1.02^5), its NeuroFlux Governor at level 4", bitNode(12, { 12: 4 })],
 ])("every augmentation's price is the game's: %s, as augmentations are installed and queued", async (_, fixture) => {
