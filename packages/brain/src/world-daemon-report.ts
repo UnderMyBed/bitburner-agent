@@ -46,9 +46,12 @@ import {
   describeEstimates,
   LEVELLING_CANDIDATE_WORDS,
   LEVELLING_CHOSEN_EVENT_KIND,
+  LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS,
   type LevellingBatchFigures,
   LevellingRateWindow,
+  LevelOnlyClock,
   levellingFiguresOf,
+  levellingHopelessFailure,
   levellingInputsOf,
   settleMsOf,
 } from "./levelling.ts";
@@ -57,8 +60,6 @@ import {
   BITNODE_DESTROY_SENT_EVENT_KIND,
   DAEDALUS_COUNT_NEUROFLUX_ONLY_EVENT_KIND,
   describeWorldDaemonPath,
-  HACKING_EXP_GAP_MS,
-  HACKING_EXP_WINDOW_MS,
   HackingExpRate,
   sinceResetOf,
   WORLD_DAEMON_STALLED_AFTER_MS,
@@ -84,9 +85,10 @@ const fieldsOf = (detail: unknown) =>
 /**
  * How long the brain may be off the shortest candidate (#336) before the run report fails it: 10 minutes, the window
  * its rates are measured over (`HACKING_EXP_WINDOW_MS`). The first choice comes a minute after the level is all
- * that's left (money's rate measured), and later ones as the measured rates move, within the window.
+ * that's left (money's rate measured), and later ones as the measured rates move, within the window. Since #410 it's
+ * ./levelling.ts's, the hopeless check being the brain's alert's too.
  */
-export const LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS = HACKING_EXP_WINDOW_MS;
+export { LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS };
 
 /** The brain's levelling mode at `atMs`, from its events (#336): the last choice by then, or money with none. */
 export function levellingModeAt(events: readonly StoredEvent[], atMs: number): LevellingCandidate {
@@ -161,9 +163,7 @@ export class WorldDaemonFold {
    * snapshots that both show it, up to `HACKING_EXP_GAP_MS` (a longer one, the brain down, counts none). The hopeless
    * failure's 10 minutes are the BitNode's own, so installs coming every few minutes can't keep it from firing.
    */
-  #levelOnlyMs = 0;
-  #levelOnlyLastMs: number | null = null;
-  #levelOnlyBitNode: number | null = null;
+  readonly #levelOnly = new LevelOnlyClock();
 
   /** A slow snapshot's game time, in order (#334); and its BitNode (#360), where it's given and says. */
   addSlow(gameTimeMs: number, atMs?: number, data?: SlowSnapshotData): void {
@@ -241,16 +241,8 @@ export class WorldDaemonFold {
     const daemonRooted = data.servers?.find((server) => server.hostname === WORLD_DAEMON)?.hasAdminRights === true;
     const levelOnly = required !== undefined && typeof level === "number" && level < required && daemonRooted;
     this.#levelOnlySinceMs = levelOnly ? (this.#levelOnlySinceMs ?? atMs) : null;
-    if (this.#levelOnlyBitNode !== bitNode) {
-      this.#levelOnlyMs = 0;
-      this.#levelOnlyLastMs = null;
-    }
-    this.#levelOnlyBitNode = bitNode;
-    const lastLevelOnlyMs = this.#levelOnlyLastMs;
-    if (levelOnly && lastLevelOnlyMs !== null && atMs - lastLevelOnlyMs <= HACKING_EXP_GAP_MS) {
-      this.#levelOnlyMs += Math.max(0, atMs - lastLevelOnlyMs);
-    }
-    this.#levelOnlyLastMs = levelOnly ? atMs : null;
+    // The level-only time added up across levelling installs (#355's review): ./levelling.ts's clock, the brain's too.
+    this.#levelOnly.add(atMs, bitNode, levelOnly);
     const ready =
       required !== undefined &&
       typeof level === "number" &&
@@ -383,7 +375,10 @@ export class WorldDaemonFold {
       "  the path to the World Daemon stalled (a step the brain finishes in minutes, not done in 5; or an install while " +
         "short of Daedalus's count that added none to it, passing over one that counts, #228, #238):",
     ];
-    const stalls = events.filter((event) => event.kind === WORLD_DAEMON_STALLED_EVENT_KIND);
+    // Levelling's hopeless choice (#410) is the levelling section's own failure, by the same check: listed there alone.
+    const stalls = events.filter(
+      (event) => event.kind === WORLD_DAEMON_STALLED_EVENT_KIND && fieldsOf(event.detail).step !== "levelling",
+    );
     // Old stores only (#311): the stops for nothing more to gain, which no brain since emits.
     const stops = events.filter(
       (event) =>
@@ -476,7 +471,7 @@ export class WorldDaemonFold {
    * the mode's estimate past the BitNode's game time so far (from the slow snapshot's `lastNodeReset`): the whole path
    * to here took that long, so a last step longer than all of it is hopeless (BN4.1: about 2,900 h to go, 27 h in),
    * once the level has been all that's left 10 minutes in the BitNode, added up across its levelling installs
-   * (#355's review: `#levelOnlyMs`).
+   * (#355's review: `LevelOnlyClock`); the same check is the brain's alert (#410).
    */
   #levelling(
     { staticLast, mediumLast, slowLast }: LastSnapshots,
@@ -575,17 +570,9 @@ export class WorldDaemonFold {
           `takes, and ${words[best]} (${describeEstimate(shortest)}) is shorter by more than 1.25 times at its end`,
       );
     }
-    if (
-      ours !== null &&
-      soFarMs !== null &&
-      ours * 1000 > soFarMs &&
-      this.#levelOnlyMs > LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS
-    ) {
-      failures.push(
-        `levelling: the brain's choice, ${words[mode]}, ${describeEstimate(ours)} to w0r1d_d43m0n's level, past the ` +
-          `${formatDuration(soFarMs)} the BitNode has taken so far: a hopeless estimate`,
-      );
-    }
+    // The hopeless check, the brain's alert's too (#410): one function, one level-only time.
+    const hopeless = levellingHopelessFailure(mode, ours, soFarMs, this.#levelOnly.ms());
+    if (hopeless !== null) failures.push(hopeless);
     return { lines, failures };
   }
 }
