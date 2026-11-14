@@ -919,3 +919,34 @@ describe("the playability at a start's range (#411): the estimate at the expecte
     console.log(`${rows.join("\n")}\nthe bar ${(BAR_SECONDS / HOUR).toFixed(2)} h`);
   });
 });
+
+describe("the skills along the route at a range read (#411): B3's rule's, as the brain runs it", () => {
+  test("bought at the low end read, as the rule buys them, whatever the estimate prices the actions at", () => {
+    const { combat: figures, input: flat, at, who } = startAt(100);
+    // A range read (the estimate 1.42× the true population, seed 1's New Tokyo at a BN6.1 start).
+    const estimate = CITY.population * 1.42;
+    const readings = flat.readings.map((read) => {
+      const action = bladeburnerLevelledAction(read.type, read.name) as NonNullable<
+        ReturnType<typeof bladeburnerLevelledAction>
+      >;
+      const chanceAt = (population: number) =>
+        actionSuccessChance(action, 1, who, { city: { ...CITY, population }, penalty: 1 });
+      return {
+        ...read,
+        chance: actionSuccessRange(chanceAt(CITY.population), chanceAt(estimate), CITY.population, estimate),
+      };
+    });
+    const ranged = { ...flat, readings };
+    const lowOnly = {
+      ...flat,
+      readings: readings.map((read) => ({ ...read, chance: [read.chance[0], read.chance[0]] as [number, number] })),
+    };
+    // The skills alone growing: the levels at each step are the rule's choices at the ranks reached, the rank grid
+    // the same; so they're the same at the range read as at its low end alone, though the estimate's times differ.
+    const grow = { skills: true, stats: false, levels: false };
+    const priced = blackOpsRouteGrownEstimate(ranged, at, { combat: figures, costMultiplier: 1, points: 300, grow });
+    const low = blackOpsRouteGrownEstimate(lowOnly, at, { combat: figures, costMultiplier: 1, points: 300, grow });
+    expect(priced.seconds).toBeLessThan(low.seconds);
+    expect(priced.steps.map((step) => step.levels)).toEqual(low.steps.map((step) => step.levels));
+  });
+});

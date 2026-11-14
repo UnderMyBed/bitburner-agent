@@ -304,9 +304,12 @@ export function blackOpsRouteGrownEstimate(
     return { ...at, exp, successes };
   };
   // The points unspent at a state, spent by B3's rule there.
+  // The points spent as B3's rule spends them (#411): its forecast at the low end read, as the brain runs it, not at the
+  // estimate's pricing (at the expected chances the success skills look worth less to the actions, and the rule would
+  // be credited purchases it doesn't make).
   const spend = (at: BladeburnerGrowthState): BladeburnerGrowthState => {
     if (!grow.skills || !(at.points > 0)) return at;
-    const plan = chooseBladeburnerSkills(bladeburnerGrownInput(input, combat, at), {
+    const plan = chooseBladeburnerSkills(bladeburnerGrownInput(read, combat, at), {
       levels: at.levels,
       points: at.points,
       costMultiplier,
