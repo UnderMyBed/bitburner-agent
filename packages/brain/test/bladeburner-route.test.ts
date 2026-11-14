@@ -389,26 +389,35 @@ describe("the route's grown estimate in the brain (#408)", () => {
   });
 });
 
-describe("#408's hindcasts (#409's review): the BN6 suites' share within ×2, the one place it's asserted", () => {
-  test("at least decision 68's share when it was set (31 of 38): 5 of 6, B4's out on Raid's lottery", () => {
+describe("#408's hindcasts (#409's review, #411): the BN6 and BN7 suites' share within ×2, the one place it's asserted", () => {
+  test("at least decision 68's share when it was set (31 of 38), on the expected measure given the actions taken", () => {
     const rows = Object.entries(GROWN_HINDCASTS);
-    const within = rows.filter(([, row]) => row.within);
+    const within = rows.filter(([, row]) => row.expectedWithin);
+    const realised = rows.filter(([, row]) => row.within);
+    const outOf = (side: "within" | "expectedWithin", ratio: "ratio" | "expected") =>
+      rows
+        .filter(([, row]) => !row[side])
+        .map(([label, row]) => `${label} ×${row[ratio]}${row.why === undefined ? "" : ` (${row.why})`}`)
+        .join("; ") || "none";
     console.log(
-      `#408's hindcasts: ${within.length} of ${rows.length} within ×2 against decision 68's ` +
-        `${DECISION_68_SHARE.within} of ${DECISION_68_SHARE.of}; out: ` +
-        rows
-          .filter(([, row]) => !row.within)
-          .map(([label, row]) => `${label} ×${row.ratio} (${row.why})`)
-          .join("; "),
+      `#408's hindcasts, expected given the actions (#411): ${within.length} of ${rows.length} within ×2 against ` +
+        `decision 68's ${DECISION_68_SHARE.within} of ${DECISION_68_SHARE.of}; out: ${outOf("expectedWithin", "expected")}
+` +
+        `realised: ${realised.length} of ${rows.length}; out: ${outOf("within", "ratio")}`,
     );
+    // The share, on the expected measure (the coordinator's ruling on #411), over every row, BN6's and BN7's.
     expect(within.length / rows.length).toBeGreaterThanOrEqual(DECISION_68_SHARE.within / DECISION_68_SHARE.of);
-    // Each row's figure on its side; the one out B4's, with its reason (its suite's section 8 line).
-    for (const [label, row] of rows) expect(withinTwice(row.ratio), label).toBe(row.within);
+    // Each row's figures on their sides; the realised out on Raid's lottery, with their reasons (section 8's lines).
+    for (const [label, row] of rows) {
+      expect(withinTwice(row.ratio), label).toBe(row.within);
+      expect(withinTwice(row.expected), label).toBe(row.expectedWithin);
+    }
     expect(rows.filter(([, row]) => !row.within).map(([label]) => label)).toEqual([
       "B4's hour, its chaos edited",
       "B2's hour from a harness join, BN7",
     ]);
-    expect(GROWN_HINDCASTS["B4's hour, its chaos edited"]?.why).toContain("Raid");
+    for (const [, row] of rows.filter(([, each]) => !each.within)) expect(row.why).toContain("Raid");
+    for (const [, row] of rows.filter(([, each]) => !each.expectedWithin)) expect(row.why).toContain("expected out");
     // Every row a BN6 or (#411) BN7 suite's, asserted there on its side (`expectGrownHindcast`); every suite's a row.
     const directory = new URL(".", import.meta.url);
     const suites = readdirSync(directory)

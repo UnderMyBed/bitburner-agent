@@ -36,7 +36,7 @@ import { runReport } from "../src/run-report.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
+import { attemptsIn, expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -154,6 +154,7 @@ test("BN7.1 with 20 Black Ops done at rank 400,000, its skills at ×2: Operation
     startMedium,
     (doneAtMs ?? Number.NaN) - startedAtMs,
     "next done",
+    await attemptsIn(simulation, startedAtMs, doneAtMs ?? Number.NaN),
     7,
   );
   console.log(hindcast.line);

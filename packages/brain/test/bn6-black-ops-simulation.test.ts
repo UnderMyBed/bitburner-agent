@@ -25,7 +25,7 @@ import { BLADEBURNER_ACTIONS_HOLD } from "../src/bladeburner.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
+import { attemptsIn, expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -136,12 +136,14 @@ test("BN6.1, an hour from a harness join at rank 2,500: Typhoon done, then Zero 
     startMedium,
     (typhoonDoneAtMs ?? Number.NaN) - startedAtMs,
     "next done",
+    await attemptsIn(fresh.simulation, startedAtMs, typhoonDoneAtMs ?? Number.NaN),
   );
   const zeroHindcast = grownHindcast(
     "B5's climb to Zero",
     zeroMedium,
     (zeroRankAtMs ?? Number.NaN) - (zeroFromMs ?? Number.NaN),
     ZERO.rank,
+    await attemptsIn(fresh.simulation, zeroFromMs ?? Number.NaN, zeroRankAtMs ?? Number.NaN),
   );
   console.log(`${typhoonHindcast.line}\n${zeroHindcast.line}`);
   expectGrownHindcast(typhoonHindcast);

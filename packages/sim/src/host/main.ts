@@ -167,6 +167,10 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       return engine.homePeak();
     },
+    "diagnostics.bladeburnerAttempts": ({ from }) => {
+      booted();
+      return engine.bladeburnerAttempts(from);
+    },
     "diagnostics.reseedRandom": ({ seed }) => {
       validateSeed(seed);
       reseedRandom(seed);

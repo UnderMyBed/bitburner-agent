@@ -29,7 +29,7 @@ import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-acti
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
+import { attemptsIn, expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -112,6 +112,7 @@ test("BN6.1, an hour from a harness join: each plan the least time to 25, the st
     startMedium,
     fresh.game.clock.now() - startedAtMs,
     medium()?.bladeburner?.rank ?? 0,
+    await attemptsIn(fresh.simulation, startedAtMs, fresh.game.clock.now()),
   );
   console.log(hindcast.line);
   expectGrownHindcast(hindcast);

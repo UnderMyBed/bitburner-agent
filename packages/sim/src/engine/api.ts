@@ -1,4 +1,5 @@
 import type {
+  BladeburnerAttempt,
   GameAugmentationCost,
   GameData,
   GameDiagnostics,
@@ -107,6 +108,8 @@ export interface EngineApi {
    * high), taken as each changes: a script that starts and exits within one timer counts.
    */
   homePeak(): HomePeak;
+  /** Every Bladeburner attempt since the game booted, from `from` on (#411), each as the game drew it. */
+  bladeburnerAttempts(from: number): BladeburnerAttempt[];
   /** The game-side fields of the game diagnostics (the host adds `bootMs`). */
   gameDiagnostics(): Omit<GameDiagnostics, "bootMs" | "defaultLocale" | "pinnedLocale">;
   /**
@@ -189,6 +192,7 @@ const API_FUNCTIONS = {
   gameSummary: true,
   saveJson: true,
   homePeak: true,
+  bladeburnerAttempts: true,
   gameDiagnostics: true,
   installPageGlobals: true,
   setGameEventListener: true,

@@ -22,6 +22,7 @@ import { RpcClient } from "./rpc.ts";
 
 export type {
   BitNodeFixture,
+  BladeburnerAttempt,
   ComparisonOp,
   EventPage,
   Fixture,
@@ -227,6 +228,11 @@ export class Simulation {
      * timer sees, still counts.
      */
     homePeak: () => this.rpc.call("diagnostics.homePeak", {}),
+    /**
+     * Every Bladeburner attempt the game has made since it booted, from index `from` on (#411): each one's chance, its
+     * outcome, the mean rank of a success and of a failure, and the rank before and after. Only observed.
+     */
+    bladeburnerAttempts: (from = 0) => this.rpc.call("diagnostics.bladeburnerAttempts", { from }),
     random: (count: number) => this.rpc.call("diagnostics.random", { count }),
     /** Starts the seeded random streams again from `seed`, as at boot (#341). A harness edit. */
     reseedRandom: (seed: number) => this.rpc.call("diagnostics.reseedRandom", { seed }),

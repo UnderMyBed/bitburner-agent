@@ -26,7 +26,7 @@ import { BLADEBURNER_CHAOS_SLACK_MS } from "../src/bladeburner-cities-report.ts"
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
+import { attemptsIn, expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -198,6 +198,7 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
     startMedium,
     fresh.game.clock.now() - movedAtMs,
     reading()?.rank ?? 0,
+    await attemptsIn(fresh.simulation, movedAtMs, fresh.game.clock.now()),
   );
   console.log(hindcast.line);
   // Past ×2 (the table's `why`: Raid's lottery), and so on the table's out side.

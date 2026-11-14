@@ -12,7 +12,14 @@ import {
   getBitNodeLevel,
   getDefaultBitNodeOptions,
 } from "../../../../../vendor/bitburner-src/src/BitNode/BitNodeUtils";
+import { ActionClass } from "../../../../../vendor/bitburner-src/src/Bladeburner/Actions/Action";
+import { Bladeburner } from "../../../../../vendor/bitburner-src/src/Bladeburner/Bladeburner";
 import { numberOfBlackOperations } from "../../../../../vendor/bitburner-src/src/Bladeburner/data/BlackOperations";
+import { BladeburnerActionType } from "../../../../../vendor/bitburner-src/src/Bladeburner/Enums";
+import {
+  calculateActionRankGain,
+  calculateActionRankLoss,
+} from "../../../../../vendor/bitburner-src/src/Bladeburner/Formulas";
 import { Companies } from "../../../../../vendor/bitburner-src/src/Company/Companies";
 import { CompanyName } from "../../../../../vendor/bitburner-src/src/Company/Enums";
 import { CONSTANTS } from "../../../../../vendor/bitburner-src/src/Constants";
@@ -50,6 +57,7 @@ import { UIEventEmitter, UIEventType } from "../../../../../vendor/bitburner-src
 import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helpers/commitHash";
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
 import type {
+  BladeburnerAttempt,
   GameAugmentationCost,
   GameData,
   GameEvent,
@@ -529,6 +537,56 @@ workerScripts.delete = (pid) => {
 
 export function homePeak() {
   return { ...homePeakSoFar };
+}
+
+/**
+ * Every Bladeburner attempt the game makes (#411), for the hindcasts' expected measure: `attempt` draws against
+ * `getSuccessChance` (`Bladeburner/Actions/Action.ts:83-85`, a pure function of the state), so its chance is taken
+ * once more there, and `completeAction` (`Bladeburner.ts:891`) gives the rank before and after. Only observed: the
+ * game draws as before. The player's alone (a sleeve's `isPlayer` false is left out).
+ */
+const bladeburnerAttemptsSoFar: BladeburnerAttempt[] = [];
+let attemptDrawn: Omit<BladeburnerAttempt, "rankBefore" | "rankAfter" | "atMs"> | null = null;
+const RANKED_TYPES: readonly string[] = [
+  BladeburnerActionType.Contract,
+  BladeburnerActionType.Operation,
+  BladeburnerActionType.BlackOp,
+];
+const attempt = ActionClass.prototype.attempt;
+ActionClass.prototype.attempt = function (this: ActionClass, bladeburner: Bladeburner, person) {
+  const chance = this.getSuccessChance(bladeburner, person);
+  const success = attempt.call(this, bladeburner, person);
+  const action = this as unknown as Parameters<typeof calculateActionRankGain>[0];
+  if (RANKED_TYPES.includes(action.type)) {
+    const ranks = this as unknown as { rankGain?: number; rankLoss?: number; level?: number };
+    attemptDrawn = {
+      type: action.type,
+      name: action.name,
+      level: typeof ranks.level === "number" ? ranks.level : 1,
+      chance,
+      success,
+      gain: ranks.rankGain ? calculateActionRankGain(action) : 0,
+      loss: ranks.rankLoss ? calculateActionRankLoss(action) : 0,
+    };
+  }
+  return success;
+};
+const completeAction = Bladeburner.prototype.completeAction;
+Bladeburner.prototype.completeAction = function (this: Bladeburner, person, actionIdent, isPlayer = true) {
+  attemptDrawn = null;
+  const rankBefore = this.rank;
+  const stats = completeAction.call(this, person, actionIdent, isPlayer);
+  // Set by `attempt`, within the call.
+  const drawn = attemptDrawn as Omit<BladeburnerAttempt, "rankBefore" | "rankAfter" | "atMs"> | null;
+  if (drawn !== null && isPlayer) {
+    bladeburnerAttemptsSoFar.push({ ...drawn, rankBefore, rankAfter: this.rank, atMs: Date.now() });
+  }
+  attemptDrawn = null;
+  return stats;
+};
+
+export function bladeburnerAttempts(from: number) {
+  return bladeburnerAttemptsSoFar.slice(from);
 }
 
 export function gameSummary() {

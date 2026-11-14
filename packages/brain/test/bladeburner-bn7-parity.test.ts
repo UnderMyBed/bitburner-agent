@@ -3,6 +3,7 @@
 // - **Every multiplier** of `getBitNodeMultipliers` at BN6 and BN7 (`BitNode/BitNode.tsx:694-727`, `:728-769`): each is
 //   core's (its table's value the engine's), or core takes it at 1 (the engine's 1 in both), or the route doesn't read
 //   it, and the table says why. The table is the engine's keys, all of them, so a game bump that adds one fails here.
+// - **The simulator's record of attempts** (#411, the hindcasts' expected measure): each chance the one drawn against.
 // - **In BN7.2** (SF1.3, SF5.1 and SF7.1, as B2's parity test is in BN6, bladeburner-parity.test.ts): every contract's
 //   and operation's estimate's range, time and rank gained and lost over two cities, the stamina and the levels; every
 //   Black Op's range, time and rank; every skill's cost (`getSkillUpgradeCost`, ×2) for 1, 3 and 10 levels at 0 and at
@@ -349,5 +350,85 @@ out({ person: ns.getPlayer(), stamina: ns.bladeburner.getStamina(), actions, ops
     `BN7.2: ${costs} skill costs ×${costMultiplier} and ${rest.bought.length} purchases (${spent} points); ` +
       `${compared} actions' and Black Ops' ranges, times and ranks at BladeburnerRank ${rankMultiplier}, ` +
       `${ranges} ranges inside (0, 1)`,
+  );
+}, 240_000);
+
+test("the simulator's record of attempts (#411, the hindcasts' expected measure): each chance the game's, its rank its draw", async () => {
+  const sim = await start({
+    seed: 1,
+    epochMs: Date.UTC(2026, 0, 1),
+    fixture: { kind: "bitnode", n: 7, sourceFiles: { 1: 3, 5: 1 } },
+  });
+  await sim.diagnostics.setHomeRam(128);
+  await sim.diagnostics.gainCombatExp(skillExpFor(400, 1.28));
+  const joined = await runScript(sim, "out(ns.bladeburner.joinBladeburnerDivision());");
+  expect(joined.out).toEqual([true]);
+  await sim.diagnostics.setBladeburnerRank(100);
+  // The true population its estimate, so the range read is the chance drawn against (`Action.ts:149-150`).
+  await sim.diagnostics.setBladeburnerFigures({ population: 1.2e9, estimate: 1.2e9, communities: 20, chaos: 0 });
+  const before = (await sim.diagnostics.bladeburnerAttempts()).length;
+  // Each tick, the chance read before the attempt that lands in it, until 12 attempts.
+  const { out, log } = await runScript(
+    sim,
+    `const type = "Operations", name = "Undercover Operation";
+ns.bladeburner.startAction(type, name);
+const reads = [];
+let count = ns.bladeburner.getActionCountRemaining(type, name);
+while (reads.length < 12) {
+  const range = ns.bladeburner.getActionEstimatedSuccessChance(type, name);
+  const rank = ns.bladeburner.getRank();
+  await ns.bladeburner.nextUpdate();
+  const now = ns.bladeburner.getActionCountRemaining(type, name);
+  if (now < count) reads.push({ range, rank, after: ns.bladeburner.getRank() });
+  count = now;
+}
+ns.bladeburner.stopBladeburnerAction();
+out(reads);`,
+    600_000,
+  );
+  expect(log.filter((line) => !line.startsWith("out:"))).toEqual([]);
+  const reads = out[0] as { range: [number, number]; rank: number; after: number }[];
+  const attempts = (await sim.diagnostics.bladeburnerAttempts(before)).filter(
+    (attempt) => attempt.name === "Undercover Operation",
+  );
+  expect(attempts.length).toBeGreaterThanOrEqual(12);
+  const undercover = bladeburnerLevelledAction("Operations", "Undercover Operation");
+  if (undercover === null) throw new Error("no Undercover Operation");
+  let successes = 0;
+  for (const [index, read] of reads.entries()) {
+    const attempt = attempts[index];
+    if (attempt === undefined) throw new Error(`no attempt ${index}`);
+    // The chance drawn against: the range read at the same state. The first one's a point (the estimate set to the
+    // truth); Undercover's success moves the estimate and its failure may migrate the population (`Bladeburner.ts:
+    // 814-821`), so later ones bracket it.
+    if (index === 0) {
+      expect(read.range[0]).toBeCloseTo(read.range[1], 12);
+      expect(attempt.chance, "the first attempt's chance").toBeCloseTo(read.range[0], 9);
+    }
+    expect(attempt.chance, `attempt ${index}'s chance`).toBeGreaterThanOrEqual(read.range[0] - 1e-9);
+    expect(attempt.chance, `attempt ${index}'s chance`).toBeLessThanOrEqual(read.range[1] + 1e-9);
+    expect(attempt.gain).toBeCloseTo(actionRankGain(undercover, attempt.level, 0.6), 12);
+    expect(attempt.loss).toBeCloseTo(actionRankLoss(undercover, attempt.level), 12);
+    const change = attempt.rankAfter - attempt.rankBefore;
+    // Its rank its draw: a success's gain, a failure's loss, each ±10% (`addOffset`).
+    if (attempt.success) {
+      successes++;
+      expect(change / attempt.gain).toBeGreaterThanOrEqual(0.9 - 1e-9);
+      expect(change / attempt.gain).toBeLessThanOrEqual(1.1 + 1e-9);
+    } else {
+      expect(-change / attempt.loss).toBeGreaterThanOrEqual(0.9 - 1e-9);
+      expect(-change / attempt.loss).toBeLessThanOrEqual(1.1 + 1e-9);
+    }
+    expect(attempt.rankBefore).toBeCloseTo(read.rank, 9);
+  }
+  // Both draws seen: successes and failures.
+  expect(successes).toBeGreaterThan(0);
+  expect(successes).toBeLessThan(reads.length);
+  console.log(
+    `${reads.length} Undercover Operations recorded: ${successes} successes, chances ` +
+      attempts
+        .slice(0, reads.length)
+        .map((attempt) => attempt.chance.toFixed(3))
+        .join(", "),
   );
 }, 240_000);

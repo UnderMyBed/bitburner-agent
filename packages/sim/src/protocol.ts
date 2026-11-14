@@ -309,6 +309,28 @@ export interface GameSummary {
 }
 
 /** Home's highs: each is its own, and they may come from different moments. */
+/**
+ * One Bladeburner attempt the game made (#411): a contract's, an operation's or a Black Op's, as its `attempt` drew it
+ * (`Bladeburner/Actions/Action.ts:83-85`), the chance it drew against, and the game's mean rank on a success and on a
+ * failure there (`Bladeburner/Formulas.ts:9-44`, before `addOffset`'s ±10%), with the rank before and after it.
+ */
+export interface BladeburnerAttempt {
+  type: string;
+  name: string;
+  /** The level attempted (1 for a Black Op). */
+  level: number;
+  chance: number;
+  success: boolean;
+  /** The mean rank a success gains (0 where the action gains none). */
+  gain: number;
+  /** The mean rank a failure loses (0 where it loses none), before the floor at 0 (`Bladeburner.ts:1271-1274`). */
+  loss: number;
+  rankBefore: number;
+  rankAfter: number;
+  /** The page's time (`Date.now()`, the virtual clock) when it completed. */
+  atMs: number;
+}
+
 export interface HomePeak {
   /** The highest RAM in use, in GB. */
   ramUsed: number;
@@ -455,6 +477,8 @@ export interface HostMethods {
    * high), taken as each changes: a script that starts and exits within one timer counts.
    */
   "diagnostics.homePeak"(params: Record<string, never>): HomePeak;
+  /** Every Bladeburner attempt the game has made since it booted, from `from` on (#411): only observed. */
+  "diagnostics.bladeburnerAttempts"(params: { from: number }): BladeburnerAttempt[];
   "diagnostics.random"(params: { count: number }): RandomSample;
   /**
    * Starts the seeded Math.random and Web Crypto streams again from `seed`, as at boot (#341): the draws from here on
