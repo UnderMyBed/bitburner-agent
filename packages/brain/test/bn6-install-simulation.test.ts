@@ -4,13 +4,12 @@
 // Harness edits stand in for the route so far: home at 128 GB, CyberSec joined, the four combat stats at 100 (SF1.3's
 // ×1.28), the division joined by the owner's own script, the rank at 1,000 through the game's own change (its 333
 // points), Blade's Intuition at 10 bought by the owner's script, Tracking's max level 5, and the Bladeburners faction's
-// whole shop queued (its 18, core's `augmentationsSoldBy`). Until #411 it queued EsperTech Bladeburner Eyewear alone;
-// since #411 (the grown estimate at the expected chance over the range read, the points spent by B3's rule as the brain
-// runs it) EsperTech leads at this reading by 0.9 h against #406's margin of 1.1 h, a tie the planner keeps (core's
-// bladeburner-installs.test.ts pins it). The suite tests B7's install mechanics, not that choice, so it takes a case the
-// planner installs on far past any margin: the shop, about 30 h ahead (core's bladeburner-growth.test.ts). Then the
-// brain's own: the planner installs it through the gate; the install keeps the rank, the skills, the max levels and the
-// Black Ops done
+// whole shop queued (its 18, core's `augmentationsSoldBy`). Until #411 it queued EsperTech Bladeburner Eyewear alone:
+// #411's estimate changes moved EsperTech to within its margin at this reading (0.9 h ahead against #406's 1.1 h at
+// ruling 3's pricing; 2.09 h against 1.77 h at ruling 4's, the true population recovered: core's
+// bladeburner-installs.test.ts). The suite tests B7's install mechanics, not that choice, so it takes a case the planner
+// installs on far past any margin: the shop, 21.7 h ahead against 0.57 h. Then the brain's own: the planner installs it
+// through the gate; the install keeps the rank, the skills, the max levels and the Black Ops done
 // (`Bladeburner.ts:259-263`), and the player's multipliers are the old ones times core's gain; the Bladeburner rule is
 // back within one reading of the first after it, Training the combat stats back to 100, 15 minutes of it with no stall
 // and no stuck resting; the run report passes, its rebuild shown.

@@ -207,6 +207,7 @@ export function blackOpsRouteOf({
           {
             rank,
             next: op,
+            chanceRead: nextRead.chance,
             firstToRankSeconds:
               rank >= op.rank
                 ? 0

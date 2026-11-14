@@ -11,6 +11,7 @@ import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-help
 import {
   actionRankLoss,
   actionSuccessChance,
+  actionSuccessRange,
   BLADEBURNER_BLACK_OPS,
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_SKILL_NAMES,
@@ -18,9 +19,11 @@ import {
   blackOpRankLoss,
   blackOpSeconds,
   blackOpStaminaCost,
+  blackOpSuccessChance,
   blackOpsRouteEstimate,
   blackOpsRouteGrownEstimate,
   bladeburnerLevelledAction,
+  bladeburnerPricedInput,
   bladeburnerSkillMultsOf,
   CONTROL_PROTOCOL_VERSION,
   chooseBladeburnerAction,
@@ -64,6 +67,14 @@ const PERSON: BladeburnerPerson = {
 const CITY = { population: 1e9, communities: 50, chaos: 0 };
 const LEVELS = { "Blade's Intuition": 40, Overclock: 50 };
 const CENTURION = BLADEBURNER_BLACK_OPS[18] as (typeof BLADEBURNER_BLACK_OPS)[number];
+/**
+ * Centurion's chance at `PERSON` and `LEVELS`, rested: its formula (#414's review: a Black Op's range has one end at its
+ * formula, `Actions/Action.ts:144-167`; the fixtures before read 0.30-0.35 against 0.023, which the game can't).
+ */
+const CENTURION_CHANCE = blackOpSuccessChance(CENTURION, PERSON, {
+  penalty: 1,
+  skills: bladeburnerSkillMultsOf(LEVELS),
+});
 
 /** The worker's reading in the division at `rank`, the next Black Op `blackOp` (null: all done). */
 function reading(rank: number, blackOp: { name: string; chance: [number, number] } | null | undefined) {
@@ -126,7 +137,7 @@ const slow = (currentNode: number, fields: Partial<SlowSnapshotData["resetInfo"]
 };
 
 describe("the route from the reading (#398)", () => {
-  const blackOp = { name: CENTURION.name, chance: [0.3, 0.35] as [number, number] };
+  const blackOp = { name: CENTURION.name, chance: [CENTURION_CHANCE, CENTURION_CHANCE] as [number, number] };
 
   test("the count, the next one, core's estimate, the ETA at the rate measured, the stall bound, both routes", () => {
     const view = blackOpsRouteOf({
@@ -157,7 +168,7 @@ describe("the route from the reading (#398)", () => {
     };
     const estimate = blackOpsRouteEstimate(input, { rank: 295_000, next: CENTURION, chanceRead: blackOp.chance });
     expect(view.estimate?.seconds).toBeCloseTo(estimate.seconds, 6);
-    expect(view.next?.chance).toBeCloseTo(0.3, 12);
+    expect(view.next?.chance).toBeCloseTo(CENTURION_CHANCE, 12);
     // The stall bound: twice a rest from ½ max at the natural regain, the attempt and a failure's rebuild, and 10 min.
     const mults = bladeburnerSkillMultsOf(LEVELS);
     const rest = r.maxStamina / 2 / staminaGainPerSecond(PERSON, r.maxStamina, mults);
@@ -280,7 +291,63 @@ function withCombat(bladeburner: unknown): MediumSnapshotData {
 }
 
 describe("the route's grown estimate in the brain (#408)", () => {
-  const blackOp = { name: CENTURION.name, chance: [0.3, 0.35] as [number, number] };
+  const blackOp = { name: CENTURION.name, chance: [CENTURION_CHANCE, CENTURION_CHANCE] as [number, number] };
+
+  test("read through a range (#414's review): the first one's rank by B5's stock at the true population, not the low end", () => {
+    // An overcount (the estimate 1.42× the truth): each action's range and Centurion's, as the game reads them.
+    const estimate = CITY.population * 1.42;
+    const skills = bladeburnerSkillMultsOf(LEVELS);
+    const ranged = {
+      ...reading(295_000, {
+        name: CENTURION.name,
+        chance: actionSuccessRange(CENTURION_CHANCE, CENTURION_CHANCE, CITY.population, estimate),
+      }),
+      skillPoints: 4,
+    };
+    ranged.actions = BLADEBURNER_LEVELLED_ACTIONS.map((action) => {
+      const at = (population: number) =>
+        actionSuccessChance(action, 1, PERSON, { city: { ...CITY, population }, penalty: 1, skills });
+      return {
+        type: action.type,
+        name: action.name,
+        level: 1,
+        maxLevel: 5,
+        count: 50,
+        chance: actionSuccessRange(at(CITY.population), at(estimate), CITY.population, estimate),
+      };
+    });
+    const data = withCombat(ranged);
+    const view = blackOpsRouteOf({
+      mediumData: data,
+      bitNode: 6,
+      ownedSF: SF,
+      rankPerSecond: 2,
+      expPerSecond: 1e4,
+      soFarMs: 10 * 3_600_000,
+    });
+    const input = {
+      readings: ranged.actions as never,
+      person: PERSON,
+      stamina: ranged.stamina,
+      maxStamina: ranged.maxStamina,
+      rankMultiplier: 1,
+      speed: 1,
+      skills: { read: ranged.skillLevels },
+    };
+    const at = { rank: 295_000, next: CENTURION, chanceRead: ranged.blackOp?.chance as [number, number] };
+    const stock = (priced: typeof input) =>
+      chooseBladeburnerAction({ ...priced, target: { rank: 295_000, target: CENTURION.rank } }).toTarget?.seconds ??
+      null;
+    const combat = combatPersonOf(data.player) as NonNullable<ReturnType<typeof combatPersonOf>>;
+    const grownWith = (firstToRankSeconds: number | null) =>
+      blackOpsRouteGrownEstimate(input, { ...at, firstToRankSeconds }, { combat, costMultiplier: 1, points: 4 })
+        .seconds;
+    const truth = stock(bladeburnerPricedInput(input, at).input);
+    const low = stock(input);
+    expect(truth).toBeLessThan(low as number);
+    expect(view.grown?.seconds).toBe(grownWith(truth));
+    expect(view.grown?.seconds).not.toBe(grownWith(low));
+  });
 
   test("the planner's: core's grown estimate on the reading (B6's first time to its rank), chosen over B6's", () => {
     const view = blackOpsRouteOf({
@@ -312,7 +379,12 @@ describe("the route's grown estimate in the brain (#408)", () => {
         rank: 295_000,
         next: CENTURION,
         chanceRead: blackOp.chance,
-        firstToRankSeconds: view.estimate?.steps[0]?.toRankSeconds ?? null,
+        // B5's stock to its rank at the estimate's pricing (#411): a point read, the read's own.
+        firstToRankSeconds:
+          chooseBladeburnerAction({
+            ...bladeburnerPricedInput(input, { next: CENTURION, chanceRead: blackOp.chance }).input,
+            target: { rank: 295_000, target: CENTURION.rank },
+          }).toTarget?.seconds ?? null,
       },
       { combat: combat as NonNullable<typeof combat>, costMultiplier: 1, points: 4 },
     );

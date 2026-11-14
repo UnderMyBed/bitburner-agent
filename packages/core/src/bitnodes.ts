@@ -221,13 +221,14 @@ export function knownBitNodes(): number[] {
  * rank 0, neither its reputation nor its money ×3 counted): optimistic, which only strengthens "past the bar". So
  * 108.9 h at best, ×2.0 the bar: unplayable. What's left is BN6's list, with the money ×3 and the rank ×0.6 on each.
  *
- * Both at a start's range (#411): the grown estimate prices each contract's and operation's chance at its expected over
- * the range read, uniform in the population (core's `bladeburnerExpectedChance`), not its low end; its skill points
- * spent by B3's rule at the low end, as the brain runs it. The states above read no range (the estimate the true
- * population), so their figures stand. At seed 1's BN6.1 start (New Tokyo's estimate 1.42× the true population, the
- * same states read through that range): BN6 113.3 h at combat 100 and 72.9 h at 300 as is, 61.3 h at combat 100 with
- * the shop installed (kept at 300); BN7 395.5 h and 140.8 h, with the shop 100.9 h and 130.4 h (core's
- * bladeburner-growth.test.ts). So BN6 61.3 h and BN7 100.9 h at best, both past the bar.
+ * Both read through a range (#411's ruling 4): the grown estimate prices each contract's and operation's chance at the
+ * true population, recovered from the next Black Op's range read (core's `bladeburnerPricedInput`), so the figures
+ * above, at the true population, are the reasons'. Read through an undercount (the estimate 0.6× the truth) and seed 1's
+ * overcount (1.42×), only B3's spending moves them, its rule at the low end as the brain runs it (a follow-up's): BN6
+ * 94.3 h and 108.7 h at combat 100 as is, 63.5 h and 60.2 h with the shop; BN7 177.4 h and 370.5 h, with the shop
+ * 102.1 h and 98.0 h (core's bladeburner-growth.test.ts). BN7's 370.5 h is that spending alone: with the skills off it
+ * is the truth's figure (the test's), and #414's review measured 191.1 h with them spent at the expected chance. All
+ * past the bar.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [
@@ -236,7 +237,7 @@ const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   ],
   [
     7,
-    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411: 100.9 h at best, the bar 54.2 h)",
+    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411: 108.9 h at best, the bar 54.2 h)",
   ],
 ]);
 /** Why BN7 is skipped (#367, #398, #411): the Black Ops' grown estimate at its multipliers past the bar, the shop in. */

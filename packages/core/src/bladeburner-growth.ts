@@ -189,6 +189,8 @@ export function bladeburnerGrownInput(
     const raw = readCompetence > 0 ? (actionSkillCompetence(action, person, mults) / readCompetence) * personRatio : 1;
     const ratio = read.chance[1] >= 1 ? Math.min(1, raw) : raw;
     const level = Math.max(read.maxLevel, maxLevelOfSuccesses(action, state.successes[action.name] ?? 0));
+    // Clipped at 1: exact at a true chance (#411's pricing); at the spread's mean, min(1, E × rise) is over
+    // E[min(1, chance × rise)] past the cap (Jensen), optimistic there.
     const chance = Math.min(1, (read.chance[0] / penalty) * ratio * action.difficultyFac ** (read.level - level));
     return { ...read, level, maxLevel: level, chance: [chance, chance] };
   });
@@ -284,8 +286,11 @@ export function blackOpsRouteGrownEstimate(
   }: {
     rank: number;
     next: BladeburnerBlackOp;
-    /** The next one's range read: the population's ratio from it (#411); every Black Op priced at its formula. */
-    chanceRead?: readonly [number, number];
+    /**
+     * The next one's range read: the population's ratio from it (#411); every Black Op priced at its formula. Required
+     * (#414's round 2: the brain's call had dropped it, so every action was priced over the spread).
+     */
+    chanceRead: readonly [number, number];
     firstToRankSeconds?: number | null;
   },
   {

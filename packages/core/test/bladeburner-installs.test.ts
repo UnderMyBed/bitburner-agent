@@ -14,6 +14,7 @@ import {
   bladeburnerTailRate,
   chooseBladeburnerAction,
   maxStaminaOf,
+  populationRatioOfBlackOpRange,
 } from "../src/bladeburner-actions.ts";
 import { BLADEBURNER_BLACK_OPS, type BladeburnerBlackOp, blackOpSuccessChance } from "../src/bladeburner-black-ops.ts";
 import { blackOpsRouteGrownEstimate } from "../src/bladeburner-growth.ts";
@@ -414,7 +415,7 @@ describe("the route's estimate with an install (#404, #408)", () => {
   });
 });
 
-describe("bn6-install's reading (#411): EsperTech a tie by #406's rule, the shop far past it", () => {
+describe("bn6-install's reading (#411): an undercount, EsperTech and the shop each installed past #406's margin", () => {
   /** The suite's first reading in BN6.1 (seed 1): rank 1,000, Blade's Intuition 10, 208 points, Tracking's max 5. */
   const READ: [string, number, number, [number, number]][] = [
     ["Tracking", 5, 49.041, [0.4191381000451312, 1]],
@@ -462,7 +463,19 @@ describe("bn6-install's reading (#411): EsperTech a tie by #406's rule, the shop
   };
   const growth = { costMultiplier: 1, points: 208 };
 
-  test("EsperTech: installing leads by less than the step's error of the difference, so kept; the shop: installed", () => {
+  // Ruling 3 pinned EsperTech kept here (0.90 h ahead against 1.15 h), its chances at their expected over the range;
+  // since ruling 4 they're at the true population, recovered from Typhoon's range: pop/popEst 1.90, an undercount,
+  // where that pricing was optimistic, so keeping rose (76.7 h to 82.3 h) and EsperTech now leads past its margin. A pin
+  // of one reading's figures, inverted; the margin's keep side is the constructed reading of #406's rule's test
+  // (combat 108, core's bladeburner-growth.test.ts: 20.4 min ahead against 33.9 min, kept).
+  test("Typhoon's range an undercount; EsperTech: installing leads past the step's error of the difference; the shop too", () => {
+    const formula = blackOpSuccessChance(at.next, person, {
+      penalty: 1,
+      skills: bladeburnerSkillMultsOf({ "Blade's Intuition": 10 }),
+    });
+    const ratio = populationRatioOfBlackOpRange(at.chanceRead, formula) as number;
+    expect(ratio).toBeCloseTo(at.chanceRead[1] / at.chanceRead[0], 9);
+    expect(ratio).toBeGreaterThan(1);
     const esper = blackOpsInstallTiming({
       input,
       at,
@@ -482,15 +495,14 @@ describe("bn6-install's reading (#411): EsperTech a tie by #406's rule, the shop
     });
     const shopLead = shop.keepSeconds - (shop.installNowSeconds as number);
     console.log(
-      `bn6-install's reading: keep ${(esper.keepSeconds / 3600).toFixed(1)} h; EsperTech install now ` +
+      `bn6-install's reading: pop/popEst ${ratio.toFixed(3)} recovered; keep ${(esper.keepSeconds / 3600).toFixed(1)} h; EsperTech install now ` +
         `${((esper.installNowSeconds as number) / 3600).toFixed(1)} h, ${(lead / 3600).toFixed(2)} h ahead against a margin of ` +
         `${((esper.marginSeconds as number) / 3600).toFixed(2)} h: ${esper.choice}; the shop ` +
         `${((shop.installNowSeconds as number) / 3600).toFixed(1)} h, ${(shopLead / 3600).toFixed(1)} h ahead against ` +
         `${((shop.marginSeconds as number) / 3600).toFixed(2)} h: ${shop.choice}`,
     );
-    expect(lead).toBeGreaterThan(0);
-    expect(lead).toBeLessThanOrEqual(esper.marginSeconds as number);
-    expect(esper.choice).toBe("keep");
+    expect(lead).toBeGreaterThan(esper.marginSeconds as number);
+    expect(esper.choice).toBe("install");
     expect(shopLead).toBeGreaterThan(shop.marginSeconds as number);
     expect(shop.choice).toBe("install");
   });

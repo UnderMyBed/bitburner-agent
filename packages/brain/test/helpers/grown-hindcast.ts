@@ -56,37 +56,37 @@ export interface GrownHindcastRow {
  */
 export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
   "B2's hour from a harness join": {
-    ratio: 0.49,
+    ratio: 0.46,
     within: false,
-    expected: 2.64,
+    expected: 2.38,
     expectedWithin: false,
     why:
       "realised: no Raid success in 23 attempts at rank 0; expected out: those attempts' chances give 71.6 rank against " +
       "5.1 realised, in jumps of 55 at rank 0 where a failure loses none, so the expected rank in the window is a " +
       "lottery's mean and the estimate's first-passage time to it is long against the fixed window (#411's diagnosis)",
   },
-  "B3's hour at rank 150": { ratio: 1.07, within: true, expected: 0.93, expectedWithin: true },
+  "B3's hour at rank 150": { ratio: 0.92, within: true, expected: 0.79, expectedWithin: true },
   "B4's hour, its chaos edited": {
-    ratio: 2.38,
+    ratio: 2.15,
     within: false,
-    expected: 0.95,
+    expected: 0.84,
     expectedWithin: true,
     why: "realised: one Raid success in 12 attempts gave 54 of its 68 rank (σ 35, section 8's own line)",
   },
   "B5's Typhoon": {
-    ratio: 2.02,
+    ratio: 2.01,
     within: false,
-    expected: 0.98,
+    expected: 0.97,
     expectedWithin: true,
     why: "realised: Typhoon done at its first attempt, its chance 0.48",
   },
-  "B5's climb to Zero": { ratio: 1.17, within: true, expected: 1.16, expectedWithin: true },
+  "B5's climb to Zero": { ratio: 0.99, within: true, expected: 0.99, expectedWithin: true },
   "B6's Daedalus": { ratio: 0.96, within: true, expected: 0.96, expectedWithin: true },
   // BN7's (#411): the same suites at BN7's multipliers.
   "B2's hour from a harness join, BN7": {
-    ratio: 2.93,
+    ratio: 2.66,
     within: false,
-    expected: 1.67,
+    expected: 1.5,
     expectedWithin: true,
     why: "realised: two Raid successes in 15 attempts gave 36 of its 44 rank (σ 22, section 8's own line)",
   },
@@ -281,6 +281,9 @@ export async function grownHindcastIn(
     await attemptsIn(fresh.simulation, start.receivedAtMs, untilMs),
     bitNode,
   );
-  const from = `from the reading ${((start.receivedAtMs - fromMs) / 1000).toFixed(0)} s in, in ${city ?? "its city"}`;
+  const from =
+    inCity === undefined
+      ? `from the window's first reading: none in ${city ?? "the attempts' city (no attempt)"}`
+      : `from the reading ${((start.receivedAtMs - fromMs) / 1000).toFixed(0)} s in, in ${city}`;
   return { ...hindcast, line: `${hindcast.line} (${from})` };
 }
