@@ -513,9 +513,10 @@ export interface BladeburnerRuleInput {
  * the next Black Op's range read, one end its formula (`Actions/BlackOperation.ts:55-61`, `Actions/Action.ts:145-166`),
  * so each chance is the one the game draws against; where it can't be (no Black Op read, or its scaled end clipped at
  * 1), the mean over the estimate's own spread at a start (`City.ts:19-23`), labelled there (optimistic at an
- * undercount, pessimistic at an overcount): the expected chance, not the low end (#415's decision, from the bn6 sims'
- * figures: the brain README's "the chance"). Every replay of the rules (the run report's, the route's) takes this too,
- * so it chooses as the brain chose.
+ * undercount, pessimistic at an overcount): the expected chance, not the low end. Labelled, #415's decision on the bn6
+ * sims' figures (seed 1, the ratio forced unrecovered, each hour's rank expected given the attempts made): B2's hour
+ * 78.0 at the spread's mean against 75.9 at the low end (84.1 recovered), B3's 239.5 against 182.5 (227.1). Every
+ * replay of the rules (the run report's, the route's) takes this too, so it chooses as the brain chose.
  */
 export function bladeburnerRuleInputOf(
   reading: BladeburnerActionsReading,

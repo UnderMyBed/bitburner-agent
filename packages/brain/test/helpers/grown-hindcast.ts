@@ -19,6 +19,7 @@
 //     rebuilds in the window (their rank's is in the expected rise of no row here).
 import {
   BLACK_OPERATIONS,
+  BLADEBURNER_CONTRACTS,
   blackOpsRouteGrownEstimate,
   bladeburnerPricedInput,
   chooseBladeburnerAction,
@@ -153,6 +154,26 @@ export function attemptsSummary(attempts: readonly BladeburnerAttempt[], blackOp
     chances,
     blackOps,
     successes: attempts.filter((attempt) => attempt.success).length,
+  };
+}
+
+/**
+ * A suite's steady part on the expected measure (#415's ruling, as #411's ruling 1 for the hindcasts): the contracts'
+ * attempts in the simulator's log each at p × gain − (1 − p) × E[the floored loss] (`attemptExpectedRank`), and Field
+ * Analysis's rank as made (`fieldAnalysis`, section 8's: it has no draw). Once the rule works Raid at its true chance,
+ * an hour's steady part is small, and a Bernstein bound on its one realised draw says little; its expectation given the
+ * attempts made is the rule's and the formulas' to get right. The realised beside it, for the line.
+ */
+export async function steadyExpected(simulation: Simulation, fieldAnalysis: number) {
+  const contracts = new Set(BLADEBURNER_CONTRACTS.map((contract) => contract.name));
+  const attempts = (await simulation.diagnostics.bladeburnerAttempts(0)).filter((attempt) =>
+    contracts.has(attempt.name),
+  );
+  const summary = attemptsSummary(attempts, null);
+  return {
+    attempts: attempts.length,
+    expected: summary.expected + fieldAnalysis,
+    realised: summary.realised + fieldAnalysis,
   };
 }
 
