@@ -1335,4 +1335,24 @@ describe("BN6's route, the Black Ops' (#398)", () => {
     expect(events.map((each) => [each.moment, each.atLeast])).toEqual([["start", true]]);
     expect(events[0]?.terms[0]).toMatchObject({ term: "BO", ms: null });
   });
+
+  test("BN7's the same route (#411): its wait said in BN7, then BO", () => {
+    const { rule, events, log } = ruleOf();
+    const at = (minute: number, figures: DestroyBlackOpsInputs | null) =>
+      rule.update({
+        slowData: slow(minute, resetInfo(0, 0, 7, { 1: 3, 2: 3, 4: 3, 5: 1 }, {})),
+        slowGameTimeMs: m(minute),
+        slowAtMs: m(minute),
+        factionChoice: null,
+        levelling: levellingView(),
+        nowMs: m(minute),
+        blackOps: figures,
+      });
+    at(1, null);
+    expect(log).toEqual([
+      "destroy estimate: the start in BN7 waits for the division's reading (#398), 13 min online at most",
+    ]);
+    at(2, blackOps(0, 300));
+    expect(events.map((each) => [each.moment, each.bitNode, each.terms[0]?.term])).toEqual([["start", "BN7.1", "BO"]]);
+  });
 });

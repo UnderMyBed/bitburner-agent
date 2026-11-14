@@ -1,5 +1,5 @@
 // #408's hindcast: the route's grown estimate from a suite's first reading against the rank the suite measured over its
-// game time (B2-B6's BN6 simulator suites). The estimate's time to a rank under the next Black Op's is the least of
+// game time (B2-B6's BN6 simulator suites, and since #411 B8's BN7 two at its multipliers). The estimate's time to a rank under the next Black Op's is the least of
 // its growth's tail (the path, linear between its steps) and B5's stock (the rule's least expected time to it, core's
 // `chooseBladeburnerAction` under that target), as the estimate takes the next one's rank; to the next one done, that
 // and its attempts. Decision 68's tolerance is ×2. #409's review: each suite asserts its row's side of ×2 against
@@ -36,6 +36,13 @@ export const GROWN_HINDCASTS: Readonly<Record<string, { ratio: number; within: b
   "B5's Typhoon": { ratio: 1.95, within: true },
   "B5's climb to Zero": { ratio: 1.62, within: true },
   "B6's Daedalus": { ratio: 0.93, within: true },
+  // BN7's (#411): the same suites at BN7's multipliers.
+  "B2's hour from a harness join, BN7": {
+    ratio: 4.28,
+    within: false,
+    why: "two Raid successes in 15 attempts gave 36 of its 44 rank (σ 22, section 8's own line); the hour's Field Analysis and Tracking 8.3 against 6.8 forecast",
+  },
+  "B6's Daedalus, BN7": { ratio: 0.95, within: true },
 };
 
 /** A hindcast's figures: the measured game ms, the estimate's (and its two parts'), their ratio, and its line. */
@@ -62,16 +69,18 @@ function pathSecondsTo(path: readonly { rank: number; seconds: number }[], rank:
 }
 
 /**
- * The hindcast from `mediumData`'s reading in BN6 (`label` names the suite): to rank `to` (under the next Black Op's)
- * where given, else to the next Black Op done; against `measuredMs` of game time.
+ * The hindcast from `mediumData`'s reading in `bitNode` (BN6's suites; BN7's at its multipliers since #411; `label`
+ * names the suite): to rank `to` (under the next Black Op's) where given, else to the next Black Op done; against
+ * `measuredMs` of game time.
  */
 export function grownHindcast(
   label: string,
   mediumData: MediumSnapshotData | null,
   measuredMs: number,
   to: number | "next done",
+  bitNode = 6,
 ): GrownHindcast & { label: string } {
-  const route = blackOpsInstallFiguresOf(mediumData, 6)?.route;
+  const route = blackOpsInstallFiguresOf(mediumData, bitNode)?.route;
   if (route == null) throw new Error(`${label}: no route's figures in the reading`);
   const { input, at, combat, growth } = route;
   const grown = blackOpsRouteGrownEstimate(input, at, { combat, ...growth });

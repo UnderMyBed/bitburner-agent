@@ -75,14 +75,14 @@ export function worldDaemonRequiredLevel(currentNode: number, ownedSF: Readonly<
 }
 
 /**
- * The BitNodes whose route to the destroy the estimate models: Daedalus's (#360), BN2's gang (#357), and BN6's Black
- * Ops (#398).
+ * The BitNodes whose route to the destroy the estimate models: Daedalus's (#360), BN2's gang (#357), and the Black Ops
+ * in BN6 (#398) and BN7 (#411, at its own multipliers).
  */
-export const DESTROY_ESTIMATE_BITNODES: readonly number[] = [1, 2, 4, 5, 6];
+export const DESTROY_ESTIMATE_BITNODES: readonly number[] = [1, 2, 4, 5, 6, 7];
 
 /**
  * A BitNode's route to the destroy, as the estimate models it: Daedalus's count to The Red Pill, the gang's faction's
- * (BN2), or the Black Ops (BN6, #398).
+ * (BN2), or the Black Ops (BN6 and BN7, #398, #411).
  */
 export type DestroyRoute = "daedalus" | "gang" | "blackOps";
 

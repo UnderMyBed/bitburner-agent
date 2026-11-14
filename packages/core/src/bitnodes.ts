@@ -70,7 +70,7 @@ function redPillRouteProblem(standing: WorldDaemonStanding | null): string | nul
  */
 export type WinRoute = "redPill" | "blackOps";
 
-/** The BitNodes whose win route is the Black Ops (#398): BN6, and BN7 once Bladeburner's B8 makes it playable. */
+/** The BitNodes whose win route is the Black Ops (#398, #411): BN6 and BN7, each skipped while past the bar. */
 export const BLACK_OPS_ROUTE_BITNODES: readonly number[] = [6, 7];
 
 /** `bitNode`'s win route (#398). */
@@ -201,16 +201,37 @@ export function knownBitNodes(): number[] {
  * installed at once: optimistic, which only strengthens "past the bar". So 67.7 h at best, ×1.25 the bar: still past
  * it. What's left, each a later slice's: the other factions' augmentations that move the route (the upper bound's
  * 31 h) and the money for them; more than one install; the Black Ops' own chances (B3's rule buys the skills for the
- * actions' rank a second, so the last Black Ops run at 5% and their attempts are a large part of the route); teams. BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is B8's.
+ * actions' rank a second, so the last Black Ops run at 5% and their attempts are a large part of the route); teams.
+ *
+ * BN7's (B8, #411) is the same route at BN7's multipliers (`BitNode.tsx:728-769`). Those the route reads: the rank
+ * gained, `BladeburnerRank` 0.6 (`:756`; `Bladeburner/Formulas.ts:13`, `:22`, `:25`, the losses unscaled, so the
+ * Bladeburners' reputation, 2 × the rank gained, `:46-49`, comes slower by time, not by rank); the skills' cost,
+ * `BladeburnerSkillCost` 2 (`:757`; `Bladeburner/Skill.ts:76-80`, `:122`); the augmentations' money, ×3
+ * (`AugmentationMoneyCost`, `:745`; `Augmentation/AugmentationHelpers.ts:136`, `:157`), their reputation ×1. Core has
+ * each (`bladeburnerRankMultiplierOf`, `bladeburnerSkillCostMultiplierOf`, `augmentationBitNodeMultipliers`), and the
+ * brain's route, its grown estimate, B3's skills and B7's installs take them by the BitNode; the rest of the row is
+ * BN6's but for `ScriptHackMoney` 0.5, the 4S data's ×2 and Stanek's, none read by the route (brain's
+ * bladeburner-bn7-parity.test.ts checks every multiplier of both against the engine, and says why for each the route
+ * doesn't read). At a BN7.1 start (rank 0, combat 100 and 300 at SF1.3's ×1.28: the campaign enters BN7.1 without SF6
+ * while BN6 is skipped) the grown estimate is 183.7 h at combat 100 and 143.5 h at 300 as is (BN6's 98.2 h and
+ * 78.6 h: the rank ×0.6 and the skills ×2 only lengthen it); with the Bladeburners' shop installed, B7's choice with
+ * #406's margin, 108.9 h at combat 100 (its rebuild half an hour) and 139.6 h at 300 (its rebuild 42 h); with every
+ * augmentation that moves the route, the upper bound (BigD's Big ... Brain among them, sold by no faction in BN7, and
+ * none of their prices, ×3 here, counted), 40.5 h (core's bladeburner-growth.test.ts). The shop priced as BN6's (at
+ * rank 0, neither its reputation nor its money ×3 counted): optimistic, which only strengthens "past the bar". So
+ * 108.9 h at best, ×2.0 the bar: unplayable. What's left is BN6's list, with the money ×3 and the rank ×0.6 on each.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [
     6,
     "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408)",
   ],
-  [7, "no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8)"],
+  [
+    7,
+    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411)",
+  ],
 ]);
-/** Why BN7 is skipped until Bladeburner's B8 (#367, #398). */
+/** Why BN7 is skipped (#367, #398, #411): the Black Ops' grown estimate at its multipliers past the bar, the shop in. */
 export const BITNODE_NO_WIN_ROUTE_REASON = NO_WIN_ROUTE.get(7) as string;
 /** Why BN6 is skipped (#398, #404, #408): the Black Ops' grown estimate past the campaign's bar, the shop installed. */
 export const BITNODE_BLACK_OPS_ESTIMATE_REASON = NO_WIN_ROUTE.get(6) as string;

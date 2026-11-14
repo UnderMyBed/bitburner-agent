@@ -319,8 +319,8 @@ const bn2Exp = (level: number) => hackingExpOfLevel(level, BN2_LEVEL_MULT);
 const SEED_1_RATE = (bn2Exp(212) - bn2Exp(201)) / (24 * 60 + 31);
 
 describe("BN2's route, the gang's (#357's slice 3)", () => {
-  test("the routes: Daedalus's in BN1, BN4 and BN5, the gang's in BN2, the Black Ops' in BN6 (#398), none elsewhere", () => {
-    expect(DESTROY_ESTIMATE_BITNODES).toEqual([1, 2, 4, 5, 6]);
+  test("the routes: Daedalus's in BN1, BN4 and BN5, the gang's in BN2, the Black Ops' in BN6 (#398) and BN7 (#411), none elsewhere", () => {
+    expect(DESTROY_ESTIMATE_BITNODES).toEqual([1, 2, 4, 5, 6, 7]);
     expect([1, 2, 3, 4, 5, 6, 7, 12].map(destroyRouteOf)).toEqual([
       "daedalus",
       "gang",
@@ -328,7 +328,7 @@ describe("BN2's route, the gang's (#357's slice 3)", () => {
       "daedalus",
       "daedalus",
       "blackOps",
-      null,
+      "blackOps",
       null,
     ]);
   });

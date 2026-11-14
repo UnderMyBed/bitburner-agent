@@ -1,6 +1,7 @@
 // BN6's win route (#398, Bladeburner's B6 of #359): the Black Ops to the destroy, as the World Daemon's path shows it
-// (./world-daemon.ts), from the medium snapshot's Bladeburner reading. Core has the formulas
-// (../../core/src/bladeburner-route.ts); paths are `vendor/bitburner-src/src/`'s.
+// (./world-daemon.ts), from the medium snapshot's Bladeburner reading; BN7's the same at its own `BladeburnerRank` and
+// `BladeburnerSkillCost` (#411, B8: core's `bladeburnerRankMultiplierOf`, `bladeburnerSkillCostMultiplierOf`, by the
+// BitNode). Core has the formulas (../../core/src/bladeburner-route.ts); paths are `vendor/bitburner-src/src/`'s.
 // - **Where it stands:** the rank against Operation Daedalus's 400,000, the last (`data/BlackOperations.ts:704-735`),
 //   the Black Ops done (the next one's place in the 21; none next once all are, `NetscriptFunctions/Bladeburner.ts:
 //   88-96`), the next one's rank and its chance's low end read (B5's, the stamina's penalty out), and the ETA to
@@ -357,10 +358,10 @@ export function blackOpsInstallFiguresOf(
 
 /**
  * The grown estimate's figures stand this long between solves (#408): it solves the tail's linear programme about 500
- * times and B3's rule at each step, about 0.15 s at a BN6.1 start (rank 0) and 0.05 s late (rank 295,000, 44 solves;
- * #409's review: the steps are fewer there; core's bladeburner-growth.test.ts), against a route of tens of hours,
- * which 10 min of play moves by under 1%, its own step's error (2%). A new Black Op next or an install solves it at
- * once.
+ * times and B3's rule at each step, about 0.15 s at a BN6.1 start (rank 0; about 0.2 s at BN7.1's, 570 mixes, #411)
+ * and 0.05 s late (rank 295,000, 44 solves; #409's review: the steps are fewer there; core's bladeburner-growth.test.ts),
+ * against a route of tens of hours, which 10 min of play moves by under 1%, its own step's error (2%). A new Black Op
+ * next or an install solves it at once.
  */
 export const BLACK_OPS_GROWN_REFRESH_MS = 10 * 60_000;
 

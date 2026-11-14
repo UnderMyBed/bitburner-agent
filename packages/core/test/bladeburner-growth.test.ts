@@ -1,7 +1,8 @@
 // Bladeburner #408: the Black Ops' route's estimate with the competence's growth. The tail's mix (the linear
 // programme's primal) against its dual, B3's forecast to the bit, the game's experience and levels by hand, the input at
 // a state against the game's own formulas there, the integration (with no growth B6's; each growth only shortens it;
-// its step), a seeded walk of the game's attempts, the install choice on both sides, and BN6's playability.
+// its step), a seeded walk of the game's attempts, the install choice on both sides, and BN6's and (#411) BN7's
+// playability.
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { AUGMENTATIONS } from "../src/augmentation-data.ts";
@@ -17,6 +18,7 @@ import {
   type BladeburnerPerson,
   bladeburnerForecastRater,
   bladeburnerLevelledAction,
+  bladeburnerRankMultiplierOf,
   bladeburnerTailMix,
   bladeburnerTailRate,
   chooseBladeburnerAction,
@@ -54,6 +56,7 @@ import {
 import { blackOpsRouteEstimate } from "../src/bladeburner-route.ts";
 import {
   BLADEBURNER_SKILL_NAMES,
+  bladeburnerSkillCostMultiplierOf,
   bladeburnerSkillMultsOf,
   cheapestBladeburnerSkillLevel,
 } from "../src/bladeburner-skills.ts";
@@ -800,6 +803,59 @@ describe("BN6's playability by the grown estimate (#408): within ×2 of the slow
       );
       expect(keep).toBeGreaterThan(BAR_SECONDS);
       expect(Math.min(keep, shopNow)).toBeGreaterThan(BAR_SECONDS);
+    }
+    console.log(`${rows.join("\n")}\nthe bar ${(BAR_SECONDS / HOUR).toFixed(2)} h`);
+  });
+});
+
+describe("BN7's playability by the grown estimate (#411): the same route at its own multipliers, against the same bar", () => {
+  /** The bar: BN4.1's 27 h 5 min online, the slowest destroy in the campaign report (2026-11-12), twice. */
+  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
+
+  test("at a BN7.1 start (rank 0, combat 100 and 300), rank ×0.6 and skills ×2: as is, the shop and every one", () => {
+    const rankMultiplier = bladeburnerRankMultiplierOf(7) as number;
+    const costMultiplier = bladeburnerSkillCostMultiplierOf(7) as number;
+    expect([rankMultiplier, costMultiplier]).toEqual([0.6, 2]);
+    const growth = { costMultiplier };
+    const rows: string[] = [];
+    for (const combat of [100, 300]) {
+      const { combat: figures, input: read, at } = startAt(combat);
+      const input = { ...read, rankMultiplier };
+      const started = performance.now();
+      const route = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier });
+      const ms = performance.now() - started;
+      const bn6 = blackOpsRouteGrownEstimate(read, at, { combat: figures, costMultiplier: 1 }).seconds;
+      const rankAlone = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier: 1 }).seconds;
+      const costAlone = blackOpsRouteGrownEstimate(read, at, { combat: figures, costMultiplier }).seconds;
+      const choosing = performance.now();
+      const shop = blackOpsInstallTiming({
+        input,
+        at,
+        combat: figures,
+        gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", 7, null)),
+        installable: true,
+        growth,
+      });
+      const choiceMs = performance.now() - choosing;
+      // B7's choice with #406's margin: installing only where it beats keeping by more than the step's error.
+      const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
+      const every = blackOpsInstallTiming({ input, at, combat: figures, gain: EVERY(), installable: true, growth });
+      const everyNow = every.installNowSeconds as number;
+      rows.push(
+        `combat ${combat}: as is ${(route.seconds / HOUR).toFixed(1)} h (BN6's ${(bn6 / HOUR).toFixed(1)} h, the rank alone ` +
+          `${(rankAlone / HOUR).toFixed(1)} h, the skills alone ${(costAlone / HOUR).toFixed(1)} h); ` +
+          `the shop ${shop.choice} ${(shopSeconds / HOUR).toFixed(1)} h (keep ${(shop.keepSeconds / HOUR).toFixed(1)} h, ` +
+          `install now ${((shop.installNowSeconds as number) / HOUR).toFixed(1)} h, its rebuild ` +
+          `${(shop.rebuildSeconds / HOUR).toFixed(2)} h, the margin ${((shop.marginSeconds ?? 0) / 60).toFixed(1)} min); ` +
+          `every one ${(everyNow / HOUR).toFixed(1)} h (rebuild ${(every.rebuildSeconds / HOUR).toFixed(2)} h); ` +
+          `a solve ${ms.toFixed(0)} ms, ${route.solves} mixes; the shop's choice ${choiceMs.toFixed(0)} ms`,
+      );
+      // Each of BN7's multipliers on the route only lengthens it, alone and together: BN6's at the same state shortest.
+      expect(rankAlone).toBeGreaterThan(bn6);
+      expect(costAlone).toBeGreaterThan(bn6);
+      expect(route.seconds).toBeGreaterThan(Math.max(rankAlone, costAlone));
+      expect(route.seconds).toBeGreaterThan(BAR_SECONDS);
+      expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
     }
     console.log(`${rows.join("\n")}\nthe bar ${(BAR_SECONDS / HOUR).toFixed(2)} h`);
   });

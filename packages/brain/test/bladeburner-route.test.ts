@@ -404,12 +404,15 @@ describe("#408's hindcasts (#409's review): the BN6 suites' share within ×2, th
     expect(within.length / rows.length).toBeGreaterThanOrEqual(DECISION_68_SHARE.within / DECISION_68_SHARE.of);
     // Each row's figure on its side; the one out B4's, with its reason (its suite's section 8 line).
     for (const [label, row] of rows) expect(withinTwice(row.ratio), label).toBe(row.within);
-    expect(rows.filter(([, row]) => !row.within).map(([label]) => label)).toEqual(["B4's hour, its chaos edited"]);
+    expect(rows.filter(([, row]) => !row.within).map(([label]) => label)).toEqual([
+      "B4's hour, its chaos edited",
+      "B2's hour from a harness join, BN7",
+    ]);
     expect(GROWN_HINDCASTS["B4's hour, its chaos edited"]?.why).toContain("Raid");
-    // Every row a BN6 suite's, asserted there on its side (`expectGrownHindcast`); every suite's hindcast a row.
+    // Every row a BN6 or (#411) BN7 suite's, asserted there on its side (`expectGrownHindcast`); every suite's a row.
     const directory = new URL(".", import.meta.url);
     const suites = readdirSync(directory)
-      .filter((name) => /^bn6-.*-simulation\.test\.ts$/.test(name))
+      .filter((name) => /^bn[67]-.*-simulation\.test\.ts$/.test(name))
       .map((name) => readFileSync(new URL(name, directory), "utf8"));
     for (const [label] of rows) {
       expect(

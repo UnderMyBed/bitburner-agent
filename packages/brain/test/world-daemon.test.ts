@@ -307,7 +307,7 @@ describe("the destroy", () => {
 
   test("past the BitNodes the brain can't play yet (#323): BN2.3 into BN5 again, the skipped logged and in the view", () => {
     const skipped =
-      "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+      "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411); " +
       "BN3 skipped: no hacking multipliers or prices yet";
     const bn23 = { currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } };
     expect(update({ slowData: slow(bn23) })).toBe(true);
@@ -696,7 +696,7 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
     "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
     "Source-File 5 at 3), but the run";
   const SKIPPED =
-    "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+    "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411); " +
     "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 " +
     "and BN12 skipped: no hacking multipliers or prices yet";
   const CAPS = { 1: 3, 2: 3, 4: 3, 5: 3 };
@@ -776,7 +776,7 @@ describe("a replay with nothing playable left in the campaign's order to gain (#
       "on (into BitNode 2)",
     );
     expect(describeWorldDaemonSwitch(true, slow({ currentNode: 2, ownedSF: { 1: 3, 4: 3, 5: 1, 2: 2 } }))).toBe(
-      "on (into BitNode 5 (BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: " +
+      "on (into BitNode 5 (BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411); BN3 skipped: " +
         "no hacking multipliers or prices yet))",
     );
     expect(describeWorldDaemonSwitch(true, slow({ ownedSF: CAPS }))).toBe(
@@ -1165,15 +1165,15 @@ describe("the Black Ops' route (#398): BN6", () => {
     expect(bn4.redPill).not.toBeNull();
   });
 
-  test("the destroy only with all 21 done, into the order's next (BN6.1 into BN5 while BN6's estimate is past the bar, BN7 waits for B8), logged; none at 20", () => {
+  test("the destroy only with all 21 done, into the order's next (BN6.1 into BN5 while BN6's and BN7's estimates are past the bar), logged; none at 20", () => {
     expect(bn6({ done: 20, next: { name: "Operation Daedalus", rank: 400_000, chance: 0.5 } })).toBe(false);
     expect(rule.destroyIntent()).toBeNull();
     expect(bn6({ done: 21, next: null, rank: 440_000 })).toBe(true);
     expect(rule.destroyIntent()).toEqual(worldDaemonDestroyIntent(5));
     expect(lines).toEqual([
       "world daemon: all 21 Black Ops done (#398): destroying the BitNode, into BitNode 5 (BN6 skipped: no win route " +
-        "yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the " +
-        "Black Ops at BN7's multipliers, Bladeburner's B8); BN3 skipped: no hacking multipliers or prices yet) (the " +
+        "yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet: the Black Ops' grown " +
+        "estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411); BN3 skipped: no hacking multipliers or prices yet) (the " +
         "gate, then a save backup first)",
     ]);
     // Unread (no reading): none.

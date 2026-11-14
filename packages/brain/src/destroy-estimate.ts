@@ -593,7 +593,7 @@ export class DestroyEstimateRule {
         this.#unmodelledLogged = facts.lastNodeReset;
         this.#log(
           `destroy estimate: none in BitNode ${facts.currentNode}: its route isn't modelled (#360 models Daedalus's, ` +
-            "BN1, BN4 and BN5; #357 BN2's gang; #398 BN6's Black Ops)",
+            "BN1, BN4 and BN5; #357 BN2's gang; #398 and #411 BN6's and BN7's Black Ops)",
         );
       }
       this.#save(note, changed);
@@ -672,7 +672,7 @@ export class DestroyEstimateRule {
         );
       }
     }
-    // BN6 (#398): the cycle's estimate waiting goes once the reading is in, or its bound is past.
+    // BN6 and BN7 (#398, #411): the cycle's estimate waiting goes once the reading is in, or its bound is past.
     if (route === "blackOps" && note.pending !== null) {
       const { pending: waitingFor } = note;
       if ((inputs.blackOps ?? null) !== null || onlineMs - waitingFor.sinceOnlineMs >= DESTROY_ROUTE_WAIT_MS) {
@@ -681,12 +681,13 @@ export class DestroyEstimateRule {
         changed = true;
       } else if (waiting !== null) {
         this.#log(
-          `destroy estimate: the ${waiting.moment} in BN6 waits for the division's reading (#398), ` +
+          `destroy estimate: the ${waiting.moment} in BN${facts.currentNode} waits for the division's reading (#398), ` +
             `${formatDuration(DESTROY_ROUTE_WAIT_MS)} online at most`,
         );
       }
     }
-    // BN6 (#398): each Black Op done, a moment, the route's time from there; the first reading only notes the count.
+    // BN6 and BN7 (#398, #411): each Black Op done, a moment, the route's time from there; the first reading only
+    // notes the count.
     const blackOpsDone = route === "blackOps" ? (inputs.blackOps?.done ?? null) : null;
     if (blackOpsDone !== null && blackOpsDone !== note.blackOpsDone) {
       if (note.blackOpsDone !== null && blackOpsDone > note.blackOpsDone && moments.length === 0) {
