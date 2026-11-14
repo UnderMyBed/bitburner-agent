@@ -1,7 +1,7 @@
 // Bladeburner B7 (#404): augmentations and installs on the Black Ops' route. The gain an install gives the route
-// against core's augmentation data, the person after it, the rebuild by Training, the planner's choice (keep or
-// install now) on both sides, the route's estimate with an install against a seeded walk, and BN6's playability by
-// the estimate with installs against the campaign's bar.
+// against core's augmentation data, the person after it, the rebuild by Training, the forecast at an install's person,
+// and the planner's choice (keep or install now) on both sides, now on the route's grown estimate (#408, whose own tests
+// have its walk, the choice's bias and BN6's playability: bladeburner-growth.test.ts).
 import { describe, expect, test } from "vitest";
 import { AUGMENTATIONS } from "../src/augmentation-data.ts";
 import { augmentationsSoldBy } from "../src/augmentations.ts";
@@ -16,6 +16,7 @@ import {
   maxStaminaOf,
 } from "../src/bladeburner-actions.ts";
 import { BLADEBURNER_BLACK_OPS, type BladeburnerBlackOp, blackOpSuccessChance } from "../src/bladeburner-black-ops.ts";
+import { blackOpsRouteGrownEstimate } from "../src/bladeburner-growth.ts";
 import {
   blackOpsInstallTiming,
   bladeburnerAugmentationValues,
@@ -28,19 +29,9 @@ import {
 import { blackOpsRouteEstimate } from "../src/bladeburner-route.ts";
 import { bladeburnerSkillMultsOf } from "../src/bladeburner-skills.ts";
 
-/** A seeded uniform on [0, 1) (mulberry32): the walk's, the same each run. */
-function seeded(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 const ESPERTECH = "EsperTech Bladeburner Eyewear";
+/** The grown estimate's BN6 figures (#408): its skill cost 1, no points unspent. */
+const GROWTH = { costMultiplier: 1 };
 const GOLEM = "GOLEM Serum";
 const INTERLINKED = "I.N.T.E.R.L.I.N.K.E.D";
 /** SF1.3's ×1.28 on the combat stats' levels and experience (`SourceFile/applySourceFile.ts:14-48`), as B1's suite. */
@@ -275,7 +266,7 @@ describe("the planner's install timing on the route (#404): keep, or install now
 
   test("install now: the rebuild and the route after it, below keeping's: chosen", () => {
     const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", 6, null));
-    const timing = blackOpsInstallTiming({ input, at, combat, gain, installable: true });
+    const timing = blackOpsInstallTiming({ input, at, combat, gain, installable: true, growth: GROWTH });
     expect(timing.rebuildSeconds).toBeCloseTo(bladeburnerRebuildSeconds(combat, { gain, fromZero: true }).seconds, 6);
     expect(timing.installNowSeconds).toBeCloseTo(timing.rebuildSeconds + timing.afterSeconds, 6);
     expect(timing.afterSeconds).toBeLessThan(timing.keepSeconds);
@@ -288,11 +279,11 @@ describe("the planner's install timing on the route (#404): keep, or install now
 
   test("keep: nothing to install; one that moves none of the route's (its rebuild, hacking and charisma lost); a tie", () => {
     const gain = bladeburnerInstallGain(0, [ESPERTECH]);
-    expect(blackOpsInstallTiming({ input, at, combat, gain, installable: false })).toMatchObject({
+    expect(blackOpsInstallTiming({ input, at, combat, gain, installable: false, growth: GROWTH })).toMatchObject({
       installNowSeconds: null,
       choice: "keep",
     });
-    const none = blackOpsInstallTiming({ input, at, combat, gain: NO_INSTALL_GAIN, installable: true });
+    const none = blackOpsInstallTiming({ input, at, combat, gain: NO_INSTALL_GAIN, installable: true, growth: GROWTH });
     expect(none.afterSeconds).toBeGreaterThanOrEqual(none.keepSeconds);
     expect(none.choice).toBe("keep");
     // Never either way (a chance of 0 now and after): a tie, kept.
@@ -301,7 +292,7 @@ describe("the planner's install timing on the route (#404): keep, or install now
       ...input,
       readings: input.readings.map((read) => ({ ...read, chance: [0, 0] as [number, number] })),
     };
-    const tie = blackOpsInstallTiming({ input: weak, at: hopeless, combat, gain, installable: true });
+    const tie = blackOpsInstallTiming({ input: weak, at: hopeless, combat, gain, installable: true, growth: GROWTH });
     expect(tie.keepSeconds).toBe(Number.POSITIVE_INFINITY);
     expect(tie.choice).toBe("keep");
   });
@@ -318,15 +309,22 @@ describe("the planner's install timing on the route (#404): keep, or install now
       gain,
       installable: true,
       levels: targets,
+      growth: GROWTH,
     });
-    const atTargets = blackOpsInstallTiming({ input: inputAt(weak), at, combat: now, gain, installable: true });
+    const atTargets = blackOpsInstallTiming({
+      input: inputAt(weak),
+      at,
+      combat: now,
+      gain,
+      installable: true,
+      growth: GROWTH,
+    });
     const finish = bladeburnerRebuildSeconds(now, { targets }).seconds;
-    const route100 = blackOpsRouteEstimate(
+    // The grown estimate at the targets: the person there, its experience the least for them (#408).
+    const route100 = blackOpsRouteGrownEstimate(
       { ...inputAt(weak), forecast: { ...weak, skills: { ...weak.skills, ...targets } } },
-      {
-        ...at,
-        firstToRankSeconds: null,
-      },
+      at,
+      { combat: combatOf(100), costMultiplier: 1 },
     ).seconds;
     expect(timing.keepSeconds).toBeCloseTo(finish + route100, 3);
     expect(timing.rebuildSeconds).toBeCloseTo(
@@ -345,6 +343,7 @@ describe("the planner's install timing on the route (#404): keep, or install now
       combat: combatOf(1000),
       gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", 6, null)),
       installable: true,
+      growth: GROWTH,
     });
     expect(timing.afterSeconds).toBeLessThan(timing.keepSeconds);
     expect(timing.rebuildSeconds).toBeGreaterThan(timing.keepSeconds);
@@ -355,6 +354,8 @@ describe("the planner's install timing on the route (#404): keep, or install now
     const values = bladeburnerAugmentationValues({
       input,
       at,
+      combat,
+      growth: GROWTH,
       augmentations: [ESPERTECH, "The Blade's Simulacrum", "Hyperion Plasma Cannon V1"],
     });
     expect(values.map((each) => each.augmentation)).toEqual([
@@ -362,106 +363,49 @@ describe("the planner's install timing on the route (#404): keep, or install now
       "The Blade's Simulacrum",
       "Hyperion Plasma Cannon V1",
     ]);
+    // None of the route's multipliers: the same estimate, to the bit.
     expect(values[1]?.savedSeconds).toBe(0);
-    expect(values[0]?.savedSeconds).toBeGreaterThan(0);
-    // Hyperion's 1.06 on the success chance saves more than EsperTech's 1.03 and 1.05 on dexterity, at the same levels.
-    expect(values[2]?.savedSeconds).toBeGreaterThan(values[0]?.savedSeconds as number);
+    // A small one is within the grown estimate's own step (2%, #408's tests): its value is noise there, and the
+    // planner's choice is the whole set's against its rebuild (`blackOpsInstallTiming`).
+    const nothing = blackOpsRouteGrownEstimate(
+      { ...input, forecast: bladeburnerPersonAfterInstall(input.person, NO_INSTALL_GAIN) },
+      at,
+      { combat, costMultiplier: 1 },
+    ).seconds;
+    for (const value of values) expect(Math.abs(value.savedSeconds)).toBeLessThan(0.2 * nothing);
+    console.log(
+      values.map((each) => `${each.augmentation} ${((each.savedSeconds / nothing) * 100).toFixed(1)}%`).join(", "),
+    );
   });
 });
 
-describe("the route's estimate with an install, against a seeded walk (#404)", () => {
-  test("the rebuild, then the Black Ops left at the install's person: within four standard errors and 1%", () => {
-    const strong = person(5000);
+describe("the route's estimate with an install (#404, #408)", () => {
+  test("the rebuild, then the grown estimate at the install's person: its experience from 0 at the gain's multipliers", () => {
+    // At combat 300, its combat figures' own (the growth reads the level multipliers times the gain).
+    const strong = person(300);
     const levels = { "Blade's Intuition": 40, Overclock: 50 };
     const ultron = BLADEBURNER_BLACK_OPS[17] as BladeburnerBlackOp;
     const input = inputAt(strong, levels, 5);
     const at = routeAt(strong, ultron, 240_000, levels);
     const gain = bladeburnerInstallGain(0, ["Hyperion Plasma Cannon V1", ESPERTECH]);
     const combat = combatOf(300);
-    const timing = blackOpsInstallTiming({ input, at, combat, gain, installable: true });
-    const after = blackOpsRouteEstimate(
-      { ...input, forecast: bladeburnerPersonAfterInstall(strong, gain) },
-      { ...at, firstToRankSeconds: null },
-    );
+    const timing = blackOpsInstallTiming({ input, at, combat, gain, installable: true, growth: GROWTH });
+    const after = blackOpsRouteGrownEstimate({ ...input, forecast: bladeburnerPersonAfterInstall(strong, gain) }, at, {
+      combat: {
+        skills: combat.skills,
+        exp: Object.fromEntries(
+          COMBAT_STATS.map((stat) => [stat, skillExpFor(300, SF1_3 * gain.levels[stat])]),
+        ) as CombatPerson["exp"],
+        mults: Object.fromEntries(
+          COMBAT_STATS.flatMap((stat) => [
+            [stat, SF1_3 * gain.levels[stat]],
+            [`${stat}_exp`, SF1_3 * gain.exp[stat]],
+          ]),
+        ) as CombatPerson["mults"],
+      },
+      costMultiplier: 1,
+    });
     expect(timing.afterSeconds).toBe(after.seconds);
-    // The walk: the rebuild (Training's, no rank), then the rank at the sustainable rate ρ a second between the Black
-    // Ops (its mean, Wald's), each attempt its seconds, a success its gain and a failure its loss, ±10% uniform.
-    const random = seeded(404);
-    const runs = 20_000;
-    const offset = () => 0.9 + 0.2 * random();
-    const times: number[] = [];
-    for (let run = 0; run < runs; run++) {
-      let time = timing.rebuildSeconds;
-      let rank = at.rank;
-      let next = 0;
-      while (next < after.steps.length) {
-        const op = after.steps[next] as (typeof after.steps)[number];
-        if (rank < op.rank) {
-          time += (op.rank - rank) / after.rate;
-          rank = op.rank;
-        }
-        time += op.seconds;
-        if (random() < op.chance) {
-          rank += op.gain * offset();
-          next += 1;
-        } else rank = Math.max(0, rank - op.loss * offset());
-      }
-      times.push(time);
-    }
-    const mean = times.reduce((a, b) => a + b, 0) / runs;
-    const variance = times.reduce((a, b) => a + (b - mean) ** 2, 0) / (runs - 1);
-    const standardError = Math.sqrt(variance / runs);
-    const estimate = timing.installNowSeconds as number;
-    console.log(
-      `with an install: ${(estimate / 3600).toFixed(2)} h by the sum (rebuild ${(timing.rebuildSeconds / 3600).toFixed(2)} h); ` +
-        `the walk ${(mean / 3600).toFixed(2)} ± ${(standardError / 3600).toFixed(3)} h (${runs} runs), ` +
-        `${(((estimate - mean) / mean) * 100).toFixed(2)}%`,
-    );
-    expect(Math.abs(estimate - mean)).toBeLessThan(4 * standardError);
-    expect(Math.abs(estimate - mean) / mean).toBeLessThan(0.01);
-  });
-});
-
-describe("BN6's playability by the estimate with installs (#404): within ×2 of the slowest destroy so far, or not", () => {
-  /** The bar: BN4.1's 27 h 5 min online, the slowest destroy in the campaign report (2026-11-12), twice. */
-  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
-
-  test("at B6's BN6.1 states (rank 0, combat 100 and 300, no skills), the whole shop installed: past the bar", () => {
-    const shop = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", 6, null));
-    // Every augmentation in the game with a multiplier the route reads, all at once: an upper bound on what installs can
-    // bring here (#407's review: BigD's Big ... Brain among them, sold by no faction in BN6).
-    const every = bladeburnerInstallGain(
-      0,
-      Object.keys(AUGMENTATIONS).filter((name) => {
-        const { multipliers } = AUGMENTATIONS[name] as { multipliers: Record<string, number> };
-        return (
-          name !== "NeuroFlux Governor" &&
-          [...COMBAT_STATS, "bladeburner_success_chance", "bladeburner_max_stamina", "bladeburner_stamina_gain"].some(
-            (key) => (multipliers[key] ?? 1) > 1,
-          )
-        );
-      }),
-    );
-    for (const combat of [100, 300]) {
-      const who = { ...person(combat), skills: { ...person(combat).skills, charisma: 1 } };
-      const at = routeAt(who, BLADEBURNER_BLACK_OPS[0] as BladeburnerBlackOp, 0);
-      for (const [label, gain] of [
-        ["the Bladeburners' shop", shop],
-        ["every one", every],
-      ] as const) {
-        const timing = blackOpsInstallTiming({
-          input: inputAt(who),
-          at,
-          combat: combatOf(combat),
-          gain,
-          installable: true,
-        });
-        console.log(
-          `combat ${combat}, ${label} installed: ${((timing.installNowSeconds as number) / 3600).toPrecision(4)} h ` +
-            `(keep ${(timing.keepSeconds / 3600).toPrecision(4)} h); the bar ${(BAR_SECONDS / 3600).toFixed(1)} h`,
-        );
-        expect(timing.installNowSeconds as number).toBeGreaterThan(100 * BAR_SECONDS);
-      }
-    }
+    expect(timing.installNowSeconds).toBe(timing.rebuildSeconds + after.seconds);
   });
 });

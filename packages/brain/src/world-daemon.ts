@@ -566,12 +566,21 @@ export function describeBlackOpsRoute(view: BlackOpsRouteView | null): string[] 
     view.redPillSeconds === null
       ? "not measured (no hacking experience rate yet)"
       : `at least ${aboutSeconds(view.redPillSeconds)} (${WORLD_DAEMON}'s hacking level alone, by the formulas)`;
-  const planner =
-    `the planner (#398): the Black Ops' ${estimate === null ? "not estimated yet" : aboutSeconds(estimate.seconds)}` +
+  const flat =
+    (estimate === null ? "not estimated yet" : aboutSeconds(estimate.seconds)) +
     (estimate === null || estimate.steps.length === 0
       ? ""
       : ` (the next one's rank by B5's stock and tail, each later one's at ${rankPerMinute(estimate.rate)} ` +
-        "sustainable, each one's attempts at the competence now)") +
+        "sustainable, each one's attempts at the competence now)");
+  // The competence's growth (#408), where the combat figures are read: the planner's, B6's at the competence now beside.
+  const grown = view.grown;
+  const planner =
+    "the planner (#398): the Black Ops' " +
+    (grown === null || grown.steps.length === 0
+      ? flat
+      : `${aboutSeconds(grown.seconds)} with the competence's growth (#408: the skills from the rank, the stats from ` +
+        `the actions, the levels from the successes; the last one at ${(100 * (grown.steps.at(-1)?.chance ?? 0)).toFixed(1)}%), ` +
+        `${estimate === null ? "B6's not estimated yet" : `${aboutSeconds(estimate.seconds)} at the competence now (B6's)`}`) +
     `; ${THE_RED_PILL}'s ${redPill}${view.choice.redPillHopeless === true ? ", hopeless" : ""}: ` +
     `${view.choice.route === "blackOps" ? "the Black Ops" : THE_RED_PILL} chosen (${view.choice.why})` +
     // Shown, not acted on (#400's review): the route played is `winRouteOf`'s, fixed per BitNode.

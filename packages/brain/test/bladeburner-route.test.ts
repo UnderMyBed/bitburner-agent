@@ -3,7 +3,7 @@
 // this route only, and the controller: the destroy asked for only with all 21 done, in BN6 alone. Core's sum and its
 // walk are core's bladeburner-route.test.ts; the rule's stalls world-daemon.test.ts's; the destroy itself in the
 // engine bn6-destroy-simulation.test.ts's.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
@@ -19,28 +19,41 @@ import {
   blackOpSeconds,
   blackOpStaminaCost,
   blackOpsRouteEstimate,
+  blackOpsRouteGrownEstimate,
   bladeburnerLevelledAction,
   bladeburnerSkillMultsOf,
   CONTROL_PROTOCOL_VERSION,
   chooseBladeburnerAction,
+  chooseWinRoute,
   climbRiseLowerBound,
   climbWindowSeconds,
+  combatPersonOf,
   encodeControlMessage,
+  hackingExpForLevel,
   type Intent,
   type MediumSnapshotData,
   maxStaminaOf,
   type SlowSnapshotData,
   type SnapshotTier,
+  skillExpFor,
   staminaGainPerSecond,
+  worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { BLADEBURNER_REST_SLACK_MS } from "../src/bladeburner-actions-report.ts";
-import { BLACK_OPS_LAST_RANK, blackOpsDoneOf, blackOpsRouteOf } from "../src/bladeburner-route.ts";
-import { DesiredStateController } from "../src/desired-state.ts";
+import {
+  BLACK_OPS_GROWN_REFRESH_MS,
+  BLACK_OPS_LAST_RANK,
+  blackOpsDoneOf,
+  blackOpsRouteOf,
+  GrownEstimateMemo,
+} from "../src/bladeburner-route.ts";
+import { DesiredStateController, destroyBlackOpsOf } from "../src/desired-state.ts";
 import { guardFailure } from "../src/irreversible-gate.ts";
 import { levelAllThatsLeft } from "../src/levelling.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { worldDaemonDestroyIntent, worldDaemonPath } from "../src/world-daemon.ts";
+import { DECISION_68_SHARE, GROWN_HINDCASTS, withinTwice } from "./helpers/grown-hindcast.ts";
 import { slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 /** The player in BN6's division, combat 5,000: every multiplier 1. */
@@ -254,6 +267,161 @@ describe("the route from the reading (#398)", () => {
   });
 });
 
+/** A medium snapshot with the player's combat figures read (#408): each stat's experience at its level, multipliers 1. */
+function withCombat(bladeburner: unknown): MediumSnapshotData {
+  const data = medium(bladeburner);
+  const player = data.player as { exp: Record<string, number>; mults: Record<string, number> };
+  for (const stat of ["strength", "defense", "dexterity", "agility"]) {
+    player.exp[stat] = skillExpFor(5000, 1);
+    player.mults[stat] = 1;
+    player.mults[`${stat}_exp`] = 1;
+  }
+  return data;
+}
+
+describe("the route's grown estimate in the brain (#408)", () => {
+  const blackOp = { name: CENTURION.name, chance: [0.3, 0.35] as [number, number] };
+
+  test("the planner's: core's grown estimate on the reading (B6's first time to its rank), chosen over B6's", () => {
+    const view = blackOpsRouteOf({
+      mediumData: withCombat({ ...reading(295_000, blackOp), skillPoints: 4 }),
+      bitNode: 6,
+      ownedSF: SF,
+      rankPerSecond: 2,
+      expPerSecond: 1e4,
+      soFarMs: 10 * 3_600_000,
+    });
+    const combat = combatPersonOf(withCombat(reading(295_000, blackOp)).player);
+    const r = reading(295_000, blackOp);
+    const input = {
+      readings: r.actions as never,
+      person: PERSON,
+      stamina: r.stamina,
+      maxStamina: r.maxStamina,
+      rankMultiplier: 1,
+      speed: 1,
+      skills: {
+        read: Object.fromEntries(
+          BLADEBURNER_SKILL_NAMES.map((name) => [name, (LEVELS as Record<string, number>)[name] ?? 0]),
+        ),
+      },
+    };
+    const grown = blackOpsRouteGrownEstimate(
+      input,
+      {
+        rank: 295_000,
+        next: CENTURION,
+        chanceRead: blackOp.chance,
+        firstToRankSeconds: view.estimate?.steps[0]?.toRankSeconds ?? null,
+      },
+      { combat: combat as NonNullable<typeof combat>, costMultiplier: 1, points: 4 },
+    );
+    expect(view.grown?.seconds).toBe(grown.seconds);
+    expect(view.grown?.seconds).toBeLessThan(view.estimate?.seconds as number);
+    expect(view.grownAtMs).toBeNull();
+    // Without the player's combat figures (an older snapshot's): B6's alone, as before #408.
+    const old = blackOpsRouteOf({
+      mediumData: medium(reading(295_000, blackOp)),
+      bitNode: 6,
+      ownedSF: SF,
+      rankPerSecond: 2,
+      expPerSecond: 1e4,
+      soFarMs: 10 * 3_600_000,
+    });
+    expect(old.grown).toBeNull();
+    // The planner's choice reads the grown estimate: The Red Pill's between the two, the Black Ops chosen.
+    const required = worldDaemonRequiredLevel(6, SF);
+    const near = (expPerSecond: number) => {
+      const data = withCombat({ ...reading(295_000, blackOp), skillPoints: 4 });
+      const player = data.player as { skills: Record<string, number>; exp: Record<string, number> };
+      player.skills = { ...player.skills, hacking: required - 1 };
+      player.exp.hacking = hackingExpForLevel(required - 1, 0.35);
+      return blackOpsRouteOf({
+        mediumData: data,
+        bitNode: 6,
+        ownedSF: SF,
+        rankPerSecond: 2,
+        expPerSecond,
+        soFarMs: 1e12,
+      });
+    };
+    const once = near(1);
+    const between = ((once.grown?.seconds as number) + (once.estimate?.seconds as number)) / 2;
+    const close = near((once.redPillSeconds as number) / between);
+    expect(close.redPillSeconds).toBeCloseTo(between, 0);
+    expect(close.choice.route).toBe("blackOps");
+    expect(
+      chooseWinRoute({
+        blackOpsSeconds: close.estimate?.seconds as number,
+        redPillSeconds: close.redPillSeconds,
+        soFarSeconds: 1e9,
+      }).route,
+    ).toBe("redPill");
+    console.log(
+      `combat 5,000 at rank 295,000: grown ${(grown.seconds / 3600).toFixed(2)} h, B6's ` +
+        `${((view.estimate?.seconds as number) / 3600).toFixed(2)} h`,
+    );
+  });
+
+  test("kept between solves: again after 10 min, at a new key (an install or Black Op next), the time gone back; null never kept", () => {
+    const memo = new GrownEstimateMemo();
+    let solves = 0;
+    const route = { steps: [], seconds: 1, rate: 1, path: [], solves: 1 };
+    const solve = () => {
+      solves += 1;
+      return route;
+    };
+    expect(memo.get("6 Operation Centurion", 1000, solve)).toEqual({ value: route, atMs: 1000 });
+    expect(memo.get("6 Operation Centurion", 1000 + BLACK_OPS_GROWN_REFRESH_MS - 1, solve).atMs).toBe(1000);
+    expect(solves).toBe(1);
+    expect(memo.get("6 Operation Centurion", 1000 + BLACK_OPS_GROWN_REFRESH_MS, solve).atMs).toBe(
+      1000 + BLACK_OPS_GROWN_REFRESH_MS,
+    );
+    expect(solves).toBe(2);
+    memo.get("6 Operation Vindictus", 1000 + BLACK_OPS_GROWN_REFRESH_MS, solve);
+    expect(solves).toBe(3);
+    memo.get("6 Operation Vindictus", 500, solve);
+    expect(solves).toBe(4);
+    expect(memo.get("6 Operation Daedalus", 600, () => null)).toEqual({ value: null, atMs: null });
+    memo.get("6 Operation Daedalus", 700, solve);
+    expect(solves).toBe(5);
+    expect(BLACK_OPS_GROWN_REFRESH_MS).toBe(10 * 60_000);
+  });
+});
+
+describe("#408's hindcasts (#409's review): the BN6 suites' share within ×2, the one place it's asserted", () => {
+  test("at least decision 68's share when it was set (31 of 38): 5 of 6, B4's out on Raid's lottery", () => {
+    const rows = Object.entries(GROWN_HINDCASTS);
+    const within = rows.filter(([, row]) => row.within);
+    console.log(
+      `#408's hindcasts: ${within.length} of ${rows.length} within ×2 against decision 68's ` +
+        `${DECISION_68_SHARE.within} of ${DECISION_68_SHARE.of}; out: ` +
+        rows
+          .filter(([, row]) => !row.within)
+          .map(([label, row]) => `${label} ×${row.ratio} (${row.why})`)
+          .join("; "),
+    );
+    expect(within.length / rows.length).toBeGreaterThanOrEqual(DECISION_68_SHARE.within / DECISION_68_SHARE.of);
+    // Each row's figure on its side; the one out B4's, with its reason (its suite's section 8 line).
+    for (const [label, row] of rows) expect(withinTwice(row.ratio), label).toBe(row.within);
+    expect(rows.filter(([, row]) => !row.within).map(([label]) => label)).toEqual(["B4's hour, its chaos edited"]);
+    expect(GROWN_HINDCASTS["B4's hour, its chaos edited"]?.why).toContain("Raid");
+    // Every row a BN6 suite's, asserted there on its side (`expectGrownHindcast`); every suite's hindcast a row.
+    const directory = new URL(".", import.meta.url);
+    const suites = readdirSync(directory)
+      .filter((name) => /^bn6-.*-simulation\.test\.ts$/.test(name))
+      .map((name) => readFileSync(new URL(name, directory), "utf8"));
+    for (const [label] of rows) {
+      expect(
+        suites.some((source) => source.includes(JSON.stringify(label)) && source.includes("expectGrownHindcast(")),
+        label,
+      ).toBe(true);
+    }
+    const called = suites.flatMap((source) => [...source.matchAll(/grownHindcast\(\s*("[^"]+")/g)].map((m) => m[1]));
+    expect(called.map((label) => JSON.parse(label as string)).sort()).toEqual(rows.map(([label]) => label).sort());
+  });
+});
+
 describe("the gate's guard (#398): all 21 done stands in for w0r1d_d43m0n's hacking level", () => {
   const destroy = worldDaemonDestroyIntent(6) as Intent;
   test("none next: the guard holds with no w0r1d_d43m0n; one next: both routes' problems said", () => {
@@ -335,7 +503,8 @@ describe("the controller (#398)", () => {
         game: { version: "3.0.1", versionNumber: 51, commit: "3162fd2", platform: "Steam" },
       }),
     );
-    const send = (tier: SnapshotTier, data: unknown) =>
+    // Each snapshot's game time, returned.
+    const send = (tier: SnapshotTier, data: unknown) => {
       connection.receive(
         encodeControlMessage({
           protocolVersion: CONTROL_PROTOCOL_VERSION,
@@ -347,6 +516,8 @@ describe("the controller (#398)", () => {
           data,
         }),
       );
+      return 1_000 * sequenceNumber;
+    };
     send("static", { servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles")] });
     return { controller, send };
   }
@@ -360,6 +531,43 @@ describe("the controller (#398)", () => {
     expect(controller.worldDaemonView().lines[0]).toContain("20 of 21 done; next Operation Daedalus");
     send("medium", medium(reading(440_000, null)));
     expect(controller.worldDaemonView()).toMatchObject({ destroying: true, nextBitNode: 5 });
+  });
+
+  test("the grown estimate (#408): the path's and the destroy estimate's, kept 10 min between solves", () => {
+    const { controller, send } = connected();
+    send("slow", slow(6, { lastAugReset: 1 }));
+    const centurion = { name: CENTURION.name, chance: [0.3, 0.35] as [number, number] };
+    const gameAtMs = send("medium", withCombat(reading(295_000, centurion)));
+    const view = controller.worldDaemonView().path?.blackOps;
+    expect(view?.grown).not.toBeNull();
+    expect(view?.grown?.seconds).toBeLessThan(view?.estimate?.seconds as number);
+    const solvedAt = view?.grownAtMs as number;
+    // Clocked by the game's time, the medium snapshot's (#409's review), not the events'.
+    expect(solvedAt).toBe(gameAtMs);
+    expect(controller.worldDaemonView().lines[1]).toContain("with the competence's growth (#408");
+    // Within 10 min the figures stand (a new reading, the same Black Op next); a new Black Op next solves again.
+    const readAtMs = send("medium", withCombat(reading(296_000, centurion)));
+    expect(controller.worldDaemonView().path?.blackOps?.grown).toBe(view?.grown);
+    expect(controller.worldDaemonView().path?.blackOps?.grownAtMs).toBe(solvedAt);
+    // An install (a new `lastAugReset`, #409's review): solved again at once, the same Black Op next, at the slow
+    // snapshot that says it, on the medium snapshot then (its game time); kept at the next medium.
+    send("slow", slow(6, { lastAugReset: 2 }));
+    const installed = controller.worldDaemonView().path?.blackOps?.grown;
+    expect(installed).not.toBe(view?.grown);
+    expect(controller.worldDaemonView().path?.blackOps?.grownAtMs).toBe(readAtMs);
+    send("medium", withCombat(reading(296_000, centurion)));
+    expect(controller.worldDaemonView().path?.blackOps?.grown).toBe(installed);
+    send("medium", withCombat(reading(301_000, { name: "Operation Vindictus", chance: [0.3, 0.35] })));
+    const vindictus = controller.worldDaemonView().path?.blackOps?.grown;
+    expect(vindictus).not.toBe(view?.grown);
+    expect(vindictus?.steps[0]?.name).toBe("Operation Vindictus");
+    // The destroy estimate's BO (#360) the grown estimate where read, said so; else B6's.
+    const route = controller.worldDaemonView().path?.blackOps ?? null;
+    expect(destroyBlackOpsOf(route)).toMatchObject({ ms: (vindictus?.seconds as number) * 1000, grown: true });
+    expect(destroyBlackOpsOf(route === null ? null : { ...route, grown: null })).toMatchObject({
+      ms: (route?.estimate?.seconds as number) * 1000,
+      grown: false,
+    });
   });
 
   test("nothing in other BitNodes: BN4 and BN5 with the same reading read no route, and ask no destroy", () => {

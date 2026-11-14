@@ -10,12 +10,15 @@ import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
   actionSuccessChance,
+  augmentationsSoldBy,
   BLADEBURNER_BLACK_OPS,
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_TRAINING,
   type BladeburnerActionReading,
   type BladeburnerPerson,
   blackOpSuccessChance,
+  bladeburnerInstallGain,
+  bladeburnerRebuildSeconds,
   CONTROL_PROTOCOL_VERSION,
   type DesiredState,
   encodeControlMessage,
@@ -374,26 +377,96 @@ describe("the controller (#404): the planner's install timing on the Black Ops' 
     return { controller, send, last, lines, play, installAsked };
   }
 
-  test("install now: EsperTech queued at combat 100 (the route's 5 million h against its rebuild's 3 h): at once", () => {
+  test("install now: the Bladeburners' shop queued at combat 100 (it beats keeping past the difference's error): at once", () => {
     const { controller, play, installAsked } = connected();
     const events: { type: string; reason?: string; timing?: InstallTimingView }[] = [];
     controller.subscribe((event) => events.push(event as (typeof events)[number]));
+    const shop = augmentationsSoldBy("Bladeburners", 6, null);
+    play(
+      2,
+      () => slow(6, { queued: shop }),
+      () => medium(100),
+    );
+    const timing = events.find((event) => event.type === "augmentationInstallChosen")?.timing;
+    console.log(timing?.words);
+    expect(timing).toMatchObject({ route: BLACK_OPS_ROUTE, choice: 0, blackOps: { choice: "install" } });
+    const view = timing?.blackOps;
+    const gain = bladeburnerInstallGain(0, shop);
+    // Training from 0 at the shop's multipliers (core's), at the medium snapshot's ×1 figures.
+    const combat = {
+      skills: { strength: 100, defense: 100, dexterity: 100, agility: 100 },
+      exp: { strength: 0, defense: 0, dexterity: 0, agility: 0 },
+      mults: Object.fromEntries(
+        ["strength", "defense", "dexterity", "agility"].flatMap((stat) => [
+          [stat, 1],
+          [`${stat}_exp`, 1],
+        ]),
+      ),
+    } as unknown as Parameters<typeof bladeburnerRebuildSeconds>[0];
+    expect(view?.rebuildMs).toBeCloseTo(bladeburnerRebuildSeconds(combat, { gain, fromZero: true }).seconds * 1000, 0);
+    expect(view?.installNowMs as number).toBeLessThan(view?.keepMs as number);
+    // #406's rule (#409's review): it beats keeping by more than the step's error of their difference, said.
+    expect(view?.marginMs).toEqual(expect.any(Number));
+    expect((view?.keepMs as number) - (view?.installNowMs as number)).toBeGreaterThan(view?.marginMs as number);
+    expect(timing?.words).toContain("the difference's error at the step ");
+    expect(view?.gain.successChance).toBe(gain.successChance);
+    expect(timing?.words).toContain(
+      "the Black Ops' route (#404), the grown estimate of the time to the destroy (#408): keep ",
+    );
+    expect(events.filter((event) => event.type === "augmentationInstallChosen")).toEqual([
+      expect.objectContaining({ reason: "the Black Ops' route" }),
+    ]);
+    expect(installAsked()).toBe(true);
+  });
+
+  test("keep: EsperTech queued at combat 100, ahead of keeping but within the difference's error (#406's rule)", () => {
+    const { controller, play, installAsked } = connected();
     play(
       2,
       () => slow(6, { queued: [ESPERTECH] }),
       () => medium(100),
     );
-    const timing = events.find((event) => event.type === "augmentationInstallChosen")?.timing;
-    expect(timing).toMatchObject({ route: BLACK_OPS_ROUTE, choice: 0, blackOps: { choice: "install" } });
+    const timing = controller.augmentationsView().progress?.timing;
+    console.log(timing?.words);
     const view = timing?.blackOps;
-    expect(view?.rebuildMs).toBeCloseTo(skillExpFor(100, 1) * 1000, 0);
+    expect(view?.choice).toBe("keep");
+    // Installing leads at the step, by less than the step's error of the difference: a near tie, kept.
     expect(view?.installNowMs as number).toBeLessThan(view?.keepMs as number);
-    expect(view?.gain.successChance).toBe(1.03);
-    expect(timing?.words).toContain("the Black Ops' route (#404), B6's estimate of the time to the destroy: keep ");
-    expect(events.filter((event) => event.type === "augmentationInstallChosen")).toEqual([
-      expect.objectContaining({ reason: "the Black Ops' route" }),
-    ]);
-    expect(installAsked()).toBe(true);
+    expect((view?.keepMs as number) - (view?.installNowMs as number)).toBeLessThanOrEqual(view?.marginMs as number);
+    expect(timing?.words).toMatch(
+      /, the difference's error at the step .* \(#406's rule: installing must beat it\): keeping/,
+    );
+    expect(installAsked()).toBe(false);
+  });
+
+  test("its figures solved again 10 min of game time on, or at a new Black Op next (#408: the grown estimate's cost)", () => {
+    const { controller, play } = connected();
+    const keepMs = () => controller.augmentationsView().progress?.timing?.blackOps?.keepMs;
+    const bitWire = () => slow(6, { queued: ["BitWire"] });
+    play(1, bitWire, () => medium(100));
+    const first = keepMs();
+    expect(first).toEqual(expect.any(Number));
+    // Within 10 min the figures stand, the rank risen or not.
+    play(5, bitWire, () => medium(100, { rank: 2000 }), HOUR + 60_000);
+    expect(keepMs()).toBe(first);
+    // 10 min on, solved again: the rank risen (its points not read here, so fewer to come).
+    play(10, bitWire, () => medium(100, { rank: 2000 }), HOUR + 6 * 60_000);
+    const again = keepMs() as number;
+    expect(again).not.toBe(first);
+    // A new Black Op next: solved again at once.
+    const zero = BLADEBURNER_BLACK_OPS[1] as (typeof BLADEBURNER_BLACK_OPS)[number];
+    const chance = blackOpSuccessChance(zero, personAt(100), { penalty: 1 });
+    play(
+      1,
+      bitWire,
+      () => {
+        const data = medium(100, { rank: 2600 });
+        (data.bladeburner as { blackOp: unknown }).blackOp = { name: zero.name, chance: [chance, chance] };
+        return data;
+      },
+      HOUR + 16 * 60_000,
+    );
+    expect(keepMs()).not.toBe(again);
   });
 
   test("keep: a hacking augmentation alone (its rebuild for nothing on the route): no install, decided at each update", () => {
