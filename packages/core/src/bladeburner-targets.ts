@@ -180,7 +180,14 @@ export function bladeburnerAttemptsInCount(count: number, growthPerSecond: numbe
  */
 export interface BladeburnerRankSource {
   growthPerSecond: number;
-  options: readonly { rise: number; seconds: number }[];
+  /**
+   * Each way: its rise and cycle seconds; where the rule made it (#408, the competence's growth), its level, its
+   * attempt's chance and seconds too.
+   */
+  options: readonly { rise: number; seconds: number; level?: number; chance?: number; attemptSeconds?: number }[];
+  /** The action's type and name, where the rule made it (#408). */
+  type?: string;
+  name?: string;
 }
 
 /**
@@ -204,38 +211,112 @@ export function bladeburnerSustainableRate(
   sources: readonly BladeburnerRankSource[],
   restRankPerSecond: number,
 ): number {
-  const floor = Math.max(0, restRankPerSecond);
-  const value = (lambda: number) => {
-    let total = lambda;
-    let slope = 1;
-    for (const { growthPerSecond, options } of sources) {
-      let best = 0;
-      let seconds = 0;
-      for (const option of options) {
-        const worth = option.rise - lambda * option.seconds;
-        if (worth > best) {
-          best = worth;
-          seconds = option.seconds;
-        }
+  const { value, floor, low, high } = sustainableDual(sources, restRankPerSecond);
+  if (low === null) return value(floor).total;
+  return Math.min(value(low).total, value(high).total);
+}
+
+/** The dual's value and slope at λ (`bladeburnerSustainableRate`), each action's best way there (-1: none worth it). */
+function sustainableValue(sources: readonly BladeburnerRankSource[], lambda: number) {
+  let total = lambda;
+  let slope = 1;
+  const chosen: number[] = [];
+  for (const { growthPerSecond, options } of sources) {
+    let best = 0;
+    let seconds = 0;
+    let index = -1;
+    options.forEach((option, at) => {
+      const worth = option.rise - lambda * option.seconds;
+      if (worth > best) {
+        best = worth;
+        seconds = option.seconds;
+        index = at;
       }
-      total += growthPerSecond * best;
-      slope -= growthPerSecond * seconds;
-    }
-    return { total, slope };
-  };
+    });
+    total += growthPerSecond * best;
+    slope -= growthPerSecond * seconds;
+    chosen.push(index);
+  }
+  return { total, slope, chosen };
+}
+
+/** The dual's bisection (`bladeburnerSustainableRate`): its floor r₀, and λ's bracket (low null: the time never binds). */
+function sustainableDual(sources: readonly BladeburnerRankSource[], restRankPerSecond: number) {
+  const floor = Math.max(0, restRankPerSecond);
+  const value = (lambda: number) => sustainableValue(sources, lambda);
   // Past the best way's rise a second, no action is worth working: the slope 1.
   let high = floor;
   for (const { options } of sources) {
     for (const option of options) if (option.seconds > 0) high = Math.max(high, option.rise / option.seconds);
   }
-  if (!(value(floor).slope < 0)) return value(floor).total;
+  if (!(value(floor).slope < 0)) return { value, floor, low: null, high };
   let low = floor;
   for (let step = 0; step < 100; step++) {
     const middle = (low + high) / 2;
     if (value(middle).slope < 0) low = middle;
     else high = middle;
   }
-  return Math.min(value(low).total, value(high).total);
+  return { value, floor, low, high };
+}
+
+/** One way an action is worked in the sustainable mix (#408): its source's and option's places, attempts a second. */
+export interface BladeburnerMixPart {
+  source: number;
+  option: number;
+  perSecond: number;
+}
+
+/**
+ * The sustainable rate's mix (#408): the linear programme's primal, each action's attempts a second at each of its
+ * ways, rebuilt from the dual's bracket by complementary slackness (Bertsimas and Tsitsiklis, §4.3). At the bracket's
+ * ends λ_low and λ_high each action's best way is worked at its whole growth (none where none is worth it), their
+ * times T_low > 1 ≥ T_high; the mix θ·low + (1 − θ)·high with θ = (1 − T_high)/(T_low − T_high) spends the second
+ * exactly, and both ends are optimal at λ* (the bracket's 100 halvings), so it is. Where the time never binds, each
+ * worked at its growth. `rate`: its Σ x·rise + r₀·(1 − Σ x·seconds), the dual's own within the bracket.
+ */
+export function bladeburnerSustainableMix(
+  sources: readonly BladeburnerRankSource[],
+  restRankPerSecond: number,
+): { rate: number; parts: BladeburnerMixPart[] } {
+  const { value, floor, low, high } = sustainableDual(sources, restRankPerSecond);
+  const ends = low === null ? [{ weight: 1, chosen: value(floor).chosen }] : mixEnds(sources, value(low), value(high));
+  const parts: BladeburnerMixPart[] = [];
+  let rise = 0;
+  let seconds = 0;
+  for (const { weight, chosen } of ends) {
+    chosen.forEach((option, source) => {
+      const each = sources[source] as BladeburnerRankSource;
+      const way = each.options[option];
+      if (way === undefined || !(weight > 0)) return;
+      const perSecond = weight * each.growthPerSecond;
+      const known = parts.find((part) => part.source === source && part.option === option);
+      if (known === undefined) parts.push({ source, option, perSecond });
+      else known.perSecond += perSecond;
+      rise += perSecond * way.rise;
+      seconds += perSecond * way.seconds;
+    });
+  }
+  return { rate: rise + floor * Math.max(0, 1 - seconds), parts };
+}
+
+/** The bracket's two ends weighted to spend the second exactly (`bladeburnerSustainableMix`). */
+function mixEnds(
+  sources: readonly BladeburnerRankSource[],
+  low: { chosen: number[] },
+  high: { chosen: number[] },
+): { weight: number; chosen: number[] }[] {
+  const timeOf = (chosen: number[]) =>
+    chosen.reduce((sum, option, source) => {
+      const each = sources[source] as BladeburnerRankSource;
+      return sum + (option < 0 ? 0 : each.growthPerSecond * (each.options[option] as { seconds: number }).seconds);
+    }, 0);
+  const tLow = timeOf(low.chosen);
+  const tHigh = timeOf(high.chosen);
+  const theta = tLow > tHigh ? Math.min(1, Math.max(0, (1 - tHigh) / (tLow - tHigh))) : 0;
+  return [
+    { weight: theta, chosen: low.chosen },
+    { weight: 1 - theta, chosen: high.chosen },
+  ];
 }
 
 /** Resting alone at `rankPerSecond` (Field Analysis's) as a walk's step: 30 s of it, no attempt. */

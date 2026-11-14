@@ -2571,7 +2571,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
         daemonMedium();
         const skipped =
-          "BN6 skipped: no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+          "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
           "BN3 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({ nextBitNode: 5, replay: null, skipped });
         daemonMedium();
@@ -2628,7 +2628,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
           "Source-File 5 at 3), but the run";
         const skipped =
-          "BN6 skipped: no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
+          "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8); " +
           "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({
           destroying: true,

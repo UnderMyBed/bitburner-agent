@@ -20,6 +20,7 @@ import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-acti
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
+import { expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -49,6 +50,8 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   // The first reading with the points: the rule's plan there.
   await fresh.game.runUntil(() => reading()?.skillPoints !== undefined, 2 * MINUTE);
   const shownAtMs = fresh.game.clock.now();
+  // #408's hindcast's start: the reading with the points, unspent.
+  const startMedium = fresh.medium() as MediumSnapshotData | null;
   expect(reading()?.skillPoints).toBe(RANK / 3);
   expect(levelsBought()).toBe(0);
   const plan = fresh.controller().bladeburnerView().skills;
@@ -65,6 +68,15 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   expect(reading()?.skillPoints).toBe(RANK / 3 - plan.spent);
   const startedAtMs = fresh.game.clock.now();
   await fresh.game.run(HOUR);
+  // #408's hindcast: the grown estimate's time to the rank the hour reached, from the reading with the points.
+  const hindcast = grownHindcast(
+    "B3's hour at rank 150",
+    startMedium,
+    fresh.game.clock.now() - shownAtMs,
+    reading()?.rank ?? 0,
+  );
+  console.log(hindcast.line);
+  expectGrownHindcast(hindcast);
 
   const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() } as const;
   const { text, failures } = runReport(fresh.data.store, window, { verbose: true });

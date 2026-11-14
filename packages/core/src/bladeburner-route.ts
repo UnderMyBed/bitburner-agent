@@ -16,8 +16,9 @@
  * - **Its chances:** the next one's the estimate's low end read (B5's, the stamina's penalty out), the later ones' the
  *   game's formula at the competence now (`blackOpSuccessChance`, rested: no penalty) times the next one's low end over
  *   its formula (the city's population estimate's share, common to every Black Op, `Actions/BlackOperation.ts:55-61`).
- * - **Left out, and labelled:** the competence's rise over the route (the skill points a rank of 3 brings, the stats; an
- *   install's augmentations are B7's forecast, ./bladeburner-installs.ts), so later chances and ρ err low and the time
+ * - **Left out, and labelled:** the competence's rise over the route (the skill points a rank of 3 brings, the stats, the
+ *   levels opened: #408's grown estimate counts them, ./bladeburner-growth.ts, the planner's since; an install's
+ *   augmentations are B7's forecast, ./bladeburner-installs.ts), so later chances and ρ err low and the time
  *   long, cautious; at a chance of 0
  *   now the time is never, "never at the competence now". The stock's counts after the next one (their regrowth is in ρ,
  *   their stock now isn't): cautious. The rank over each requirement at a failure (the rebuild errs long). The ±10% on
