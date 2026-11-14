@@ -1948,6 +1948,7 @@ export class DesiredStateController {
       const plan = actions?.plan ?? null;
       const key = [
         bitNode,
+        resetTimeOf(this.#slowData, "lastAugReset"),
         rankPerSecond,
         expPerSecond,
         soFarMs,
@@ -1968,8 +1969,13 @@ export class DesiredStateController {
         firstToRankSeconds,
         // The climb's bound on the plan the Bladeburner rule runs (#400's review).
         plan,
-        // The grown estimate (#408), solved again each 10 min of the events' time or a new Black Op next.
-        grownMemo: { memo: this.#blackOpsGrown, nowMs: this.#lastEventAtMs ?? 0 },
+        // The grown estimate (#408), solved again each 10 min of the game's time (the medium snapshot's), at a new
+        // Black Op next, or at an install (#409's review: its figures otherwise the person before it for 10 min).
+        grownMemo: {
+          memo: this.#blackOpsGrown,
+          nowMs: this.#mediumGameTimeMs ?? 0,
+          lastAugReset: resetTimeOf(this.#slowData, "lastAugReset"),
+        },
       });
       this.#blackOpsRouteCache = { mediumData, key, view };
       return view;

@@ -35,9 +35,12 @@
  *   their levels before with their experience from 0 at the multipliers times the gain (so the actions' experience
  *   after it counts the gain), the success chance and stamina times the gain; the actions' and Black Ops' chances
  *   scaled by the competence there over the competence read, their times, ρ and the stamina computed there.
- * - **The choice:** keeping, the grown estimate now; installing now, the rebuild and the grown estimate after it; the
- *   least, a tie to keeping (an install is irreversible); installing now only with something to install. Both take the
- *   next one's rank by the growth's tail alone (the counts' stock now left out of both alike). While a rebuild is under
+ * - **The choice:** keeping, the grown estimate now; installing now, the rebuild and the grown estimate after it;
+ *   installing now only where it beats keeping by more than the step's error of their difference (#406's rule, #409's
+ *   review: an install is irreversible, so a tie within the estimate's error keeps): keep − install now at the default
+ *   step against the same at an eighth of it, measured each choice where installing leads (the difference's error,
+ *   not a chosen margin; the grown estimate twice more at 8 times the steps); only with something to install. Both
+ *   take the next one's rank by the growth's tail alone (the counts' stock now left out of both alike). While a rebuild is under
  *   way (`levels`, its targets, #407's review), both are priced at those levels: keeping finishes it (Training from the
  *   levels now) and then the grown estimate there; installing now rebuilds to them from 0 at the gain.
  * - **Its bias towards installing is gone** (#408): #407's review found B6's flat estimate made the route about 10³
@@ -65,7 +68,11 @@ import {
   trainingExpPerAttempt,
 } from "./bladeburner-actions.ts";
 import type { BladeburnerBlackOp } from "./bladeburner-black-ops.ts";
-import { blackOpsRouteGrownEstimate } from "./bladeburner-growth.ts";
+import {
+  BLADEBURNER_GROWTH_FRACTION,
+  BLADEBURNER_GROWTH_LEAST_STEP,
+  blackOpsRouteGrownEstimate,
+} from "./bladeburner-growth.ts";
 
 /** What an install gives the route (#404): each combat stat's level and experience multiplier, and Bladeburner's. */
 export interface BladeburnerInstallGain {
@@ -206,6 +213,11 @@ export interface BlackOpsInstallTiming {
   choice: "keep" | "install";
   /** The gain the install gives the route. */
   gain: BladeburnerInstallGain;
+  /**
+   * The step's error of keep − install now (#406's rule): |its value − its value at an eighth of the step|, which
+   * installing must beat; null where installing doesn't lead at the step (not measured), 0 where keeping is never.
+   */
+  marginSeconds: number | null;
 }
 
 /** What the grown estimate reads beside B6's (#408): the BitNode's skill cost and the skill points unspent. */
@@ -247,19 +259,21 @@ function routeSeconds(
   combat: CombatPerson,
   growth: BlackOpsGrowthAt,
   forecast?: BladeburnerPerson,
+  fine = false,
 ): number {
   return blackOpsRouteGrownEstimate(forecast === undefined ? input : { ...input, forecast }, at, {
     combat,
     costMultiplier: growth.costMultiplier,
     points: growth.points ?? 0,
+    ...(fine ? { fraction: BLADEBURNER_GROWTH_FRACTION / 8, leastStep: BLADEBURNER_GROWTH_LEAST_STEP / 8 } : {}),
   }).seconds;
 }
 
 /**
  * The planner's install timing on the Black Ops' route (#404, see above): keep (the grown estimate now, #408) against
  * install now (the rebuild at `gain`, then the grown estimate at the person after it, its experience from 0 at the
- * multipliers times the gain), the least chosen, a tie to keeping; installing now only with something to install
- * (`installable`). Game seconds.
+ * multipliers times the gain); installing now only where it beats keeping by more than the step's error of their
+ * difference (#406's rule, `marginSeconds`), and only with something to install (`installable`). Game seconds.
  */
 export function blackOpsInstallTiming({
   input,
@@ -282,23 +296,31 @@ export function blackOpsInstallTiming({
   const priced = levels === undefined ? input.person : personAtLevels(input.person, levels);
   // Keeping finishes a rebuild under way first (Training from the levels now), then the route at its targets.
   const finish = levels === undefined ? 0 : bladeburnerRebuildSeconds(combat, { targets: levels }).seconds;
-  const keepSeconds =
+  const keepAt = (fine: boolean) =>
     finish +
     (levels === undefined
-      ? routeSeconds(input, at, combat, growth)
-      : routeSeconds(input, at, combatAt(combat, levels, null), growth, priced));
+      ? routeSeconds(input, at, combat, growth, undefined, fine)
+      : routeSeconds(input, at, combatAt(combat, levels, null), growth, priced, fine));
   const targets = levels ?? combat.skills;
   const rebuildSeconds = bladeburnerRebuildSeconds(combat, { targets, gain, fromZero: true }).seconds;
-  const afterSeconds = routeSeconds(
-    input,
-    at,
-    combatAt(combat, targets, gain),
-    growth,
-    bladeburnerPersonAfterInstall(priced, gain),
-  );
+  const afterAt = (fine: boolean) =>
+    routeSeconds(input, at, combatAt(combat, targets, gain), growth, bladeburnerPersonAfterInstall(priced, gain), fine);
+  const keepSeconds = keepAt(false);
+  const afterSeconds = afterAt(false);
   const installNowSeconds = installable ? rebuildSeconds + afterSeconds : null;
-  const choice = installNowSeconds !== null && installNowSeconds < keepSeconds ? "install" : "keep";
-  return { keepSeconds, rebuildSeconds, afterSeconds, installNowSeconds, choice, gain };
+  // #406's rule: the difference's error at the step, measured against an eighth of it where installing leads (keeping
+  // never: no error to beat). A difference never at the eighth (an error of Infinity, or NaN) keeps.
+  let marginSeconds: number | null = null;
+  if (installNowSeconds !== null && installNowSeconds < keepSeconds) {
+    marginSeconds = Number.isFinite(keepSeconds)
+      ? Math.abs(keepSeconds - installNowSeconds - (keepAt(true) - (rebuildSeconds + afterAt(true))))
+      : 0;
+  }
+  const choice =
+    installNowSeconds !== null && marginSeconds !== null && keepSeconds - installNowSeconds > marginSeconds
+      ? "install"
+      : "keep";
+  return { keepSeconds, rebuildSeconds, afterSeconds, installNowSeconds, choice, gain, marginSeconds };
 }
 
 /**

@@ -143,8 +143,11 @@ export function blackOpsRouteOf({
   plan,
   grownMemo,
 }: {
-  /** Where the grown estimate is kept between solves (#408) and the time now; absent, solved each call (the report's). */
-  grownMemo?: { memo: GrownEstimateMemo; nowMs: number };
+  /**
+   * Where the grown estimate is kept between solves (#408), the game's time now (the medium snapshot's), and the last
+   * install's time (`lastAugReset`, #409's review: an install solves it again); absent, solved each call (the report's).
+   */
+  grownMemo?: { memo: GrownEstimateMemo; nowMs: number; lastAugReset: number | null };
   /** The Bladeburner rule's plan (its view's), for the climb's bound; absent, the forecast's best by rank a second. */
   plan?: BladeburnerActionPlan | null;
   mediumData: MediumSnapshotData | null;
@@ -210,7 +213,11 @@ export function blackOpsRouteOf({
       ? { value: { steps: [], seconds: 0, rate: 0, path: [], solves: 0 }, atMs: null }
       : grownMemo === undefined
         ? { value: solveGrown(), atMs: null }
-        : grownMemo.memo.get(`${bitNode} ${op?.name ?? "none"}`, grownMemo.nowMs, solveGrown);
+        : grownMemo.memo.get(
+            `${bitNode} ${grownMemo.lastAugReset ?? "unread"} ${op?.name ?? "none"}`,
+            grownMemo.nowMs,
+            solveGrown,
+          );
   const grown = grownKept.value;
   const first = estimate?.steps[0];
   let rankStallMs: number | null = null;
@@ -350,16 +357,17 @@ export function blackOpsInstallFiguresOf(
 
 /**
  * The grown estimate's figures stand this long between solves (#408): it solves the tail's linear programme about 500
- * times and B3's rule at each step, about 0.15 s at a BN6.1 start (core's bladeburner-growth.test.ts), against a route
- * of tens of hours, which 10 min of play moves by under 1%, its own step's error (2%). A new Black Op next solves it
- * at once.
+ * times and B3's rule at each step, about 0.15 s at a BN6.1 start (rank 0) and 0.05 s late (rank 295,000, 44 solves;
+ * #409's review: the steps are fewer there; core's bladeburner-growth.test.ts), against a route of tens of hours,
+ * which 10 min of play moves by under 1%, its own step's error (2%). A new Black Op next or an install solves it at
+ * once.
  */
 export const BLACK_OPS_GROWN_REFRESH_MS = 10 * 60_000;
 
 /**
- * One grown estimate kept (#408): solved again when its key (the BitNode and the next Black Op) changes, when
- * `BLACK_OPS_GROWN_REFRESH_MS` has passed since its solve, or when the time goes back (a restart's clock, a new
- * BitNode); else its figures as of their solve. A null (unread) is never kept.
+ * One grown estimate kept (#408): solved again when its key (the BitNode, the last install's time and the next Black
+ * Op, #409's review) changes, when `BLACK_OPS_GROWN_REFRESH_MS` of game time has passed since its solve, or when the
+ * time goes back (a new game); else its figures as of their solve. A null (unread) is never kept.
  */
 export class GrownEstimateMemo {
   #kept: { key: string; atMs: number; value: BlackOpsGrownTime } | null = null;

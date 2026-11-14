@@ -95,6 +95,18 @@ function combatOf(combat: number): CombatPerson {
   } as CombatPerson;
 }
 
+/** `combat` after an install of `gain` rebuilt to its levels: the multipliers times the gain, the least experience. */
+function combatAfter(combat: CombatPerson, gain: ReturnType<typeof bladeburnerInstallGain>): CombatPerson {
+  const mults = { ...combat.mults };
+  const exp = { ...combat.exp };
+  for (const stat of COMBAT_STATS) {
+    mults[stat] = combat.mults[stat] * gain.levels[stat];
+    mults[`${stat}_exp`] = combat.mults[`${stat}_exp`] * gain.exp[stat];
+    exp[stat] = skillExpFor(combat.skills[stat], mults[stat]);
+  }
+  return { skills: { ...combat.skills }, exp, mults };
+}
+
 /** A player as BN6's division takes one (B7's playability states): combat at each stat's experience, hacking 100. */
 function personAt(exp: Readonly<Record<CombatStat, number>>): BladeburnerPerson {
   const skills = { hacking: 100, charisma: 1, intelligence: 0 } as BladeburnerPerson["skills"];
@@ -182,7 +194,7 @@ describe("the tail's mix (#408): the linear programme's primal, against its dual
     }
   });
 
-  test("at readings: the mix's rate the tail rate's, each action its level, chance and attempts within its growth", () => {
+  test("at readings: the mix's rate the tail rate's, each action its level, chance and attempts within its growth and the second", () => {
     for (const [combat, levels, maxLevel] of [
       [100, {}, 1],
       [300, { Overclock: 40, Reaper: 20 }, 12],
@@ -196,7 +208,14 @@ describe("the tail's mix (#408): the linear programme's primal, against its dual
       );
       const mix = bladeburnerTailMix(input);
       expect(mix.rate / bladeburnerTailRate(input)).toBeCloseTo(1, 9);
+      // The time (#409's review): the cycles worked fit in the second, each at least its attempt.
+      expect(mix.work.reduce((sum, part) => sum + part.attemptsPerSecond * part.cycleSeconds, 0)).toBeLessThanOrEqual(
+        1 + 1e-9,
+      );
+      // At combat 100 the actions rest (B2's three quarters of the time): a cycle there is longer than its attempt.
+      if (combat === 100) expect(mix.work.some((part) => part.cycleSeconds > part.attemptSeconds)).toBe(true);
       for (const part of mix.work) {
+        expect(part.cycleSeconds).toBeGreaterThanOrEqual(part.attemptSeconds);
         const action = bladeburnerLevelledAction(part.type, part.name);
         expect(action).not.toBeNull();
         expect(part.level).toBeGreaterThanOrEqual(1);
@@ -381,7 +400,7 @@ describe("the route's grown estimate (#408): the integration", () => {
     expect(all).toBeLessThan(Math.min(skills, stats, levels));
   });
 
-  test("its step: the default within 2% of an eighth of it (the left sum errs long, B3's buys move with the step)", () => {
+  test("its step: the default within 2% of an eighth of it, and short of it (optimistic: B3's buys batched a step at a time)", () => {
     for (const combat of [100, 300]) {
       const { combat: figures, input, at } = startAt(combat);
       const at8 = blackOpsRouteGrownEstimate(input, at, {
@@ -399,7 +418,36 @@ describe("the route's grown estimate (#408): the integration", () => {
           `(${(((route.seconds - at8.seconds) / at8.seconds) * 100).toFixed(2)}%)`,
       );
       expect(Math.abs(route.seconds - at8.seconds) / at8.seconds).toBeLessThan(0.02);
+      // Short at both (#409's review): the step's error optimistic, as labelled, though the left sum alone errs long.
+      expect(route.seconds).toBeLessThan(at8.seconds);
     }
+  });
+
+  test("its cost late on the route (#409's review): a solve from rank 295,000, Centurion next, at combat 1,000", () => {
+    const who = personAt(combatOf(1000).exp);
+    const levels = {
+      "Blade's Intuition": 120,
+      "Digital Observer": 100,
+      Reaper: 60,
+      "Evasive System": 60,
+      Overclock: 90,
+    };
+    const maxLevels = Object.fromEntries(BLADEBURNER_LEVELLED_ACTIONS.map((action) => [action.name, 40]));
+    const centurion = BLADEBURNER_BLACK_OPS.find((op) => op.name === "Operation Centurion") as BladeburnerBlackOp;
+    const chance = blackOpSuccessChance(centurion, who, { penalty: 1, skills: bladeburnerSkillMultsOf(levels) });
+    const at = { rank: 295_000, next: centurion, chanceRead: [chance, chance] as [number, number] };
+    const started = performance.now();
+    const route = blackOpsRouteGrownEstimate(inputAt(who, levels, maxLevels), at, {
+      combat: combatOf(1000),
+      costMultiplier: 1,
+    });
+    const ms = performance.now() - started;
+    console.log(
+      `late, rank 295,000, combat 1,000: ${(route.seconds / HOUR).toFixed(2)} h, ${route.solves} mixes solved, ` +
+        `${ms.toFixed(0)} ms`,
+    );
+    expect(route.steps[0]?.name).toBe("Operation Centurion");
+    expect(Number.isFinite(route.seconds)).toBe(true);
   });
 
   test("the first one's rank: B5's stock where shorter than the growth's tail; each Black Op's figures at its rank", () => {
@@ -466,8 +514,9 @@ describe("the route's grown estimate (#408): the integration", () => {
 });
 
 /**
- * A seeded walk of the game's attempts from rank 0 at combat `combat` to the `last`-th Black Op done, independent of the
- * integration: the actions as the tail's mix at the walk's own state works them (the brain's ρ, its policy), each
+ * A seeded walk of the game's attempts from rank 0 at combat `combat` to the `last`-th Black Op done, a check of the
+ * integration and the growth's bookkeeping, not of ρ (#409's review): the actions as the tail's mix at the walk's own
+ * state works them (the brain's ρ, its policy and its time accounting, inherited; only the hindcasts check ρ), each
  * attempt's success drawn at the game's formula there (the walk's own input: `actionSuccessChance` at its stats,
  * skills and max levels), its rank ±10% uniform (`Bladeburner.ts:951`, `:980`), its experience the game's
  * (`getActionStats`), the stats' levels the game's, a success's max level the game's (`setMaxLevel`), the points the
@@ -598,7 +647,9 @@ describe("the grown estimate against a seeded walk of the game's attempts (#408)
 
   test("combat 100 from rank 0 to Operation Titan done (the stats ×2, the skills and levels all moving): within 3%", () => {
     const { estimate, mean, standardError, off } = check(100, 3, 200, 408);
-    // Its step errs long (the left sum, B3's buys a step late): never short past the walk's noise.
+    // One-sided (#409's review): never short past the walk's noise. The step's own error is short (1.1% here, under
+    // 4 SE, 3%); what the walk counts and the estimate leaves out (the Black Ops' own experience; the paths' spread,
+    // the whole route 2.8% long) errs long.
     expect(estimate).toBeGreaterThan(mean - 4 * standardError);
     expect(Math.abs(off)).toBeLessThan(0.03);
   }, 60_000);
@@ -660,6 +711,45 @@ describe("B7's install choice on the grown estimate (#408): the bias towards ins
     expect(Math.abs(saved)).toBeLessThan(0.02 * nothing);
     expect(timing.rebuildSeconds).toBeGreaterThan(10 * Math.abs(saved));
     expect(timing.choice).toBe("keep");
+  });
+
+  test("#406's rule (#409's review): installing must beat keeping by more than the step's error of their difference", () => {
+    const gain = bladeburnerInstallGain(0, [ESPERTECH]);
+    const fine = { fraction: BLADEBURNER_GROWTH_FRACTION / 8, leastStep: BLADEBURNER_GROWTH_LEAST_STEP / 8 };
+    const growth = { costMultiplier: 1 };
+    const rows: string[] = [];
+    for (const [combat, chosen] of [
+      [100, "install"],
+      [108, "keep"],
+    ] as const) {
+      const { combat: figures, input, at, who } = startAt(combat);
+      const started = performance.now();
+      const timing = blackOpsInstallTiming({ input, at, combat: figures, gain, installable: true, growth });
+      const ms = performance.now() - started;
+      // The paired difference at an eighth of the step, worked out here: both sides' estimates.
+      const keep8 = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier: 1, ...fine }).seconds;
+      const after8 = blackOpsRouteGrownEstimate({ ...input, forecast: bladeburnerPersonAfterInstall(who, gain) }, at, {
+        combat: combatAfter(figures, gain),
+        costMultiplier: 1,
+        ...fine,
+      }).seconds;
+      const difference = timing.keepSeconds - (timing.installNowSeconds as number);
+      const margin = Math.abs(difference - (keep8 - (timing.rebuildSeconds + after8)));
+      rows.push(
+        `combat ${combat}, EsperTech: keep − install now ${(difference / 60).toFixed(1)} min, its error at the step ` +
+          `${(margin / 60).toFixed(1)} min: ${timing.choice} (the choice in ${ms.toFixed(0)} ms)`,
+      );
+      // Installing leads at the step on both sides: the rule decides.
+      expect(difference).toBeGreaterThan(0);
+      expect(timing.marginSeconds).toBeCloseTo(margin, 3);
+      expect(timing.choice).toBe(chosen);
+      expect(difference > margin).toBe(chosen === "install");
+    }
+    console.log(rows.join("\n"));
+    // Keeping leads (combat 300): no error measured, kept.
+    const { combat: figures, input, at } = startAt(300);
+    const kept = blackOpsInstallTiming({ input, at, combat: figures, gain, installable: true, growth });
+    expect(kept).toMatchObject({ marginSeconds: null, choice: "keep" });
   });
 
   test("the shop at combat 100: a rebuild of half an hour against the route it saves: install", () => {

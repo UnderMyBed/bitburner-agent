@@ -3,7 +3,7 @@
 // this route only, and the controller: the destroy asked for only with all 21 done, in BN6 alone. Core's sum and its
 // walk are core's bladeburner-route.test.ts; the rule's stalls world-daemon.test.ts's; the destroy itself in the
 // engine bn6-destroy-simulation.test.ts's.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
@@ -53,6 +53,7 @@ import { guardFailure } from "../src/irreversible-gate.ts";
 import { levelAllThatsLeft } from "../src/levelling.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
 import { worldDaemonDestroyIntent, worldDaemonPath } from "../src/world-daemon.ts";
+import { DECISION_68_SHARE, GROWN_HINDCASTS, withinTwice } from "./helpers/grown-hindcast.ts";
 import { slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 /** The player in BN6's division, combat 5,000: every multiplier 1. */
@@ -362,7 +363,7 @@ describe("the route's grown estimate in the brain (#408)", () => {
     );
   });
 
-  test("kept between solves: again after 10 min, at a new Black Op next, or with the time gone back; null never kept", () => {
+  test("kept between solves: again after 10 min, at a new key (an install or Black Op next), the time gone back; null never kept", () => {
     const memo = new GrownEstimateMemo();
     let solves = 0;
     const route = { steps: [], seconds: 1, rate: 1, path: [], solves: 1 };
@@ -385,6 +386,39 @@ describe("the route's grown estimate in the brain (#408)", () => {
     memo.get("6 Operation Daedalus", 700, solve);
     expect(solves).toBe(5);
     expect(BLACK_OPS_GROWN_REFRESH_MS).toBe(10 * 60_000);
+  });
+});
+
+describe("#408's hindcasts (#409's review): the BN6 suites' share within ×2, the one place it's asserted", () => {
+  test("at least decision 68's share when it was set (31 of 38): 5 of 6, B4's out on Raid's lottery", () => {
+    const rows = Object.entries(GROWN_HINDCASTS);
+    const within = rows.filter(([, row]) => row.within);
+    console.log(
+      `#408's hindcasts: ${within.length} of ${rows.length} within ×2 against decision 68's ` +
+        `${DECISION_68_SHARE.within} of ${DECISION_68_SHARE.of}; out: ` +
+        rows
+          .filter(([, row]) => !row.within)
+          .map(([label, row]) => `${label} ×${row.ratio} (${row.why})`)
+          .join("; "),
+    );
+    expect(within.length / rows.length).toBeGreaterThanOrEqual(DECISION_68_SHARE.within / DECISION_68_SHARE.of);
+    // Each row's figure on its side; the one out B4's, with its reason (its suite's section 8 line).
+    for (const [label, row] of rows) expect(withinTwice(row.ratio), label).toBe(row.within);
+    expect(rows.filter(([, row]) => !row.within).map(([label]) => label)).toEqual(["B4's hour, its chaos edited"]);
+    expect(GROWN_HINDCASTS["B4's hour, its chaos edited"]?.why).toContain("Raid");
+    // Every row a BN6 suite's, asserted there on its side (`expectGrownHindcast`); every suite's hindcast a row.
+    const directory = new URL(".", import.meta.url);
+    const suites = readdirSync(directory)
+      .filter((name) => /^bn6-.*-simulation\.test\.ts$/.test(name))
+      .map((name) => readFileSync(new URL(name, directory), "utf8"));
+    for (const [label] of rows) {
+      expect(
+        suites.some((source) => source.includes(JSON.stringify(label)) && source.includes("expectGrownHindcast(")),
+        label,
+      ).toBe(true);
+    }
+    const called = suites.flatMap((source) => [...source.matchAll(/grownHindcast\(\s*("[^"]+")/g)].map((m) => m[1]));
+    expect(called.map((label) => JSON.parse(label as string)).sort()).toEqual(rows.map(([label]) => label).sort());
   });
 });
 
@@ -469,7 +503,8 @@ describe("the controller (#398)", () => {
         game: { version: "3.0.1", versionNumber: 51, commit: "3162fd2", platform: "Steam" },
       }),
     );
-    const send = (tier: SnapshotTier, data: unknown) =>
+    // Each snapshot's game time, returned.
+    const send = (tier: SnapshotTier, data: unknown) => {
       connection.receive(
         encodeControlMessage({
           protocolVersion: CONTROL_PROTOCOL_VERSION,
@@ -481,6 +516,8 @@ describe("the controller (#398)", () => {
           data,
         }),
       );
+      return 1_000 * sequenceNumber;
+    };
     send("static", { servers: [staticServer("home", { moneyMax: 0 }), staticServer("n00dles")] });
     return { controller, send };
   }
@@ -498,19 +535,28 @@ describe("the controller (#398)", () => {
 
   test("the grown estimate (#408): the path's and the destroy estimate's, kept 10 min between solves", () => {
     const { controller, send } = connected();
-    send("slow", slow(6));
+    send("slow", slow(6, { lastAugReset: 1 }));
     const centurion = { name: CENTURION.name, chance: [0.3, 0.35] as [number, number] };
-    send("medium", withCombat(reading(295_000, centurion)));
+    const gameAtMs = send("medium", withCombat(reading(295_000, centurion)));
     const view = controller.worldDaemonView().path?.blackOps;
     expect(view?.grown).not.toBeNull();
     expect(view?.grown?.seconds).toBeLessThan(view?.estimate?.seconds as number);
     const solvedAt = view?.grownAtMs as number;
-    expect(solvedAt).toEqual(expect.any(Number));
+    // Clocked by the game's time, the medium snapshot's (#409's review), not the events'.
+    expect(solvedAt).toBe(gameAtMs);
     expect(controller.worldDaemonView().lines[1]).toContain("with the competence's growth (#408");
     // Within 10 min the figures stand (a new reading, the same Black Op next); a new Black Op next solves again.
-    send("medium", withCombat(reading(296_000, centurion)));
+    const readAtMs = send("medium", withCombat(reading(296_000, centurion)));
     expect(controller.worldDaemonView().path?.blackOps?.grown).toBe(view?.grown);
     expect(controller.worldDaemonView().path?.blackOps?.grownAtMs).toBe(solvedAt);
+    // An install (a new `lastAugReset`, #409's review): solved again at once, the same Black Op next, at the slow
+    // snapshot that says it, on the medium snapshot then (its game time); kept at the next medium.
+    send("slow", slow(6, { lastAugReset: 2 }));
+    const installed = controller.worldDaemonView().path?.blackOps?.grown;
+    expect(installed).not.toBe(view?.grown);
+    expect(controller.worldDaemonView().path?.blackOps?.grownAtMs).toBe(readAtMs);
+    send("medium", withCombat(reading(296_000, centurion)));
+    expect(controller.worldDaemonView().path?.blackOps?.grown).toBe(installed);
     send("medium", withCombat(reading(301_000, { name: "Operation Vindictus", chance: [0.3, 0.35] })));
     const vindictus = controller.worldDaemonView().path?.blackOps?.grown;
     expect(vindictus).not.toBe(view?.grown);

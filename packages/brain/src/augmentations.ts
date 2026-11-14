@@ -89,8 +89,10 @@
 //   `blackOpsInstall`, from ./bladeburner-route.ts): the planner chooses keep the cycle or install now, by the route's
 //   grown estimate of the time to the destroy (#408: core's `blackOpsInstallTiming`, with the competence's growth;
 //   keeping, the estimate now; installing now, the rebuild of the combat stats by Training and the estimate at the
-//   install's multipliers, the rank kept), in place of the count rule, decided again at every update, its figures
-//   solved again each `BLACK_OPS_GROWN_REFRESH_MS` (10 min) of game time or at a new set or Black Op next. Installing now goes at once (`reason` "the Black Ops' route"), through the
+//   install's multipliers, the rank kept; installing now only past the step's error of their difference, #406's rule,
+//   #409's review), in place of the count rule, decided again at every update, its figures solved again each
+//   `BLACK_OPS_GROWN_REFRESH_MS` (10 min) of game time or at a new set or Black Op next (the grown estimate twice,
+//   four times where installing leads). Installing now goes at once (`reason` "the Black Ops' route"), through the
 //   controller's gate, only with something to install; keeping is a wait with no countdown and no money held. With the
 //   reading not in (or all 21 done), no estimate and no install. Before the join, the count rule as before (labelled).
 //   Once the count is met (Daedalus inviting or joined), or never short (The Red Pill elsewhere), the count rule times
@@ -363,6 +365,11 @@ export interface BlackOpsInstallView {
   choice: "keep" | "install";
   /** What the install gives the route: the success chance's, the max stamina's and its regain's factors. */
   gain: { successChance: number; maxStamina: number; staminaGain: number };
+  /**
+   * The step's error of keep − install now that installing must beat (#406's rule, core's `marginSeconds`), ms; null
+   * where installing doesn't lead, or never at an eighth of the step. Absent in events before #409.
+   */
+  marginMs?: number | null;
 }
 
 /** Core's timing as the view keeps it (#404). */
@@ -376,6 +383,7 @@ export function blackOpsInstallViewOf(timing: BlackOpsInstallTiming): BlackOpsIn
     installNowMs: ms(timing.installNowSeconds),
     choice: timing.choice,
     gain: { successChance, maxStamina, staminaGain },
+    marginMs: ms(timing.marginSeconds),
   };
 }
 
@@ -395,7 +403,11 @@ export function describeBlackOpsInstallTiming(view: BlackOpsInstallView | null):
         `route ${time(view.afterMs)} at ${gain})`;
   return (
     `the Black Ops' route (#404), the grown estimate of the time to the destroy (#408): keep ${time(view.keepMs)}, ` +
-    `${install}: ` +
+    `${install}` +
+    (view.marginMs == null
+      ? ""
+      : `, the difference's error at the step ${time(view.marginMs)} (#406's rule: installing must beat it)`) +
+    ": " +
     (view.choice === "install" ? "installing now" : "keeping")
   );
 }
@@ -3420,9 +3432,10 @@ export class AugmentationRule {
 
   /**
    * Core's `blackOpsInstallTiming` on the route's figures and what the install would install (#404): NeuroFlux
-   * Governor's `levels` and `augmentations`. The grown estimate twice (#408, about 0.15 s each), so solved again only
-   * at a new set, Black Op next or rebuild's targets, or `BLACK_OPS_GROWN_REFRESH_MS` of game time on
-   * (./bladeburner-route.ts's, as the World Daemon's path keeps its own); A6 updates on every snapshot and event.
+   * Governor's `levels` and `augmentations`. The grown estimate twice (#408, about 0.15 s each), and twice more at an
+   * eighth of the step where installing leads (#406's rule, 8 times the steps), so solved again only at a new set,
+   * Black Op next or rebuild's targets, or `BLACK_OPS_GROWN_REFRESH_MS` of game time on (./bladeburner-route.ts's, as
+   * the World Daemon's path keeps its own); A6 updates on every snapshot and event.
    */
   #blackOpsTiming(
     route: NonNullable<BlackOpsInstallFigures["route"]>,

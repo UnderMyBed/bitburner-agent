@@ -520,7 +520,8 @@ describe("BN6's route, the Black Ops' (#398)", () => {
     expect(grown.terms[0]?.source).toContain(
       "3 of 21 done; with the competence's growth (#408): each step of rank at ρ there, the skills its points buy by " +
         "B3's rule, the stats the actions' experience gives and the levels their successes open, each one's attempts " +
-        "at the competence then (cautious on balance: its step errs long;",
+        "at the competence then (cautious on balance: 2.8% long of a seeded walk of the game's attempts over the route, " +
+        "its step about 2% short of an eighth of it;",
     );
     expect(grown.terms[0]?.source).not.toContain("its rise left out");
   });

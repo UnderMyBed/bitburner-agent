@@ -22,19 +22,24 @@
  *   the successes a second.
  * - **The integration** (`blackOpsRouteGrownEstimate`): over the rank, from the rank read to each Black Op's rank in
  *   steps of `fraction` of the rank (at least `BLADEBURNER_GROWTH_LEAST_STEP`), each step's time its rank over ρ at the
- *   state at its start (a left Riemann sum in the rank: the competence only rises along a step, so it errs long), the
- *   experience and successes accrued at that state's rates, the step's points then spent by B3's rule (and the points
- *   read unspent first). Its error is first order in the step: `fraction` 0.05 is within 2% of an eighth of it at B7's
- *   BN6.1 states (1.1% and 1.8%, the tests'; not signed, as B3's buys move with the step). Each Black Op's attempts:
- *   the n-th made with the chance all before it failed, at the state their rebuilds left (each a failure's loss
- *   rebuilt at ρ's mix), so Σₙ P(n made)·(Tₙ + (1 − pₙ)·L/ρₙ), B6's (T + (1 − p)·L/ρ)/p where nothing grows; its chance
+ *   state at its start (a left Riemann sum in the rank), the experience and successes accrued at that state's rates,
+ *   the step's points then spent by B3's rule, batched at its end (and the points read unspent first). Its error is
+ *   first order in the step, and measured, not signed by argument: `fraction` 0.05 is 1.1% and 1.8% shorter than an
+ *   eighth of it at B7's BN6.1 states (combat 100 and 300, the tests'), so optimistic by about 2% (#409's review). The
+ *   left sum alone errs long (with the skills alone, 0.3% and 7.4% long; without them, under 0.01%), but B3's buys,
+ *   batched a step at a time, with the stats and levels rising under them come out short on balance. Each Black Op's
+ *   attempts: the n-th made with the chance all before it failed, at the state their rebuilds left (each a failure's
+ *   loss rebuilt at ρ's mix), so Σₙ P(n made)·(Tₙ + (1 − pₙ)·L/ρₙ), B6's (T + (1 − p)·L/ρ)/p where nothing grows; its chance
  *   the formula there times the share read (B6's); the state after it its expected failures' rebuilds' (their mean),
  *   then its gain's points.
  * - **Its check** (core's bladeburner-growth.test.ts): a seeded walk of the game's attempts (each success drawn at the
  *   game's formula at the walk's own state, its experience, levels and points the game's, the points spent by B3's
  *   rule as they cover a level): combat 100 from rank 0 to Operation Titan done, within 1% (0.76%); the whole route
  *   (behind an environment knob), 2.8% long (98.25 h against 95.56 ± 1.97 h over 40 walks): the mean path's rate
- *   stands for the mean over the paths (a mean-field step, labelled).
+ *   stands for the mean over the paths (a mean-field step, labelled). The walk checks the integration and the growth's
+ *   bookkeeping (the experience, the levels, the points and their spending, the Black Ops' attempts), not ρ: it works
+ *   the actions as the tail's mix (`bladeburnerTailMix`) has them, so it inherits ρ and its time accounting (#409's
+ *   review). Only the BN6 suites' hindcasts check ρ.
  * - **The first Black Op's rank:** B6's stock (B5's least expected time, `firstToRankSeconds`) where shorter than the
  *   growth's tail: each leaves out what the other counts (the counts' stock; the growth), so each errs long.
  * Left out, and labelled:
@@ -45,7 +50,8 @@
  * - the max rank over the rank read (not read): the points from the rank read on, so a rank under its max earns its
  *   points early, optimistic by at most that gap's thirds; the points' fraction toward the next, cautious;
  * - the successes before the reading (not read): the least that opened each max level read, cautious;
- * - the skills bought only at each step's end, not each reading: cautious;
+ * - the skills bought only at each step's end, not each reading: with the left sum, the step's error, measured
+ *   optimistic by about 2% (above);
  * - the spread of the paths: the rate at the mean path stands for the paths' mean (the walk's whole route 2.8%
  *   shorter): cautious;
  * - B6's own (its stamina for the Black Ops, HP and the hospital, the destroy's minute): as B6 labels them;
@@ -182,7 +188,7 @@ export function bladeburnerGrownInput(
 
 /** The least step of the integration, in rank: 10 skill points' worth. */
 export const BLADEBURNER_GROWTH_LEAST_STEP = 10 * BLADEBURNER_RANKS_PER_SKILL_POINT;
-/** The integration's step, a share of the rank (`blackOpsRouteGrownEstimate`): within 1% of half of it (the tests'). */
+/** The integration's step, a share of the rank (`blackOpsRouteGrownEstimate`): within 2% of an eighth of it (the tests'). */
 export const BLADEBURNER_GROWTH_FRACTION = 0.05;
 /** A Black Op's attempts followed one by one, at most (`blackOpsRouteGrownEstimate`), then in closed form. */
 export const BLADEBURNER_GROWTH_ATTEMPTS = 2000;

@@ -386,8 +386,9 @@ function blackOpsTerm(blackOps: DestroyBlackOpsInputs | null): DestroyTerm {
       (blackOps.grown === true
         ? "with the competence's growth (#408): each step of rank at ρ there, the skills its points buy by B3's rule, " +
           "the stats the actions' experience gives and the levels their successes open, each one's attempts at the " +
-          "competence then (cautious on balance: its step errs long; the Black Ops' stamina, 41.8 a Daedalus attempt, " +
-          "and HP left out, optimistic)" +
+          "competence then (cautious on balance: 2.8% long of a seeded walk of the game's attempts over the route, " +
+          "its step about 2% short of an eighth of it; the Black Ops' stamina, 41.8 a Daedalus attempt, and HP left " +
+          "out, optimistic)" +
           `${Number.isFinite(blackOps.ms) ? "" : ": never"}`
         : "the next one's rank by B5's stock and tail, each later one's at the sustainable rate, each one's attempts " +
           "(T + (1 − p)·L/ρ)/p, at the competence now (cautious on balance: its rise left out; the Black Ops' " +

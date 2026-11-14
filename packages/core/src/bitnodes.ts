@@ -196,11 +196,12 @@ export function knownBitNodes(): number[] {
  * 98.2 h at combat 100 and 78.6 h at 300; with the Bladeburners faction's whole shop installed, 67.7 h at combat 100
  * (its rebuild half an hour) and 104.8 h at 300 (its rebuild 42 h, so keeping's 78.6 h is the better); with every
  * augmentation in the game that moves the route's multipliers, an upper bound (BigD's Big ... Brain among them, sold by
- * no faction in BN6, and none of their prices counted), 31.0 h (core's bladeburner-growth.test.ts). So 67.7 h at
- * best, ×1.25 the bar: still past it. What's left, each a later slice's: the other factions' augmentations that move
- * the route (the upper bound's 31 h) and the money for them; more than one install; the Black Ops' own chances (B3's
- * rule buys the skills for the actions' rank a second, so the last Black Ops run at 5% and their attempts are a large
- * part of the route); teams. BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is B8's.
+ * no faction in BN6, and none of their prices counted), 31.0 h (core's bladeburner-growth.test.ts). The shop is priced
+ * at rank 0 with neither its reputation (the Bladeburners faction's, earned by the rank) nor its money counted, so
+ * installed at once: optimistic, which only strengthens "past the bar". So 67.7 h at best, ×1.25 the bar: still past
+ * it. What's left, each a later slice's: the other factions' augmentations that move the route (the upper bound's
+ * 31 h) and the money for them; more than one install; the Black Ops' own chances (B3's rule buys the skills for the
+ * actions' rank a second, so the last Black Ops run at 5% and their attempts are a large part of the route); teams. BN7's, at its own `BladeburnerRank` 0.6, `BladeburnerSkillCost` 2 and prices ×3, is B8's.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [

@@ -26,7 +26,7 @@ import { BLADEBURNER_CHAOS_SLACK_MS } from "../src/bladeburner-cities-report.ts"
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { grownHindcast } from "./helpers/grown-hindcast.ts";
+import { expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -193,10 +193,15 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
   await fresh.game.run(HOUR - (fresh.game.clock.now() - startedAtMs));
   expect(chaosOf(reading()?.city)).toBeLessThan(50);
   // #408's hindcast: the grown estimate's time to the rank the hour reached, from the reading in the city moved to.
-  console.log(
-    grownHindcast("B4's hour, its chaos edited", startMedium, fresh.game.clock.now() - movedAtMs, reading()?.rank ?? 0)
-      .line,
+  const hindcast = grownHindcast(
+    "B4's hour, its chaos edited",
+    startMedium,
+    fresh.game.clock.now() - movedAtMs,
+    reading()?.rank ?? 0,
   );
+  console.log(hindcast.line);
+  // Past ×2 (the table's `why`: Raid's lottery), and so on the table's out side.
+  expectGrownHindcast(hindcast);
 
   const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() } as const;
   const { text, failures } = runReport(fresh.data.store, window, { verbose: true });

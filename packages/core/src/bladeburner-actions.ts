@@ -813,6 +813,8 @@ export interface BladeburnerTailWork {
   level: number;
   chance: number;
   attemptSeconds: number;
+  /** An attempt with its share of its rest (its cycle step's seconds): the linear programme's time, Σ ≤ 1 a second. */
+  cycleSeconds: number;
   attemptsPerSecond: number;
   /** An attempt's mean rank with its share of its rest's (the cycle's rise, `bladeburnerStepRise`). */
   rise: number;
@@ -836,6 +838,7 @@ export function bladeburnerTailMix(input: BladeburnerActionInput): { rate: numbe
       level: way.level,
       chance: way.chance,
       attemptSeconds: way.attemptSeconds,
+      cycleSeconds: way.seconds,
       attemptsPerSecond: perSecond,
       rise: way.rise,
     };

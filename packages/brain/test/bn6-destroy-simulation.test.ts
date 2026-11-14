@@ -30,7 +30,7 @@ import { runReport } from "../src/run-report.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { grownHindcast } from "./helpers/grown-hindcast.ts";
+import { expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -113,7 +113,9 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
   expect(daedalusSentAtMs).not.toBeNull();
   expect(doneAtMs).not.toBeNull();
   // #408's hindcast: Daedalus done from its rank, against the grown estimate.
-  console.log(grownHindcast("B6's Daedalus", startMedium, (doneAtMs ?? Number.NaN) - startedAtMs, "next done").line);
+  const hindcast = grownHindcast("B6's Daedalus", startMedium, (doneAtMs ?? Number.NaN) - startedAtMs, "next done");
+  console.log(hindcast.line);
+  expectGrownHindcast(hindcast);
 
   // BN5.2: SF6.1 gained beside the others; through Singularity's destroy, straight into it (no BitVerse).
   expect(slow()?.resetInfo).toMatchObject({ currentNode: 5, ownedAugs: {} });

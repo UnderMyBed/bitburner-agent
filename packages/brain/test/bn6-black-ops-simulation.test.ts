@@ -25,7 +25,7 @@ import { BLADEBURNER_ACTIONS_HOLD } from "../src/bladeburner.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { grownHindcast } from "./helpers/grown-hindcast.ts";
+import { expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -131,17 +131,21 @@ test("BN6.1, an hour from a harness join at rank 2,500: Typhoon done, then Zero 
   }
   console.log(`${sent} readings sending a Black Op; ${waited} at its rank waiting (the look-ahead)`);
   // #408's hindcasts: Typhoon done from its rank, and Zero's rank from 100 under it, against the grown estimate.
-  console.log(
-    grownHindcast("B5's Typhoon", startMedium, (typhoonDoneAtMs ?? Number.NaN) - startedAtMs, "next done").line,
+  const typhoonHindcast = grownHindcast(
+    "B5's Typhoon",
+    startMedium,
+    (typhoonDoneAtMs ?? Number.NaN) - startedAtMs,
+    "next done",
   );
-  console.log(
-    grownHindcast(
-      "B5's climb to Zero",
-      zeroMedium,
-      (zeroRankAtMs ?? Number.NaN) - (zeroFromMs ?? Number.NaN),
-      ZERO.rank,
-    ).line,
+  const zeroHindcast = grownHindcast(
+    "B5's climb to Zero",
+    zeroMedium,
+    (zeroRankAtMs ?? Number.NaN) - (zeroFromMs ?? Number.NaN),
+    ZERO.rank,
   );
+  console.log(`${typhoonHindcast.line}\n${zeroHindcast.line}`);
+  expectGrownHindcast(typhoonHindcast);
+  expectGrownHindcast(zeroHindcast);
   // Typhoon done; Zero sent once its rank came, within the readings' cadence.
   expect(typhoonDoneAtMs).not.toBeNull();
   expect(zeroRankAtMs).not.toBeNull();
