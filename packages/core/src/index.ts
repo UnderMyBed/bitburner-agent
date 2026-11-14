@@ -964,6 +964,7 @@ export {
 export {
   addsToLevelling,
   batchThenInstallPlan,
+  beatsTheWait,
   chooseLevelling,
   chooseLevellingTarget,
   LEVELLING_CANDIDATES,

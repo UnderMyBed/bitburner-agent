@@ -16,7 +16,10 @@ import type { HackingPlayer, HackingTarget } from "../src/hacking-ceiling.ts";
 import {
   addsToLevelling,
   batchThenInstallPlan,
+  beatsTheWait,
   chooseLevelling,
+  LEVELLING_INSTALL_MS,
+  LEVELLING_REROOT_MS,
   type LevellingRate,
   levelLoopThreads,
   levellingEstimates,
@@ -573,6 +576,32 @@ describe("The Red Pill's install timed (#410): #406's margin, the measured error
     expect(quiet.marginSeconds).toBeGreaterThan(0);
     expect(quiet.marginSeconds).toBeLessThan(lead);
     expect(quiet.choice).toBe("now");
+  });
+
+  test("a tie waits; batching's experience rate scaled by the install's gains, its error in the margin where (a) leads", () => {
+    expect(beatsTheWait(10, 9)).toBe(true);
+    expect(beatsTheWait(10, 10)).toBe(false);
+    expect(beatsTheWait(0, 0)).toBe(false);
+    // Batching's experience so fast (a) is the least after the install: from 0 at the multipliers the purchase leaves,
+    // at the measured rate times its `hacking_exp` and `hacking_speed` gains, after the install's fixed times.
+    const fast = { ...offer, batchingExp: { expPerSecond: 1e15, atLevel: 2938 } };
+    const purchase = { levels: 10, augmentations: ["Embedded Netburner Module Analyze Engine"] };
+    const after = redPillLevelling(fast, purchase);
+    expect(after.candidate).toBe("money");
+    const gain = levellingInstallMultipliers(10, purchase.augmentations);
+    const fixed = (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS + fast.preparationMs(purchase)) / 1000;
+    const levelMult = (fast.levelMult as number) * gain.hacking;
+    expect(after.seconds).toBeCloseTo(
+      fixed +
+        secondsToHackingLevel(0, REQUIRED, levelMult, {
+          expPerSecond: 1e15 * gain.hackingExp * gain.hackingSpeed,
+          atLevel: 2938,
+        }),
+      3,
+    );
+    // Its error moves the difference, the income's none: the margin from the experience rate's alone.
+    expect(redPillInstallTiming(fast).marginSeconds).toBe(0);
+    expect(redPillInstallTiming({ ...fast, batchingExpError: 5e14 }).marginSeconds).toBeGreaterThan(0);
   });
 
   test("now with no wait: no income measured, or none within the bound; The Red Pill's donation off the money first", () => {

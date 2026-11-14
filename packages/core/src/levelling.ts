@@ -482,6 +482,14 @@ export function rateStandardError(samples: readonly { atMs: number; value: numbe
   return effective > 1 ? Math.sqrt(variance / (effective - 1)) : null;
 }
 
+/**
+ * #406's margin rule (#410): an irreversible step beats the wait only where it leads by more than the measured error
+ * of their difference, `marginSeconds`; a tie waits.
+ */
+export function beatsTheWait(leadSeconds: number, marginSeconds: number): boolean {
+  return leadSeconds > marginSeconds;
+}
+
 /** What an install buys of the levelling set (#410): NeuroFlux Governor's levels and the set's augmentations. */
 export interface RedPillPurchase {
   levels: number;
@@ -660,7 +668,7 @@ export function redPillInstallTiming(offer: RedPillInstallOffer): RedPillInstall
       ? moved(difference(income, { expPerSecond: exp.expPerSecond + expError, atLevel: exp.atLevel }))
       : 0;
   const marginSeconds = Math.hypot(byIncome, byExp);
-  const installNow = Number.isFinite(now.seconds) && base > marginSeconds;
+  const installNow = Number.isFinite(now.seconds) && beatsTheWait(base, marginSeconds);
   return {
     choice: installNow ? "now" : "wait",
     now,
