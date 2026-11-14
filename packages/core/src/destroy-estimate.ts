@@ -44,12 +44,14 @@
  *   The Red Pill by the formulas is a later slice.
  *
  * **BN6, the Black Ops' route** (#398; `destroyRouteOf`'s "blackOps", core's `winRouteOf`): one term, BO, the route's
- * time from the reading (./bladeburner-route.ts's `blackOpsRouteEstimate`: the next Black Op's rank by B5's stock and
- * tail, each later one's at the sustainable rate, each one's attempts (T + (1 − p)·L/ρ)/p), at the competence now:
- * cautious on balance. Its rise is left out, which errs long by far; the Black Ops' stamina (0.285 × diffMult an attempt,
- * 41.8 for Daedalus's, `Bladeburner.ts:1015-1024`) and its rests, and HP (a failure's hpLoss × diffMult, the hospital's
- * money), are left out too, which err short. 0 with all 21 done; none before the division's reading; never at a chance
- * of 0 now.
+ * time from the reading: since #408 with the competence's growth where the combat figures are read
+ * (./bladeburner-growth.ts's `blackOpsRouteGrownEstimate`: the skills from the rank, the stats from the actions, the
+ * levels from the successes, its step erring long), else B6's (./bladeburner-route.ts's `blackOpsRouteEstimate`: the
+ * next Black Op's rank by B5's stock and tail, each later one's at the sustainable rate, each one's attempts (T + (1 −
+ * p)·L/ρ)/p), at the competence now, whose rise left out errs long by far; the Black Ops' stamina (0.285 × diffMult
+ * an attempt, 41.8 for Daedalus's, `Bladeburner.ts:1015-1024`) and its rests, and HP (a failure's hpLoss × diffMult,
+ * the hospital's money), are left out too, which err short. 0 with all 21 done; none before the division's reading;
+ * never at a chance of 0 now.
  * Its source names The Red Pill's estimate beside it (the hacking level alone by the formulas, at least) and the
  * planner's choice (`chooseWinRoute`): both routes' estimates, the planner's to weigh. Daedalus's A, BC and D don't
  * apply: The Red Pill's holds are off on this route.
@@ -155,8 +157,12 @@ export interface DestroyEstimateInputs {
 export interface DestroyBlackOpsInputs {
   /** The Black Ops done (`BLACK_OPS_COUNT` all of them). */
   done: number;
-  /** The route's time from the reading (`blackOpsRouteEstimate`), ms; Infinity never (a chance of 0 now). */
+  /**
+   * The route's time from the reading, ms; Infinity never (a chance of 0 now): with the competence's growth (#408,
+   * `blackOpsRouteGrownEstimate`) where `grown`, else B6's at the competence now (`blackOpsRouteEstimate`).
+   */
   ms: number;
+  grown?: boolean;
   /** The Red Pill's hacking level by the formulas (`redPillLevelSeconds`), ms, at least; Infinity never; null unmeasured. */
   redPillMs: number | null;
   /** The planner's choice between them (`chooseWinRoute`). */
@@ -376,10 +382,19 @@ function blackOpsTerm(blackOps: DestroyBlackOpsInputs | null): DestroyTerm {
     ms: blackOps.ms,
     atLeast: false,
     source:
-      `the Black Ops (#398): ${blackOps.done} of ${BLACK_OPS_COUNT} done; the next one's rank by B5's stock and tail, each later ` +
-      "one's at the sustainable rate, each one's attempts (T + (1 − p)·L/ρ)/p, at the competence now (cautious on " +
-      "balance: its rise left out; the Black Ops' stamina, 41.8 a Daedalus attempt, and HP left out, optimistic)" +
-      `${Number.isFinite(blackOps.ms) ? "" : ": never at the competence now"}; The Red Pill's by the ` +
+      `the Black Ops (#398): ${blackOps.done} of ${BLACK_OPS_COUNT} done; ` +
+      (blackOps.grown === true
+        ? "with the competence's growth (#408): each step of rank at ρ there, the skills its points buy by B3's rule, " +
+          "the stats the actions' experience gives and the levels their successes open, each one's attempts at the " +
+          "competence then (cautious on balance: 2.8% long of a seeded walk of the game's attempts over the route, " +
+          "its step about 2% short of an eighth of it; the Black Ops' stamina, 41.8 a Daedalus attempt, and HP left " +
+          "out, optimistic)" +
+          `${Number.isFinite(blackOps.ms) ? "" : ": never"}`
+        : "the next one's rank by B5's stock and tail, each later one's at the sustainable rate, each one's attempts " +
+          "(T + (1 − p)·L/ρ)/p, at the competence now (cautious on balance: its rise left out; the Black Ops' " +
+          "stamina, 41.8 a Daedalus attempt, and HP left out, optimistic)" +
+          `${Number.isFinite(blackOps.ms) ? "" : ": never at the competence now"}`) +
+      "; The Red Pill's by the " +
       `formulas ${hours(blackOps.redPillMs)}; the planner's choice: ${blackOps.choice.route === "blackOps" ? "the Black Ops" : "The Red Pill"} ` +
       `(${blackOps.choice.why})`,
     label: "cautious",

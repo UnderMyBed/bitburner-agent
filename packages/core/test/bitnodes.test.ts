@@ -255,7 +255,7 @@ test("BN6's route is built (B6, #398), its estimate with installs past the bar (
   expect(playableBitNodes()).toEqual([1, 2, 4, 5]);
   expect(bitNodeUnplayableReason(6)).toBe(BITNODE_BLACK_OPS_ESTIMATE_REASON);
   expect(BITNODE_BLACK_OPS_ESTIMATE_REASON).toBe(
-    "no win route yet: the Black Ops' estimate with installs is past the campaign's bar (#404)",
+    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408)",
   );
   expect(bitNodeUnplayableReason(7)).toBe(BITNODE_NO_WIN_ROUTE_REASON);
   expect(BITNODE_NO_WIN_ROUTE_REASON).toBe("no win route yet (the Black Ops at BN7's multipliers, Bladeburner's B8)");

@@ -100,6 +100,7 @@ import {
   type BlackOpsRouteView,
   blackOpsInstallFiguresOf,
   blackOpsRouteOf,
+  GrownEstimateMemo,
 } from "./bladeburner-route.ts";
 import {
   CLOUD_SERVER_RESERVE_HORIZON_MS,
@@ -1921,6 +1922,8 @@ export class DesiredStateController {
    */
   /** The Black Ops' route last read (#398): its medium snapshot, the rest of its inputs, and the view. */
   #blackOpsRouteCache: { mediumData: MediumSnapshotData | null; key: string; view: BlackOpsRouteView } | null = null;
+  /** The route's grown estimate (#408), kept between solves: its figures stand `BLACK_OPS_GROWN_REFRESH_MS`. */
+  #blackOpsGrown = new GrownEstimateMemo();
 
   #blackOpsRoute():
     | ((rates: { rankPerSecond: number | null; expPerSecond: number | null }) => BlackOpsRouteView)
@@ -1945,6 +1948,7 @@ export class DesiredStateController {
       const plan = actions?.plan ?? null;
       const key = [
         bitNode,
+        resetTimeOf(this.#slowData, "lastAugReset"),
         rankPerSecond,
         expPerSecond,
         soFarMs,
@@ -1965,6 +1969,13 @@ export class DesiredStateController {
         firstToRankSeconds,
         // The climb's bound on the plan the Bladeburner rule runs (#400's review).
         plan,
+        // The grown estimate (#408), solved again each 10 min of the game's time (the medium snapshot's), at a new
+        // Black Op next, or at an install (#409's review: its figures otherwise the person before it for 10 min).
+        grownMemo: {
+          memo: this.#blackOpsGrown,
+          nowMs: this.#mediumGameTimeMs ?? 0,
+          lastAugReset: resetTimeOf(this.#slowData, "lastAugReset"),
+        },
       });
       this.#blackOpsRouteCache = { mediumData, key, view };
       return view;
@@ -2357,11 +2368,13 @@ function resetTimeOf(slow: SlowSnapshotData | null, field: ResetSentNote["field"
  * The destroy estimate's BN6 figures (#398) from the World Daemon's path: the Black Ops done and the route's time, The
  * Red Pill's beside it, and the planner's choice; null before the reading has the count and the estimate.
  */
-function destroyBlackOpsOf(route: BlackOpsRouteView | null): DestroyBlackOpsInputs | null {
+export function destroyBlackOpsOf(route: BlackOpsRouteView | null): DestroyBlackOpsInputs | null {
   if (route === null || route.done === null || route.estimate === null) return null;
   return {
     done: route.done,
-    ms: route.estimate.seconds * 1000,
+    // The planner's (#408): with the competence's growth where read, else B6's at the competence now.
+    ms: (route.grown ?? route.estimate).seconds * 1000,
+    grown: route.grown !== null,
     redPillMs: route.redPillSeconds === null ? null : route.redPillSeconds * 1000,
     choice: route.choice,
   };
