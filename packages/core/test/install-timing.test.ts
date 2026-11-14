@@ -942,7 +942,7 @@ describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's p
    * at the count's most, the DP at most doubles a reading. Nothing installed, every hacking faction and the later
    * cycles' joined (47 countables left), no favour, the 8 waits the cheapest left, as the brain's soonest mostly are
    * (a wait's cycles then install now's, after the same installs; 8 spread among the 47, 3.3 ms against 1.6 here on
-   * 2026-11-14). The least of 5 readings, past the first (the code's compile).
+   * 2026-11-14). Measured in CPU time, past the first reading (the code's compile).
    */
   test("its cost a reading at the count's most, 25 to go with 8 waits: within main's whole reading of the brain", () => {
     const MAIN_READING_MS = 2_940 / 458;
@@ -989,16 +989,18 @@ describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's p
     const first = reading();
     expect(first.candidates).toHaveLength(9);
     expect(first.candidates.every((each) => each.cyclesMs !== undefined)).toBe(true);
-    const costs = Array.from({ length: 5 }, () => {
-      const start = performance.now();
-      const timing = reading();
-      const cost = performance.now() - start;
-      expect(timing).toEqual(first);
-      return cost;
-    });
+    // This process's CPU time over 40 readings (a test file runs in its own process): a shard's other files share the
+    // CPUs, which stretched the wall time 4 times on CI. 40, so Windows' 15.6 ms clock is within 0.4 ms a reading.
+    const READINGS = 40;
+    const timings: InstallTiming[] = [];
+    const before = process.cpuUsage();
+    for (let each = 0; each < READINGS; each++) timings.push(reading());
+    const used = process.cpuUsage(before);
+    const perReadingMs = (used.user + used.system) / 1000 / READINGS;
+    for (const timing of timings) expect(timing).toEqual(first);
     console.log(
-      `count 25, 8 waits: ${Math.min(...costs).toFixed(2)} ms a reading; main's whole reading ${MAIN_READING_MS.toFixed(2)} ms`,
+      `count 25, 8 waits: ${perReadingMs.toFixed(2)} ms of CPU a reading; main's whole reading ${MAIN_READING_MS.toFixed(2)} ms`,
     );
-    expect(Math.min(...costs)).toBeLessThan(MAIN_READING_MS);
+    expect(perReadingMs).toBeLessThan(MAIN_READING_MS);
   });
 });
