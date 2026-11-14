@@ -2078,6 +2078,8 @@ export class DesiredStateController {
       levellingInstall: this.#levelling.mode() === "install",
       // #228's invitation hold, as of the invitations rule's last update (#343: installing now held meanwhile).
       invitationHold: this.#invitations.hold(),
+      // Faction work going on (#389: the planner's R, the rebuild, is its first in a cycle), as of the last state sent.
+      factionWorking: factionWorkGoingOn(this.#desired?.work ?? null, this.#fastData?.work),
       shareBonus,
       // BN2 before the gang (#357's (1)): avmnite-02h's level, while the gang rule reads none.
       gangForming: this.#gangFormingInputs(),

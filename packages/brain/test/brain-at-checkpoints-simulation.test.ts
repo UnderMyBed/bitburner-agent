@@ -50,6 +50,9 @@ interface LoggedTiming {
   choice: number | null;
   heldForIncome: boolean;
   heldForInvitation: boolean;
+  /** #406: what kept a choice other than the least (the margin, or the wait under way held), and its margin, ms. */
+  kept?: "margin" | "held" | null;
+  marginMs?: number;
 }
 
 /** Seeds as the baseline's `--seeds` takes them (`a..b` or `a,b,c`, distinct); seed 1 when unset. Else it throws. */
@@ -472,9 +475,10 @@ test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the g
   // 5.4 h against waiting 5.5 h). Its level at 1 h, 506, passes main's 458 with that install.
   expect(last.peakHackingLevel).toBe(Math.max(...levels));
   // The planner sound over the run: the countables at an install rose; no wait went overdue; past the income's first
-  // window (10 minutes), every timing it logged made a choice; and each choice is its candidates' least estimate, a tie
-  // to installing now (then to the fewer to wait for), or the least wait while installing now is held (core's
-  // `installTiming`). A planner always installing now, or always waiting for the most, fails it.
+  // window (10 minutes), every timing it logged made a choice; and each choice is its candidates' least estimate (then
+  // the fewer to wait for), or the least wait while installing now is held (core's `installTiming`), or (#406) one the
+  // margin kept: installing now not shorter than the best wait by more than its τ's error, or the wait under way not
+  // beaten by more than the error. A planner always installing now, or always waiting for the most, fails it.
   const events = fresh.data.store.eventsInWindow({
     environment: "E1",
     sinceMs: EPOCH_MS,
@@ -495,7 +499,17 @@ test("seed 1 from the baseline's start, to 1 virtual hour: each checkpoint the g
       null,
     );
   };
-  expect(timings.filter((timing) => timing.choice !== (least(timing)?.k ?? null))).toEqual([]);
+  const keptWithin = (timing: LoggedTiming) => {
+    const chosen = timing.candidates.find((each) => each.k === timing.choice);
+    const best = least(timing);
+    return (
+      (timing.kept === "margin" || timing.kept === "held") &&
+      chosen !== undefined &&
+      best !== null &&
+      chosen.estimateMs - best.estimateMs <= (timing.marginMs ?? 0)
+    );
+  };
+  expect(timings.filter((timing) => timing.choice !== (least(timing)?.k ?? null) && !keptWithin(timing))).toEqual([]);
   // The brain played: past hacking 1, home at SF1's 32 GB or more.
   expect(last.reading.hackingLevel).toBeGreaterThan(50);
   expect(last.reading.homeRamMax).toBeGreaterThanOrEqual(32);

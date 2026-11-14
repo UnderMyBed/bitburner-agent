@@ -35,6 +35,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   AUGMENTATION_ONLINE_SETTING,
   type InstallTimingPolicy,
+  readCycleRebuild,
   readCycleSeen,
   readInstallWait,
   readOnlineClock,
@@ -49,6 +50,7 @@ import { readManualIntents, readResetSentNote, writeResetSentNote } from "../src
 import { readProgramsEnabled } from "../src/programs.ts";
 import type { SaveBackupEvent } from "../src/save-backups.ts";
 import { type Environment, TelemetryStore } from "../src/telemetry-store.ts";
+import { writeOwnersWork } from "../src/work.ts";
 import { mediumData, slowData, staticServer } from "./helpers/snapshot-fixtures.ts";
 
 const TOKEN = "the-token";
@@ -1471,6 +1473,27 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           way: "work",
           tauMs: expect.closeTo(30 * MINUTE, -3),
         });
+      });
+
+      test("faction work going on reaches the planner's R (#389): waiting while none, measured once the Agent's work converges", () => {
+        const { controller, connection } = connectedWithLoopOff("planner");
+        // The Black Hand short (50,000 of 100,000): the planner times installs.
+        for (let minute = 0; minute <= 1; minute += 1) minuteAt(connection, minute, 1e12, { blackHand: 50_000 });
+        expect(readCycleRebuild(store)).toEqual({ lastAugReset: 0, waiting: true });
+        // The owner's faction work at The Black Hand sent: not yet going on (no word from the Agent).
+        writeOwnersWork(store, { kind: "faction", faction: TBH, workType: "hacking" });
+        minuteAt(connection, 2, 1e12, { blackHand: 50_000 });
+        expect(controller.workView().desired?.kind).toBe("faction");
+        expect(readCycleRebuild(store)).toEqual({ lastAugReset: 0, waiting: true });
+        // The Agent's word it converged: going on, R measured at the next look.
+        send(connection, "fast", {
+          degradedTiers: [],
+          pageHeapUsedBytes: null,
+          game: null,
+          work: { converged: true, problem: null, backend: "ui" },
+        });
+        minuteAt(connection, 3, 1e12, { blackHand: 50_000 });
+        expect(readCycleRebuild(store)).toMatchObject({ lastAugReset: 0, rebuildMs: expect.any(Number) });
       });
 
       test("the experience the medium snapshots measure reaches the planner's τ by work (#401): flat, today's; rising, less", () => {
