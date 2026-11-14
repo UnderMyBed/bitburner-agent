@@ -455,16 +455,20 @@ class LaterPricing {
   /** Each group's factions in turn (`factionsOneAtATime`), by their countables' ids: the same after any installs. */
   readonly #worked = new Map<string, { faction: string; reputation: number }[]>();
 
-  constructor(later: PricedLaterCycles, counts?: LaterPricingCounts) {
+  /** The dead time a ramp in the rate (#413's review, `rampSeconds`), not a flat level: the level timing's alone. */
+  readonly #ramp: boolean;
+
+  constructor(later: PricedLaterCycles, counts?: LaterPricingCounts, ramp = false) {
     this.#later = later;
     this.#counts = counts;
+    this.#ramp = ramp;
   }
 
   /** The path and `faction_rep` after the installs of `installed` (`laterCycleRise`, `levellingInstallMultipliers`). */
   after(installed: readonly string[]): Installs {
     const later = this.#later;
-    const rise = laterCycleRise(later.rise, levellingInstallMultipliers(0, installed), later.deadSeconds);
-    const pathKey = `${rise.levelMult} ${rise.kappa} ${rise.delaySeconds ?? 0}`;
+    const rise = laterCycleRise(later.rise, levellingInstallMultipliers(0, installed), later.deadSeconds, this.#ramp);
+    const pathKey = `${rise.levelMult} ${rise.kappa} ${rise.delaySeconds ?? 0} ${rise.rampSeconds ?? 0}`;
     const repGain = factionRepGain(installed);
     const key = `${pathKey} ${repGain}`;
     let installs = this.#installs.get(key);
@@ -940,12 +944,13 @@ export interface LevelTiming {
  * is m·(32·ln(exp + 534.6) − 200) (`calculateSkill`, `skill.ts:7-15`), so at a level multiplier m it needs
  * exp((2500/m + 200)/32) − 534.6 experience: at BN4's m 2.75 after the count about 1e15 against the 7e9 a cycle earns,
  * so only an install that raises m gets there. Each candidate's time to the level:
- * - **install now:** the cycle after it along `laterCycleRise` at the install's multipliers (#405's level path, flat
- *   for the dead time), to the level (`levelMs`); or, where the hacking set's later cycles reach it sooner, those by
+ * - **install now:** the cycle after it along `laterCycleRise` at the install's multipliers (#405's level path, its dead
+ *   time a ramp in the rate, the level rising during it: #413's review, `rampSeconds`), to the level (`levelMs`); or,
+ *   where the hacking set's later cycles reach it sooner, those by
  *   #389's DP (`leastSplits`, `LaterPricing`: the same recurrence and the same cycles, shared by every candidate of a
  *   reading) and the last one's time to the level: the least over j of B(j) and its level's time after j;
  * - **wait for a faction's next k** (`waits`, A5's work there): τ_k, then likewise after the install of them too; or
- *   this cycle's own time to the invitation where that's sooner (`stays`).
+ *   this cycle's own time to the invitation where that's sooner (`stays`: then no wait, staying, choice null).
  * The hacking set: the countables left that add to levelling (`addsToLevelling`: the level's multiplier, its
  * experience's or its speed's), cheapest first, from the joined and later-cycle factions (`countablesLeft`). Installing
  * now is chosen only past the best wait's error (#406's rule, `marginMs`), or staying's (κ's), a tie to the wait; a
@@ -1000,7 +1005,8 @@ export function levelInstallTiming({
   counts?: LaterPricingCounts;
 }): LevelTiming | null {
   if (!pricedBy(later)) return null;
-  const pricing = new LaterPricing(later, counts);
+  // The dead time as a ramp in the rate (#413's review): the level rises during it, as the evidence's +5 min show.
+  const pricing = new LaterPricing(later, counts, true);
   const left = later.left.filter((each) => addsToLevelling([each.augmentation]));
   /** After installing `installing` and `waitedFor`: the least over j of B(j) and the level's time after j. */
   const priceAfter = (waitedFor: readonly string[]) => {
@@ -1076,7 +1082,7 @@ export function levelInstallTiming({
       kept = "margin";
       marginMs = margin;
     }
-  } else if (best !== null && best.stays !== true && !(best.estimateMs < stayMs)) {
+  } else if (best !== null && !(best.estimateMs < stayMs)) {
     // No install and no wait beats staying (a tie stays): no install, nothing waited for.
     chosen = null;
   }
@@ -1094,6 +1100,9 @@ export function levelInstallTiming({
       marginMs = margin;
     }
   }
+  // A wait that stays (its τ past this cycle's own time) waits for nothing: staying, no install, no money held for it
+  // (#413's review).
+  if (chosen?.stays === true) chosen = null;
   const choice = chosen === null ? null : candidates.indexOf(chosen);
   const working = chosen !== null && chosen.k > 0 ? chosen : bestWait;
   const first = working?.waitedFor[0];

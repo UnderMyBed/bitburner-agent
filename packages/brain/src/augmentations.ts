@@ -110,8 +110,9 @@
 //   error (#406), held with no income measured or an invitation's money held (#343's guards, `augmentationIncomeHeld`
 //   past two windows); never of nothing that adds to the level. Waiting: no countdown, the wait's money held within the
 //   lookahead, A5 working for the wait's faction, else the best wait's (`countHoldTarget`: the faction whose next
-//   augmentation most cuts the time). Unpriced: no install while R or the rate is soon measured (the rate's window,
-//   10 min online, at most), else the count rule, logged. The A/B's baseline (`levelTiming` "count rule", tests alone)
+//   augmentation most cuts the time). Unpriced: no κ carried over an install yet (#389's rule), or R not measurable
+//   this cycle, the count rule, logged; R waiting for the cycle's first faction work, no install until it's measured,
+//   `augmentationRebuildHeld` (an event, a run report failure) past two of the income's windows. The A/B's baseline (`levelTiming` "count rule", tests alone)
 //   keeps the count rule there.
 //   Once Daedalus invites or joins, or never short (The Red Pill elsewhere), the count rule times installs as before,
 //   with The Red Pill's way, Daedalus donations and levelling. The count rule short of the count stays only as the
@@ -325,6 +326,12 @@ export const AUGMENTATION_WAIT_OVERDUE_EVENT_KIND = "augmentationWaitOverdue";
  * report failure.
  */
 export const AUGMENTATION_INCOME_HELD_EVENT_KIND = "augmentationIncomeHeld";
+/**
+ * Installs held after Daedalus's count for R (#413's review: the cycle's first faction work, which prices the later
+ * cycles) for two of the income's windows online without a break (`INCOME_HELD_TOO_LONG_MS`): R isn't being measured
+ * (no faction work: A5's switch off, or the owner's other work). Once a hold; a run report failure.
+ */
+export const AUGMENTATION_REBUILD_HELD_EVENT_KIND = "augmentationRebuildHeld";
 /**
  * The overdue wait's slack beyond twice its τ (#343): the income's window, 10 minutes
  * (`AUGMENTATION_INCOME_WINDOW_MS`), which a restart or a gap takes to measure again, the money's τ never until then.
@@ -746,6 +753,14 @@ export type AugmentationEvent =
       timing?: InstallTimingView;
       /** In BN2 with the gang, before The Red Pill (#357's (3)): what it costs there. Absent otherwise. */
       gangCost?: GangInstallCost;
+    }
+  | {
+      type: typeof AUGMENTATION_REBUILD_HELD_EVENT_KIND;
+      atMs: number;
+      /** The time online this cycle now, and when the hold began. */
+      onlineMs: number;
+      sinceOnlineMs: number;
+      timing: InstallTimingView;
     }
   | {
       type: typeof AUGMENTATION_INCOME_HELD_EVENT_KIND;
@@ -2153,6 +2168,13 @@ export class AugmentationRule {
   readonly #levelPolicy: LevelTimingPolicy;
   /** The last reading's wait after Daedalus's count (#413, #406's hysteresis): in memory, a restart decides afresh. */
   #levelHeld: { lastAugReset: number; faction: string; k: number } | null = null;
+  /**
+   * A5's work after Daedalus's count (#413): the chosen wait's faction and first augmentation, else the best wait's;
+   * null off the route or unpriced.
+   */
+  #levelWork: { faction: string; augmentation: string } | null = null;
+  /** Installs held after the count until R is measured (#413's review), since when, and whether alerted. */
+  #rebuildHeld: { lastAugReset: number; sinceOnlineMs: number; reported: boolean } | null = null;
   /** Why the level's timing wasn't priced, as last logged (#413): logged on a change. */
   #levelUnpriced: string | null = null;
   /** The store's slow snapshots of a cycle, by its `lastAugReset` (#388), or null: none read. */
@@ -2304,7 +2326,8 @@ export class AugmentationRule {
     // Not one of a faction not joined yet (Netburners', #387): A5 works for the next meanwhile.
     const held =
       this.#countHeld ?? this.#waitedFor.find((each) => each.way === "work" && each.beforeJoinMs === undefined) ?? null;
-    return held?.way === "work" ? { faction: held.faction, augmentation: held.augmentation } : null;
+    if (held?.way === "work") return { faction: held.faction, augmentation: held.augmentation };
+    return this.#enabled ? this.#levelWork : null;
   }
 
   /**
@@ -2844,7 +2867,14 @@ export class AugmentationRule {
           }),
         ]),
       );
-    const waits = grouped(byWork(levelRise.rise));
+    const toCome = byWork(levelRise.rise);
+    const waits = grouped(toCome);
+    // #343's income guard, where it bites (#413's review): with no income measured, a wait whose money the money held
+    // doesn't cover is never (`nextCountables` ends there), so one unpriced; with every wait priced, the income
+    // doesn't enter the choice, and installing now isn't held for it.
+    const unpricedByIncome =
+      income === null &&
+      [...waits].some(([faction, next]) => next.length < toCome.filter((each) => each.faction === faction).length);
     // #406: each τ's error, the share's and κ's through the τ (the waits again at κ lowered by its measured error).
     const shareError = meanRelativeError(this.#shareSamples.map((sample) => sample.bonus));
     const kappaError = levelRise.from === "measured now" ? this.#expRate.relativeError() : null;
@@ -2880,7 +2910,7 @@ export class AugmentationRule {
       set: set.purchases.map((purchase) => purchase.name),
     });
     const rebuildMs = "rebuildMs" in rebuild ? rebuild.rebuildMs : null;
-    const measured = levelRise.from !== null;
+    const carried = this.#riseCarried(resetInfo.lastAugReset, slowData);
     const required = daedalusRequirements(resetInfo.currentNode, resetInfo.ownedSF);
     const moneyMs =
       args.money >= required.money
@@ -2905,40 +2935,65 @@ export class AugmentationRule {
       later: {
         left,
         rebuildMs,
-        rise: measured ? levelRise.rise : null,
+        rise: carried ? levelRise.rise : null,
         deadSeconds: dead.deadMs / 1000,
         rateAt,
         installing: args.installing,
       },
       tauError: tauRelativeError(shareError, null),
       held: held === null ? null : { faction: held.faction, k: held.k },
-      incomeMeasured: income !== null,
+      incomeMeasured: !unpricedByIncome,
       invitationHeld: args.invitationHeld,
     });
-    // Unpriced: R waiting for the cycle's first faction work, or the rate's window filling, is soon measured, so no
-    // install meanwhile, for the rate's window (`HACKING_EXP_WINDOW_MS`, 10 min) online at most; past it, or R not
-    // measurable this cycle (first seen with its work going on), the count rule, as before #413.
+    // Unpriced (#413's review): R waiting for the cycle's first faction work, with a κ carried, is measured at that work,
+    // so no install until it is (an alert past two of the income's windows, `#watchRebuildHold`); no κ carried over an
+    // install (#389's rule: never one measured now, through an install not made), or R not measurable this cycle (first
+    // seen with its work going on), the count rule, as before #413.
     const why =
       timing !== null
         ? null
-        : rebuildMs === null
-          ? `R not measured: ${"waiting" in rebuild ? "no faction work yet" : "the cycle first seen with its work going on"}`
-          : !measured
-            ? "no level's rise measured or carried yet"
+        : !carried
+          ? "no rate carried over an install yet"
+          : rebuildMs === null
+            ? `R not measured: ${"waiting" in rebuild ? "no faction work yet" : "the cycle first seen with its work going on"}`
             : "a level that doesn't rise (κ or m 0)";
-    const soon = args.onlineMs < HACKING_EXP_WINDOW_MS && (rebuildMs === null ? "waiting" in rebuild : !measured);
+    const soon = carried && rebuildMs === null && "waiting" in rebuild;
     const unpriced = why === null ? null : { why, held: soon };
     const words = unpriced === null ? null : `${why}${soon ? ": no install until it is" : ": the count rule"}`;
     if (words !== null && words !== this.#levelUnpriced) {
       this.#log(
         `augmentations: after Daedalus's count, the planner's level timing isn't priced (${why}): ` +
-          (soon
-            ? `no install until it is, for the rate's window (${formatEta(HACKING_EXP_WINDOW_MS)} online) at most (#413)`
-            : "the count rule times installs meanwhile (#413)"),
+          (soon ? "no install until it is (#413)" : "the count rule times installs meanwhile (#413)"),
       );
     }
     this.#levelUnpriced = words;
     return { timing, waits, unpriced };
+  }
+
+  /**
+   * Installs held after Daedalus's count until R is measured (#413's review), without a break, `INCOME_HELD_TOO_LONG_MS`
+   * online (two of the income's windows, as #343's income hold): once, `augmentationRebuildHeld` and a log line (a run
+   * report failure). In memory: a restart starts it afresh.
+   */
+  #watchRebuildHold(timing: InstallTimingView, lastAugReset: number, onlineMs: number, atMs: number): void {
+    const held =
+      this.#rebuildHeld?.lastAugReset === lastAugReset
+        ? this.#rebuildHeld
+        : { lastAugReset, sinceOnlineMs: onlineMs, reported: false };
+    this.#rebuildHeld = held;
+    if (held.reported || onlineMs - held.sinceOnlineMs < INCOME_HELD_TOO_LONG_MS) return;
+    held.reported = true;
+    this.#emit({
+      type: AUGMENTATION_REBUILD_HELD_EVENT_KIND,
+      atMs,
+      onlineMs,
+      sinceOnlineMs: held.sinceOnlineMs,
+      timing,
+    });
+    this.#log(
+      `augmentations: R UNMEASURED: after Daedalus's count, installs held for R (the cycle's first faction work) since ` +
+        `${formatEta(held.sinceOnlineMs)} online, ${formatEta(onlineMs - held.sinceOnlineMs)}; ${timing.words}`,
+    );
   }
 
   /** This cycle's rebuild (#389), R or null: the store's, moved on by this look (`nextCycleRebuild`) and kept. */
@@ -3615,7 +3670,11 @@ export class AugmentationRule {
             invitationHeld: invitationHold > 0,
           })
         : null;
-      if (!levelRoute) this.#levelHeld = null;
+      if (!levelRoute) {
+        this.#levelHeld = null;
+        this.#levelWork = null;
+      }
+      if (level?.unpriced?.held !== true) this.#rebuildHeld = null;
       const levelPlanned = level !== null && (level.timing !== null || level.unpriced?.held === true);
       // Short of Daedalus's count, the planner times installs (#343): install now, or wait for the next k countables,
       // the least estimated time to the count chosen, decided again at every update. With the gang, (3) (#357).
@@ -3661,10 +3720,12 @@ export class AugmentationRule {
             route: LEVEL_ROUTE,
             words:
               `after Daedalus's count, to its invitation's hacking 2,500 (#413): not priced yet (${level.unpriced?.why}): ` +
-              `no install until it is, for the rate's window (${formatEta(HACKING_EXP_WINDOW_MS)} online) at most`,
+              "no install until it is",
           };
           levelWaitedFor = [];
+          this.#levelWork = null;
           this.#incomeHeld = null;
+          this.#watchRebuildHold(timing, resetInfo.lastAugReset, onlineMs, atMs);
         } else if (levelPlanned && level?.timing != null) {
           // After Daedalus's count (#413): decided again at every update from the reading; no wait kept in the store
           // (a restart decides afresh), the last choice held in memory (#406's hysteresis).
@@ -3677,10 +3738,11 @@ export class AugmentationRule {
               ? { lastAugReset: resetInfo.lastAugReset, faction: chosen.faction, k: chosen.k }
               : null;
           // A5's work (#413): the chosen wait's faction, else the best wait's; its countables, the reserve's.
-          const work = level.timing.work;
-          const working = chosen != null && chosen.k > 0 ? chosen : null;
-          const list = work === null ? [] : (level.waits.get(work.faction) ?? []);
-          levelWaitedFor = working === null ? list.slice(0, 1) : list.slice(0, working.k);
+          const working = chosen != null && chosen.k > 0 && chosen.faction !== undefined ? chosen : null;
+          levelWaitedFor =
+            working === null ? [] : (level.waits.get(working.faction as string) ?? []).slice(0, working.k);
+          this.#levelWork = level.timing.work;
+          this.#rebuildHeld = null;
           this.#watchIncomeHold(timing, resetInfo.lastAugReset, onlineMs, atMs);
         } else if (blackOpsPlanned) {
           // The Black Ops' route (#404): keep or install now, decided again at every update from the reading; no wait is

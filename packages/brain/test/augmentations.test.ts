@@ -54,6 +54,7 @@ import {
   describeReason,
   earnedOf,
   formatEta,
+  INCOME_HELD_TOO_LONG_MS,
   type InstallTimingPolicy,
   type InstallTimingView,
   LEVEL_ROUTE,
@@ -5111,16 +5112,19 @@ describe("after Daedalus's count (#413): installs and A5's work by the time to i
     rebuild = true,
     onlineMinutes = 60,
     steps = 11,
+    carried = true,
     levelTiming = "planner" as LevelTimingPolicy,
     held = MONEY,
   }) => {
     exp = hackingExpOfLevel(1900, M);
     money = held;
     earned = 0;
-    store.setSetting(
-      AUGMENTATION_LEVEL_RISE_SETTING,
-      JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 2e6 / 1950, deadMs: null }),
-    );
+    if (carried) {
+      store.setSetting(
+        AUGMENTATION_LEVEL_RISE_SETTING,
+        JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 2e6 / 1950, deadMs: null }),
+      );
+    }
     store.setSetting(
       AUGMENTATION_ONLINE_SETTING,
       JSON.stringify({ lastAugReset: 0, onlineMs: onlineMinutes * MINUTE, lastGameTimeMs: gameTimeMs }),
@@ -5213,25 +5217,43 @@ describe("after Daedalus's count (#413): installs and A5's work by the time to i
     expect(chosen()?.reason ?? "none").not.toBe("Daedalus's level");
   });
 
-  test("unpriced early in the cycle (R and the rate soon measured): no install, for the rate's window at most", () => {
+  test("R not measured yet (no faction work), a κ carried: no install until it is; alerted past two windows", () => {
     at({ queued: BIG, rebuild: false, onlineMinutes: 0, steps: 5 });
     expect(chosen()).toBeUndefined();
     const timing = rule.view().progress?.timing as InstallTimingView;
     expect(timing).toMatchObject({ route: LEVEL_ROUTE, choice: null, candidates: [] });
-    expect(timing.words).toMatch(/: not priced yet \(R not measured: no faction work yet\): no install until it is/);
+    expect(timing.words).toMatch(/: not priced yet \(R not measured: no faction work yet\): no install until it is$/);
     expect(lines.filter((line) => line.includes("the planner's level timing isn't priced"))).toEqual([
       "augmentations: after Daedalus's count, the planner's level timing isn't priced (R not measured: no faction " +
-        "work yet): no install until it is, for the rate's window (10 min online) at most (#413)",
+        "work yet): no install until it is (#413)",
     ]);
+    // No cap of its own (#413's review): still held an hour on, alerted once at two of the income's windows (20 min).
+    for (let minute = 0; minute < 60; minute += 1) {
+      gameTimeMs += MINUTE;
+      earned += 60e9;
+      exp += 1.2e8;
+      update({ slowData: slowAt(30, 0, BIG), mediumData: levelMedium(), mediumGameTimeMs: gameTimeMs });
+    }
+    expect(chosen()).toBeUndefined();
+    const alerts = events.filter((event) => event.type === "augmentationRebuildHeld") as {
+      onlineMs: number;
+      sinceOnlineMs: number;
+    }[];
+    expect(alerts).toHaveLength(1);
+    expect((alerts[0]?.onlineMs ?? 0) - (alerts[0]?.sinceOnlineMs ?? 0)).toBe(INCOME_HELD_TOO_LONG_MS);
+    expect(lines.filter((line) => line.startsWith("augmentations: R UNMEASURED: after Daedalus's count"))).toHaveLength(
+      1,
+    );
   });
 
-  test("unpriced (R not measured): the count rule meanwhile, its reason logged once", () => {
-    at({ queued: BIG, rebuild: false });
-    expect(rule.view().progress?.timing).toBeUndefined();
+  test("no κ carried over an install yet (#389's rule): the count rule meanwhile, its reason logged once", () => {
+    at({ queued: BIG, carried: false });
+    expect(rule.view().progress?.timing?.route).not.toBe(LEVEL_ROUTE);
+    expect(chosen()?.reason ?? "none").not.toBe("Daedalus's level");
     const logged = lines.filter((line) => line.includes("the planner's level timing isn't priced"));
     expect(logged).toEqual([
-      "augmentations: after Daedalus's count, the planner's level timing isn't priced (R not measured: no faction " +
-        "work yet): the count rule times installs meanwhile (#413)",
+      "augmentations: after Daedalus's count, the planner's level timing isn't priced (no rate carried over an install " +
+        "yet): the count rule times installs meanwhile (#413)",
     ]);
   });
 });

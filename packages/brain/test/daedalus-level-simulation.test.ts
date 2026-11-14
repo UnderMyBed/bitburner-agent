@@ -1,18 +1,25 @@
 // After Daedalus's count (#413), in the simulator: the A/B of the planner's install timing by the time to the
 // invitation's hacking 2,500 against the count rule's (main's, `levelTiming` "count rule"), from one BN4 save at the
-// count met, on one seed, each arm bounded at 45 virtual minutes (about 40 s of real time each). Harness edits stand in
-// for the BitNode so far, before the Agent: 36 installed and applied (`applyInstalledAugmentations`), so the count is
-// met and m is 4.03; hacking 2,000; BitRunners joined at 240,000 (its Neural Accelerator and Embedded Netburner Module
-// Core Implant reached, Cranial Signal Processors - Gen V 10,000 off, Artificial Bio-neural Network Implant 35,000),
-// The Black Hand at none, $1t, home at 512 TB (BN4.2's at its count), and 21 minutes of the cycle past (no quick
-// install). Each arm, a test of its own, logs its time to Daedalus's invitation (from the Agent's first snapshot),
-// its installs, and the level and m at the end. Measured 2026-11-14 on seed 1: the count rule installs at once on its
-// bar (Neural Accelerator, the Core Implant and NeuroFlux Governor's levels), then a quick install at 9 min of
-// NeuroFlux Governor alone, Daedalus at 25 min; the planner waits for Gen V (13 min) and installs all three, Daedalus
-// at 21 min. CI runs seed 1; `DAEDALUS_LEVEL_SEEDS` (`1,2,3`, say) runs others.
+// count met, on one seed. Harness edits stand in for the BitNode so far, before the Agent: 36 installed and applied
+// (`applyInstalledAugmentations`), so the count is met and m is 4.03; hacking 2,000; BitRunners at 20,000, The Black
+// Hand at none, $1t, home at 512 TB (BN4.2's at its count), and 21 minutes of the cycle past (no quick install). A
+// prior install in the run, alike in both arms (#413's review: so a κ is carried, #389's rule): the Augmentations
+// switch off for the rate's window (11 min), then on, and the count rule installs NeuroFlux Governor's levels, carrying
+// the κ measured. Then BitRunners at 240,000 (Neural Accelerator and Embedded Netburner Module Core Implant reached,
+// Cranial Signal Processors - Gen V 10,000 off, Artificial Bio-neural Network Implant 35,000), $1t again, and each
+// arm runs to Daedalus's invitation, 45 virtual minutes at most (about 40 s of real time an arm). Each arm, a test of
+// its own, logs its time to the invitation from the prior install, its installs after it, and the level each minute.
+// Measured 2026-11-14, seeds 1-3 alike: both arms install Neural Accelerator and the Core Implant at 1 min (the count
+// rule's quick install; the planner's estimate, install now 6 min against waiting for Gen V, 15), Daedalus at 9 min in
+// both. CI runs seed 1; `DAEDALUS_LEVEL_SEEDS` (`1,2,3`, say) runs others; `DAEDALUS_LEVEL_LOG=1` prints the
+// planner's lines.
 import { hackingExpOfLevel, levellingInstallMultipliers, type SlowSnapshotData } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND, type LevelTimingPolicy } from "../src/augmentations.ts";
+import {
+  AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
+  type LevelTimingPolicy,
+  readCarriedLevelRise,
+} from "../src/augmentations.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { useFreshStarts } from "./helpers/fresh-start.ts";
 
@@ -29,7 +36,7 @@ function levelSeeds(text: string | undefined): number[] {
 const freshStartOf = useFreshStarts();
 const SEEDS = levelSeeds(process.env.DAEDALUS_LEVEL_SEEDS);
 const MINUTE = 60_000;
-/** Each arm's bound: 45 virtual minutes, both arms' invitation within it on seed 1 (25 and 21). */
+/** Each arm's bound after the prior install: 45 virtual minutes, both arms' invitation within it (9 and 9). */
 const ARM_MS = 45 * MINUTE;
 /**
  * Installed at the count: BN4.3's 30 to its count (the run report's c1-c11, NeuroFlux Governor once) and its c12's
@@ -98,27 +105,44 @@ test.each(SEEDS.flatMap((seed) => (["count rule", "planner"] as const).map((poli
       seed,
       fixture: { kind: "bitnode", n: 4, sourceFiles: { 1: 3 } },
       levelTiming: policy,
+      // Off until the rate's window is whole, so the prior install carries a κ (#389's rule, #413's review).
+      augmentations: false,
       beforeAgent: async ({ simulation, game }) => {
         for (const name of INSTALLED) await simulation.diagnostics.giveInstalledAugmentation(name);
         await simulation.diagnostics.applyInstalledAugmentations();
         await simulation.diagnostics.gainHackingExp(hackingExpOfLevel(LEVEL, M));
         await simulation.diagnostics.setHomeRam(HOME_GB);
-        await simulation.diagnostics.joinFactionWithReputation("BitRunners", BITRUNNERS_REP);
+        // Before the prior install, 20,000 at BitRunners: NeuroFlux Governor's levels its reach, nothing of its hacking set.
+        await simulation.diagnostics.joinFactionWithReputation("BitRunners", 20_000);
         await simulation.diagnostics.joinFactionWithReputation("The Black Hand", 0);
         await simulation.diagnostics.setMoney(1e12);
         // Past the quick install's 20 minutes (core's `QUICK_INSTALL_WITHIN_MS`), as a save mid-cycle at the count.
         await game.run(21 * MINUTE);
       },
     });
-    const { game } = fresh;
+    const { game, simulation } = fresh;
     const slow = () => fresh.latest<SlowSnapshotData>("slow");
+    // The prior install in the run, both arms alike (the count rule's: no κ carried yet, so the level route's
+    // unpriced): the rate's window whole first, then the switch on; the install carries the κ measured over it.
+    await game.run(11 * MINUTE);
+    fresh.controller().setAugmentationsEnabled(true);
+    const firstReset = slow()?.resetInfo.lastAugReset;
+    await game.runUntil(() => slow()?.resetInfo.lastAugReset !== firstReset, 10 * MINUTE);
+    expect(slow()?.resetInfo.lastAugReset).not.toBe(firstReset);
+    expect(readCarriedLevelRise(fresh.data.store)).not.toBeNull();
+    // The BitNode so far, after it: BitRunners again 240,000 in (Gen V 10,000 off, ABNI 35,000), $1t.
+    await simulation.diagnostics.joinFactionWithReputation("BitRunners", BITRUNNERS_REP);
+    await simulation.diagnostics.joinFactionWithReputation("The Black Hand", 0);
+    await simulation.diagnostics.setMoney(1e12);
     const startMs = game.clock.now();
     let invitedAtMs: number | null = null;
     let levelAtStart: number | null = null;
+    const levels: (number | null)[] = [];
     while (game.clock.now() < startMs + ARM_MS && invitedAtMs === null) {
       await game.run(MINUTE);
       const medium = fresh.medium();
       const level = (medium?.player as { skills?: { hacking?: number } } | undefined)?.skills?.hacking ?? null;
+      levels.push(level);
       levelAtStart ??= level;
       const state = slow()?.factions?.state;
       const daedalus =
@@ -129,7 +153,7 @@ test.each(SEEDS.flatMap((seed) => (["count rule", "planner"] as const).map((poli
     const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
     const chosen = fresh.data.store
       .eventsInWindow(window)
-      .filter((event) => event.kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)
+      .filter((event) => event.kind === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND && event.atMs >= startMs)
       .map(
         (event) =>
           event.detail as {
@@ -147,8 +171,11 @@ test.each(SEEDS.flatMap((seed) => (["count rule", "planner"] as const).map((poli
           : `at ${((invitedAtMs - startMs) / MINUTE).toFixed(1)} min`) +
         `; installs: ${chosen.map((each) => `${each.reason} at ${(each.onlineMs / MINUTE).toFixed(0)} min (${each.set.map((one) => one.augmentation).join(", ")})`).join("; ") || "none"}` +
         `; hacking ${levelAtStart} → ${player?.skills?.hacking}, m ${player?.mults?.hacking?.toFixed(3)}; ` +
-        `m at the start ${M.toFixed(3)}`,
+        `m at the start ${M.toFixed(3)}; the level each minute: ${levels.join(" ")}`,
     );
+    if (process.env.DAEDALUS_LEVEL_LOG === "1") {
+      for (const line of fresh.brain.logLines.filter((each) => each.includes("after Daedalus"))) console.log(line);
+    }
     invited.set(seed, { ...invited.get(seed), [policy]: invitedAtMs === null ? null : invitedAtMs - startMs });
     // Each arm reaches the invitation within the bound: the A/B measures something.
     expect(invitedAtMs).not.toBeNull();

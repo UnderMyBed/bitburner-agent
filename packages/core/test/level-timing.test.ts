@@ -1,9 +1,9 @@
 // The planner's install timing after Daedalus's count (#413): the candidates' cases, the choice under #406's margin,
 // A5's work, the cost by work counts, and the hindcast of BN4.2's c10-c11 and BN4.3's c12-c13 (`postcount.txt`).
 import { describe, expect, test } from "vitest";
-import { type CountableLeft, type LaterCycles, levelInstallTiming } from "../src/install-timing.ts";
+import { type CountableLeft, factionRepGain, type LaterCycles, levelInstallTiming } from "../src/install-timing.ts";
 import { laterCycleRise, levelAlong, levelRiseOf, steps } from "../src/level-rise.ts";
-import { levellingInstallMultipliers } from "../src/levelling.ts";
+import { addsToLevelling, levellingInstallMultipliers } from "../src/levelling.ts";
 import { BN4_3_C12, BN4_3_INSTALLED_AT_COUNT, NEUROFLUX } from "./bn4-postcount-fixture.ts";
 import {
   DEAD_BN4_3_C12,
@@ -14,6 +14,7 @@ import {
   measuredFactor,
   PATHS,
   pathRows,
+  RAMP_FALLBACK_MINUTES,
   READINGS,
   type Reading,
   rateWith,
@@ -36,9 +37,9 @@ const later = (fields: Partial<LaterCycles> = {}): LaterCycles => ({
   installing: ["Cranial Signal Processors - Gen V", NEUROFLUX],
   ...fields,
 });
-/** The cycle after installing `names` on `RISE`, to the level (`laterCycleRise`, its dead time first): ms. */
+/** The cycle after installing `names` on `RISE`, to the level (`laterCycleRise`, its dead time a ramp): ms. */
 const levelAfter = (names: readonly string[], deadSeconds = 300) => {
-  const rise = laterCycleRise(RISE, levellingInstallMultipliers(0, names), deadSeconds);
+  const rise = laterCycleRise(RISE, levellingInstallMultipliers(0, names), deadSeconds, true);
   let low = 0;
   let high = 1e9;
   for (let i = 0; i < 200; i++) {
@@ -243,13 +244,16 @@ describe("the choice (#413): installing only by more than the error (#406), a wa
     expect([free?.choice, free?.heldForIncome, free?.heldForInvitation]).toEqual([0, false, false]);
   });
 
-  test("a wait whose τ is past this cycle's own time to the invitation is staying: its estimate that", () => {
+  test("a wait whose τ is past this cycle's own time to the invitation is staying: no wait chosen, nothing held", () => {
     const near = levelRiseOf({ exp: 1e9, level: 2400, levelMult: 6.8, expPerSecond: 2e6 });
     const timing = levelInstallTiming({ required: REQUIRED, rise: near, waits: [wait(600 * MINUTE)], later: later() });
     const waiting = timing?.candidates.find((each) => each.k === 1);
     expect(waiting?.stays).toBe(true);
     expect(waiting?.estimateMs).toBe(timing?.stayMs);
-    expect(timing?.choice).not.toBe(0);
+    // Staying (#413's review): no wait chosen, so none described or its money held; A5's work still its faction.
+    expect(timing?.choice).toBeNull();
+    expect(timing?.estimateMs).toBe(timing?.stayMs);
+    expect(timing?.work).toEqual({ faction: "BitRunners", augmentation: "Neural Accelerator" });
   });
 });
 
@@ -265,27 +269,34 @@ const timingOf = (reading: Reading, counts?: { priced: number; lookups: number; 
 
 describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
   /**
-   * The level at each 15 min of each post-count cycle against #405's path (`laterCycleRise` from the cycle before's end,
-   * at the install's multipliers, flat for the dead time the brain would price with: the cycle before's ramp, else
-   * the fallback's 10 min; BN4.2's c9 and BN4.3's c11, before the count, have one sample: their mean rate). Within ×2
-   * from the dead time on, and 0.88-1.09 there; BN4.3's c13 at 15 min is inside c12's 28.5-min ramp, the path flat.
+   * The level at 5 and 10 min and each 15 min of each post-count cycle against #405's path (`laterCycleRise` from the
+   * cycle before's end, at the install's multipliers), its dead time the brain would price with (the cycle before's
+   * ramp, else the fallback's 10 min) a ramp in the rate, the level rising during it (#413's review: flat, BN4.3's c13
+   * at 15 min was 1 against 1,607); BN4.2's c9 and BN4.3's c11, before the count, have one sample, their mean rate.
+   * 0.84-1.21 throughout, inside the ramp too: c13 0.88 and 0.95 at 5 and 10 min (in c12's 28.5); c14 1.00 at +5
+   * (2,597 against 2,608: past 2,500 there, as the c13 install's estimate says); BN4.2's c12 1.21 at +5.
    */
-  test("the level at each 15 min against the path's", () => {
+  test("the level at 5, 10 and each 15 min against the path's, inside the ramp too", () => {
     const rows = PATHS.flatMap(({ cycle, before, dead }) =>
       pathRows(cycle, before, dead).map((row) => ({ ...row, name: cycle.name, dead: dead.minutes })),
     );
-    expect(rows).toHaveLength(6 + 6 + 6 + 7);
+    expect(rows).toHaveLength(8 + 8 + 8 + 9 + 1 + 1);
     for (const row of rows) {
-      if (row.minutes <= row.dead) {
-        expect(row.predicted).toBe(1);
-        continue;
-      }
-      expect(row.predicted / row.level).toBeGreaterThan(0.85);
-      expect(row.predicted / row.level).toBeLessThan(1.1);
+      expect(row.predicted / row.level).toBeGreaterThan(0.8);
+      expect(row.predicted / row.level).toBeLessThan(1.25);
     }
-    expect(rows.filter((row) => row.minutes <= row.dead).map((row) => `${row.name} ${row.minutes}`)).toEqual([
+    const inRamp = rows.filter((row) => row.minutes < row.dead).map((row) => `${row.name} ${row.minutes}`);
+    expect(inRamp).toEqual([
+      "BN4.2 c10 5",
+      "BN4.3 c12 5",
+      "BN4.3 c13 5",
+      "BN4.3 c13 10",
       "BN4.3 c13 15",
+      "BN4.3 c14 5",
     ]);
+    const c14 = rows.find((row) => row.name === "BN4.3 c14");
+    expect(c14?.predicted).toBeGreaterThan(2500);
+    expect((c14?.predicted as number) / (c14?.level as number)).toBeCloseTo(1, 1);
   });
 
   test("BN4.3's measured factor in the share's place: c12's predicts c13's BitRunners rate within 15%", () => {
@@ -298,16 +309,18 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
   /**
    * Each post-count install's choice against what happened (each installed), with each option's time to 2,500 and
    * the actual, minutes online from the choice to Daedalus joined. Install now is chosen at all four, as happened; its
-   * estimate within ×2 at the two that bought the next cycle (1.29, 1.11). At the two last installs the estimate is the
-   * dead time's and the actual the commit's (2 min) and the money's ($100b by about +6 min, left out): BN4.2's c11
-   * 0.5 against 6 (its ramp under the evidence's 5-minute samples), BN4.3's c13 28.8 against 8 (c12's 28.5-min ramp,
-   * where c14 passed 2,500 by +5): #405's dead time, one cycle's ramp, labelled for the owner.
+   * estimate within ×2 at the two that bought the next cycle (1.28, 0.88). The two last are under 10 min actual, the
+   * campaign report's rule for a ratio, so out of it, labelled with their cause: the estimate is the level's alone, the
+   * actual mostly the commit (1.8-1.9 min, chosen to sent) and the $100b (about +6 min), both left out. BN4.2's c11 0.3
+   * against 6 (its ramp under the evidence's 5-minute samples); BN4.3's c13 4.0 against 8.1 (0.49), the level itself on
+   * its path (c14's 2,597 against 2,608 at +5, the test above). Flat for c12's 28.5-min ramp, as before #413's review,
+   * c13 was 28.8.
    */
   const ROWS: [name: string, actual: number, installNow: number, bestWait: number, choice: number][] = [
-    ["BN4.2 c10", 106, 136.4, 154.8, 0],
-    ["BN4.2 c11", 6, 0.5, 298.9, 0],
-    ["BN4.3 c12", 171, 190.6, 205.2, 0],
-    ["BN4.3 c13", 8, 28.8, 315.3, 0],
+    ["BN4.2 c10", 106, 136.2, 154.6, 0],
+    ["BN4.2 c11", 6, 0.3, 298.8, 0],
+    ["BN4.3 c12", 171, 150.1, 168.5, 0],
+    ["BN4.3 c13", 8.1, 4.0, 288.4, 0],
   ];
 
   test("each install's choice: install now, as happened; every option's time to 2,500", () => {
@@ -323,19 +336,24 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
       ];
     });
     expect(rows).toEqual(ROWS);
-    expect(
-      rows.filter(
-        ([, actual, now]) => (now as number) / (actual as number) > 0.5 && (now as number) / (actual as number) < 2,
-      ),
-    ).toHaveLength(2);
+    // At 10 min or more actual, within ×2; under it, out of the ratio (the campaign report's rule), labelled above.
+    for (const [, actual, now] of rows as [string, number, number][]) {
+      if (actual < 10) continue;
+      expect(now / actual).toBeGreaterThan(0.5);
+      expect(now / actual).toBeLessThan(2);
+    }
+    expect(rows.filter(([, actual]) => (actual as number) < 10).map(([name]) => name)).toEqual([
+      "BN4.2 c11",
+      "BN4.3 c13",
+    ]);
   });
 
   /**
    * A5's work at BN4.3's count (#413's question): from c12's start, The Black Hand's work (its reputation the report's
-   * rate since R, 4 min). The planner's estimate against the time left to the join (268 min from the count): 0.98-1.15.
-   * At 15 and 30 min it works BitRunners, the six of its hacking set in one cycle (291.6 and 242.3 against The Black
-   * Hand's best, 298.3 and 247.1: within 7 min, so a wait held there keeps it); from 45 min, its reputation at The
-   * Black Hand 58k, its three there (Neuralstimulator, Enhanced Myelin Sheathing, The Black Hand) first.
+   * rate since R, 4 min), the dead time the brain would have then (#413's review: no hindsight): c12's own ramp once
+   * measured (28.5 min), before it the fallback's 10. The planner's estimate against the time left to the join (268 min
+   * from the count): 0.79-0.99. It works The Black Hand throughout, its three there (Neuralstimulator, Enhanced Myelin
+   * Sheathing, The Black Hand) first, as the brain did.
    */
   test("A5's work from the count: the faction whose next augmentation most cuts the time to 2,500", () => {
     const rows = [15, 30, 45, 60].map((at) => {
@@ -350,30 +368,31 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
         reputation: { "The Black Hand": 23.56 * Math.max(0, at - 4) * 60 },
         favor: FAVOUR_C12,
         factor: FACTOR_C12,
-        dead: DEAD_BN4_3_C12,
+        dead: at >= DEAD_BN4_3_C12.minutes ? DEAD_BN4_3_C12 : { minutes: RAMP_FALLBACK_MINUTES, from: "the fallback" },
       });
       const timing = timingOf(reading);
       const chosen = timing?.candidates[timing?.choice as number];
       return [at, reading.actual, Number(minutes(timing?.estimateMs as number).toFixed(1)), chosen?.faction, chosen?.k];
     });
     expect(rows).toEqual([
-      [15, 253, 291.6, "BitRunners", 6],
-      [30, 238, 242.3, "BitRunners", 6],
-      [45, 223, 225.1, "The Black Hand", 3],
-      [60, 208, 204.8, "The Black Hand", 3],
+      [15, 253, 250.5, "The Black Hand", 3],
+      [30, 238, 210.0, "The Black Hand", 3],
+      [45, 223, 186.5, "The Black Hand", 3],
+      [60, 208, 164.5, "The Black Hand", 3],
     ]);
     for (const [, actual, estimate] of rows) {
-      expect((estimate as number) / (actual as number)).toBeGreaterThan(0.9);
+      expect((estimate as number) / (actual as number)).toBeGreaterThan(0.75);
       expect((estimate as number) / (actual as number)).toBeLessThan(1.2);
     }
   });
 
   /**
    * The cost by work counts (#399's way, not time): BN4.3's c12 at 15 min, 10 of the hacking set left and 14 waits.
-   * Each candidate's DP asks for r(r + 1) / 2 cycles of its r left, 409 in all; shared, 150 priced; and each path walked
-   * to the level once, 37 of them.
+   * Each candidate's DP asks for r(r + 1) / 2 cycles of its r left, 409 in all; shared, one priced for each distinct
+   * (path, faction_rep, group) of them all, and one walk to the level for each distinct path after every split, both
+   * derived here from the candidates (#413's review), not measured.
    */
-  test("its work at a reading of 10 left and 14 waits: 150 cycles priced of 409 asked for, 37 paths to the level", () => {
+  test("its work at a reading of 10 left and 14 waits: each distinct cycle priced once, each distinct path walked once", () => {
     const reading = readingAt({
       name: "BN4.3 c12 at 15",
       actual: 253,
@@ -385,7 +404,7 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
       reputation: { "The Black Hand": 23.56 * 11 * 60 },
       favor: FAVOUR_C12,
       factor: FACTOR_C12,
-      dead: DEAD_BN4_3_C12,
+      dead: { minutes: RAMP_FALLBACK_MINUTES, from: "the fallback" },
     });
     const counts = { priced: 0, lookups: 0 };
     const start = performance.now();
@@ -399,7 +418,33 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
       return sum + (r * (r + 1)) / 2;
     }, 0);
     expect(timing?.candidates).toHaveLength(15);
-    expect(counts).toEqual({ priced: 150, lookups: asked, levels: 37 });
+    // The distinct cycles and paths, keyed as the pricing keys them: the path (m, κ, the ramp) and faction_rep after the
+    // installs before each cycle, and the cycle's countables.
+    const later = reading.later;
+    const hacking = later.left.filter((each) => addsToLevelling([each.augmentation]));
+    const pathOf = (installs: readonly string[]) => {
+      const rise = laterCycleRise(
+        later.rise as NonNullable<LaterCycles["rise"]>,
+        levellingInstallMultipliers(0, installs),
+        later.deadSeconds,
+        true,
+      );
+      return `${rise.levelMult} ${rise.kappa} ${rise.rampSeconds ?? 0}`;
+    };
+    const cycles = new Set<string>();
+    const paths = new Set<string>();
+    for (const candidate of timing?.candidates ?? []) {
+      const names = hacking.map((each) => each.augmentation).filter((name) => !candidate.waitedFor.includes(name));
+      const installing = [...later.installing, ...candidate.waitedFor];
+      for (let j = 0; j <= names.length; j++) paths.add(pathOf([...installing, ...names.slice(0, j)]));
+      for (let i = 0; i < names.length; i++) {
+        const before = [...installing, ...names.slice(0, i)];
+        for (let j = i + 1; j <= names.length; j++) {
+          cycles.add(`${pathOf(before)} ${factionRepGain(before)} ${names.slice(i, j).join(",")}`);
+        }
+      }
+    }
+    expect(counts).toEqual({ priced: cycles.size, lookups: asked, levels: paths.size });
     expect(asked).toBe(409);
     console.log(
       `10 left, 14 waits: ${counts.priced} cycles priced of ${counts.lookups}, ${ms.toFixed(2)} ms (printed)`,

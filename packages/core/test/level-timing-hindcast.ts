@@ -11,10 +11,12 @@ import {
   BN4_2_C9,
   BN4_2_C10,
   BN4_2_C11,
+  BN4_2_C12,
   BN4_2_INSTALLED_AT_COUNT,
   BN4_3_C11,
   BN4_3_C12,
   BN4_3_C13,
+  BN4_3_C14,
   BN4_3_INSTALLED_AT_COUNT,
   FIRST_INSTALL,
   FIRST_SET,
@@ -184,7 +186,7 @@ const DEAD_BN4_3_C13 = deadIn(BN4_3_C13, BN4_3_C12, DEAD_BN4_3_C12);
  * The four post-count installs. The reputation earned at each faction at the choice: BN4.3's c12 The Black Hand's and
  * c13 BitRunners' (the run report's); BN4.2's c10-c11 faction work isn't in the evidence, so BN4.3's stand in (the same
  * sets bought, the same multipliers). Actual: minutes online from the choice to Daedalus joined: BN4.3's from the event
- * times (15:44:32 and 18:27:34 to 18:35:40, c13 online throughout); BN4.2's from the count met (10 h 4 min online) to
+ * times (15:44:32 and 18:27:34 to 18:35:40, c13 online throughout: 171 and 8.1); BN4.2's from the count met (10 h 4 min online) to
  * the join (13 h 23 min), c10's 93 min to its choice and c11's about 100 online (the issue's table).
  */
 export const READINGS: Reading[] = [
@@ -229,7 +231,7 @@ export const READINGS: Reading[] = [
   }),
   readingAt({
     name: "BN4.3 c13",
-    actual: 8,
+    actual: 8.1,
     cycle: BN4_3_C13,
     minutes: 161,
     installed: [...BN4_3_INSTALLED_AT_COUNT, ...FIRST_SET],
@@ -242,11 +244,14 @@ export const READINGS: Reading[] = [
   }),
 ];
 
-/** The level path's hindcast (#405's, `laterCycleRise`): each cycle from the one before's end, at each 15 min. */
+/**
+ * The level path's hindcast (#405's, `laterCycleRise`, the dead time a ramp in the rate as #413's level timing takes
+ * it): each cycle from the one before's end, at 5 and 10 min (inside the ramp) and each 15 min.
+ */
 export function pathRows(cycle: PostCountCycle, before: PostCountCycle, dead: { minutes: number }) {
-  const rise = laterCycleRise(riseAt(before), gainBetween(before, cycle), dead.minutes * 60);
+  const rise = laterCycleRise(riseAt(before), gainBetween(before, cycle), dead.minutes * 60, true);
   return cycle.samples
-    .filter(([minutes]) => minutes > 0 && minutes % 15 === 0)
+    .filter(([minutes]) => minutes === 5 || minutes === 10 || (minutes > 0 && minutes % 15 === 0))
     .map(([minutes, level]) => ({ minutes, level, predicted: levelAlong(rise, minutes * 60) }));
 }
 export const PATHS = [
@@ -254,5 +259,7 @@ export const PATHS = [
   { cycle: BN4_2_C11, before: BN4_2_C10, dead: DEAD_BN4_2_C10 },
   { cycle: BN4_3_C12, before: BN4_3_C11, dead: { minutes: RAMP_FALLBACK_MINUTES } },
   { cycle: BN4_3_C13, before: BN4_3_C12, dead: DEAD_BN4_3_C12 },
+  { cycle: BN4_2_C12, before: BN4_2_C11, dead: DEAD_BN4_2_C11 },
+  { cycle: BN4_3_C14, before: BN4_3_C13, dead: DEAD_BN4_3_C13 },
 ];
 export { DEAD_BN4_2_C10, DEAD_BN4_2_C11, DEAD_BN4_3_C12, DEAD_BN4_3_C13 };
