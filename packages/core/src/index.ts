@@ -928,12 +928,23 @@ export {
 export { HOME_RAM_LIMIT, homeRamUpgradePrice, isUpgradableHomeRam, UPGRADE_HOME_RAM_WORKER_NAME } from "./home-ram.ts";
 export { freshSaveHomeWorkerFileNames, homeWorkerFileNames } from "./home-workers.ts";
 export {
+  type CountableLeft,
+  countablesLeft,
+  factionRepGain,
+  factionsOneAtATime,
   type InstallTiming,
   type InstallTimingCandidate,
   installNowEstimateMs,
   installTiming,
+  LATER_CYCLE_FACTIONS,
+  type LaterCycles,
+  type LaterPricingCounts,
+  laterCyclesMs,
+  meanRelativeError,
   type NextCountable,
   nextCountables,
+  reputationOneFactionAtATime,
+  tauRelativeError,
   waitEstimateMs,
 } from "./install-timing.ts";
 export {

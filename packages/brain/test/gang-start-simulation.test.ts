@@ -63,6 +63,11 @@ const formedWithinMs = (seed: number) => FORMED_WITHIN_MS[seed] ?? 40 * 60_000;
  * before #357, seed 5's gang formed 78 min in, seed 3's not by 90 min).
  */
 const RULES_WITHIN_MS = 90 * 60_000;
+/**
+ * The planner's arm's gang, from the edit, by seed, as this run measures it (the suite above, run first in this file):
+ * the rules' arm is compared with it too where it ran (#389's review), beside the planner's bound for the seed.
+ */
+const plannerFormedMs = new Map<number, number>();
 /** A minute more: the gang's first readings, the report's checks on them. */
 const AFTER_MS = 60_000;
 
@@ -191,6 +196,7 @@ test.each(SEEDS)(
       const said = brain.logLines.filter((line) => /backdoor|NiteSec|gang|install/i.test(line)).slice(-12);
       throw new Error([String(error), progress(), ...said].join("\n"));
     });
+    plannerFormedMs.set(seed, steps.formed as number);
     await game.run(AFTER_MS);
 
     const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: game.clock.now() } as const;
@@ -314,12 +320,14 @@ test.each(SEEDS)(
 /**
  * #357's A/B, the rules' arm (`bn2Route` "rules": #343's install timing before the gang, as before #357): on seeds 3 and
  * 5 the install comes before the gang, the level reset and the servers re-rolled (`Prestige.ts:69`, `:74`, `:98`). The
- * planner's arm is the suite above, on the same seeds: no install, the gang at 34 min 41 s and 28 min 41 s.
+ * planner's arm is the suite above, on the same seeds: no install, its gang sooner than the rules' (34 min 41 s and 28
+ * min 41 s on 2026-11-13), and measured in this run where it ran first (#389's review; this arm runs alone too, `-t`).
  */
 test.each([3, 5])(
   "seed %i, the rules (#357's A/B baseline): an install before the gang, short of avmnite-02h's level; the gang later or never",
   { timeout: 120_000 },
   async (seed) => {
+    const plannerMs = plannerFormedMs.get(seed) ?? null;
     let editedAtMs = Number.NaN;
     const fresh = await freshStartOf({
       withDesiredState: true,
@@ -330,7 +338,7 @@ test.each([3, 5])(
         editedAtMs = await underNiteSec(game);
       },
     });
-    const { game } = fresh;
+    const { game, brain } = fresh;
     const medium = () => fresh.medium();
     const hacking = () => (medium()?.player.skills as { hacking?: number } | undefined)?.hacking ?? 0;
     const required = () =>
@@ -357,15 +365,20 @@ test.each([3, 5])(
     const installed = install as { atMs: number; hacking: number; required: number | undefined } | null;
     console.log(
       `seed ${seed}, the rules: installed at ${minutes(installed?.atMs ?? null)}, hacking ${installed?.hacking} of ` +
-        `${installed?.required}; the gang formed at ${minutes(formedAtMs)} (90 min at most)`,
+        `${installed?.required}; the gang formed at ${minutes(formedAtMs)} (90 min at most); the planner's at ` +
+        minutes(plannerMs),
     );
+    console.log(brain.logLines.filter((line) => /install chosen|planner's install timing/.test(line)).join("\n"));
     // The install, before the gang, short of the roll: what #357's planner doesn't do on these seeds.
     expect(installed).not.toBeNull();
     expect(installed?.hacking as number).toBeLessThan(installed?.required as number);
-    expect(formedAtMs === null || formedAtMs > (installed?.atMs as number)).toBe(true);
+    const formed = formedAtMs as number | null;
+    expect(formed === null || formed > (installed?.atMs as number)).toBe(true);
     // Measured on 2026-11-11: seed 3 installed at 30 min 26 s, at 214 of 218, and had no gang by 90 min; seed 5 at
-    // 28 min 26 s, at 216 of 217, its gang at 78 min 6 s. Either way past the planner's bound for the seed (45 and 40
-    // min; its gang at 34 min 41 s and 28 min 41 s).
-    expect(formedAtMs === null || formedAtMs > formedWithinMs(seed)).toBe(true);
+    // 28 min 26 s, at 216 of 217, its gang at 78 min 6 s (73 min 6 s since). Since #389 the same: the first cycle is
+    // priced as before, no rate carried over an install yet. Either way past the planner's bound for the seed (45 and
+    // 40 min), and after the planner's arm's gang where it ran in this run.
+    expect(formed === null || formed > formedWithinMs(seed)).toBe(true);
+    if (plannerMs !== null) expect(formed === null || formed > plannerMs).toBe(true);
   },
 );
