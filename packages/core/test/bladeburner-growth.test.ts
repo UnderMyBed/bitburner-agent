@@ -936,49 +936,51 @@ describe("the playability at a start's range (#411's ruling 4): the estimate at 
     },
   );
 
-  test("at the truth, the figures with no range read; read through a range, only B3's low-end spending moves them", () => {
+  test("read through any range, the truth's figures, the skills included (#415: B3 spends at the true population)", () => {
     const flat = startAt(100);
-    const truth = rangedStartAt(100, 1);
     const options = { combat: flat.combat, costMultiplier: 2 };
     const bn7 = (input: typeof flat.input) => ({ ...input, rankMultiplier: 0.6 });
     const ratio = (a: number, b: number) => Math.abs(a / b - 1);
-    // Within 1e-4: the ratio recovered to the bit, the integration's choices (levels, mixes) sensitive below it.
-    expect(
-      ratio(
-        blackOpsRouteGrownEstimate(bn7(truth.input), truth.at, options).seconds,
-        blackOpsRouteGrownEstimate(bn7(flat.input), flat.at, options).seconds,
-      ),
-    ).toBeLessThan(1e-4);
-    // An overcount: priced at the truth, its skills bought at the low end read (B3's rule as the brain runs it); with
-    // the skills off, the truth's figure.
-    const over = rangedStartAt(100, 2_016_312_413 / 1_421_276_822);
-    const noSkills = { skills: false, stats: true, levels: true };
-    expect(
-      ratio(
-        blackOpsRouteGrownEstimate(bn7(over.input), over.at, { ...options, grow: noSkills }).seconds,
-        blackOpsRouteGrownEstimate(bn7(flat.input), flat.at, { ...options, grow: noSkills }).seconds,
-      ),
-    ).toBeLessThan(1e-4);
+    const truth = blackOpsRouteGrownEstimate(bn7(flat.input), flat.at, options).seconds;
+    // Within 1e-4: the ratio recovered to the bit, the integration's choices (levels, mixes) sensitive below it. #411's
+    // 370.5 h at the overcount (B3's low-end spending) is the truth's 183.7 h now.
+    for (const over of [1, 0.6, 2_016_312_413 / 1_421_276_822]) {
+      const ranged = rangedStartAt(100, over);
+      expect(
+        ratio(blackOpsRouteGrownEstimate(bn7(ranged.input), ranged.at, options).seconds, truth),
+        `${over}`,
+      ).toBeLessThan(1e-4);
+    }
   });
 });
 
-describe("the skills along the route at a range read (#411): B3's rule's, as the brain runs it", () => {
-  test("bought at the low end read, as the rule buys them, whatever the estimate prices the actions at", () => {
-    const { combat: figures, input: ranged, at } = rangedStartAt(100, 1.42);
-    const lowOnly = {
-      ...ranged,
-      readings: ranged.readings.map((read) => ({
-        ...read,
-        chance: [read.chance[0], read.chance[0]] as [number, number],
-      })),
-    };
-    const lowAt = { ...at, chanceRead: [at.chanceRead[1], at.chanceRead[1]] as [number, number] };
-    // The skills alone growing: the levels at each step are the rule's choices at the ranks reached, the rank grid
-    // the same; so they're the same at the range read as at its low end alone, though the estimate's times differ.
-    const grow = { skills: true, stats: false, levels: false };
-    const priced = blackOpsRouteGrownEstimate(ranged, at, { combat: figures, costMultiplier: 1, points: 300, grow });
-    const low = blackOpsRouteGrownEstimate(lowOnly, lowAt, { combat: figures, costMultiplier: 1, points: 300, grow });
-    expect(priced.seconds).toBeLessThan(low.seconds);
-    expect(priced.steps.map((step) => step.levels)).toEqual(low.steps.map((step) => step.levels));
+describe("the skills along the route at a range read (#415): B3's rule as the brain runs it, at the same chances", () => {
+  test("the points read spent as the brain's rule spends them: at the true population, not at the low end", () => {
+    const rows: string[] = [];
+    for (const over of [0.6, 1.42]) {
+      const { combat: figures, input: ranged, at } = rangedStartAt(100, over);
+      // At Typhoon's rank: no climb, so its step's levels are the points read, spent first.
+      const there = { ...at, rank: TYPHOON.rank };
+      const points = 300;
+      const estimate = blackOpsRouteGrownEstimate(ranged, there, { combat: figures, costMultiplier: 1, points });
+      const spent = estimate.steps[0]?.levels;
+      // The brain's: B3's rule on its input (the brain's `bladeburnerRuleInputOf` is this pricing).
+      const levelsOf = (plan: ReturnType<typeof chooseBladeburnerSkills>) =>
+        Object.fromEntries(plan.buys.map((buy) => [buy.skill, buy.to]));
+      const brain = chooseBladeburnerSkills(bladeburnerPricedInput(ranged, at).input, {
+        levels: {},
+        points,
+        costMultiplier: 1,
+      });
+      expect(spent, `${over}`).toEqual(levelsOf(brain));
+      // Not the low end's (#411's exception, gone): there the rule buys otherwise.
+      const low = chooseBladeburnerSkills(
+        { ...ranged, readings: ranged.readings.map((read) => ({ ...read, chance: [read.chance[0], read.chance[0]] })) },
+        { levels: {}, points, costMultiplier: 1 },
+      );
+      rows.push(`${over}×: ${JSON.stringify(spent)}; at the low end ${JSON.stringify(levelsOf(low))}`);
+      if (over > 1) expect(spent).not.toEqual(levelsOf(low));
+    }
+    console.log(rows.join("\n"));
   });
 });

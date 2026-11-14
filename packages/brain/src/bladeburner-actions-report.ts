@@ -14,7 +14,10 @@
 //   each stretch's end, the attempt cut short there (`Bladeburner.ts:186-188`: starting another loses the progress)
 //   that the forecast counts in part. The low end is the game's lowest chance (`Actions/Action.ts:144-167`: never above
 //   the real one), so a rank under the bound is the rule or the formulas wrong, not luck. Rank lost below 0 isn't
-//   (`:1271-1274`): it only lifts the rank measured.
+//   (`:1271-1274`): it only lifts the rank measured. Since #415 the rules choose at the true population's chance (the
+//   brain's `bladeburnerRuleInputOf`), and the forecast judged takes it where pop/popEst is recovered (the chance the
+//   game draws against: exact, so the bound is Bernstein's own); where it isn't, the low end as read, not the rules'
+//   fallback (its spread mean is optimistic at an undercount, which could fail a right rule): so it errs low there.
 // - **By action** (#381's review): each action's own forecast, measured rank and bound, as the whole's (its own
 //   Bernstein margin at the same α, its own cuts), with its attempts (a contract's or operation's count's fall, its mean
 //   growth added back) and successes (the rank over a success's gain and a failure's loss): estimates, shown, not
@@ -39,7 +42,8 @@
 //   (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:135`).
 // - **The focus** (#377's review): A5's faction work waits all the actions' time, the rests' too, Field Analysis's rank
 //   all it gains then; the time and that rank are shown, the trade the planner's.
-// - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings): its cycle's rank a
+// - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings, at the brain's input,
+//   #415's: each chance at the true population; the stuck-resting and the points-unspent checks too): its cycle's rank a
 //   second, shown beside the rank measured over the readings; not judged, as a window cuts the cycle anywhere. Under
 //   the reading's current-rank target (#386, core's `bladeburnerRankTarget`), the plan the brain chooses, the least
 //   expected time to it, and that time; the stuck-resting check takes that plan's rest too.
@@ -64,6 +68,7 @@ import {
   BLADEBURNER_REST_SECONDS,
   BLADEBURNER_TRAINING,
   type BladeburnerActionPlan,
+  type BladeburnerActionReading,
   type BladeburnerForecastInput,
   type BladeburnerLevelledAction,
   type BladeburnerPerson,
@@ -96,7 +101,8 @@ import {
 import {
   type BladeburnerActionId,
   type BladeburnerActionsReading,
-  bladeburnerSpeedOf,
+  type BladeburnerRuleInput,
+  bladeburnerRuleInputOf,
   describeSkillPlan,
   describeToTarget,
 } from "./bladeburner.ts";
@@ -158,6 +164,13 @@ interface Kept {
   target: number | null;
   /** B2's forecast, shared with the reading's other folds (#392: core's `memoizedBladeburnerChoice`). */
   choose: typeof chooseBladeburnerAction;
+  /** The rules' input, as the brain's (#415: each chance at the true population, `bladeburnerRuleInputOf`). */
+  rule: BladeburnerRuleInput;
+  /**
+   * The readings the forecast judged takes (#415): priced at the true population where pop/popEst is recovered (the
+   * chance the game draws against, exact), else as read (the low end, a bound from below).
+   */
+  judged: readonly BladeburnerActionReading[];
 }
 
 /** The action under way at `kept`, as the forecast takes it: an attempt's figures, or a rest's rank a second. */
@@ -238,7 +251,7 @@ function runningOf(kept: Kept): Running | null {
     };
   }
   const action = bladeburnerLevelledAction(current.type, current.name);
-  const read = kept.reading.actions.find((each) => each.type === current.type && each.name === current.name);
+  const read = kept.judged.find((each) => each.type === current.type && each.name === current.name);
   if (action === null || read === undefined)
     return { name: current.name, action: current.name, resting: false, rate: 0, cut: 0, attempt: null };
   const seconds = actionSeconds(action, read.level, kept.person, kept.mults);
@@ -370,6 +383,7 @@ export class BladeburnerActionsFold {
     const levels = reading.skills?.levels ?? {};
     const factions = (data.player as { factions?: unknown } | undefined)?.factions;
     const factionJoined = Array.isArray(factions) && factions.includes(BLADEBURNER_FACTION);
+    const rule = bladeburnerRuleInputOf(reading, person, rankMultiplier);
     const kept: Kept = {
       atMs,
       rank,
@@ -389,6 +403,8 @@ export class BladeburnerActionsFold {
         blackOpRank: reading.blackOp == null ? null : (bladeburnerBlackOp(reading.blackOp.name)?.rank ?? null),
       }),
       choose,
+      rule,
+      judged: rule.ratio === null ? reading.actions : rule.input.readings,
     };
     this.#readings += 1;
     const plan = this.#plan(kept);
@@ -602,15 +618,9 @@ export class BladeburnerActionsFold {
     };
   }
 
+  /** The rules' input at `kept`, as the brain's (#415: each chance at the true population, `bladeburnerRuleInputOf`). */
   #forecastInput(kept: Kept): BladeburnerForecastInput {
-    return {
-      readings: kept.reading.actions,
-      person: kept.person,
-      stamina: kept.reading.stamina,
-      maxStamina: kept.reading.maxStamina,
-      rankMultiplier: kept.rankMultiplier,
-      speed: bladeburnerSpeedOf(kept.reading.bonusSeconds),
-    };
+    return kept.rule.input;
   }
 
   /** The rule's plan at `kept`: under its target (#386), the least time to it, as the brain chooses. */

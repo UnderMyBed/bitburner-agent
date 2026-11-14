@@ -773,7 +773,10 @@ export interface BladeburnerWork {
   type: BladeburnerLevelledType;
   name: string;
   level: number;
-  /** The estimate's low end there (`chanceLowAt`), the stamina penalty out. */
+  /**
+   * The range read's low end there (`chanceLowAt`), the stamina penalty out: since #415 the brain's range is a point
+   * at the true population (`bladeburnerPricedInput`), so this is the chance the game draws against, or the fallback's.
+   */
   chance: number;
   /** An attempt's rank, mean and variance; its seconds; its stamina; its HP lost on failure; its money on success. */
   rankMean: number;
@@ -805,7 +808,10 @@ export interface BladeburnerActionPlan {
 /**
  * The work a cycle of work and rest gains most rank a second with (#375), each contract and operation at each level
  * up to its max, and the rest with it:
- * - **The chance:** the estimate's low end (`chanceLowAt`), from the game's range as last read.
+ * - **The chance:** the range read's low end (`chanceLowAt`). Since #415 the brain gives the range priced at the true
+ *   population (a point: the chance the game draws against, pop/popEst recovered from the next Black Op's range; else
+ *   the mean over the estimate's spread, ./bladeburner-growth.ts's `bladeburnerPricedInput`), so the rule chooses at
+ *   that chance, as the grown estimate prices it; given the game's own range, its low end, a bound from below.
  * - **The rank:** an attempt's mean, a success's gain against a failure's loss (`attemptRankMoments`), over its time.
  * - **The counts:** an action needs its next attempt and those until the next reading: 1 + 10 s × the bonus time's
  *   speed over its time. Under 1 the game stops it (`Actions/LevelableAction.ts:44-47`), idle until the rule's next turn.

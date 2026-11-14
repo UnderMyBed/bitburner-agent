@@ -16,6 +16,7 @@ import {
   type BladeburnerActionReading,
   type BladeburnerPerson,
   type BladeburnerSkillLevels,
+  bladeburnerPricedInput,
   bladeburnerSkillMultsOf,
   CONTROL_PROTOCOL_VERSION,
   chooseBladeburnerSkills,
@@ -140,11 +141,27 @@ const slow = (bitNode: number, ownedSF: Record<string, number> = {}): SlowSnapsh
   return { ...data, resetInfo: { ...data.resetInfo, ownedSF } as SlowSnapshotData["resetInfo"] };
 };
 
+/**
+ * The rules' input with no Black Op read (#415: these readings are a B4 Agent's): the population not recovered, each
+ * chance the fallback's, its mean over the estimate's spread (core's `bladeburnerPricedInput`), as the brain prices it.
+ */
+function spread<T extends Parameters<typeof bladeburnerPricedInput>[0]>(input: T): T {
+  return bladeburnerPricedInput(input, { next: null, chanceRead: null }).input;
+}
+
 /** Core's plan of a reading's skills, as the rule makes it. */
 function planOf(points: number, levels: BladeburnerSkillLevels = {}, costMultiplier = 1, rankMultiplier = 1) {
   const max = maxStaminaOf(PERSON, 0, bladeburnerSkillMultsOf(levels));
   return chooseBladeburnerSkills(
-    { readings: actionReadings(levels), person: PERSON, stamina: max, maxStamina: max, rankMultiplier, speed: 1 },
+    spread({
+      readings: actionReadings(levels),
+      person: PERSON,
+      stamina: max,
+      maxStamina: max,
+      rankMultiplier,
+      speed: 1,
+      skills: { read: levels },
+    }),
     { levels: { ...NO_LEVELS, ...levels }, points, costMultiplier },
   );
 }

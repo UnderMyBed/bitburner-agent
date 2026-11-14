@@ -10,12 +10,17 @@ import path from "node:path";
 import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
+  actionChanceAtRatio,
   actionSuccessChance,
+  BLADEBURNER_BLACK_OPS,
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_READING_SECONDS,
   type BladeburnerActionReading,
+  type BladeburnerBlackOp,
   type BladeburnerPerson,
+  blackOpSuccessChance,
   bladeburnerPlansToTarget,
+  bladeburnerPricedInput,
   CONTROL_PROTOCOL_VERSION,
   chooseBladeburnerAction,
   type DesiredState,
@@ -71,6 +76,8 @@ interface ReadingOptions {
   found?: { type: string; name: string } | null;
   current?: { type: string; name: string } | null;
   actions?: BladeburnerActionReading[];
+  /** The next Black Op read (#392); none: a B4 Agent's. */
+  blackOp?: { name: string; chance: [number, number] };
 }
 /** The worker's reading in the division, B2's figures in it (full stamina, idle, every action's). */
 function reading({
@@ -80,8 +87,19 @@ function reading({
   found = null,
   current = null,
   actions = actionReadings(),
+  blackOp,
 }: ReadingOptions = {}) {
-  return { rank, problems: [], stamina, maxStamina: MAX_STAMINA, bonusSeconds, found, current, actions };
+  return {
+    rank,
+    problems: [],
+    stamina,
+    maxStamina: MAX_STAMINA,
+    bonusSeconds,
+    found,
+    current,
+    actions,
+    ...(blackOp === undefined ? {} : { blackOp }),
+  };
 }
 
 /**
@@ -145,15 +163,25 @@ const slow = (bitNode: number, ownedSF: Record<string, number> = {}): SlowSnapsh
   return { ...data, resetInfo: { ...data.resetInfo, ownedSF } as SlowSnapshotData["resetInfo"] };
 };
 
+/**
+ * The rules' input with no Black Op read (#415: these readings are a B4 Agent's): the population not recovered, each
+ * chance the fallback's, its mean over the estimate's spread (core's `bladeburnerPricedInput`), as the brain prices it.
+ */
+function spread<T extends Parameters<typeof bladeburnerPricedInput>[0]>(input: T): T {
+  return bladeburnerPricedInput(input, { next: null, chanceRead: null }).input;
+}
+
 /** The plan core makes of a reading at full stamina: Bounty Hunter level 1 at combat 100, Field Analysis to rest. */
-const PLAN = chooseBladeburnerAction({
-  readings: actionReadings(),
-  person: PERSON,
-  stamina: MAX_STAMINA,
-  maxStamina: MAX_STAMINA,
-  rankMultiplier: 1,
-  speed: 1,
-});
+const PLAN = chooseBladeburnerAction(
+  spread({
+    readings: actionReadings(),
+    person: PERSON,
+    stamina: MAX_STAMINA,
+    maxStamina: MAX_STAMINA,
+    rankMultiplier: 1,
+    speed: 1,
+  }),
+);
 const WORK = { type: "Contracts", name: "Bounty Hunter", level: 1 };
 const REST = { type: "General", name: "Field Analysis", level: null };
 
@@ -168,9 +196,9 @@ describe("the rule (#375)", () => {
     expect(rule.acting()).toBe(true);
     expect(rule.view().actions).toMatchObject({ order: WORK, resting: false, plan: { work: WORK } });
     expect(rule.view().line).toBe(
-      "Bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1 (21.2% at the " +
-        "estimate's low end, 0.54 rank/min worked), resting with Field Analysis; stamina 39.8 / 39.8; worked 29% of a " +
-        "cycle, 0.30 rank/min over it",
+      "Bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1 (22.4% over the " +
+        "estimate's spread: the population not recovered, 0.58 rank/min worked), resting with Field Analysis; stamina " +
+        "39.8 / 39.8; worked 29% of a cycle, 0.31 rank/min over it",
     );
   });
 
@@ -250,9 +278,11 @@ describe("the rule (#375)", () => {
     decide(rule, medium(reading({ stamina: MAX_STAMINA * 0.8, rank: 2 })));
     decide(rule, medium(reading({ stamina: MAX_STAMINA * 0.4, rank: 3 })));
     decide(rule, medium(reading({ stamina: MAX_STAMINA * 0.45, rank: 3.1 })));
+    // At 40% the fixture's ranges (read at no penalty) are over the penalty's 0.8, so ×1.25: Raid's spread mean then
+    // beats Bounty Hunter's (#415; at the low end it didn't). One line a change, as before.
     expect(lines.map((line) => line.split(" (")[0])).toEqual([
       "bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1",
-      "bladeburner: in the division, rank 3.0; Bladeburners joined; resting with Field Analysis for Bounty Hunter level 1",
+      "bladeburner: in the division, rank 3.0; Bladeburners joined; resting with Field Analysis for Raid level 1",
     ]);
   });
 });
@@ -372,8 +402,15 @@ describe("the controller (#375)", () => {
       send("medium", medium(reading({ rank, actions: targetReadings() }), { factions }));
       return { action: last()?.bladeburner?.action, plan: controller.bladeburnerView().actions?.plan };
     };
-    const forecast = { readings: targetReadings(), person: PERSON, stamina: MAX_STAMINA, maxStamina: MAX_STAMINA };
-    const byRate = chooseBladeburnerAction({ ...forecast, rankMultiplier: 1, speed: 1 });
+    const forecast = spread({
+      readings: targetReadings(),
+      person: PERSON,
+      stamina: MAX_STAMINA,
+      maxStamina: MAX_STAMINA,
+      rankMultiplier: 1,
+      speed: 1,
+    });
+    const byRate = chooseBladeburnerAction(forecast);
     expect(byRate.work).toMatchObject(RAID);
     // Far under it, Raid's wait is the shorter (a failure at the floor loses nothing); near it, the steady rise.
     const far = at(0);
@@ -383,12 +420,7 @@ describe("the controller (#375)", () => {
     expect(near.action).toEqual(BOUNTY_HUNTER);
     // Each the least of every plan the rule weighs, from core's own list.
     for (const rank of [0, 20]) {
-      const every = bladeburnerPlansToTarget({
-        ...forecast,
-        rankMultiplier: 1,
-        speed: 1,
-        target: { rank, target: 25 },
-      });
+      const every = bladeburnerPlansToTarget({ ...forecast, target: { rank, target: 25 } });
       expect(at(rank).plan).toEqual(every[0]);
     }
     expect(controller.bladeburnerView().line).toContain("rank 25 in about");
@@ -463,12 +495,14 @@ describe("the run report's actions (#375)", () => {
     const under = fold(run(ranks)).text;
     const forecastLine = (text: string) => text.split("\n").find((line) => line.includes("the rule's forecast over"));
     const plan = chooseBladeburnerAction({
-      readings: tracking(),
-      person: PERSON,
-      stamina: MAX_STAMINA,
-      maxStamina: MAX_STAMINA,
-      rankMultiplier: 1,
-      speed: 1,
+      ...spread({
+        readings: tracking(),
+        person: PERSON,
+        stamina: MAX_STAMINA,
+        maxStamina: MAX_STAMINA,
+        rankMultiplier: 1,
+        speed: 1,
+      }),
       target: { rank: 10, target: 25 },
     });
     expect(plan.toTarget?.seconds).toBeGreaterThan(0);
@@ -479,6 +513,30 @@ describe("the run report's actions (#375)", () => {
       run(ranks).map(([atMs, data]) => [atMs, { ...data, player: { ...data.player, factions: ["Bladeburners"] } }]),
     ).text;
     expect(forecastLine(joined)).not.toContain("rank 25 in about");
+  });
+
+  test("the forecast judged at the true population where recovered (#415), else the low end read", () => {
+    const typhoon = BLADEBURNER_BLACK_OPS[0] as BladeburnerBlackOp;
+    const formula = blackOpSuccessChance(typhoon, PERSON, { penalty: 1 });
+    // An overcount (pop/popEst 1/1.42): Typhoon's range its formula at the high end, × the ratio at the low.
+    const ratio = 1 / 1.42;
+    const recovered = { name: typhoon.name, chance: [formula * ratio, formula] as [number, number] };
+    // An undercount past the clip: its formula the low end, the high end at 1, so only a bound: not recovered.
+    const clipped = { name: typhoon.name, chance: [formula, 1] as [number, number] };
+    const forecastOf = (blackOp: { name: string; chance: [number, number] }) => {
+      const { text } = fold(
+        run(
+          Array.from({ length: N }, () => 0),
+          () => ({ blackOp }),
+        ),
+      );
+      return Number(/rank from the actions run: -?[\d.]+ measured against (-?[\d.]+) forecast/.exec(text)?.[1]);
+    };
+    // Tracking's 0.5–0.7 at that ratio: the high end the estimate's chance, the true one 0.7 × ratio^0.7.
+    const drawn = actionChanceAtRatio([0.5, 0.7], ratio) as number;
+    expect(drawn).toBeCloseTo(0.7 * ratio ** 0.7, 12);
+    expect(forecastOf(recovered)).toBeCloseTo((N - 1) * (10 / 11) * drawn * 0.3, 2);
+    expect(forecastOf(clipped)).toBeCloseTo(expected, 2);
   });
 
   test("Tracking for 10 min at its forecast: the lines, and no failure", () => {

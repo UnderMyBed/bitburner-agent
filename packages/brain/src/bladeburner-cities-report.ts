@@ -29,7 +29,7 @@ import {
   INCITE_VIOLENCE,
   type MediumSnapshotData,
 } from "@bitburner-agent/core";
-import { type BladeburnerActionsReading, bladeburnerSpeedOf, describeCityChoice } from "./bladeburner.ts";
+import { type BladeburnerActionsReading, bladeburnerRuleInputOf, describeCityChoice } from "./bladeburner.ts";
 import { BLADEBURNER_GAP_MS } from "./bladeburner-actions-report.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 
@@ -101,13 +101,8 @@ export class BladeburnerCitiesFold {
     const target = rank === null ? null : bladeburnerRankTarget({ rank, factionJoined, blackOpRank });
     const choice = chooseBladeburnerCity(
       {
-        readings: reading.actions,
-        person,
-        stamina: reading.stamina,
-        maxStamina: reading.maxStamina,
-        rankMultiplier,
-        speed: bladeburnerSpeedOf(reading.bonusSeconds),
-        skills: { read: reading.skills?.levels ?? {} },
+        // As the brain's (#415): each chance at the true population.
+        ...bladeburnerRuleInputOf(reading, person, rankMultiplier).input,
         ...(target === null || rank === null ? {} : { target: { rank, target } }),
       },
       { city, cities },
