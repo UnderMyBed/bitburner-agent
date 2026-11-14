@@ -137,6 +137,7 @@ import {
   daedalusCountOf,
   daedalusRequirements,
   daedalusSkillsReached,
+  donationsUnlocked,
   donationTermsOf,
   donationToReach,
   type FactionState,
@@ -146,6 +147,7 @@ import {
   factionRepInstallMultiplier,
   factionReputationPerSecond,
   favorAfterInstall,
+  favorToDonate,
   GANG_RED_PILL_HOLD_MS,
   GANG_ROUTE_COMMIT_MS,
   GANG_ROUTE_SERVER,
@@ -167,6 +169,8 @@ import {
   type JoinedFaction,
   LATER_CYCLE_FACTIONS,
   LEVEL_RISE_TERM,
+  type LevellingCandidate,
+  type LevellingRate,
   type LevelRise,
   levellingInstallMultipliers,
   levelRiseOf,
@@ -181,11 +185,17 @@ import {
   purchaseSequenceCost,
   QUICK_INSTALL_COUNTDOWN_MS,
   QUICK_INSTALL_WITHIN_MS,
+  type RedPillInstallOffer,
+  type RedPillInstallTiming,
+  type RedPillPurchase,
+  rateStandardError,
+  redPillInstallTiming,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
   tauRelativeError,
   winRouteOf,
+  worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import { BLADEBURNER_PRICED_REBUILD_SETTING } from "./bladeburner.ts";
 import { BLACK_OPS_GROWN_REFRESH_MS, type BlackOpsInstallFigures } from "./bladeburner-route.ts";
@@ -786,6 +796,12 @@ export interface AugmentationInputs {
    * join (the count rule, as before #404).
    */
   blackOpsInstall?: BlackOpsInstallFigures | null;
+  /**
+   * Levelling mode after an install, from the snapshots now (#410, the controller's from ./levelling.ts's
+   * `redPillLevellingFiguresOf`): The Red Pill's install is then timed, now or first batching for the levelling set,
+   * with the destroy wanted on its route. Absent or null: installed at once, as before #410.
+   */
+  redPillLevelling?: (() => RedPillLevellingFigures | null) | null;
   /**
    * Netburners before it's joined (#387, the controller's from ./hacknet.ts's `netburnersRoute`): the planner's
    * countables count its five, by A5's work there after its Hacknet setup's money and its invitation. Absent or null,
@@ -1713,6 +1729,117 @@ export function purchaseIntent(faction: string, augmentation: string, level: num
   return { id: intentId("purchaseAugmentation", args), action: "purchaseAugmentation", args };
 }
 
+/**
+ * Levelling mode after an install as The Red Pill's timing reads it (#410): home's level loop threads (home's RAM is
+ * kept through an install, `Prestige.ts:78-80`), one thread's rate on the levelling target at the level and speed now,
+ * the level's multiplier now, and the target's preparation after an install at the levels' and the set's multipliers.
+ */
+export interface RedPillLevellingFigures {
+  homeThreads: number;
+  perThread: LevellingRate;
+  levelMult: number;
+  preparationMs: (levels: number, augmentations: readonly string[]) => number;
+}
+
+/**
+ * The Red Pill's install as last timed (#410), for the view, the World Daemon's stall and the destroy estimate's D:
+ * core's choice and figures, the plan's set, its words, and the wait (from when, the controller's clock, and its
+ * bound: twice the first plan's batching and the income's window), null when not waiting.
+ */
+export interface RedPillTimingView {
+  choice: "now" | "wait";
+  /** What the money now buys after The Red Pill's donation, and D after it: levelling's least candidate then. */
+  now: { levels: number; augmentations: string[]; seconds: number; candidate: LevellingCandidate | null };
+  /** The best wait (core's), null with none; the set it buys. */
+  wait: RedPillInstallTiming["wait"];
+  augmentations: string[];
+  /** The measured error of their difference (#406's margin), seconds. */
+  marginSeconds: number;
+  words: string;
+  /** The wait's clock (from when, the controller's, and its bound), null when not waiting. */
+  waitBound: { sinceMs: number; withinMs: number } | null;
+}
+
+/** What The Red Pill's offer is priced from (#410, A6's `#redPillOffer`). */
+interface RedPillContext {
+  figures: RedPillLevellingFigures;
+  donation: Donation | null;
+  purchaseState: AugmentationPurchaseState;
+  shopsView: AugmentationShops;
+  installable: readonly string[];
+  money: number;
+  hackingLevel: number;
+  short: boolean;
+  factionRep: number;
+  resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
+  /** The BitNode's start (the slow snapshot's), or null unread: the batching's bound. */
+  lastNodeReset: number | null;
+  slowGameTimeMs: number | null;
+}
+
+/**
+ * (d)'s offer after The Red Pill's install with `purchase` (#410): what's left of the levelling set, and NeuroFlux
+ * Governor's ladder from the levels it leaves, the queue empty (prices ×1.9 afresh, `AugmentationHelpers.ts:29-31`)
+ * and every faction's reputation 0 (`Faction/Faction.ts:77-85`), so all of it by donation where the favour the
+ * install brings unlocks them (`favorAfterInstall`, `Faction/Faction.ts:77-81`; one install's, where two may come
+ * before The Red Pill's: cautious). Daedalus's unlocked whatever its reputation now: its route's donations install
+ * (#225, "Daedalus donations") comes before The Red Pill's, for that (`favorToDonate`), so from Daedalus joined (d) is
+ * priced.
+ */
+function afterRedPill({
+  purchase,
+  queuedLevels,
+  installable,
+  purchaseState,
+  shops,
+  factionRep,
+  multipliers,
+  hackingLevel,
+  short,
+}: {
+  purchase: RedPillPurchase;
+  queuedLevels: number;
+  installable: readonly string[];
+  purchaseState: AugmentationPurchaseState;
+  shops: AugmentationShops;
+  factionRep: number;
+  multipliers: ReturnType<typeof augmentationBitNodeMultipliers>;
+  hackingLevel: number;
+  short: boolean;
+}): { ladder: number[]; augmentations: string[] } {
+  const installed: Record<string, number> = { ...purchaseState.installed, [THE_RED_PILL]: 1 };
+  for (const name of [...installable, ...purchase.augmentations]) {
+    if (name !== NEUROFLUX_GOVERNOR) installed[name] = 1;
+  }
+  const neuroFlux = (purchaseState.installed[NEUROFLUX_GOVERNOR] ?? 0) + queuedLevels + purchase.levels;
+  if (neuroFlux > 0) installed[NEUROFLUX_GOVERNOR] = neuroFlux;
+  const state: AugmentationPurchaseState = { ...purchaseState, installed, queued: [] };
+  const owned = (name: string) => Object.hasOwn(installed, name);
+  const reset = shops.joined.map((faction) => ({
+    ...faction,
+    favor: Math.max(
+      favorAfterInstall(faction.favor, faction.reputation),
+      faction.name === DAEDALUS ? favorToDonate(multipliers) : 0,
+    ),
+    reputation: 0,
+  }));
+  const wanted = shops.sold.filter((name) => !owned(name) && addsToLevelling([name]));
+  const terms = donationTermsOf(reset, shops.shops, wanted, factionRep, multipliers);
+  const set = chooseAugmentationsToBuy([], state, Number.MAX_VALUE, hackingLevel, terms, short);
+  return {
+    ladder: neuroFluxLadder({ state, set, neuroFluxReputation: 0, donations: terms }),
+    augmentations: set.purchases.map((each) => each.name),
+  };
+}
+
+/** Levelling's candidates in the words the dashboard and the run report use (./levelling.ts's). */
+const RED_PILL_CANDIDATE_WORDS: Record<LevellingCandidate, string> = {
+  money: "batching for money",
+  level: "levelling mode",
+  install: "augmentations, then an install",
+  batch: "batching for the money, then an install",
+};
+
 /** The Red Pill's way, before an ordinary install is chosen (#215): `AugmentationRule`'s `#endgame`. */
 type HoldReason = "destroy" | "redPillNotQueued" | "redPill" | "daedalus" | "daedalusDonations";
 type Endgame =
@@ -1804,6 +1931,18 @@ export class AugmentationRule {
   #installAugmentationsOffer: string[] = [];
   /** (d)'s ladder and set (#380), as the last destroy hold had them, or null. */
   #batchOffer: { ladder: number[]; augmentations: string[] } | null = null;
+  /** The Red Pill's install as the last decision timed it (#410), or null: not at it, or not timed. */
+  #redPillTiming: RedPillTimingView | null = null;
+  /** The wait at The Red Pill for the levelling set (#410): its cycle, start and bound; null when not waiting. */
+  #redPillWait: { lastAugReset: number; sinceOnlineMs: number; sinceMs: number; boundMs: number } | null = null;
+  /** D from m (#410) at the last decision's state, lazy; null where The Red Pill's timing can't price the route. */
+  #levelFromMultipliers: (() => number) | null = null;
+  /** The last install chosen (#410): when, and its BitNode, for the commit's measured time to its install sent. */
+  #chosenAt: { atMs: number; lastNodeReset: number } | null = null;
+  /** The commit's measured time (#410), chosen to sent, the last in its BitNode; null with none. */
+  #commitMs: { lastNodeReset: number; ms: number } | null = null;
+  /** The Red Pill's timing's choice last logged (#410): logged on a change. */
+  #redPillTimingLogged: "now" | "wait" | null = null;
   /** The install held for Daedalus's count (#243), as last decided, or null: logged as it starts and ends. */
   #countHeld: CountHoldView | null = null;
   /** This update logged the hold's end (#243 review): `update` logs one on any other path. */
@@ -2017,6 +2156,43 @@ export class AugmentationRule {
    * levels after it cost (core's `neuroFluxLadder`: ×1.14 a level, ×1.9 a purchase, reputation by donation where a
    * seller takes them), so a commit with entry k's money buys the set and k levels.
    */
+  /** The Red Pill's install as the last decision timed it (#410), or null. */
+  redPillTiming(): RedPillTimingView | null {
+    return this.#redPillTiming;
+  }
+
+  /** The wait at The Red Pill for the levelling set (#410), for the World Daemon's stall: from when, its bound. */
+  redPillWait(): { sinceMs: number; withinMs: number } | null {
+    return this.#redPillTiming?.waitBound ?? null;
+  }
+
+  /**
+   * D from m (#410), ms, for the destroy estimate (#360): The Red Pill's timing's least, the install now's or the best
+   * wait's (`redPillInstallTiming`), from the last decision's state, once it can price the route: Daedalus's donations
+   * unlocked and the income measured (`redPillPriced`); null before (the prior's then), or with The Red Pill installed,
+   * the destroy not wanted, off its route, or no levelling figures. Lazy: read only at an estimate's moment.
+   */
+  redPillPriced(): boolean {
+    return this.#levelFromMultipliers !== null;
+  }
+
+  /**
+   * The install went out (#410, the controller's `augmentationInstallSent`): the commit's measured time, from its
+   * choice, for The Red Pill's commit money.
+   */
+  installSent(atMs: number): void {
+    const chosen = this.#chosenAt;
+    if (chosen !== null && atMs >= chosen.atMs) {
+      this.#commitMs = { lastNodeReset: chosen.lastNodeReset, ms: atMs - chosen.atMs };
+    }
+    this.#chosenAt = null;
+  }
+
+  levelFromMultipliersMs(): number | null {
+    const seconds = this.#levelFromMultipliers?.() ?? null;
+    return seconds === null || Number.isNaN(seconds) ? null : seconds * 1000;
+  }
+
   batchOffer(): { ladder: number[]; augmentations: string[] } | null {
     return this.#batchOffer === null
       ? null
@@ -2084,6 +2260,8 @@ export class AugmentationRule {
     this.#neuroFluxOffer = null;
     this.#installAugmentationsOffer = [];
     this.#batchOffer = null;
+    this.#redPillTiming = null;
+    this.#levelFromMultipliers = null;
     this.#redPillHold = 0;
     this.#enabled = enabled;
     const atMs = nowMs ?? 0;
@@ -2163,6 +2341,7 @@ export class AugmentationRule {
         gangInstall: inputs.gangInstall ?? null,
         netburners: inputs.netburners ?? null,
         blackOpsInstall: inputs.blackOpsInstall ?? null,
+        redPillLevelling: inputs.redPillLevelling ?? null,
       });
     } catch (error) {
       return askNothing(`the snapshots as core knows the game (${(error as Error).message})`, { waiting: false });
@@ -2583,6 +2762,7 @@ export class AugmentationRule {
     gangInstall,
     netburners,
     blackOpsInstall,
+    redPillLevelling,
   }: {
     state: FactionState;
     resetInfo: NonNullable<ReturnType<typeof resetInfoOf>>;
@@ -2605,6 +2785,7 @@ export class AugmentationRule {
     gangInstall: GangInstallFigures | null;
     netburners: NetburnersRoute | null;
     blackOpsInstall: BlackOpsInstallFigures | null;
+    redPillLevelling: (() => RedPillLevellingFigures | null) | null;
   }): AugmentationAsk {
     const { currentNode, ownedAugs, ownedSF } = resetInfo;
     // What an install would install: the faction state's queue, with each purchase reported done that it doesn't show
@@ -2798,6 +2979,71 @@ export class AugmentationRule {
             "install, but nothing is queued or affordable",
         };
       }
+      // The Red Pill's install timed (#410): D, the time after it to w0r1d_d43m0n's level, depends on the multipliers
+      // it leaves (`calculateSkill`), so the planner weighs installing now against batching first for more of the
+      // levelling set (core's `redPillInstallTiming`, #406's margin rule): only with the destroy wanted on its route
+      // and the controller's levelling figures; waiting, a hold on The Red Pill's way, its donation's money held.
+      // The figures read only here (the controller's from the snapshots): the rest of the time, nothing is priced.
+      const onRoute = destroyWanted && winRouteOf(currentNode) === "redPill" && !owned(THE_RED_PILL);
+      const context = (figures: RedPillLevellingFigures, donation: Donation | null): RedPillContext => ({
+        figures,
+        donation,
+        purchaseState,
+        shopsView,
+        installable,
+        money,
+        hackingLevel,
+        short,
+        factionRep: player.person.mults.faction_rep,
+        resetInfo,
+        lastNodeReset: isFiniteNumber(slowData.resetInfo?.lastNodeReset) ? slowData.resetInfo.lastNodeReset : null,
+        slowGameTimeMs,
+      });
+      // D from m for the destroy estimate (#410), once The Red Pill's timing can price the route: Daedalus's donations
+      // unlocked (its reputation then bought) and the income measured. Priced only if it's read.
+      const daedalus = shopsView.joined.find((faction) => faction.name === DAEDALUS);
+      const income = this.#income();
+      if (
+        onRoute &&
+        redPillLevelling !== null &&
+        daedalus !== undefined &&
+        donationsUnlocked(daedalus.favor, multipliers) &&
+        income !== null &&
+        income > 0
+      ) {
+        const needed = augmentationCost(THE_RED_PILL, purchaseState).reputation;
+        const donation: Donation = {
+          faction: DAEDALUS,
+          reputation: needed,
+          amount:
+            daedalus.reputation >= needed
+              ? 0
+              : donationToReach(
+                  needed - daedalus.reputation,
+                  player.person.mults.faction_rep,
+                  multipliers.FactionWorkRepGain,
+                ),
+        };
+        this.#levelFromMultipliers = () => {
+          const figures = redPillLevelling();
+          if (figures === null) return Number.NaN;
+          const timing = redPillInstallTiming(this.#redPillOffer(context(figures, donation)).offer);
+          return Math.min(timing.now.seconds, timing.wait?.seconds ?? Number.POSITIVE_INFINITY);
+        };
+      }
+      const redPillFigures = endgame.kind === "redPill" && onRoute ? (redPillLevelling?.() ?? null) : null;
+      if (endgame.kind === "redPill" && redPillFigures !== null) {
+        const timing = this.#timeRedPill({ ...context(redPillFigures, endgame.donation), onlineMs, atMs });
+        if (timing.choice === "wait") {
+          // The wait's money held back too (cloud servers and home RAM wait for it): its purchase and the donation.
+          endgame = {
+            kind: "hold",
+            why: "redPill",
+            reserve: redPillAmount + (timing.wait?.money ?? 0),
+            waitingFor: timing.words,
+          };
+        }
+      } else this.#redPillWait = null;
       // The destroy's hold (#336): what the money buys of NeuroFlux Governor, and (#355) the set's augmentations that
       // add to levelling, are the planner's install candidate; that install, once the planner
       // chooses it, goes at once in the hold's place ("the hacking level"), if the money buys a level or such a set (an
@@ -3474,6 +3720,9 @@ export class AugmentationRule {
       this.#installing = false;
       this.#progress = null;
       this.#donationsSkipped.clear();
+      // The commit's time (#410): from here to the install sent.
+      const nodeReset = slowData.resetInfo?.lastNodeReset;
+      this.#chosenAt = isFiniteNumber(nodeReset) ? { atMs, lastNodeReset: nodeReset } : null;
       this.#emit({
         type: AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
         atMs,
@@ -3844,6 +4093,187 @@ export class AugmentationRule {
           : null;
     const carried: CarriedLevelRise = { lastNodeReset, lastAugReset, kappa, deadMs };
     this.#store.setSetting(AUGMENTATION_LEVEL_RISE_SETTING, JSON.stringify(carried));
+  }
+
+  /**
+   * The Red Pill's install as the planner prices it (#410, core's `RedPillInstallOffer`): what the money after its
+   * donation buys now (the set's augmentations that add to levelling, then NeuroFlux Governor's levels, as
+   * `neuroFluxLadder` prices them), A6's set at any money and its ladder (the wait's), (d)'s offer after the install
+   * (`#afterRedPill`), the measured income and experience rate with their standard errors (core's
+   * `rateStandardError`), and levelling mode after an install (the controller's figures). The Red Pill's donation goes
+   * first at the commit, so its faction's reputation then counts for the rest (BN4.3, 2026-11-13: Daedalus at 2.5m
+   * covered NeuroFlux Governor 54-63, which the plan had put on BitRunners' donation, $2.5e11 for nothing). What's
+   * queued installs either way: its multipliers are taken as the player's. Left out: the commit's other purchases
+   * (those adding nothing to levelling raise the levels' prices ×1.9 each: toward now), the gang's shop in BN2 (toward
+   * now).
+   */
+  #redPillOffer({
+    figures,
+    donation,
+    purchaseState,
+    shopsView,
+    installable,
+    money,
+    hackingLevel,
+    short,
+    factionRep,
+    resetInfo,
+    lastNodeReset,
+    slowGameTimeMs,
+  }: RedPillContext): { offer: RedPillInstallOffer; nowSet: string[]; nowLevels: number } {
+    const { currentNode, ownedSF } = resetInfo;
+    const multipliers = augmentationBitNodeMultipliers(currentNode, ownedSF);
+    const redPillMoney = donation?.amount ?? 0;
+    // The Red Pill's donation first: its faction at the reputation it brings.
+    const joined = shopsView.joined.map((faction) =>
+      donation !== null && faction.name === donation.faction
+        ? { ...faction, reputation: Math.max(faction.reputation, donation.reputation) }
+        : faction,
+    );
+    const owned = (name: string) => Object.hasOwn(purchaseState.installed, name) || purchaseState.queued.includes(name);
+    const shops = augmentationShops(joined, currentNode, purchaseState, owned);
+    const wanted = shops.sold.filter(
+      (name) => !owned(name) && shops.sellerOf(name) === null && addsToLevelling([name]),
+    );
+    const terms = donationTermsOf(shops.joined, shops.shops, wanted, factionRep, multipliers);
+    const toBuy = shops.reached.filter((name) => name !== THE_RED_PILL && addsToLevelling([name]));
+    const ladderOf = (set: AugmentationSet) =>
+      neuroFluxLadder({ state: purchaseState, set, neuroFluxReputation: shops.neuroFluxReputation, donations: terms });
+    const names = (set: AugmentationSet) => set.purchases.map((purchase) => purchase.name);
+    // The income before the choice (the reserve's window, trailing), and the money the commit's own time brings at it:
+    // the commit buys a level at a time as the money comes. Its time is the last measured in the BitNode, chosen to
+    // sent (`installSent`; 5901be2's Red Pill commit at BN4.3's 21:13 took 3.4 min); none measured, 0 (cautious).
+    const income = this.#income();
+    const commitMs = this.#commitMs !== null && this.#commitMs.lastNodeReset === lastNodeReset ? this.#commitMs.ms : 0;
+    const commitMoney = income !== null && income > 0 ? (income * commitMs) / 1000 : 0;
+    // Now: the set the money after the donation and the commit's covers, then each level it still covers.
+    const budget = money - redPillMoney + commitMoney;
+    const nowSet = chooseAugmentationsToBuy(toBuy, purchaseState, budget, hackingLevel, terms, short);
+    const nowLevels = Math.max(
+      0,
+      ladderOf(nowSet).findLastIndex((cost) => cost <= budget),
+    );
+    const whole = chooseAugmentationsToBuy(toBuy, purchaseState, Number.MAX_VALUE, hackingLevel, terms, short);
+    // What's queued installs either way: its multipliers on top of the player's, on both sides.
+    const queuedLevels = installable.filter((name) => name === NEUROFLUX_GOVERNOR).length;
+    const queuedAdds = installable.filter((name) => name !== NEUROFLUX_GOVERNOR && addsToLevelling([name]));
+    const queuedGain = levellingInstallMultipliers(queuedLevels, queuedAdds);
+    const soFarSeconds =
+      slowGameTimeMs === null || lastNodeReset === null ? null : Math.max(0, slowGameTimeMs - lastNodeReset) / 1000;
+    const exp = this.#expRate.windowFull() ? this.#expRate.perSecond() : null;
+    // (d)'s offer after the install, priced once a purchase within this offer (one reading's state).
+    const afterInstall = new Map<string, { ladder: number[]; augmentations: string[] }>();
+    const offer: RedPillInstallOffer = {
+      money,
+      redPillMoney,
+      commitMoney,
+      incomePerSecond: income,
+      incomeError: rateStandardError(
+        this.#incomeSamples.map(({ gameTimeMs, earned }) => ({ atMs: gameTimeMs, value: earned })),
+      ),
+      batchingExp: exp === null || !(exp > 0) ? null : { expPerSecond: exp, atLevel: hackingLevel },
+      batchingExpError: this.#expRate.standardError(),
+      now: { levels: nowLevels, augmentations: names(nowSet) },
+      ladder: ladderOf(whole),
+      augmentations: names(whole),
+      afterInstall: (purchase) => {
+        const key = JSON.stringify([purchase.levels, purchase.augmentations]);
+        const cached = afterInstall.get(key);
+        if (cached !== undefined) return cached;
+        const after = afterRedPill({
+          purchase,
+          queuedLevels,
+          installable,
+          purchaseState,
+          shops,
+          factionRep,
+          multipliers,
+          hackingLevel,
+          short,
+        });
+        afterInstall.set(key, after);
+        return after;
+      },
+      homeThreads: figures.homeThreads,
+      perThread: {
+        expPerSecond: figures.perThread.expPerSecond * queuedGain.hackingExp * queuedGain.hackingSpeed,
+        atLevel: figures.perThread.atLevel,
+      },
+      preparationMs: (purchase) =>
+        figures.preparationMs(queuedLevels + purchase.levels, [...queuedAdds, ...purchase.augmentations]),
+      batchingBoundSeconds: soFarSeconds,
+      required: worldDaemonRequiredLevel(currentNode, ownedSF),
+      levelMult: figures.levelMult * queuedGain.hacking,
+    };
+    return { offer, nowSet: names(nowSet), nowLevels };
+  }
+
+  /**
+   * The Red Pill's install timed (#410, core's `redPillInstallTiming`): now, or first batching for more of the
+   * levelling set, by D, levelling's own least candidate after the install (`redPillLevelling`), both sides priced
+   * alike, the install now only past the measured error of their difference (#406's rule; a tie waits). A wait is
+   * overdue at twice its first batching and the income's window (`AUGMENTATION_INCOME_WINDOW_MS`, as #343's waits):
+   * then now, said. Its clock is within one brain process: a restart starts it again.
+   */
+  #timeRedPill(context: RedPillContext & { onlineMs: number; atMs: number }): RedPillTimingView {
+    const { onlineMs, atMs } = context;
+    const { lastAugReset } = context.resetInfo;
+    const { offer, nowSet, nowLevels } = this.#redPillOffer(context);
+    const timing = redPillInstallTiming(offer);
+    const { now, wait } = timing;
+    const hours = (seconds: number) =>
+      !Number.isFinite(seconds)
+        ? "never"
+        : seconds / 3600 >= 1e6
+          ? `${(seconds / 3600).toPrecision(3)} h`
+          : formatEta(seconds * 1000);
+    let choice = timing.choice;
+    let why = timing.why;
+    if (choice === "wait" && wait !== null) {
+      const stale = this.#redPillWait !== null && this.#redPillWait.lastAugReset !== lastAugReset;
+      if (this.#redPillWait === null || stale) {
+        this.#redPillWait = {
+          lastAugReset,
+          sinceOnlineMs: onlineMs,
+          sinceMs: atMs,
+          boundMs: 2 * wait.batchingSeconds * 1000 + AUGMENTATION_INCOME_WINDOW_MS,
+        };
+      }
+      const held = this.#redPillWait;
+      if (onlineMs - held.sinceOnlineMs >= held.boundMs) {
+        choice = "now";
+        why = `the wait overdue: ${formatEta(onlineMs - held.sinceOnlineMs)} online, past its bound of ${formatEta(held.boundMs)}`;
+      }
+    } else this.#redPillWait = null;
+    const words = (candidate: LevellingCandidate | null) =>
+      candidate === null ? "none" : RED_PILL_CANDIDATE_WORDS[candidate];
+    const text =
+      `${THE_RED_PILL}'s install timed (#410): now (NeuroFlux Governor ×${nowLevels}` +
+      (nowSet.length === 0 ? "" : ` and ${nowSet.join(", ")}`) +
+      `), D about ${hours(now.seconds)} (${words(now.candidate)})` +
+      (wait === null
+        ? ""
+        : `; batching ${hours(wait.batchingSeconds)} first to ${formatMoney(wait.money + offer.redPillMoney)} for ` +
+          `NeuroFlux Governor ×${wait.levels}` +
+          (offer.augmentations.length === 0 ? "" : ` and ${offer.augmentations.join(", ")}`) +
+          `, about ${hours(wait.seconds)} in all (${words(wait.candidate)} after)`) +
+      `; the difference's error ${hours(timing.marginSeconds)}: ${choice === "wait" ? "batching first" : "the install now"}, ${why}`;
+    const view: RedPillTimingView = {
+      choice,
+      now: { levels: nowLevels, augmentations: nowSet, seconds: now.seconds, candidate: now.candidate },
+      wait,
+      marginSeconds: timing.marginSeconds,
+      augmentations: [...offer.augmentations],
+      words: text,
+      waitBound:
+        choice === "wait" && this.#redPillWait !== null
+          ? { sinceMs: this.#redPillWait.sinceMs, withinMs: this.#redPillWait.boundMs }
+          : null,
+    };
+    if (this.#redPillTimingLogged !== choice) this.#log(`augmentations: ${text}`);
+    this.#redPillTimingLogged = choice;
+    this.#redPillTiming = view;
+    return view;
   }
 
   /**

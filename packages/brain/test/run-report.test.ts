@@ -3390,6 +3390,12 @@ describe("the World Daemon (#215)", () => {
       sinceMs: T0 + 10 * MINUTE,
       detail: "w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed",
     });
+    // Levelling's hopeless choice (#410): the levelling section's own failure, by the same check; not a stall line too.
+    event(15 * MINUTE, "worldDaemonStalled", {
+      step: "levelling",
+      sinceMs: T0 + 12 * MINUTE,
+      detail: "levelling: the brain's choice, levelling mode, about 2.0 h to w0r1d_d43m0n's level: a hopeless estimate",
+    });
     // Below the cap (and a store from before #311, with no `replay`): no replay said.
     event(16 * MINUTE, "bitNodeDestroySent", { source: "brain", nextBitNode: 1 });
     const { text, failures } = report();
@@ -3410,6 +3416,7 @@ describe("the World Daemon (#215)", () => {
       "world daemon stalled: w0r1d_d43m0n at its level (hacking 3,000 of 3,000), the BitNode not destroyed, from " +
         `${at(10 * MINUTE)} to at least ${at(15 * MINUTE)}`,
     );
+    expect(failures.filter((failure) => failure.startsWith("world daemon stalled: levelling:"))).toEqual([]);
   });
 });
 

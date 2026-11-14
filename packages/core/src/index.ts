@@ -975,6 +975,7 @@ export {
 export {
   addsToLevelling,
   batchThenInstallPlan,
+  beatsTheWait,
   chooseLevelling,
   chooseLevellingTarget,
   LEVELLING_CANDIDATES,
@@ -995,7 +996,15 @@ export {
   levellingExpPerThreadSecond,
   levellingInstallMultipliers,
   levellingPreparationMs,
+  levellingSecondsAfterInstall,
   neuroFluxMultipliers,
+  type RedPillInstallOffer,
+  type RedPillInstallTiming,
+  type RedPillLevelling,
+  type RedPillPurchase,
+  rateStandardError,
+  redPillInstallTiming,
+  redPillLevelling,
   secondsToHackingLevel,
   shortestLevellingCandidate,
 } from "./levelling.ts";
