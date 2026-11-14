@@ -11,7 +11,6 @@
 // the queue once a slow snapshot shows the game reset.
 import type { ControlChannel } from "@bitburner-agent/bridge";
 import {
-  AUGMENTATIONS,
   BATCHER_RAM_BUDGET_GB,
   type BatcherHealth,
   type BitNodeHackingMultipliers,
@@ -41,7 +40,6 @@ import {
   LEVEL_LOOP_SCRIPT_NAME,
   MAX_INTENTS,
   type MediumSnapshotData,
-  NEUROFLUX_GOVERNOR,
   PORT_OPENER_PROGRAMS,
   parseIntentRequest,
   resetsTheGame,
@@ -49,7 +47,6 @@ import {
   type StaticSnapshotData,
   THE_RED_PILL,
   TOR_ROUTER,
-  worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
 import {
   AUGMENTATION_INSTALL_INTENT,
@@ -160,7 +157,6 @@ import {
   type LevellingPlan,
   LevellingRule,
   type LevellingView,
-  levelFromMultipliersSeconds,
   levellingFiguresOf,
   redPillLevellingFiguresOf,
 } from "./levelling.ts";
@@ -2066,31 +2062,6 @@ export class DesiredStateController {
     return figures;
   }
 
-  /**
-   * D from m (#410), ms, for the destroy estimate before levelling's first choice: The Red Pill's timing's D now as A6
-   * last timed it, else at the multipliers the queue would leave (no purchase counted: cautious); null unread.
-   */
-  #levelFromMultipliersMs(): number | null {
-    const timing = this.#augmentations.redPillTiming();
-    if (timing !== null) return timing.nowSeconds * 1000;
-    const figures = this.#redPillLevelling();
-    const resetInfo = this.#slowData?.resetInfo;
-    if (figures === null || resetInfo === undefined) return null;
-    const queued = this.#augmentations.queued();
-    try {
-      return (
-        levelFromMultipliersSeconds(
-          figures,
-          worldDaemonRequiredLevel(resetInfo.currentNode, resetInfo.ownedSF),
-          queued.filter((name) => name === NEUROFLUX_GOVERNOR).length,
-          queued.filter((name) => name !== NEUROFLUX_GOVERNOR && Object.hasOwn(AUGMENTATIONS, name)),
-        ) * 1000
-      );
-    } catch {
-      return null;
-    }
-  }
-
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     // The gang (#325) first: its faction, once formed, is left out of what the other rules see as joined.
@@ -2308,7 +2279,7 @@ export class DesiredStateController {
       // BN6 (#398): the Black Ops' route as the World Daemon's path read it this update, both routes' estimates.
       blackOps: destroyBlackOpsOf(this.#worldDaemon.view().path?.blackOps ?? null),
       // D from m (#410), read only at an estimate's moment.
-      levelFromMultipliers: () => this.#levelFromMultipliersMs(),
+      levelFromMultipliers: () => this.#augmentations.levelFromMultipliersMs(),
     });
     // The owner's queue and the brain's resets first, then the rules' intents (`#ruleIntents`, in its order). The
     // purchases before the backdoor: a `buy` never waits for its terminal action.

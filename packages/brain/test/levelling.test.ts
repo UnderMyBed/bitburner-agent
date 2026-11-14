@@ -47,13 +47,16 @@ import {
   describeEstimates,
   LEVELLING_CHOSEN_EVENT_KIND,
   LEVELLING_INCOME_WAIT_MS,
+  LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS,
   LEVELLING_SETTLE_MS,
   type LevellingEvent,
   LevellingRateWindow,
   LevellingRule,
   type LevellingRuleInputs,
+  LevelOnlyClock,
   levelAllThatsLeft,
   levellingFiguresOf,
+  levellingHopelessFailure,
   levellingInputsOf,
   settleMsOf,
 } from "../src/levelling.ts";
@@ -403,8 +406,7 @@ describe("the levelling rule (#336)", () => {
       joesgunsMoney = 6.25e7,
       homeGb = 4096,
       money = 1e6,
-      // ×8 (#410): at ×2 levelling mode is hopeless (about 1e18 s to 3,000), and a hopeless levelling mode is left out.
-      mult = 8,
+      mult = 2,
       batchOffer = undefined as LevellingRuleInputs["batchOffer"],
     } = {},
   ): LevellingRuleInputs {
@@ -434,7 +436,7 @@ describe("the levelling rule (#336)", () => {
   });
   const rule = () =>
     new LevellingRule({ log: (line) => lines.push(line), emit: (event) => events.push(event as RuleEvent) });
-  const figures = levellingFiguresOf(STATIC, medium({ mult: 8 }), slow(), BN1_HACKING);
+  const figures = levellingFiguresOf(STATIC, medium(), slow(), BN1_HACKING);
   /** The formula's rate in levelling mode on the test's RAM: joesguns' grow. */
   const predicted = (figures?.target?.expPerThreadSecond ?? 0) * (figures?.threads ?? 0);
   /** A mode's settle here: a minute and joesguns' weaken at its minimum (no batcher). */
@@ -487,30 +489,29 @@ describe("the levelling rule (#336)", () => {
     expect(levelling.view().lines[1]).toContain("not measured yet (1 taken, optimistic)");
   });
 
-  test("a hopeless levelling mode left out (#410): money keeps the income, the choice's own hopeless estimate said", () => {
-    // At ×2, levelling mode to 3,000 is about 1e18 s, past the BitNode's 10 h so far (BN4.3: 3.3e10 s, 9 h 40 min with
-    // the income stopped): never chosen; money's estimate hopeless too, said.
-    const levelling = rule();
-    measureMoney(levelling, 10, { mult: 2 });
-    expect(levelling.mode()).toBe("money");
-    const view = levelling.view();
-    expect(view.estimates?.level as number).toBeGreaterThan(10 * 60 * 60);
-    expect(view.lines).toContain(
-      "  levelling mode left out: hopeless, past the BitNode's time so far, and it would stop the income (#410)",
+  test("the run report's hopeless check (#410): one function, the level-only time added up per BitNode, gaps left out", () => {
+    const clock = new LevelOnlyClock();
+    // Two readings 10 s apart count 10 s; a 4-minute gap (the brain down) counts none; not level-only breaks it.
+    clock.add(0, 4, true);
+    clock.add(10 * SECOND, 4, true);
+    clock.add(10 * SECOND + 4 * MINUTE, 4, true);
+    clock.add(10 * SECOND + 5 * MINUTE, 4, true);
+    expect(clock.ms()).toBe(10 * SECOND + MINUTE);
+    clock.add(6 * MINUTE, 4, false);
+    clock.add(7 * MINUTE, 4, true);
+    expect(clock.ms()).toBe(10 * SECOND + MINUTE);
+    // Another BitNode: from 0.
+    clock.add(8 * MINUTE, 5, true);
+    expect(clock.ms()).toBe(0);
+    // Past the BitNode's time so far, past the 10 minutes: the failure; at either short, none.
+    const tenMinutes = LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS;
+    expect(levellingHopelessFailure("money", 3600, 1_000_000, tenMinutes + 1)).toBe(
+      "levelling: the brain's choice, batching for money, about 60 min to w0r1d_d43m0n's level, past the 16 min 40 s " +
+        "the BitNode has taken so far: a hopeless estimate",
     );
-    expect(view.hopeless).toMatch(
-      /^levelling's choice hopeless \(#410\): batching for money, about [\d.e+]+ h to w0r1d_d43m0n's level, past the 10\.1 h the BitNode has taken so far; levelling mode \(about [\d.e+]+ h\) left out, as it would stop the income$/,
-    );
-    expect(view.lines.at(-1)).toBe(`  ${view.hopeless}`);
-    // The BitNode older than levelling mode's estimate: not hopeless, chosen, nothing said.
-    const old = rule();
-    const { plan } = measureMoney(old, 10, { mult: 2, slowData: slow({ lastNodeReset: -1e25 }) });
-    expect(plan.mode).toBe("level");
-    expect(old.view().hopeless).toBeNull();
-    // In levelling mode, its estimate turned hopeless (the BitNode's time so far shorter, say): back to money.
-    old.update(inputsAt(5 * MINUTE, { mult: 2, expAbove: 3000 }));
-    expect(old.mode()).toBe("money");
-    expect(events.at(-1)).toMatchObject({ type: LEVELLING_CHOSEN_EVENT_KIND, mode: "money", from: "level" });
+    expect(levellingHopelessFailure("money", 3600, 1_000_000, tenMinutes)).toBeNull();
+    expect(levellingHopelessFailure("money", 1000, 1_000_000, tenMinutes + 1)).toBeNull();
+    expect(levellingHopelessFailure("money", null, 1_000_000, tenMinutes + 1)).toBeNull();
   });
 
   test("the operation: the grow at joesguns' minimum security, whatever its money; the weaken above it", () => {
@@ -541,12 +542,12 @@ describe("the levelling rule (#336)", () => {
     levelling.update(inputsAt(0));
     // A burst as the old loops' last operations land, then batching's 10 a second.
     for (let atMs = 10 * SECOND; atMs < SETTLE_MS; atMs += 10 * SECOND) {
-      levelling.update(inputsAt(atMs, { expAbove: 1e5 }));
+      levelling.update(inputsAt(atMs, { expAbove: 1e9 }));
     }
     let atMs = Math.ceil(SETTLE_MS / (10 * SECOND)) * 10 * SECOND;
     const from = atMs;
     for (; atMs <= from + 70 * SECOND; atMs += 10 * SECOND) {
-      levelling.update(inputsAt(atMs, { expAbove: 1e5 + ((atMs - from) / 1000) * 10 }));
+      levelling.update(inputsAt(atMs, { expAbove: 1e9 + ((atMs - from) / 1000) * 10 }));
     }
     expect(events.at(-1)).toMatchObject({ money: expect.objectContaining({ expPerSecond: expect.closeTo(10, 6) }) });
   });
@@ -994,7 +995,7 @@ describe("the levelling rule (#336)", () => {
     // levelling mode here, its estimate.
     expect(flat.view()).toMatchObject({ waitingForIncome: true, meanwhile: "level" });
     expect(levellingEstimateMs(flat.view())).toBe((flat.view().estimates?.level as number) * 1000);
-    expect(flat.view().lines).toContain("  money waits for (d)'s income: none measured yet (5 min at most, #382)");
+    expect(flat.view().lines.at(-1)).toBe("  money waits for (d)'s income: none measured yet (5 min at most, #382)");
     batchFor(flat, measuredMs + 10 * SECOND, LEVELLING_INCOME_WAIT_MS - 20 * SECOND, {
       incomePerSecond: 0,
       expAt: ((measuredMs + 10 * SECOND) / 1000) * 10,
@@ -1089,8 +1090,7 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
    */
   function aMinuteOf(
     connection: MemoryConnection,
-    // ×8 (#410): at ×2 levelling mode is hopeless, and left out.
-    { money = 1e6, slowData = slow(), fromMs = 1_000, level = 2000, gang = undefined as unknown, mult = 8 } = {},
+    { money = 1e6, slowData = slow(), fromMs = 1_000, level = 2000, gang = undefined as unknown, mult = 2 } = {},
   ) {
     send(connection, "static", STATIC, fromMs);
     send(connection, "slow", slowData, fromMs);
@@ -1188,24 +1188,31 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     expect(state?.hackLoop.levelling).toEqual({ homeKeptGb: SHARE_HOME_KEPT_GB, operation: "grow" });
   });
 
-  test("a hopeless levelling choice (#410): the World Daemon's alert in the same reading; the batcher kept, no levelling mode", () => {
-    // At ×2 every estimate is hopeless (levelling mode's about 1e18 s against the 10 h so far): money, never levelling
-    // mode, and the alert at once (BN4.3: no alert, levelling mode 9 h 40 min with the income stopped).
+  test("a hopeless choice (#410): the World Daemon's alert, by the run report's own check, once 10 minutes level-only", () => {
+    // At ×2 levelling mode to 3,000 is about 1e18 s, past the BitNode's 10 h so far: chosen still (the least), and
+    // alerted once the level has been all that's left 10 minutes, as the run report fails it.
     const controller = new DesiredStateController({ channel, store });
     const events: RuleEvent[] = [];
     controller.subscribe((event) => events.push(event));
     const connection = connectAgent();
     writeAugmentationsEnabled(store, false);
-    aMinuteOf(connection, { mult: 2 });
-    expect(controller.levellingView().mode).toBe("money");
-    expect(lastDesired(connection)?.hackLoop.levelling).toBeUndefined();
-    const stalls = events.filter((event) => event.type === "worldDaemonStalled");
-    expect(stalls).toEqual([
-      expect.objectContaining({ step: "levelling", detail: controller.levellingView().hopeless }),
-    ]);
-    // The reading money's estimate was first measured in: the alert's.
-    const firstHopeless = events.find((event) => event.type === "worldDaemonStalled") as unknown as { atMs: number };
-    expect(controller.worldDaemonStall()).toMatchObject({ step: "levelling", sinceMs: firstHopeless.atMs });
+    aMinuteOf(connection);
+    expect(controller.levellingView().mode).toBe("level");
+    expect(controller.levellingView().hopeless).toBeNull();
+    const stalls = () => events.filter((event) => event.type === "worldDaemonStalled");
+    let atMs = 190 * SECOND;
+    for (; atMs <= 1_000 + 10 * MINUTE; atMs += 10 * SECOND) {
+      send(connection, "medium", medium({ level: 2000, expAbove: atMs / 100 }), atMs);
+    }
+    expect(stalls()).toEqual([]);
+    send(connection, "medium", medium({ level: 2000, expAbove: atMs / 100 }), atMs);
+    send(connection, "medium", medium({ level: 2000, expAbove: atMs / 100 + 1 }), atMs + 10 * SECOND);
+    const hopeless = controller.levellingView().hopeless;
+    expect(hopeless).toMatch(
+      /^levelling: the brain's choice, levelling mode, about [\d.e+]+ h to w0r1d_d43m0n's level, past the 10 h \d+ min the BitNode has taken so far: a hopeless estimate$/,
+    );
+    expect(stalls()).toEqual([expect.objectContaining({ step: "levelling", detail: hopeless })]);
+    expect(lastDesired(connection)?.hackLoop.levelling).toBeDefined();
   });
 
   test("The Red Pill's install timed (#410): A6 gets levelling mode after it from the snapshots; with no income, now", () => {
@@ -1221,9 +1228,7 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
       expect.objectContaining({ reason: "The Red Pill" }),
     ]);
     expect(lines.filter((line) => line.startsWith("augmentations: The Red Pill's install timed (#410)"))).toEqual([
-      expect.stringMatching(
-        /: D about [\d.e+]+ h now \(NeuroFlux Governor ×\d+[^)]*\): now, no income measured to batch with$/,
-      ),
+      expect.stringMatching(/: the install now, no income measured to batch with$/),
     ]);
   });
 
@@ -1233,16 +1238,16 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     writeAugmentationsEnabled(store, false);
     aMinuteOf(connection);
     // At its minimum security, at a 25th of its money (as an install leaves it): the grow.
-    send(connection, "medium", medium({ level: 2000, mult: 8, expAbove: 3000, joesgunsMoney: 2.5e6 }), 200 * SECOND);
+    send(connection, "medium", medium({ level: 2000, expAbove: 3000, joesgunsMoney: 2.5e6 }), 200 * SECOND);
     expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("grow");
     expect(controller.levellingView().lines[1]).toContain("growing it (the operation sent)");
     // The round filled it and raised its security: the weaken.
-    send(connection, "medium", medium({ level: 2000, mult: 8, expAbove: 3100, joesgunsSecurity: 25 }), 210 * SECOND);
+    send(connection, "medium", medium({ level: 2000, expAbove: 3100, joesgunsSecurity: 25 }), 210 * SECOND);
     expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("weaken");
     expect(controller.levellingView().lines[1]).toContain("weakening it (the operation sent)");
     // Back at its minimum, its money at its maximum: the grow, which moves nothing now, so it stays.
     for (let atMs = 220 * SECOND; atMs <= 320 * SECOND; atMs += 10 * SECOND) {
-      send(connection, "medium", medium({ level: 2000, mult: 8, expAbove: 3200 + atMs / 1000 }), atMs);
+      send(connection, "medium", medium({ level: 2000, expAbove: 3200 + atMs / 1000 }), atMs);
       expect(lastDesired(connection)?.hackLoop.levelling?.operation).toBe("grow");
     }
   });
@@ -1258,7 +1263,7 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     const fromMs = 200 * SECOND;
     for (let atMs = fromMs; atMs <= fromMs + 12 * MINUTE; atMs += 10 * SECOND) {
       send(connection, "fast", fastWithHomeLoop(0), atMs);
-      send(connection, "medium", medium({ level: 2000, mult: 8, expAbove: 3000 }), atMs);
+      send(connection, "medium", medium({ level: 2000, expAbove: 3000 }), atMs);
     }
     expect(lastDesired(connection)?.hackLoop.enabled).toBe(false);
     expect(controller.levellingView().fit).toBeNull();
@@ -1268,7 +1273,7 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     const onMs = fromMs + 13 * MINUTE;
     for (let atMs = onMs; atMs <= onMs + 4 * MINUTE; atMs += 10 * SECOND) {
       send(connection, "fast", fastWithHomeLoop(2000), atMs);
-      send(connection, "medium", medium({ level: 2000, mult: 8, expAbove: 3000 + (atMs - onMs) }), atMs);
+      send(connection, "medium", medium({ level: 2000, expAbove: 3000 + (atMs - onMs) }), atMs);
     }
     expect(controller.levellingView().fit?.measured).toBeCloseTo(1000, 6);
   });
@@ -1285,7 +1290,7 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     const connection = connectAgent();
     const slowData = slow({ faction: "NiteSec", reputation: 1e6, currentNode, neuroFluxLevel: 70 });
     aMinuteOf(connection, { money: 1e12, slowData, gang });
-    send(connection, "medium", medium({ level: 2000, mult: 8, money: 1e12, expAbove: 3000, gang }), 200 * SECOND);
+    send(connection, "medium", medium({ level: 2000, money: 1e12, expAbove: 3000, gang }), 200 * SECOND);
     send(connection, "slow", slowData, 200 * SECOND);
     return {
       controller,

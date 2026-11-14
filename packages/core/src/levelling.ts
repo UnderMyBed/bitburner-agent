@@ -461,121 +461,213 @@ export function chooseLevelling(estimates: LevellingEstimates, current: Levellin
 }
 
 /**
- * The fast model's error band (owner decision 68, #39): an estimate within ×2 of the outcome is good enough. Where an
- * error isn't measured, #406's margin rule takes it: an irreversible step must beat the wait by more than its error.
+ * The standard error of a rate measured over `samples` (#410, #406's margin: the error of a difference propagated from
+ * the measured rates'): each interval's rate, weighted by its length, about their mean (the window's rate, the total
+ * over the span); its variance over the effective count of intervals ((Σ Δt)² / Σ Δt²) less one. Null with fewer
+ * than two intervals; 0 where every interval's rate is the same.
  */
-export const ESTIMATE_ERROR_FACTOR = 2;
+export function rateStandardError(samples: readonly { atMs: number; value: number }[]): number | null {
+  const intervals: { ms: number; rate: number }[] = [];
+  for (let index = 1; index < samples.length; index++) {
+    const before = samples[index - 1] as { atMs: number; value: number };
+    const after = samples[index] as { atMs: number; value: number };
+    const ms = after.atMs - before.atMs;
+    if (ms > 0) intervals.push({ ms, rate: ((after.value - before.value) / ms) * 1000 });
+  }
+  if (intervals.length < 2) return null;
+  const total = intervals.reduce((sum, each) => sum + each.ms, 0);
+  const mean = intervals.reduce((sum, each) => sum + each.rate * each.ms, 0) / total;
+  const variance = intervals.reduce((sum, each) => sum + each.ms * (each.rate - mean) ** 2, 0) / total;
+  const effective = total ** 2 / intervals.reduce((sum, each) => sum + each.ms ** 2, 0);
+  return effective > 1 ? Math.sqrt(variance / (effective - 1)) : null;
+}
 
-/**
- * Whether `seconds`, a last step's estimate, is hopeless (decision 67's point 8, #336): past `soFarSeconds`, the
- * BitNode's time so far, the whole path to here. Infinity always; unread (null) never.
- */
-export function hopelessEstimate(seconds: number | null, soFarSeconds: number | null): boolean {
-  if (seconds === null || Number.isNaN(seconds)) return false;
-  if (!Number.isFinite(seconds)) return true;
-  return soFarSeconds !== null && seconds > soFarSeconds;
+/** What an install buys of the levelling set (#410): NeuroFlux Governor's levels and the set's augmentations. */
+export interface RedPillPurchase {
+  levels: number;
+  augmentations: readonly string[];
 }
 
 /**
- * The Red Pill's install as the planner weighs it (#410): the time after it to w0r1d_d43m0n's level (D, from the
- * multipliers it would leave, `levellingSecondsAfterInstall`) now, against batching first for the levelling set.
+ * The Red Pill's install as the planner weighs it (#410).
  * - `money`: the money now; `redPillMoney` The Red Pill's own donation, paid first at its commit (its price is 0 once
- *   reached, `Augmentation/Augmentations.ts`; a donation `Faction/formulas/donation.ts:12-14`), so outside the ladder.
- * - `now`: what the commit at the money now buys, NeuroFlux Governor's levels and the set's augmentations that add to
- *   levelling (A6's counts at its budget).
+ *   reached; a donation, `Faction/formulas/donation.ts:12-14`), so outside the ladder.
+ * - `incomePerSecond`, `incomeError`: the batcher's measured income and its standard error (`rateStandardError`);
+ *   `batchingExp`, `batchingExpError`: batching's measured experience rate, at its level, and its error. Null unmeasured.
+ * - `now`: what the commit at the money now buys (A6's counts at its budget).
  * - `ladder`, `augmentations`: A6's set at any money (by donation where a seller takes them) and each count of
- *   NeuroFlux Governor's levels after it, priced as the commit buys them (core's `neuroFluxLadder`, (d)'s, #380).
- * - `homeThreads`, `perThread`, `preparationMs`: (c)'s, from the snapshots now: home's RAM is kept through an install
- *   (`Prestige.ts:78-80`, its programs alone reset), the cloud servers lost (`Prestige.ts:72-74`).
- * - `factor`: levelling mode's fitted factor; before The Red Pill none is measured in the BitNode, so 1 (optimistic,
- *   both sides alike).
+ *   NeuroFlux Governor's levels after it, priced as the commit buys them (core's `neuroFluxLadder`, (d)'s, #380): the
+ *   wait's purchases.
+ * - `afterInstall`: (d)'s offer after The Red Pill's install with a purchase: what's left of the set, and the ladder
+ *   from the levels it leaves, every reputation reset (`Faction/Faction.ts:77-85`); A6's.
+ * - `homeThreads`, `perThread`, `preparationMs`: levelling mode after an install, from the snapshots now: home's RAM
+ *   is kept (`Prestige.ts:78-80`, its programs alone reset), the cloud servers lost (`Prestige.ts:72-74`).
  */
 export interface RedPillInstallOffer {
   money: number;
   redPillMoney: number;
   incomePerSecond: number | null;
-  now: { levels: number; augmentations: readonly string[] };
+  incomeError?: number | null;
+  batchingExp: LevellingRate | null;
+  batchingExpError?: number | null;
+  now: RedPillPurchase;
   ladder: readonly number[];
   augmentations: readonly string[];
+  afterInstall: (purchase: RedPillPurchase) => { ladder: readonly number[]; augmentations: readonly string[] };
   homeThreads: number;
   perThread: LevellingRate;
-  preparationMs?: number;
-  /** The BitNode's time so far, seconds: the batching's bound (#382's review, the hopeless bar); null, none. */
+  preparationMs: (purchase: RedPillPurchase) => number;
+  /** The BitNode's time so far, seconds: the batching's bound (#382's review); null, none. */
   batchingBoundSeconds?: number | null;
   required: number;
   levelMult: number;
-  factor?: number | null;
 }
 
-/** The choice (#410): install now, or wait while batching to the plan's money; each side's seconds and why. */
+/** D after The Red Pill's install (#410): levelling's least candidate then, and its seconds (Infinity with none). */
+export interface RedPillLevelling {
+  seconds: number;
+  candidate: LevellingCandidate | null;
+}
+
+/** The choice (#410): install now, or batch first; each side, the difference's measured error, and why. */
 export interface RedPillInstallTiming {
   choice: "now" | "wait";
-  /** D now: the time after an install at the money now. */
-  nowSeconds: number;
-  /** The wait's plan, (d)'s search from the money beyond The Red Pill's donation; null with none. */
-  plan: LevellingBatchPlan | null;
+  /** D now: after an install at the money now, levelling's least candidate then. */
+  now: RedPillLevelling;
+  /** The best wait: batching to the ladder's `money` for `levels` and the set, then the install; null with none. */
+  wait: (RedPillLevelling & { batchingSeconds: number; levels: number; money: number }) | null;
+  /** The measured error of wait − now (#406's margin), propagated from the income's and the experience rate's. */
+  marginSeconds: number;
   why: string;
 }
 
 /**
- * The Red Pill's install (#410): now, or first batching to the money for more of the levelling set and NeuroFlux
- * Governor's levels (#380's (d), its search: the least of the batching at the measured income and D after it).
- * The install is irreversible, the batching not, so by #406's margin rule the install goes now only where it beats the
- * wait by more than its error: D's model (the formula's rate at an unmeasured factor) is decision 68's ×2 band
- * (`ESTIMATE_ERROR_FACTOR`), the same factor scaling D on both sides (one rate, one model), so now wins only where
- * `ESTIMATE_ERROR_FACTOR × (D now − D after the plan) < the batching`; a tie waits. The search ends past the BitNode's
- * time so far (the hopeless bar): with no plan within it, or no income measured, now (the rules' install, as before).
- * Left out: the income's own error (either way), its rise with the level while batching (cautious, toward waiting),
- * the experience the batching earns, which the install resets (exact: none counted), and later installs (as (d)'s).
+ * D after The Red Pill's install with `purchase` (#410): its commit (`LEVELLING_INSTALL_MS`), w0r1d_d43m0n rooted
+ * again (`LEVELLING_REROOT_MS`) and the target's preparation, then levelling's own least candidate from 0 experience
+ * at the multipliers it leaves (`levellingEstimates`: (a) batching at its measured experience rate, (b) levelling mode
+ * at the formula's rate on home's RAM, its factor unmeasured, 1, (d) batching at the income for what's left of the set
+ * and NeuroFlux Governor's levels, then an install; (c) none, the money reset,
+ * `PersonObjects/Player/PlayerObjectGeneralMethods.ts:102`). This is D from m: `calculateSkill`
+ * (`PersonObjects/formulas/skill.ts:7-15`) at the multipliers the install leaves.
  */
-export function redPillInstallTiming(offer: RedPillInstallOffer): RedPillInstallTiming {
-  const factor = offer.factor ?? 1;
-  const nowSeconds = levellingSecondsAfterInstall(
-    offer.now.levels,
-    offer.now.augmentations,
-    offer,
-    factor,
-    offer.required,
-    offer.levelMult,
-  );
-  const plan = batchThenInstallPlan({
+export function redPillLevelling(
+  offer: RedPillInstallOffer,
+  purchase: RedPillPurchase,
+  incomePerSecond: number | null = offer.incomePerSecond,
+  batchingExp: LevellingRate | null = offer.batchingExp,
+): RedPillLevelling {
+  const gain = levellingInstallMultipliers(purchase.levels, purchase.augmentations);
+  const levelMult = offer.levelMult * gain.hacking;
+  const scale = gain.hackingExp * gain.hackingSpeed;
+  const perThread = { expPerSecond: offer.perThread.expPerSecond * scale, atLevel: offer.perThread.atLevel };
+  const preparationMs = offer.preparationMs(purchase);
+  const after = offer.afterInstall(purchase);
+  const estimates = levellingEstimates({
     exp: 0,
-    level: 0,
+    level: hackingLevelOfExp(0, levelMult),
     required: offer.required,
-    levelMult: offer.levelMult,
-    money: null,
-    levelling: { predicted: { expPerSecond: 0, atLevel: 0 }, factor },
+    levelMult,
+    money:
+      batchingExp === null ? null : { expPerSecond: batchingExp.expPerSecond * scale, atLevel: batchingExp.atLevel },
+    levelling: {
+      predicted: { expPerSecond: perThread.expPerSecond * offer.homeThreads, atLevel: perThread.atLevel },
+      factor: null,
+    },
     install: null,
     batch: {
-      money: offer.money - offer.redPillMoney,
-      incomePerSecond: offer.incomePerSecond,
-      ladder: offer.ladder,
-      augmentations: offer.augmentations,
+      money: 0,
+      incomePerSecond,
+      ladder: after.ladder,
+      augmentations: after.augmentations,
       homeThreads: offer.homeThreads,
-      perThread: offer.perThread,
-      ...(offer.preparationMs === undefined ? {} : { preparationMs: offer.preparationMs }),
+      perThread,
+      preparationMs,
       batchingBoundSeconds: offer.batchingBoundSeconds ?? null,
     },
   });
-  if (plan === null) {
+  const candidate = shortestLevellingCandidate(estimates);
+  const seconds = candidate === null ? null : estimates[candidate];
+  return {
+    seconds:
+      seconds === null
+        ? Number.POSITIVE_INFINITY
+        : (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS + preparationMs) / 1000 + seconds,
+    candidate,
+  };
+}
+
+/**
+ * The Red Pill's install (#410): now, or first batching to the money for more of the levelling set and NeuroFlux
+ * Governor's levels. Both sides priced alike: D after the install is levelling's own least candidate at the state it
+ * leaves (`redPillLevelling`); the wait's, the batching at the measured income ((M − the money after The Red Pill's
+ * donation) / income) plus D after the install with the set and the levels, the least over the ladder's counts beyond
+ * the money, each count's batching within the BitNode's time so far (the search ends at the first whose batching
+ * alone, with the install's fixed time, is past the best, as M rises with the count). The install is irreversible, the
+ * batching not, so by #406's margin rule it goes now only where it beats the best wait by more than the measured error
+ * of their difference: propagated from the income's and the experience rate's standard errors (each rate moved by its
+ * error at the wait's purchase, the difference's changes added in quadrature); none measured, 0, so it only breaks a
+ * tie, and a tie waits. No income, or no wait within the bound: now (the rules' install, as before). Left out: the
+ * income's rise with the level while batching (cautious, toward now), the experience the batching earns, which the
+ * install resets (exact: none counted), and buying part of the set (the wait's set is A6's at any money).
+ */
+export function redPillInstallTiming(offer: RedPillInstallOffer): RedPillInstallTiming {
+  const income = offer.incomePerSecond;
+  const fixedSeconds = (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS) / 1000;
+  const now = redPillLevelling(offer, offer.now);
+  const available = offer.money - offer.redPillMoney;
+  const setAdds = addsToLevelling(offer.augmentations);
+  let wait: RedPillInstallTiming["wait"] = null;
+  if (income !== null && income > 0 && Number.isFinite(income)) {
+    for (let levels = 0; levels < offer.ladder.length; levels++) {
+      const money = offer.ladder[levels] as number;
+      if (!(money > available) || (levels === 0 && !setAdds)) continue;
+      const batchingSeconds = (money - available) / income;
+      if (offer.batchingBoundSeconds != null && batchingSeconds > offer.batchingBoundSeconds) break;
+      if (!(batchingSeconds + fixedSeconds < (wait?.seconds ?? Number.POSITIVE_INFINITY))) break;
+      const d = redPillLevelling(offer, { levels, augmentations: offer.augmentations });
+      const seconds = batchingSeconds + d.seconds;
+      if (wait === null || seconds < wait.seconds) {
+        wait = { seconds, candidate: d.candidate, batchingSeconds, levels, money };
+      }
+    }
+  }
+  if (wait === null || !Number.isFinite(wait.seconds) || income === null) {
     return {
       choice: "now",
-      nowSeconds,
-      plan,
+      now,
+      wait: null,
+      marginSeconds: 0,
       why:
-        offer.incomePerSecond === null || !(offer.incomePerSecond > 0)
+        income === null || !(income > 0)
           ? "no income measured to batch with"
           : "no more of the levelling set within the BitNode's time so far of batching",
     };
   }
-  const saving = nowSeconds - (plan.seconds - plan.batchingSeconds);
-  const wait = saving > 0 && plan.batchingSeconds <= ESTIMATE_ERROR_FACTOR * saving;
+  // The difference's error (#406): each rate moved by its standard error, both sides at the wait's purchase.
+  const best = wait;
+  const difference = (perSecond: number, exp: LevellingRate | null) =>
+    (best.money - available) / perSecond +
+    redPillLevelling(offer, { levels: best.levels, augmentations: offer.augmentations }, perSecond, exp).seconds -
+    redPillLevelling(offer, offer.now, perSecond, exp).seconds;
+  const base = wait.seconds - now.seconds;
+  const incomeError = offer.incomeError ?? 0;
+  const exp = offer.batchingExp;
+  const expError = offer.batchingExpError ?? 0;
+  const moved = (value: number) => (Number.isFinite(value) ? value - base : 0);
+  const byIncome = incomeError > 0 ? moved(difference(income + incomeError, exp)) : 0;
+  const byExp =
+    expError > 0 && exp !== null
+      ? moved(difference(income, { expPerSecond: exp.expPerSecond + expError, atLevel: exp.atLevel }))
+      : 0;
+  const marginSeconds = Math.hypot(byIncome, byExp);
+  const installNow = Number.isFinite(now.seconds) && base > marginSeconds;
   return {
-    choice: wait ? "wait" : "now",
-    nowSeconds,
-    plan,
-    why: wait
-      ? `the batching saves more of D than it costs, by more than D's ×${ESTIMATE_ERROR_FACTOR} error`
-      : `the batching costs more than ×${ESTIMATE_ERROR_FACTOR} D's saving (D's error): the install now`,
+    choice: installNow ? "now" : "wait",
+    now,
+    wait,
+    marginSeconds,
+    why: installNow
+      ? "the install now beats the wait by more than their difference's measured error (#406)"
+      : "the wait no longer than the install now, within their difference's measured error (#406): a tie waits",
   };
 }

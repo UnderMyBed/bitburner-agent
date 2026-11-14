@@ -4398,20 +4398,23 @@ describe("The Red Pill's install timed (#410): now, or first batching for the le
   };
   const installs = () => events.filter((event) => event.type === "augmentationInstallChosen");
 
-  test("D now hopeless: batching first for the set, held on The Red Pill's way, said; overdue at its bound, now", () => {
+  test("the wait shorter: batching first for the set, held on The Red Pill's way, said; overdue at its bound, now", () => {
     measured();
     minute(RED_PILL_DONATION);
     expect(installs()).toEqual([]);
     expect(readAugmentationCycle(store)).toBeNull();
     const timing = rule.redPillTiming();
     expect(timing?.choice).toBe("wait");
-    // The set by donation (the Analyze Engine and Core V3 at Daedalus within The Red Pill's 2.5m), and levels.
+    // The set by donation (the Analyze Engine and Core V3 at Daedalus within The Red Pill's 2.5m), and levels; both
+    // sides' D levelling's least after the install, the income steady so its error 0.
     expect(timing?.augmentations.toSorted()).toEqual(LEVELLING_SET.toSorted());
-    const plan = timing?.plan as NonNullable<NonNullable<typeof timing>["plan"]>;
-    expect(plan.levels).toBeGreaterThan(0);
-    expect(plan.batchingSeconds).toBeCloseTo(plan.money / INCOME, 0);
+    const wait = timing?.wait as NonNullable<NonNullable<typeof timing>["wait"]>;
+    expect(wait.seconds).toBeLessThan(timing?.now.seconds as number);
+    expect(wait.batchingSeconds).toBeCloseTo(wait.money / INCOME, 0);
+    expect(timing?.marginSeconds).toBe(0);
+    expect(timing?.now.candidate).not.toBeNull();
     expect(rule.view().waitingFor).toMatch(
-      /^The Red Pill's install timed \(#410\): D about [\d.e+]+ h now \(NeuroFlux Governor ×0\), about [\d.e+]+ h after batching .* to \$[\d,]+ for NeuroFlux Governor ×\d+ and .*BitRunners Neurolink.*: batching first, the batching saves more of D than it costs/,
+      /^The Red Pill's install timed \(#410\): now \(NeuroFlux Governor ×0\), D about .+ \((?:batching for money|levelling mode|batching for the money, then an install)\); batching .+ first to \$[\d,]+ for NeuroFlux Governor ×\d+ and .*BitRunners Neurolink, about .+ in all \(.+ after\); the difference's error 0 s: batching first, the wait no longer than the install now, within their difference's measured error \(#406\): a tie waits$/,
     );
     // Its progress, at the reading it began (the run report's held line), and The Red Pill's donation's money still
     // held.
@@ -4421,18 +4424,20 @@ describe("The Red Pill's install timed (#410): now, or first batching for the le
     expect(lines.filter((line) => line.startsWith("augmentations: The Red Pill's install timed (#410)"))).toHaveLength(
       1,
     );
-    // The World Daemon's stall bound: twice the first plan's batching and the income's window, from the wait's start.
-    const boundMs = 2 * plan.batchingSeconds * 1000 + AUGMENTATION_INCOME_WINDOW_MS;
+    // The World Daemon's stall bound: twice the first wait's batching and the income's window (#343's waits').
+    const boundMs = 2 * wait.batchingSeconds * 1000 + AUGMENTATION_INCOME_WINDOW_MS;
     expect(rule.redPillWait()).toEqual({ sinceMs: gameTimeMs, withinMs: boundMs });
+    // D from m for the destroy estimate: levelling's least after the install with nothing bought, as priced here.
+    expect(rule.levelFromMultipliersMs()).toBeCloseTo((timing?.now.seconds as number) * 1000, 0);
     // The money flat: the wait goes on to its bound, then The Red Pill now, said.
     const until = gameTimeMs + boundMs;
     while (gameTimeMs < until - MINUTE) minute(RED_PILL_DONATION);
     expect(installs()).toEqual([]);
     minute(RED_PILL_DONATION);
     expect(installs()).toEqual([expect.objectContaining({ reason: "The Red Pill" })]);
-    expect(lines.some((line) => /The Red Pill's install timed \(#410\).*: now, the wait overdue/.test(line))).toBe(
-      true,
-    );
+    expect(
+      lines.some((line) => /The Red Pill's install timed \(#410\).*: the install now, the wait overdue/.test(line)),
+    ).toBe(true);
   });
 
   test("The Red Pill's donation first: its faction's reputation then counts, so Core V3 and the Analyze Engine need none", () => {
@@ -4457,26 +4462,24 @@ describe("The Red Pill's install timed (#410): now, or first batching for the le
     ]);
   });
 
-  test("without levelling's figures, or with the destroy not wanted: installed at once, as before #410", () => {
+  test("without levelling's figures: installed at once, as before #410, D from m none", () => {
     measured();
     minute(RED_PILL_DONATION + 1e9, null);
     expect(installs()).toEqual([expect.objectContaining({ reason: "The Red Pill" })]);
     expect(rule.redPillTiming()).toBeNull();
+    expect(rule.levelFromMultipliersMs()).toBeNull();
   });
 
-  test("now where the batching costs more than twice D's saving: a set of little worth at a slow income", () => {
+  test("now where no wait is within the BitNode's time so far: the set and the levels the money buys, then the install", () => {
     measured();
-    // ×9 now: D in hours, the set's cut worth less than its batching at $1m a second.
-    gameTimeMs += MINUTE;
-    earned += 1e6 * 60;
-    update({
-      slowData: slow({ joined: JOINED, ownedAugs: OWNED, currentNode: 4, earned }),
-      mediumData: medium({ money: RED_PILL_DONATION + 1e9 }),
-      destroyWanted: true,
-      redPillLevelling: () => ({ ...FIGURES, levelMult: 12, perThread: { expPerSecond: 1e3, atLevel: 300 } }),
-      nowMs: gameTimeMs,
-    });
-    expect(rule.redPillTiming()?.choice).toBe("now");
+    // $1e16 after the donation buys the whole set and dozens of levels; the next costs more than 7 h at $1b/s.
+    minute(RED_PILL_DONATION + 1e16);
+    const timing = rule.redPillTiming();
+    expect(timing?.choice).toBe("now");
+    expect(timing?.wait).toBeNull();
+    expect(timing?.now.augmentations.toSorted()).toEqual(LEVELLING_SET.toSorted());
+    expect(timing?.now.levels).toBeGreaterThan(20);
+    expect(timing?.words).toMatch(/: the install now, no more of the levelling set within the BitNode's time so far/);
     expect(installs()).toEqual([expect.objectContaining({ reason: "The Red Pill" })]);
     expect(rule.redPillWait()).toBeNull();
   });

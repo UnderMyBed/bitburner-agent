@@ -149,8 +149,8 @@ export interface DestroyEstimateInputs {
   levellingMs: number | null;
   /**
    * D from m (#410), before levelling's first choice: the time after The Red Pill's install to w0r1d_d43m0n's level at
-   * the multipliers it would leave (core's `levellingSecondsAfterInstall`: `calculateSkill` and levelling mode's rate
-   * on home's RAM), ms; absent or null, unmeasured (the prior's then). Infinity: no rate.
+   * the multipliers it would leave, levelling's own least candidate then (core's `redPillLevelling`: `calculateSkill`, the
+   * measured rates and the formula's), ms; absent or null, unmeasured (the prior's then). Infinity: no rate.
    */
   levelFromMultipliersMs?: number | null;
   prior: DestroyPrior | null;
@@ -308,8 +308,8 @@ function levelTerm(inputs: DestroyEstimateInputs, requiredLevel: number): Destro
       atLeast: false,
       source:
         `D from m (#410): w0r1d_d43m0n's level ${requiredLevel.toLocaleString("en-US")} from 0 experience at the ` +
-        "multipliers The Red Pill's install would leave, levelling mode on home's RAM at the formula's rate (its " +
-        "factor unmeasured, 1: optimistic; what's bought before the install left out: cautious)" +
+        "multipliers The Red Pill's install would leave, levelling's own least candidate then (levelling mode's factor " +
+        "unmeasured, 1: optimistic; what's bought before the install as the money now buys it)" +
         (inputs.redPillInstalled ? ", levelling not yet chosen" : ""),
       label: "either way",
     };

@@ -64,6 +64,7 @@ import {
   type MediumSnapshotData,
   type NextBitNode,
   nextBitNodeOf,
+  rateStandardError,
   type SlowSnapshotData,
   type StaticSnapshotData,
   THE_RED_PILL,
@@ -697,6 +698,11 @@ export class HackingExpRate {
    * The samples span the whole window (`HACKING_EXP_WINDOW_MS`): the rate isn't its first minutes' only, which after a
    * reset (the hack loop starting) can be none or a sliver (#378's review: τ_g from it 258 h against 26 min).
    */
+  /** The rate's standard error over the samples (#410, core's `rateStandardError`); null with under two intervals. */
+  standardError(): number | null {
+    return rateStandardError(this.#samples.map(({ atMs, exp }) => ({ atMs, value: exp })));
+  }
+
   windowFull(): boolean {
     const first = this.#samples[0];
     const last = this.#samples.at(-1);
