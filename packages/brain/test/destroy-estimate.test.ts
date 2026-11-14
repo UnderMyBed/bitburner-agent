@@ -633,6 +633,46 @@ describe("the brain's rule (#360)", () => {
     ]);
   });
 
+  test("D from m (#410): the controller's, read only at a moment before levelling's choice, in place of the prior's", () => {
+    const { rule, events } = ruleOf();
+    let reads = 0;
+    const fromM = (ms: number | null) => () => {
+      reads += 1;
+      return ms;
+    };
+    const at = (
+      minute: number,
+      aug: number,
+      count: number,
+      ms: number | null,
+      more: { redPill?: boolean; levelling?: number } = {},
+    ) =>
+      rule.update({
+        slowData: slow(minute, resetInfo(0, aug, 1, { 1: 2 }, augs(count, { redPill: more.redPill ?? false }))),
+        slowGameTimeMs: m(minute),
+        slowAtMs: m(minute),
+        factionChoice: null,
+        levelling: levellingView(more.levelling),
+        nowMs: m(minute),
+        levelFromMultipliers: fromM(ms),
+      });
+    at(1, 0, 0, 45 * MINUTE);
+    at(2, 0, 0, 45 * MINUTE);
+    // One moment, one read: D the controller's 45 min, not the prior's 3.
+    expect(reads).toBe(1);
+    expect(events.at(-1)?.terms.find((term) => term.term === "D")).toMatchObject({ ms: 45 * MINUTE });
+    expect(events.at(-1)?.terms.find((term) => term.term === "D")?.source).toMatch(/^D from m \(#410\)/);
+    // Unread: the prior's.
+    at(3, 3, 10, null);
+    expect(events.at(-1)?.terms.find((term) => term.term === "D")).toMatchObject({ ms: 3 * MINUTE });
+    // After The Red Pill, levelling's choice: D its, D from m not read.
+    at(4, 6, 31, 45 * MINUTE, { redPill: true });
+    const before = reads;
+    at(5, 6, 31, 45 * MINUTE, { redPill: true, levelling: 1200 });
+    expect(reads).toBe(before);
+    expect(events.at(-1)?.terms.find((term) => term.term === "D")).toMatchObject({ ms: 20 * MINUTE });
+  });
+
   test("once across a restart: the note carries the moments, the clock and the last estimate", () => {
     const first = ruleOf();
     for (let minute = 1; minute <= 5; minute++) update(first.rule, minute, 0, 0);

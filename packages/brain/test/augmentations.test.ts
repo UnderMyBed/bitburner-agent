@@ -4342,3 +4342,142 @@ describe("BN2 with the gang (#357's (3)): keep the cycle, install now, or bank R
     expect(planner.events.some((event) => "gangCost" in event)).toBe(false);
   });
 });
+
+describe("The Red Pill's install timed (#410): now, or first batching for the levelling set", () => {
+  const RED_PILL = "The Red Pill";
+  const NEUROLINK = "BitRunners Neurolink";
+  /** BN4.3's three it never had, and the Analyze Engine: the levelling set Daedalus and BitRunners sell (#410). */
+  const LEVELLING_SET = [
+    NEUROLINK,
+    "Embedded Netburner Module Core V2 Upgrade",
+    "Embedded Netburner Module Core V3 Upgrade",
+    "Embedded Netburner Module Analyze Engine",
+  ];
+  /** Every other augmentation installed: Daedalus's count met, the set's prerequisites owned. */
+  const OWNED = Object.fromEntries(
+    AUGMENTATION_NAMES.filter(
+      (name) =>
+        ![...LEVELLING_SET, NFG, RED_PILL, "Embedded Netburner Module Direct Memory Access Upgrade"].includes(name),
+    ).map((name) => [name, 1]),
+  );
+  /** Daedalus and BitRunners joined at no reputation, their donations unlocked: everything by a donation. */
+  const JOINED = [
+    { name: "Daedalus", reputation: 0, favor: 150 },
+    { name: "BitRunners", reputation: 0, favor: 150 },
+  ];
+  /** The Red Pill's 2.5m at faction_rep 1 and BN4's FactionWorkRepGain 0.75 (`BitNode/BitNode.tsx:651`). */
+  const RED_PILL_DONATION = donationToReach(2.5e6, 1, 0.75);
+  /** Levelling mode after an install, at ×5 now (BN4.3's was 6.6): D now hopeless, the set's cutting it most. */
+  const FIGURES = {
+    homeThreads: 1e7,
+    perThread: { expPerSecond: 100, atLevel: 300 },
+    levelMult: 5,
+    preparationMs: () => MINUTE,
+  };
+  const INCOME = 1e9;
+  let earned = 0;
+  beforeEach(() => {
+    earned = 0;
+  });
+  /** A minute on: the slow snapshot's hacking money up by the income's minute, BN4, the destroy wanted. */
+  const minute = (money: number, redPillLevelling: typeof FIGURES | null = FIGURES) => {
+    gameTimeMs += MINUTE;
+    earned += INCOME * 60;
+    return update({
+      slowData: slow({ joined: JOINED, ownedAugs: OWNED, currentNode: 4, earned }),
+      mediumData: medium({ money }),
+      destroyWanted: true,
+      redPillLevelling: redPillLevelling === null ? null : () => redPillLevelling,
+      nowMs: gameTimeMs,
+    });
+  };
+  /** The income measured (the window's 10 minutes) with The Red Pill's donation short of the money: its hold. */
+  const measured = () => {
+    for (let each = 0; each <= 10; each += 1) minute(RED_PILL_DONATION - 1);
+    expect(rule.view().waitingFor).toMatch(/^The Red Pill: the money for Daedalus's donation/);
+  };
+  const installs = () => events.filter((event) => event.type === "augmentationInstallChosen");
+
+  test("D now hopeless: batching first for the set, held on The Red Pill's way, said; overdue at its bound, now", () => {
+    measured();
+    minute(RED_PILL_DONATION);
+    expect(installs()).toEqual([]);
+    expect(readAugmentationCycle(store)).toBeNull();
+    const timing = rule.redPillTiming();
+    expect(timing?.choice).toBe("wait");
+    // The set by donation (the Analyze Engine and Core V3 at Daedalus within The Red Pill's 2.5m), and levels.
+    expect(timing?.augmentations.toSorted()).toEqual(LEVELLING_SET.toSorted());
+    const plan = timing?.plan as NonNullable<NonNullable<typeof timing>["plan"]>;
+    expect(plan.levels).toBeGreaterThan(0);
+    expect(plan.batchingSeconds).toBeCloseTo(plan.money / INCOME, 0);
+    expect(rule.view().waitingFor).toMatch(
+      /^The Red Pill's install timed \(#410\): D about [\d.e+]+ h now \(NeuroFlux Governor ×0\), about [\d.e+]+ h after batching .* to \$[\d,]+ for NeuroFlux Governor ×\d+ and .*BitRunners Neurolink.*: batching first, the batching saves more of D than it costs/,
+    );
+    // Its progress, at the reading it began (the run report's held line), and The Red Pill's donation's money still
+    // held.
+    const timed = progressEvents().filter((event) => /install timed \(#410\)/.test(String(event.held)));
+    expect(timed).toEqual([expect.objectContaining({ atMs: gameTimeMs, held: rule.view().waitingFor })]);
+    expect(rule.view().reserve).toBe(RED_PILL_DONATION);
+    expect(lines.filter((line) => line.startsWith("augmentations: The Red Pill's install timed (#410)"))).toHaveLength(
+      1,
+    );
+    // The World Daemon's stall bound: twice the first plan's batching and the income's window, from the wait's start.
+    const boundMs = 2 * plan.batchingSeconds * 1000 + AUGMENTATION_INCOME_WINDOW_MS;
+    expect(rule.redPillWait()).toEqual({ sinceMs: gameTimeMs, withinMs: boundMs });
+    // The money flat: the wait goes on to its bound, then The Red Pill now, said.
+    const until = gameTimeMs + boundMs;
+    while (gameTimeMs < until - MINUTE) minute(RED_PILL_DONATION);
+    expect(installs()).toEqual([]);
+    minute(RED_PILL_DONATION);
+    expect(installs()).toEqual([expect.objectContaining({ reason: "The Red Pill" })]);
+    expect(lines.some((line) => /The Red Pill's install timed \(#410\).*: now, the wait overdue/.test(line))).toBe(
+      true,
+    );
+  });
+
+  test("The Red Pill's donation first: its faction's reputation then counts, so Core V3 and the Analyze Engine need none", () => {
+    // Neurolink and Core V2 owned: what's left of the set is Daedalus's, within The Red Pill's 2.5m once donated. $2e10
+    // after its donation buys both at their prices alone (Core V3 $7.5b, then the Analyze Engine $6b × 1.9); without
+    // the 2.5m, Core V3's 1.75m would be a $2.3t donation more.
+    const owned = { ...OWNED, [NEUROLINK]: 1, "Embedded Netburner Module Core V2 Upgrade": 1 };
+    for (let each = 0; each <= 10; each += 1) {
+      gameTimeMs += MINUTE;
+      earned += INCOME * 60;
+      update({
+        slowData: slow({ joined: JOINED, ownedAugs: owned, currentNode: 4, earned }),
+        mediumData: medium({ money: RED_PILL_DONATION + (each === 10 ? 2e10 : -1) }),
+        destroyWanted: true,
+        redPillLevelling: () => FIGURES,
+        nowMs: gameTimeMs,
+      });
+    }
+    expect(rule.redPillTiming()?.now.augmentations.toSorted()).toEqual([
+      "Embedded Netburner Module Analyze Engine",
+      "Embedded Netburner Module Core V3 Upgrade",
+    ]);
+  });
+
+  test("without levelling's figures, or with the destroy not wanted: installed at once, as before #410", () => {
+    measured();
+    minute(RED_PILL_DONATION + 1e9, null);
+    expect(installs()).toEqual([expect.objectContaining({ reason: "The Red Pill" })]);
+    expect(rule.redPillTiming()).toBeNull();
+  });
+
+  test("now where the batching costs more than twice D's saving: a set of little worth at a slow income", () => {
+    measured();
+    // ×9 now: D in hours, the set's cut worth less than its batching at $1m a second.
+    gameTimeMs += MINUTE;
+    earned += 1e6 * 60;
+    update({
+      slowData: slow({ joined: JOINED, ownedAugs: OWNED, currentNode: 4, earned }),
+      mediumData: medium({ money: RED_PILL_DONATION + 1e9 }),
+      destroyWanted: true,
+      redPillLevelling: () => ({ ...FIGURES, levelMult: 12, perThread: { expPerSecond: 1e3, atLevel: 300 } }),
+      nowMs: gameTimeMs,
+    });
+    expect(rule.redPillTiming()?.choice).toBe("now");
+    expect(installs()).toEqual([expect.objectContaining({ reason: "The Red Pill" })]);
+    expect(rule.redPillWait()).toBeNull();
+  });
+});

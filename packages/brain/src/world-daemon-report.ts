@@ -51,6 +51,7 @@ import {
   levellingFiguresOf,
   levellingInputsOf,
   settleMsOf,
+  weighedLevellingEstimates,
 } from "./levelling.ts";
 import type { StoredEvent } from "./telemetry-store.ts";
 import {
@@ -541,7 +542,10 @@ export class WorldDaemonFold {
     const estimates = levellingEstimates(
       levellingInputsOf(figures, required, money, factor, levels, augmentations, batch),
     );
-    const best = shortestLevellingCandidate(estimates);
+    // The brain leaves a hopeless levelling mode out (#410): the shortest it weighs is of the rest.
+    const best = shortestLevellingCandidate(
+      weighedLevellingEstimates(estimates, soFarMs === null ? null : soFarMs / 1000),
+    );
     const words = LEVELLING_CANDIDATE_WORDS;
     const lines = [
       `levelling (the hacking level all that's left since ${formatTime(sinceMs)}, #336): ${describeEstimates(estimates)}` +

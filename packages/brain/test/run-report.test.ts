@@ -3448,6 +3448,7 @@ describe("the levelling choice (#336)", () => {
     expAt: (offsetMs: number) => number,
     money = 6.96e15,
     daemonRooted = true,
+    hackingMult = 11.38,
   ): MediumSnapshotData {
     const server = (hostname: string, maxRam: number, security = 1, moneyAvailable = 0) => ({
       hostname,
@@ -3464,7 +3465,7 @@ describe("the levelling choice (#336)", () => {
         skills: { hacking: 6779, intelligence: 0, strength: 1 },
         exp: { hacking: expAt(offsetMs) },
         mults: {
-          hacking: 11.38,
+          hacking: hackingMult,
           hacking_exp: 19.06,
           hacking_speed: 4.465,
           hacking_chance: 3,
@@ -3492,6 +3493,8 @@ describe("the levelling choice (#336)", () => {
     expAt: (offsetMs: number) => number,
     money: (offsetMs: number) => number = () => 6.96e15,
     rootedFromMs: number | ((offsetMs: number) => boolean) = 0,
+    /** The level's multiplier (#410: BN4.3's 7.32, levelling mode hopeless). */
+    hackingMult = 11.38,
   ) {
     event(0, "brainStarted", { release: "v1.0.1-19-g1d08268" });
     for (const offsetMs of fastOffsets()) snapshot("fast", offsetMs, fastData());
@@ -3505,6 +3508,7 @@ describe("the levelling choice (#336)", () => {
         expAt,
         money(offsetMs),
         typeof rootedFromMs === "number" ? offsetMs >= rootedFromMs : rootedFromMs(offsetMs),
+        hackingMult,
       );
       snapshot("medium", offsetMs, medium, GAME_NOW - RUN_MS + offsetMs);
     }
@@ -3532,6 +3536,17 @@ describe("the levelling choice (#336)", () => {
       "  the levelling choice (#336: the brain not on the shortest way to w0r1d_d43m0n's level for 10 min, or its " +
         "choice's estimate past the BitNode's time so far):",
     );
+  });
+
+  test("BN4.3's shape (#410): levelling mode hopeless, so left out as the brain leaves it: money isn't off the shortest", () => {
+    // At ×7.32 levelling mode to 9,000 is millions of hours, past the 26 h 59 min so far: the brain never takes it
+    // (it would stop the income). Money's own estimate is hopeless too: that failure stands, the other doesn't.
+    bn4Run((offsetMs) => 6.34e10 + (offsetMs / 1000) * 2.65e6, undefined, 0, 7.3167);
+    const { text, failures } = report();
+    expect(text).toMatch(/levelling mode about [\d.e+]+ h/);
+    expect(failures.filter((failure) => failure.startsWith("levelling:"))).toEqual([
+      expect.stringMatching(/^levelling: the brain's choice, batching for money, .*: a hopeless estimate$/),
+    ]);
   });
 
   test("the World Daemon's switch off: the same two lines, warnings, not failures (money is what the owner asked for)", () => {

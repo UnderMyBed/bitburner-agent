@@ -475,6 +475,12 @@ export interface DestroyEstimateInputs {
   gang?: DestroyGangFacts | null;
   /** BN6's Black Ops route (#398), read there alone; absent or null: no reading yet. */
   blackOps?: DestroyBlackOpsInputs | null;
+  /**
+   * D from m (#410, the controller's): the time after The Red Pill's install to w0r1d_d43m0n's level at the multipliers
+   * it would leave, ms, or null unread; called only at an estimate's moment, before levelling's first choice. Absent,
+   * none (the prior's D then).
+   */
+  levelFromMultipliers?: (() => number | null) | null;
 }
 
 interface ResetFacts {
@@ -747,6 +753,11 @@ export class DestroyEstimateRule {
         daedalus: stage,
         holdEtaMs,
         levellingMs: redPillInstalled ? levellingMs : null,
+        // D from m (#410) on Daedalus's route and BN2's, where D is the level's.
+        levelFromMultipliersMs:
+          route !== "blackOps" && !(redPillInstalled && levellingMs !== null)
+            ? (inputs.levelFromMultipliers?.() ?? null)
+            : null,
         prior: note.prior,
         gang: route === "gang" ? destroyGangInputsOf(inputs.gang ?? null, formed, facts.lastAugReset) : null,
         blackOps: route === "blackOps" ? (inputs.blackOps ?? null) : null,

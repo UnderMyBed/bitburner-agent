@@ -13,7 +13,8 @@
  *   that cycle, cautious (the level's rise left out); before, the prior's B + C less the time since the count was met, never less than the
  *   prior's Red Pill cycle (BN1's vary 2-4×: either way).
  * - D, w0r1d_d43m0n's level (3000 × `WorldDaemonDifficulty`, `worldDaemonRequiredLevel`): once The Red Pill is
- *   installed, levelling's chosen candidate's estimate (#336); before, the prior's D where its level is this BitNode's,
+ *   installed, levelling's chosen candidate's estimate (#336); before, D from m (#410: the time to the level after The
+ *   Red Pill's install at the multipliers it would leave), else the prior's D where its level is this BitNode's,
  *   else none (optimistic: the total is "at least"). A prior whose D came before levelling (no levelling choice before
  *   its destroy: BN4.1's 419 min, 409 of them at the money pace) is cautious.
  * The prior is the last destroyed BitNode, the same number first (the brain's campaign fold measures its stretches).
@@ -21,7 +22,7 @@
  * hopeless.
  * Left out, each labelled in the issue: B's hacking 2,500 and $100b by the formulas, and C with the level's rise (the
  * prior's until slice 2); install timing's per-cycle shape for A (right for its choice, wrong for the total); D before
- * The Red Pill by the formulas; restarts and offline time (the online clock); Black Ops' route (#359); a prior scaled
+ * The Red Pill by the formulas where the brain gives none (#410's D from m, else the prior's); restarts and offline time (the online clock); Black Ops' route (#359); a prior scaled
  * by the multipliers.
  *
  * **BN2, the gang's route** (#357's slice 3; `destroyRouteOf`): The Red Pill is the gang's faction's (`Faction/
@@ -40,8 +41,8 @@
  *   (the gang rule's estimate of its end, #374, said); never at no rate outside a pause, which is also every working
  *   member earning 0 respect (a money task with respect and wanted both 0: the brain's gang-stalls.ts, `gangPlanEarnsNone`,
  *   leaves that corner to the respect stall), said in its source.
- * - D as Daedalus's route has it: none before The Red Pill with no prior at 15,000 (BN2.1's), so "at least"; D before
- *   The Red Pill by the formulas is a later slice.
+ * - D as Daedalus's route has it: D from m where the brain gives it (#410), else none before The Red Pill with no prior
+ *   at 15,000 (BN2.1's), so "at least".
  *
  * **BN6, the Black Ops' route** (#398; `destroyRouteOf`'s "blackOps", core's `winRouteOf`): one term, BO, the route's
  * time from the reading (./bladeburner-route.ts's `blackOpsRouteEstimate`: the next Black Op's rank by B5's stock and
@@ -144,6 +145,12 @@ export interface DestroyEstimateInputs {
   holdEtaMs: number | null;
   /** The Red Pill installed: levelling's chosen candidate's estimate (#336), ms; null before its first choice. */
   levellingMs: number | null;
+  /**
+   * D from m (#410), before levelling's first choice: the time after The Red Pill's install to w0r1d_d43m0n's level at
+   * the multipliers it would leave (core's `levellingSecondsAfterInstall`: `calculateSkill` and levelling mode's rate
+   * on home's RAM), ms; absent or null, unmeasured (the prior's then). Infinity: no rate.
+   */
+  levelFromMultipliersMs?: number | null;
   prior: DestroyPrior | null;
   /** BN2's gang route (#357): its figures, required there (`destroyRouteOf`'s "gang"); ignored elsewhere. */
   gang?: DestroyGangInputs | null;
@@ -283,6 +290,21 @@ function levelTerm(inputs: DestroyEstimateInputs, requiredLevel: number): Destro
       ms: inputs.levellingMs,
       atLeast: false,
       source: "levelling's chosen candidate (#336)",
+      label: "either way",
+    };
+  }
+  // D from m (#410): the multipliers this BitNode's Red Pill install would leave, in place of the prior's constant.
+  const fromM = inputs.levelFromMultipliersMs ?? null;
+  if (fromM !== null) {
+    return {
+      term: "D",
+      ms: fromM,
+      atLeast: false,
+      source:
+        `D from m (#410): w0r1d_d43m0n's level ${requiredLevel.toLocaleString("en-US")} from 0 experience at the ` +
+        "multipliers The Red Pill's install would leave, levelling mode on home's RAM at the formula's rate (its " +
+        "factor unmeasured, 1: optimistic; what's bought before the install left out: cautious)" +
+        (inputs.redPillInstalled ? ", levelling not yet chosen" : ""),
       label: "either way",
     };
   }
