@@ -225,9 +225,10 @@ describe("the route from the reading (#398)", () => {
       `the climb at combat 5,000: window ${(window / 60).toFixed(1)} min (base ${((view.rankStallMs as number) / 60_000).toFixed(1)}), ` +
         `least rise ${(view.climbRise as number).toFixed(0)} of the rate's ${(estimate.rate * window).toFixed(0)}`,
     );
-    // The attempts' bound: ⌈ln 0.001 / ln(1 − 0.3)⌉ = 20 attempts, each with a failure's rebuild, a rest and 10 min.
-    const attempts = Math.ceil(Math.log(0.001) / Math.log(1 - 0.3));
-    expect(attempts).toBe(20);
+    // The attempts' bound: ⌈ln 0.001 / ln(1 − p)⌉ attempts at Centurion's formula p (0.023: 298), each with a failure's
+    // rebuild, a rest and 10 min.
+    const attempts = Math.ceil(Math.log(0.001) / Math.log(1 - CENTURION_CHANCE));
+    expect(attempts).toBe(298);
     // Each attempt's own stamina regained at the natural regain (#400's round 2).
     const regain = staminaGainPerSecond(PERSON, r.maxStamina, mults);
     const stamina = Math.min(blackOpStaminaCost(CENTURION), r.maxStamina) / regain;
