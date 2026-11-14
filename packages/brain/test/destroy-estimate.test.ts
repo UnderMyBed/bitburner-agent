@@ -633,6 +633,57 @@ describe("the brain's rule (#360)", () => {
     ]);
   });
 
+  test("D from m (#410): the controller's, read once The Red Pill's install is in view, before levelling's choice", () => {
+    const { rule, events } = ruleOf();
+    let reads = 0;
+    const fromM = (ms: number | null) => () => {
+      reads += 1;
+      return ms;
+    };
+    const at = (
+      minute: number,
+      aug: number,
+      count: number,
+      ms: number | null,
+      more: { daedalus?: number; eta?: number; redPill?: boolean; levelling?: number } = {},
+    ) =>
+      rule.update({
+        slowData: slow(
+          minute,
+          resetInfo(0, aug, 1, { 1: 2 }, augs(count, { redPill: more.redPill ?? false })),
+          more.daedalus === undefined ? [] : [{ name: "Daedalus", favor: more.daedalus }],
+        ),
+        slowGameTimeMs: m(minute),
+        slowAtMs: m(minute),
+        factionChoice: more.eta === undefined ? null : choice(more.eta),
+        levelling: levellingView(more.levelling),
+        nowMs: m(minute),
+        levelFromMultipliers: fromM(ms),
+      });
+    const d = () => events.at(-1)?.terms.find((term) => term.term === "D");
+    // The start and the count met: The Red Pill far off, m to rise with every install: the prior's, not read.
+    at(1, 0, 0, 45 * MINUTE);
+    at(7, 6, 31, 45 * MINUTE);
+    expect(reads).toBe(0);
+    expect(d()).toMatchObject({ ms: 3 * MINUTE });
+    // Daedalus joined: one moment, one read, D the controller's 45 min.
+    at(9, 6, 31, 45 * MINUTE, { daedalus: 0, eta: 100 });
+    at(10, 6, 31, 45 * MINUTE, { daedalus: 0, eta: 100 });
+    expect(reads).toBe(1);
+    expect(d()).toMatchObject({ ms: 45 * MINUTE });
+    expect(d()?.source).toMatch(/^D from m \(#410\)/);
+    // The donations install, unread: the prior's.
+    at(11, 10, 35, null, { daedalus: 152 });
+    expect(reads).toBe(2);
+    expect(d()).toMatchObject({ ms: 3 * MINUTE });
+    // After The Red Pill, levelling's choice: D its, D from m not read.
+    at(13, 12, 36, null, { redPill: true });
+    const before = reads;
+    at(14, 12, 36, 45 * MINUTE, { redPill: true, levelling: 1200 });
+    expect(reads).toBe(before);
+    expect(d()).toMatchObject({ ms: 20 * MINUTE });
+  });
+
   test("once across a restart: the note carries the moments, the clock and the last estimate", () => {
     const first = ruleOf();
     for (let minute = 1; minute <= 5; minute++) update(first.rule, minute, 0, 0);

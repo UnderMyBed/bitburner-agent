@@ -47,13 +47,16 @@ import {
   describeEstimates,
   LEVELLING_CHOSEN_EVENT_KIND,
   LEVELLING_INCOME_WAIT_MS,
+  LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS,
   LEVELLING_SETTLE_MS,
   type LevellingEvent,
   LevellingRateWindow,
   LevellingRule,
   type LevellingRuleInputs,
+  LevelOnlyClock,
   levelAllThatsLeft,
   levellingFiguresOf,
+  levellingHopelessFailure,
   levellingInputsOf,
   settleMsOf,
 } from "../src/levelling.ts";
@@ -484,6 +487,31 @@ describe("the levelling rule (#336)", () => {
     ]);
     expect(levelling.view().lines[1]).toContain("chosen: levelling mode on joesguns, growing it (the operation sent)");
     expect(levelling.view().lines[1]).toContain("not measured yet (1 taken, optimistic)");
+  });
+
+  test("the run report's hopeless check (#410): one function, the level-only time added up per BitNode, gaps left out", () => {
+    const clock = new LevelOnlyClock();
+    // Two readings 10 s apart count 10 s; a 4-minute gap (the brain down) counts none; not level-only breaks it.
+    clock.add(0, 4, true);
+    clock.add(10 * SECOND, 4, true);
+    clock.add(10 * SECOND + 4 * MINUTE, 4, true);
+    clock.add(10 * SECOND + 5 * MINUTE, 4, true);
+    expect(clock.ms()).toBe(10 * SECOND + MINUTE);
+    clock.add(6 * MINUTE, 4, false);
+    clock.add(7 * MINUTE, 4, true);
+    expect(clock.ms()).toBe(10 * SECOND + MINUTE);
+    // Another BitNode: from 0.
+    clock.add(8 * MINUTE, 5, true);
+    expect(clock.ms()).toBe(0);
+    // Past the BitNode's time so far, past the 10 minutes: the failure; at either short, none.
+    const tenMinutes = LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS;
+    expect(levellingHopelessFailure("money", 3600, 1_000_000, tenMinutes + 1)).toBe(
+      "levelling: the brain's choice, batching for money, about 60 min to w0r1d_d43m0n's level, past the 16 min 40 s " +
+        "the BitNode has taken so far: a hopeless estimate",
+    );
+    expect(levellingHopelessFailure("money", 3600, 1_000_000, tenMinutes)).toBeNull();
+    expect(levellingHopelessFailure("money", 1000, 1_000_000, tenMinutes + 1)).toBeNull();
+    expect(levellingHopelessFailure("money", null, 1_000_000, tenMinutes + 1)).toBeNull();
   });
 
   test("the operation: the grow at joesguns' minimum security, whatever its money; the weaken above it", () => {
@@ -1158,6 +1186,50 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
     });
     expect(readAugmentationCycle(store)?.neuroFluxTarget).toBeGreaterThan(0);
     expect(state?.hackLoop.levelling).toEqual({ homeKeptGb: SHARE_HOME_KEPT_GB, operation: "grow" });
+  });
+
+  test("a hopeless choice (#410): the World Daemon's alert, by the run report's own check, once 10 minutes level-only", () => {
+    // At ×2 levelling mode to 3,000 is about 1e18 s, past the BitNode's 10 h so far: chosen still (the least), and
+    // alerted once the level has been all that's left 10 minutes, as the run report fails it.
+    const controller = new DesiredStateController({ channel, store });
+    const events: RuleEvent[] = [];
+    controller.subscribe((event) => events.push(event));
+    const connection = connectAgent();
+    writeAugmentationsEnabled(store, false);
+    aMinuteOf(connection);
+    expect(controller.levellingView().mode).toBe("level");
+    expect(controller.levellingView().hopeless).toBeNull();
+    const stalls = () => events.filter((event) => event.type === "worldDaemonStalled");
+    let atMs = 190 * SECOND;
+    for (; atMs <= 1_000 + 10 * MINUTE; atMs += 10 * SECOND) {
+      send(connection, "medium", medium({ level: 2000, expAbove: atMs / 100 }), atMs);
+    }
+    expect(stalls()).toEqual([]);
+    send(connection, "medium", medium({ level: 2000, expAbove: atMs / 100 }), atMs);
+    send(connection, "medium", medium({ level: 2000, expAbove: atMs / 100 + 1 }), atMs + 10 * SECOND);
+    const hopeless = controller.levellingView().hopeless;
+    expect(hopeless).toMatch(
+      /^levelling: the brain's choice, levelling mode, about [\d.e+]+ h to w0r1d_d43m0n's level, past the 10 h \d+ min the BitNode has taken so far: a hopeless estimate$/,
+    );
+    expect(stalls()).toEqual([expect.objectContaining({ step: "levelling", detail: hopeless })]);
+    expect(lastDesired(connection)?.hackLoop.levelling).toBeDefined();
+  });
+
+  test("The Red Pill's install timed (#410): A6 gets levelling mode after it from the snapshots; with no income, now", () => {
+    // BN4, The Red Pill reached at Daedalus, the destroy wanted: A6 times its install on the controller's figures (home's
+    // threads, joesguns' grow); no income measured (no hacking money in these slow snapshots), so now, said once.
+    const lines: string[] = [];
+    const controller = new DesiredStateController({ channel, store, log: (line) => lines.push(line) });
+    const events: RuleEvent[] = [];
+    controller.subscribe((event) => events.push(event));
+    const connection = connectAgent();
+    aMinuteOf(connection, { slowData: slow({ redPill: false, reputation: 2.6e6, currentNode: 4 }) });
+    expect(events.filter((event) => event.type === AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND)).toEqual([
+      expect.objectContaining({ reason: "The Red Pill" }),
+    ]);
+    expect(lines.filter((line) => line.startsWith("augmentations: The Red Pill's install timed (#410)"))).toEqual([
+      expect.stringMatching(/: the install now, no income measured to batch with$/),
+    ]);
   });
 
   test("the flip: the grow at minimum security below its money, the weaken once the grow raised it, then grow for good", () => {

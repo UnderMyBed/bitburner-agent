@@ -57,6 +57,7 @@ import {
   type InstallAwaitingRestart,
   type InstallTimingPolicy,
   type NotQueued,
+  type RedPillLevellingFigures,
   readAugmentationsEnabled,
   readCycleLooks,
   writeAugmentationsEnabled,
@@ -151,7 +152,14 @@ import {
 import { chooseHomeRamUpgrade, HOME_RAM_ENABLED_SETTING, type HomeRamPlan, readHomeRamEnabled } from "./home-ram.ts";
 import { type InvitationEvent, type InvitationInputs, InvitationRule, type InvitationView } from "./invitations.ts";
 import { type BackupsBeforeIrreversibleIntents, IrreversibleIntentGates } from "./irreversible-gate.ts";
-import { type LevellingEvent, type LevellingPlan, LevellingRule, type LevellingView } from "./levelling.ts";
+import {
+  type LevellingEvent,
+  type LevellingPlan,
+  LevellingRule,
+  type LevellingView,
+  levellingFiguresOf,
+  redPillLevellingFiguresOf,
+} from "./levelling.ts";
 import {
   type ResetSentNote,
   readManualIntents,
@@ -2011,6 +2019,49 @@ export class DesiredStateController {
     return figures;
   }
 
+  /** Levelling mode after an install, as last read (#410): one a set of snapshots, as A6 times The Red Pill on it. */
+  #redPillLevellingCache: {
+    staticData: StaticSnapshotData | null;
+    mediumData: MediumSnapshotData | null;
+    slowData: SlowSnapshotData | null;
+    homeAlsoKeptGb: number;
+    figures: RedPillLevellingFigures | null;
+  } | null = null;
+
+  /**
+   * Levelling mode after an install (#410, ./levelling.ts's `redPillLevellingFiguresOf`), before The Red Pill is
+   * installed: A6 times its install on it, and the destroy estimate's D from m. Null after it, or unread.
+   */
+  #redPillLevelling(): RedPillLevellingFigures | null {
+    const slowData = this.#slowData;
+    if (slowData?.resetInfo?.ownedAugs === undefined || Object.hasOwn(slowData.resetInfo.ownedAugs, THE_RED_PILL)) {
+      return null;
+    }
+    const homeAlsoKeptGb = this.#homeAlsoKeptGb();
+    const cached = this.#redPillLevellingCache;
+    if (
+      cached !== null &&
+      cached.staticData === this.#staticData &&
+      cached.mediumData === this.#mediumData &&
+      cached.slowData === slowData &&
+      cached.homeAlsoKeptGb === homeAlsoKeptGb
+    ) {
+      return cached.figures;
+    }
+    const hacking = bitNodeHackingOf(slowData.resetInfo.currentNode).multipliers;
+    const figures = redPillLevellingFiguresOf(
+      levellingFiguresOf(this.#staticData, this.#mediumData, slowData, hacking, homeAlsoKeptGb),
+    );
+    this.#redPillLevellingCache = {
+      staticData: this.#staticData,
+      mediumData: this.#mediumData,
+      slowData,
+      homeAlsoKeptGb,
+      figures,
+    };
+    return figures;
+  }
+
   #update(): void {
     const hackLoopEnabled = readHackLoopEnabled(this.#store);
     // The gang (#325) first: its faction, once formed, is left out of what the other rules see as joined.
@@ -2087,6 +2138,8 @@ export class DesiredStateController {
       netburners,
       // The Black Ops' route in the division (#404): the planner's keep or install now, by B6's estimate.
       blackOpsInstall: this.#blackOpsInstall(),
+      // The Red Pill's install timed (#410): levelling mode after it, from the snapshots now.
+      redPillLevelling: () => this.#redPillLevelling(),
     });
     this.#augmentationIntent = augmentations.intent;
     this.#augmentationInstall = augmentations.install;
@@ -2118,6 +2171,8 @@ export class DesiredStateController {
       bladeburnerActing: this.#bladeburner.acting(),
       // The rebuild after an install (#404): the rank's stall waits for it, within its own bound.
       bladeburnerRebuild: this.#bladeburner.rebuilding(),
+      // A6 batching first for the levelling set at The Red Pill (#410): its stall waits within the wait's own bound.
+      redPillWait: this.#augmentations.redPillWait(),
     });
     // The planner's levelling choice (#336), on A8's path as it now reads, and A6's offer of NeuroFlux Governor levels.
     const batcherConfig = this.#desired?.batcher?.config ?? null;
@@ -2141,6 +2196,8 @@ export class DesiredStateController {
       // (d) (#380): A6's ladder and set (none where a test's A/B turns (d) off).
       batchOffer: this.#levellingBatch ? this.#augmentations.batchOffer() : null,
     });
+    // A hopeless levelling choice (#410): the World Daemon's alert at once, this reading.
+    this.#worldDaemon.watchLevelling(this.#levelling.view().hopeless ?? null, this.#lastEventAtMs);
     // The travel for invitations (#228), before the purchases: its hold keeps their money.
     this.#travel = this.#invitations.update({
       inputs: this.#invitationInputs(),
@@ -2221,6 +2278,8 @@ export class DesiredStateController {
       },
       // BN6 (#398): the Black Ops' route as the World Daemon's path read it this update, both routes' estimates.
       blackOps: destroyBlackOpsOf(this.#worldDaemon.view().path?.blackOps ?? null),
+      // D from m (#410), read only at an estimate's moment.
+      levelFromMultipliers: () => this.#augmentations.levelFromMultipliersMs(),
     });
     // The owner's queue and the brain's resets first, then the rules' intents (`#ruleIntents`, in its order). The
     // purchases before the backdoor: a `buy` never waits for its terminal action.

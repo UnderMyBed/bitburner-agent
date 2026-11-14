@@ -64,6 +64,7 @@ import {
   type MediumSnapshotData,
   type NextBitNode,
   nextBitNodeOf,
+  rateStandardError,
   type SlowSnapshotData,
   type StaticSnapshotData,
   THE_RED_PILL,
@@ -152,9 +153,16 @@ export type WorldDaemonEvent =
 
 /**
  * The steps a stall can be on; `daedalusCount` (#228) is "Daedalus count stuck": an install that added none, passing
- * over one that counts (#238).
+ * over one that counts (#238); `levelling` (#410), levelling's choice hopeless.
  */
-export type StallStep = "daedalusCount" | "daedalus" | "redPill" | "redPillReputation" | "destroy" | "blackOpsRank";
+export type StallStep =
+  | "daedalusCount"
+  | "daedalus"
+  | "redPill"
+  | "redPillReputation"
+  | "destroy"
+  | "blackOpsRank"
+  | "levelling";
 
 /**
  * The Red Pill reached, not installed this long after (#215 review): 15 minutes, from "reached". A6's whole commit
@@ -174,6 +182,8 @@ const STALLED_AFTER_MS: Record<StallStep, number> = {
   destroy: WORLD_DAEMON_STALLED_AFTER_MS,
   // Its own bound always comes with it (the route's `rankStallMs`).
   blackOpsRank: WORLD_DAEMON_STALLED_AFTER_MS,
+  // At once (#410): a choice whose own estimate is past the BitNode's time so far waits out nothing.
+  levelling: 0,
 };
 
 // Moved to core (#321), with the campaign's order; the name stays here for the campaign model and the tests.
@@ -688,6 +698,11 @@ export class HackingExpRate {
    * The samples span the whole window (`HACKING_EXP_WINDOW_MS`): the rate isn't its first minutes' only, which after a
    * reset (the hack loop starting) can be none or a sliver (#378's review: τ_g from it 258 h against 26 min).
    */
+  /** The rate's standard error over the samples (#410, core's `rateStandardError`); null with under two intervals. */
+  standardError(): number | null {
+    return rateStandardError(this.#samples.map(({ atMs, exp }) => ({ atMs, value: exp })));
+  }
+
   windowFull(): boolean {
     const first = this.#samples[0];
     const last = this.#samples.at(-1);
@@ -768,6 +783,12 @@ export interface WorldDaemonInputs {
    * rebuild and 10 minutes (the rule runs none past it). Absent or null: none.
    */
   bladeburnerRebuild?: BladeburnerRebuildView | null;
+  /**
+   * A6 waiting at The Red Pill to batch for the levelling set first (#410, its `redPillWait`): from when (the
+   * controller's clock) and its bound (twice the plan's batching and 10 minutes), in place of the 15 minutes the
+   * install takes, or the 10 its reputation may stay flat, while longer. Absent or null: none.
+   */
+  redPillWait?: { sinceMs: number; withinMs: number } | null;
 }
 
 /** The World Daemon rule (#215), as the controller runs it. */
@@ -866,6 +887,32 @@ export class WorldDaemonRule {
     };
   }
 
+  /**
+   * Levelling's choice hopeless (#410, the levelling rule's view, after its update): `worldDaemonStalled` at once
+   * (step "levelling": an event, a log line, the dashboard's alert and a run report failure), once while it lasts; over
+   * when the choice is no longer hopeless.
+   */
+  watchLevelling(hopeless: string | null, nowMs: number | null): void {
+    if (hopeless === null) {
+      this.#ready.delete("levelling");
+      return;
+    }
+    const ready = this.#ready.get("levelling") ?? { sinceMs: nowMs ?? 0, stored: false, detail: hopeless };
+    ready.detail = hopeless;
+    this.#ready.set("levelling", ready);
+    if (ready.stored) return;
+    ready.stored = true;
+    const atMs = nowMs ?? 0;
+    this.#emit({
+      type: WORLD_DAEMON_STALLED_EVENT_KIND,
+      atMs,
+      step: "levelling",
+      sinceMs: ready.sinceMs,
+      detail: hopeless,
+    });
+    this.#log(`world daemon: STALLED 0 min: ${hopeless}`);
+  }
+
   /** The step stalled longest, or null: `worldDaemonStalled`'s. */
   stall(): WorldDaemonStall | null {
     let worst: WorldDaemonStall | null = null;
@@ -896,6 +943,7 @@ export class WorldDaemonRule {
     blackOps = null,
     bladeburnerActing = false,
     bladeburnerRebuild = null,
+    redPillWait = null,
   }: WorldDaemonInputs): boolean {
     this.#enabled = enabled;
     if (slowData !== null) {
@@ -950,7 +998,16 @@ export class WorldDaemonRule {
     }
     this.#path = path;
     this.#watchCount(path, slowData, nowMs ?? 0, countFacts, augmentationsInstalling);
-    this.#watch(path, nowMs ?? 0, enabled, redPillHeldAtGang, gangPause, bladeburnerActing, bladeburnerRebuild);
+    this.#watch(
+      path,
+      nowMs ?? 0,
+      enabled,
+      redPillHeldAtGang,
+      gangPause,
+      bladeburnerActing,
+      bladeburnerRebuild,
+      redPillWait,
+    );
     // On the Black Ops' route (#398), all 21 done: the reading shows none next.
     const ready =
       path.route === "blackOps"
@@ -1060,8 +1117,17 @@ export class WorldDaemonRule {
     gangPause: WorldDaemonInputs["gangPause"] = null,
     bladeburnerActing = false,
     bladeburnerRebuild: BladeburnerRebuildView | null = null,
+    redPillWait: WorldDaemonInputs["redPillWait"] = null,
   ): void {
     const steps = new Map<StallStep, { detail: string; sinceMs?: number; withinMs?: number }>();
+    // A6's wait at The Red Pill for the levelling set (#410): its own bound from its start, where it ends later.
+    const waitWithin = (sinceMs: number, defaultMs: number) =>
+      redPillWait === null ? undefined : Math.max(defaultMs, redPillWait.sinceMs + redPillWait.withinMs - sinceMs);
+    const waitWords =
+      redPillWait === null
+        ? ""
+        : `; A6 batching first for the levelling set (#410), its bound ${formatDuration(redPillWait.withinMs)} from ` +
+          formatIsoTime(redPillWait.sinceMs);
     // The Black Ops' route (#398): all 21 done, the destroy's step; short, the rank's, while the Bladeburner rule acts
     // (the owner's work holds its actions: no rank is asked for), from its high's last rise, within the route's bound.
     const route = path.route === "blackOps" ? path.blackOps : null;
@@ -1183,7 +1249,12 @@ export class WorldDaemonRule {
       redPill.reputationNeeded !== null &&
       redPill.reputation >= redPill.reputationNeeded;
     if (redPill !== null && !redPill.installed && (redPill.queued || reached)) {
-      steps.set("redPill", { detail: `${THE_RED_PILL} ${redPill.queued ? "queued" : "reached"}, not installed` });
+      const sinceMs = this.#ready.get("redPill")?.sinceMs ?? nowMs;
+      const withinMs = waitWithin(sinceMs, RED_PILL_INSTALL_STALLED_AFTER_MS);
+      steps.set("redPill", {
+        detail: `${THE_RED_PILL} ${redPill.queued ? "queued" : "reached"}, not installed${waitWords}`,
+        ...(withinMs === undefined ? {} : { withinMs }),
+      });
     }
     // Short at a joined Daedalus, A6 holds every install: its reputation not rising is loud (#215 review). At the gang's
     // faction (#334) only while A6 holds for it: G5's hold, at most 20 min a cycle (#335's review, the rules'), or the
@@ -1216,11 +1287,15 @@ export class WorldDaemonRule {
             ? ""
             : `; the gang's plan earning no respect since ${formatIsoTime(paused.fromMs)}, its bound ` +
               `${formatDuration(paused.withinMs)} (twice the gang rule's estimate of ` +
-              `${formatDuration(paused.estimateMs)}, and 10 min)`),
+              `${formatDuration(paused.estimateMs)}, and 10 min)`) +
+          waitWords,
         sinceMs,
         ...(pauseEndsMs === null
           ? {}
           : { withinMs: Math.max(RED_PILL_REPUTATION_STALLED_AFTER_MS, pauseEndsMs - sinceMs) }),
+        ...(redPillWait === null
+          ? {}
+          : { withinMs: waitWithin(sinceMs, RED_PILL_REPUTATION_STALLED_AFTER_MS) as number }),
       });
     } else {
       this.#reputation = null;
@@ -1237,7 +1312,8 @@ export class WorldDaemonRule {
           `the BitNode not destroyed${daemon.problem === null ? "" : `: ${daemon.problem}`}`,
       });
     }
-    for (const step of [...this.#ready.keys()]) if (!steps.has(step)) this.#ready.delete(step);
+    // Levelling's (#410) is watched apart, after its rule (`watchLevelling`).
+    for (const step of [...this.#ready.keys()]) if (!steps.has(step) && step !== "levelling") this.#ready.delete(step);
     for (const [step, { detail, sinceMs, withinMs }] of steps) {
       const ready = this.#ready.get(step) ?? { sinceMs: sinceMs ?? nowMs, stored: false, detail };
       ready.detail = detail;

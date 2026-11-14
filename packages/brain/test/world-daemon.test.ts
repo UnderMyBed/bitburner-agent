@@ -454,6 +454,66 @@ describe("stalls", () => {
     at(1.2e6, 2 * RED_PILL_REPUTATION_STALLED_AFTER_MS);
     expect(rule.stall()).toBeNull();
   });
+
+  test("A6 batching first for the levelling set at The Red Pill (#410): its bound in place of the 15 or 10 minutes", () => {
+    const met = { mediumData: medium({ hacking: 2600, money: 200e9 }) };
+    // Reached, A6 waiting from 0 within 40 min: no stall at 15, nor at 40 less a millisecond; at 40, the stall, said.
+    const wait = { sinceMs: 0, withinMs: 40 * MINUTE };
+    const reached = (nowMs: number) =>
+      update({ ...met, slowData: slow({ ownedAugs: THIRTY, daedalus: 2.5e6 }), nowMs, redPillWait: wait });
+    reached(0);
+    reached(RED_PILL_INSTALL_STALLED_AFTER_MS);
+    reached(40 * MINUTE - 1);
+    expect(rule.stall()).toBeNull();
+    reached(40 * MINUTE);
+    expect(rule.stall()).toMatchObject({
+      step: "redPill",
+      detail:
+        "The Red Pill reached, not installed; A6 batching first for the levelling set (#410), its bound 40 min from " +
+        "1970-01-01T00:00:00.000Z",
+    });
+    // By a donation, its reputation flat: the wait's bound too, in place of the 10 minutes.
+    rule = new WorldDaemonRule({ log: (line) => lines.push(line), emit: (event) => events.push(event) });
+    const short = (nowMs: number) =>
+      update({ ...met, slowData: slow({ ownedAugs: THIRTY, daedalus: 3_000 }), nowMs, redPillWait: wait });
+    short(0);
+    short(RED_PILL_REPUTATION_STALLED_AFTER_MS);
+    short(40 * MINUTE - 1);
+    expect(rule.stall()).toBeNull();
+    short(40 * MINUTE);
+    expect(rule.stall()).toMatchObject({ step: "redPillReputation" });
+    // A wait shorter than the default: the default stands.
+    rule = new WorldDaemonRule({ log: (line) => lines.push(line), emit: (event) => events.push(event) });
+    const brief = (nowMs: number) =>
+      update({
+        ...met,
+        slowData: slow({ ownedAugs: THIRTY, daedalus: 2.5e6 }),
+        nowMs,
+        redPillWait: { sinceMs: 0, withinMs: MINUTE },
+      });
+    brief(0);
+    brief(RED_PILL_INSTALL_STALLED_AFTER_MS - 1);
+    expect(rule.stall()).toBeNull();
+    brief(RED_PILL_INSTALL_STALLED_AFTER_MS);
+    expect(rule.stall()).toMatchObject({ step: "redPill" });
+  });
+
+  test("levelling's choice hopeless (#410): the stall at once, once while it lasts; over when it isn't", () => {
+    const detail = "levelling's choice hopeless (#410): batching for money, about 1.0e+6 h";
+    rule.watchLevelling(detail, 5_000);
+    expect(rule.stall()).toEqual({ step: "levelling", sinceMs: 5_000, detail });
+    expect(events).toEqual([{ type: "worldDaemonStalled", atMs: 5_000, step: "levelling", sinceMs: 5_000, detail }]);
+    expect(lines.at(-1)).toBe(`world daemon: STALLED 0 min: ${detail}`);
+    // A8's own update keeps it; a second reading adds none.
+    update({ mediumData: medium({ hacking: 2600 }), slowData: slow({ ownedAugs: THIRTY }), nowMs: 6_000 });
+    rule.watchLevelling(detail, 7_000);
+    expect(events).toHaveLength(1);
+    expect(rule.stall()?.step).toBe("levelling");
+    rule.watchLevelling(null, 8_000);
+    expect(rule.stall()).toBeNull();
+    rule.watchLevelling(detail, 9_000);
+    expect(events).toHaveLength(2);
+  });
 });
 
 describe("The Red Pill at the gang's faction (#334, G5)", () => {

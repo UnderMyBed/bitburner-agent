@@ -50,8 +50,10 @@ import {
   type StaticSnapshotData,
   threadsThatFit,
 } from "@bitburner-agent/core";
+import type { RedPillLevellingFigures } from "./augmentations.ts";
 import { batcherMultsOf, hackingPlayerOf } from "./batcher.ts";
 import { describeEta } from "./factions.ts";
+import { formatDuration } from "./gap-report.ts";
 import { hackLoopHosts } from "./hack-loop.ts";
 import { homeKeptGbOf, singularityRamMultiplierOf } from "./share.ts";
 import { HACKING_EXP_GAP_MS, HACKING_EXP_WINDOW_MS, type WorldDaemonPath } from "./world-daemon.ts";
@@ -315,6 +317,88 @@ export function levellingInputsOf(
 }
 
 /**
+ * What The Red Pill's install timing reads (#410, A6's `redPillLevelling`): levelling mode after an install, as (c)'s
+ * from the snapshots now (home's threads, the grow's rate a thread on the best target at the level and speed now, its
+ * preparation at the levels' and the set's), and the level's multiplier now; null with no target with money to grow.
+ */
+export function redPillLevellingFiguresOf(figures: LevellingFigures | null): RedPillLevellingFigures | null {
+  const after = figures?.afterInstall ?? null;
+  if (figures === null || after === null || figures.homeThreads <= 0) return null;
+  return {
+    homeThreads: figures.homeThreads,
+    perThread: { expPerSecond: after.expPerThreadSecond, atLevel: figures.level },
+    levelMult: figures.levelMult,
+    preparationMs: (levels, augmentations) => {
+      const gain = levellingInstallMultipliers(levels, augmentations);
+      const player = figures.player;
+      return levellingPreparationMs(
+        after.figures,
+        {
+          skills: { ...player.skills, hacking: hackingLevelOfExp(0, figures.levelMult * gain.hacking) },
+          mults: { ...player.mults, hacking_speed: player.mults.hacking_speed * gain.hackingSpeed },
+        },
+        figures.homeThreads,
+      );
+    },
+  };
+}
+
+/**
+ * How long a choice is given before the run report judges it (#336): off the shortest, or past the BitNode's time so
+ * far, for longer than this fails: the rates' window, 10 minutes (`HACKING_EXP_WINDOW_MS`). The run report's and, since
+ * #410, the brain's alert's (`levellingHopelessFailure`).
+ */
+export const LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS = HACKING_EXP_WINDOW_MS;
+
+/**
+ * The time the hacking level has been all that's left in a BitNode (#355's review), added up across its levelling
+ * installs (each breaks it while w0r1d_d43m0n is rooted again): each interval between two medium snapshots that both
+ * show it, up to `HACKING_EXP_GAP_MS` (a longer one, the brain down, counts none); another BitNode starts it at 0. The
+ * run report's (./world-daemon-report.ts) and the levelling rule's (#410), so the alert fires exactly where the report
+ * fails.
+ */
+export class LevelOnlyClock {
+  #ms = 0;
+  #lastMs: number | null = null;
+  #bitNode: number | null = null;
+
+  add(atMs: number, bitNode: number | null, levelOnly: boolean): void {
+    if (this.#bitNode !== bitNode) {
+      this.#ms = 0;
+      this.#lastMs = null;
+    }
+    this.#bitNode = bitNode;
+    const last = this.#lastMs;
+    if (levelOnly && last !== null && atMs - last <= HACKING_EXP_GAP_MS) this.#ms += Math.max(0, atMs - last);
+    this.#lastMs = levelOnly ? atMs : null;
+  }
+
+  ms(): number {
+    return this.#ms;
+  }
+}
+
+/**
+ * The run report's hopeless check on levelling's choice (#336, decision 67's point 8), the brain's alert's too (#410):
+ * the chosen candidate's estimate, `seconds`, past the time the BitNode has taken so far (`soFarMs`), once the level has
+ * been all that's left `LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS` in the BitNode (`levelOnlyMs`, `LevelOnlyClock`). The
+ * failure in words, or null.
+ */
+export function levellingHopelessFailure(
+  mode: LevellingCandidate,
+  seconds: number | null,
+  soFarMs: number | null,
+  levelOnlyMs: number,
+): string | null {
+  if (seconds === null || soFarMs === null || !(seconds * 1000 > soFarMs)) return null;
+  if (!(levelOnlyMs > LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS)) return null;
+  return (
+    `levelling: the brain's choice, ${LEVELLING_CANDIDATE_WORDS[mode]}, ${describeEstimate(seconds)} to w0r1d_d43m0n's ` +
+    `level, past the ${formatDuration(soFarMs)} the BitNode has taken so far: a hopeless estimate`
+  );
+}
+
+/**
  * (d)'s figures (#380): A6's ladder and its set (`batchOffer`), the measured income, $/s, or null unmeasured, and
  * (#382's review) the BitNode's time so far, seconds, the batching's bound (core's `batchingBoundSeconds`), or null.
  */
@@ -504,6 +588,11 @@ export interface LevellingView {
    */
   waitingForIncome?: boolean;
   meanwhile?: LevellingCandidate;
+  /**
+   * The run report's hopeless check on the choice (#410, `levellingHopelessFailure`: its estimate past the BitNode's time
+   * so far, the level all that's left 10 min), its failure in words, or null: the World Daemon's alert (step "levelling").
+   */
+  hopeless?: string | null;
 }
 
 /** The levelling rule (#336), as the controller runs it. */
@@ -532,7 +621,18 @@ export class LevellingRule {
   #started = false;
   /** The level loop ran at the last update. */
   #levelLoopRan = false;
-  #view: LevellingView = { applies: false, mode: "money", estimates: null, target: null, fit: null, lines: [] };
+  /** The level-only time in the BitNode (#410), the run report's `LevelOnlyClock`, and the medium snapshot last added. */
+  readonly #levelOnly = new LevelOnlyClock();
+  #levelOnlyAtMs: number | null = null;
+  #view: LevellingView = {
+    applies: false,
+    mode: "money",
+    estimates: null,
+    target: null,
+    fit: null,
+    lines: [],
+    hopeless: null,
+  };
 
   constructor({
     log = () => {},
@@ -592,12 +692,26 @@ export class LevellingRule {
       this.#window.add(mediumGameTimeMs, figures.exp, figures.level, figures.money);
     }
     const applies = inputs.enabled && levelAllThatsLeft(inputs.path);
+    // The level-only time (#410), as the run report adds it up: each medium snapshot once, in its BitNode.
+    if (isFiniteNumber(mediumGameTimeMs) && mediumGameTimeMs !== this.#levelOnlyAtMs) {
+      this.#levelOnlyAtMs = mediumGameTimeMs;
+      const bitNode = slowData?.resetInfo?.currentNode;
+      this.#levelOnly.add(mediumGameTimeMs, isFiniteNumber(bitNode) ? bitNode : null, levelAllThatsLeft(inputs.path));
+    }
     const required = inputs.path?.daemon?.requiredHackingLevel ?? null;
     if (!applies || figures === null || required === null) {
       if (this.#mode !== "money") {
         this.#switch("money", inputs, null, figures, `the hacking level is no longer all that's left`);
       }
-      this.#view = { applies: false, mode: "money", estimates: null, target: null, fit: this.#fit, lines: [] };
+      this.#view = {
+        applies: false,
+        mode: "money",
+        estimates: null,
+        target: null,
+        fit: this.#fit,
+        lines: [],
+        hopeless: null,
+      };
       return { mode: "money", levelling: null };
     }
     // The rate measured in the mode, fitted: (a)'s, or (b)'s against the formula's for the RAM sent.
@@ -650,6 +764,7 @@ export class LevellingRule {
     );
     const estimates = levellingEstimates(levellingInputs);
     const plan = batchThenInstallPlan(levellingInputs);
+    const soFar = soFarSeconds(slowData, mediumGameTimeMs);
     // The install chosen stays chosen while A6 commits it; a choice that A6 can no longer commit (no levels to buy, no
     // set that adds to levelling, and not committed) is chosen afresh.
     const onOffer =
@@ -669,6 +784,13 @@ export class LevellingRule {
       awaiting && gameMs !== null && gameMs - (this.#incomeAwaitedSinceGameMs ?? gameMs) < LEVELLING_INCOME_WAIT_MS;
     const choice = installHeld ? "install" : waitsForIncome ? "money" : chooseLevelling(estimates, this.#mode);
     if (choice !== this.#mode) this.#switch(choice, inputs, estimates, figures, null, plan, batch);
+    // The run report's hopeless check (#410), the same function and level-only time: the World Daemon's alert.
+    const hopeless = levellingHopelessFailure(
+      this.#mode,
+      estimates[this.#mode],
+      soFar === null ? null : soFar * 1000,
+      this.#levelOnly.ms(),
+    );
     this.#view = {
       applies: true,
       mode: this.#mode,
@@ -679,6 +801,7 @@ export class LevellingRule {
         ...this.#lines(estimates, target?.hostname ?? null, figures, inputs, plan),
         ...(waitsForIncome ? ["  money waits for (d)'s income: none measured yet (5 min at most, #382)"] : []),
       ],
+      hopeless,
       ...(waitsForIncome
         ? { waitingForIncome: true, meanwhile: chooseLevelling({ ...estimates, batch: null }, "money") }
         : {}),
