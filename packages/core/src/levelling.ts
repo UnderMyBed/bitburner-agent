@@ -515,9 +515,9 @@ export interface RedPillInstallOffer {
   money: number;
   redPillMoney: number;
   /**
-   * The money the commit's own time brings at the income (A6's: the income × `LEVELLING_INSTALL_MS`), on both sides:
-   * the commit buys a level at a time as the money comes (5901be2's at BN4.3's 21:13 bought ×10 in 3.4 min, not the ×6
-   * the money at the choice covered). Absent, 0.
+   * The money the commit's own time brings at the income (A6's: the income × its last measured time in the BitNode,
+   * chosen to sent; none, 0), on both sides: the commit buys a level at a time as the money comes (5901be2's at BN4.3's
+   * 21:13 bought ×10 in 3.4 min, not the ×6 the money at the choice covered). Absent, 0.
    */
   commitMoney?: number;
   incomePerSecond: number | null;

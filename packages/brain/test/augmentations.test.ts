@@ -4960,8 +4960,8 @@ describe("The Red Pill's install timed (#410): now, or first batching for the le
     expect(timing?.augmentations.toSorted()).toEqual(LEVELLING_SET.toSorted());
     const wait = timing?.wait as NonNullable<NonNullable<typeof timing>["wait"]>;
     expect(wait.seconds).toBeLessThan(timing?.now.seconds as number);
-    // From the money after the donation and the commit's 15 min at the income (#410's review).
-    expect(wait.batchingSeconds).toBeCloseTo((wait.money - INCOME * 900) / INCOME, 0);
+    // From the money after the donation; no commit measured yet in the BitNode, so none of its money (#412's ruling).
+    expect(wait.batchingSeconds).toBeCloseTo(wait.money / INCOME, 0);
     expect(timing?.marginSeconds).toBe(0);
     expect(timing?.now.candidate).not.toBeNull();
     expect(rule.view().waitingFor).toMatch(
@@ -4978,10 +4978,10 @@ describe("The Red Pill's install timed (#410): now, or first batching for the le
     // The World Daemon's stall bound: twice the first wait's batching and the income's window (#343's waits').
     const boundMs = 2 * wait.batchingSeconds * 1000 + AUGMENTATION_INCOME_WINDOW_MS;
     expect(rule.redPillWait()).toEqual({ sinceMs: gameTimeMs, withinMs: boundMs });
-    // D from m for the destroy estimate: levelling's least after the install with nothing bought (and no donation), so
-    // longer than now's, which buys the commit's.
-    expect(rule.levelFromMultipliersMs()).toBeGreaterThan((timing?.now.seconds as number) * 1000);
-    expect(Number.isFinite(rule.levelFromMultipliersMs())).toBe(true);
+    // D from m for the destroy estimate (#412's ruling): priced (Daedalus's donations unlocked, the income measured), the
+    // timing's least, here the wait's.
+    expect(rule.redPillPriced()).toBe(true);
+    expect(rule.levelFromMultipliersMs()).toBeCloseTo(wait.seconds * 1000, 0);
     // The money flat: the wait goes on to its bound, then The Red Pill now, said.
     const until = gameTimeMs + boundMs;
     while (gameTimeMs < until - MINUTE) minute(RED_PILL_DONATION);
@@ -5035,5 +5035,18 @@ describe("The Red Pill's install timed (#410): now, or first batching for the le
     expect(timing?.words).toMatch(/: the install now, no more of the levelling set within the BitNode's time so far/);
     expect(installs()).toEqual([expect.objectContaining({ reason: "The Red Pill" })]);
     expect(rule.redPillWait()).toBeNull();
+  });
+
+  test("the commit's money (#412's ruling): its last measured time in the BitNode, chosen to sent, at the income", () => {
+    measured();
+    minute(RED_PILL_DONATION + 1e16);
+    expect(installs()).toEqual([expect.objectContaining({ reason: "The Red Pill" })]);
+    // The install sent 120 s after its choice (the controller's `augmentationInstallSent`): measured.
+    rule.installSent(gameTimeMs + 120_000);
+    store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+    minute(RED_PILL_DONATION);
+    const wait = rule.redPillTiming()?.wait as NonNullable<NonNullable<ReturnType<typeof rule.redPillTiming>>["wait"]>;
+    // The batching from the money after the donation and 120 s of the income.
+    expect(wait.batchingSeconds).toBeCloseTo((wait.money - 120 * INCOME) / INCOME, 0);
   });
 });

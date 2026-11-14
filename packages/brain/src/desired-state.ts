@@ -1635,6 +1635,8 @@ export class DesiredStateController {
     }
     // An install going out (#210): stored, so the run report can look for the reset after it.
     if (note?.field === "lastAugReset") {
+      // The commit's measured time (#410): A6's choice to here.
+      this.#augmentations.installSent(this.#lastEventAtMs ?? 0);
       this.#emit({
         type: AUGMENTATION_INSTALL_SENT_EVENT_KIND,
         atMs: this.#lastEventAtMs ?? 0,
@@ -2280,7 +2282,8 @@ export class DesiredStateController {
       },
       // BN6 (#398): the Black Ops' route as the World Daemon's path read it this update, both routes' estimates.
       blackOps: destroyBlackOpsOf(this.#worldDaemon.view().path?.blackOps ?? null),
-      // D from m (#410), read only at an estimate's moment.
+      // D from m (#410): once The Red Pill's timing can price the route (its own moment), read only at a moment.
+      redPillPriced: this.#augmentations.redPillPriced(),
       levelFromMultipliers: () => this.#augmentations.levelFromMultipliersMs(),
     });
     // The owner's queue and the brain's resets first, then the rules' intents (`#ruleIntents`, in its order). The

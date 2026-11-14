@@ -93,7 +93,15 @@ export const DESTROY_ROUTE_WAIT_MS = HACKING_EXP_WINDOW_MS + AUGMENTATION_SLOW_G
  * first choice; or "first seen", a cycle not the BitNode's first that a brain with no note for the BitNode sees first (a
  * first deploy mid-cycle): the hindcast has its install already, so it's listed apart and left out of the summaries.
  */
-export type DestroyMoment = "start" | "install" | "first seen" | "joined" | "gang formed" | "levelling" | "black op";
+export type DestroyMoment =
+  | "start"
+  | "install"
+  | "first seen"
+  | "joined"
+  | "gang formed"
+  | "red pill priced"
+  | "levelling"
+  | "black op";
 
 /**
  * Where the BitNode stood at it, for the campaign report's ratios by moment: an install short of the count, the count
@@ -107,6 +115,7 @@ export type DestroyStage =
   | "gang formed"
   | "donations install"
   | "The Red Pill installed"
+  | "red pill priced"
   | "levelling"
   | "black op"
   | "first seen";
@@ -161,6 +170,7 @@ export function destroyStageOf(
     moment === "start" ||
     moment === "joined" ||
     moment === "gang formed" ||
+    moment === "red pill priced" ||
     moment === "levelling" ||
     moment === "black op" ||
     moment === "first seen"
@@ -216,7 +226,16 @@ export function destroyEstimateRecord(
   };
 }
 
-const MOMENTS: readonly string[] = ["start", "install", "first seen", "joined", "gang formed", "levelling", "black op"];
+const MOMENTS: readonly string[] = [
+  "start",
+  "install",
+  "first seen",
+  "joined",
+  "gang formed",
+  "red pill priced",
+  "levelling",
+  "black op",
+];
 const isTerm = (value: unknown): value is StoredDestroyTerm => {
   const term = value as Partial<StoredDestroyTerm> | null;
   return (
@@ -267,6 +286,7 @@ export function describeTerms(terms: readonly StoredDestroyTerm[]): string {
 const MOMENT_WORDS: Partial<Record<DestroyMoment, string>> = {
   levelling: "levelling's first choice",
   "gang formed": "the gang formed",
+  "red pill priced": "The Red Pill's install priced (#410)",
   "black op": "a Black Op done",
 };
 
@@ -346,6 +366,8 @@ interface DestroyNote {
   joinedCycle: number | null;
   /** Levelling's first choice estimated. */
   levelled: boolean;
+  /** The Red Pill priced (#410): its moment made in the BitNode. Absent in an earlier note: not. */
+  priced?: boolean;
   prior: DestroyPrior | null;
   last: DestroyEstimateRecord | null;
   /**
@@ -405,6 +427,7 @@ function readNote(store: TelemetryStore): DestroyNote | null {
     countMetOnlineMs: isFiniteNumber(note.countMetOnlineMs) ? note.countMetOnlineMs : null,
     joinedCycle: isFiniteNumber(note.joinedCycle) ? note.joinedCycle : null,
     levelled: note.levelled,
+    priced: note.priced === true,
     prior: note.prior ?? null,
     last: note.last === undefined || note.last === null ? null : parseDestroyEstimate(note.last),
     gangFormed: note.gangFormed === undefined ? false : note.gangFormed,
@@ -476,9 +499,13 @@ export interface DestroyEstimateInputs {
   /** BN6's Black Ops route (#398), read there alone; absent or null: no reading yet. */
   blackOps?: DestroyBlackOpsInputs | null;
   /**
-   * D from m (#410, the controller's): the time after The Red Pill's install to w0r1d_d43m0n's level at the multipliers
-   * it would leave, ms, or null unread; called only at an estimate's moment, before levelling's first choice. Absent,
-   * none (the prior's D then).
+   * The Red Pill's timing can price the route (#410, A6's `redPillPriced`: Daedalus's donations unlocked, the income
+   * measured): from then, D is D from m, and its first look is a moment of its own. Absent, not.
+   */
+  redPillPriced?: boolean;
+  /**
+   * D from m (#410, A6's): The Red Pill's timing's least, ms, or null unread; called only at an estimate's moment, once
+   * priced and before The Red Pill's install. Absent, none (the prior's D then).
    */
   levelFromMultipliers?: (() => number | null) | null;
 }
@@ -722,6 +749,14 @@ export class DestroyEstimateRule {
       note = { ...note, joinedCycle: facts.lastAugReset };
       changed = true;
     }
+    // The Red Pill priced (#410): once a BitNode, before its install, an estimate with D from m.
+    const priced = route !== "blackOps" && !redPillInstalled && inputs.redPillPriced === true;
+    if (priced && note.priced !== true) {
+      if (moments.length === 0)
+        moments.push({ moment: "red pill priced", late: false, formed: formedBefore || formedNow });
+      note = { ...note, priced: true };
+      changed = true;
+    }
     // Levelling's first choice; at a cycle's first estimate that already has it as D, no second with the same figures.
     const levellingMs = levellingEstimateMs(inputs.levelling);
     if (redPillInstalled && !note.levelled && levellingMs !== null) {
@@ -753,13 +788,10 @@ export class DestroyEstimateRule {
         daedalus: stage,
         holdEtaMs,
         levellingMs: redPillInstalled ? levellingMs : null,
-        // D from m (#410) once The Red Pill's install is in view (Daedalus joined, its donations install), where D is the
-        // level's: earlier, m rises with every install to come, so the multipliers now say nothing of The Red Pill's (BN2's
-        // start: 5e201 ms), and the prior's stands. The Red Pill installed, A6 prices none (levelling's own choice is D).
-        levelFromMultipliersMs:
-          route !== "blackOps" && !redPillInstalled && (stage === "joined" || stage === "donations installed")
-            ? (inputs.levelFromMultipliers?.() ?? null)
-            : null,
+        // D from m (#410) once The Red Pill's timing can price the route (A6's: Daedalus's donations unlocked, the income
+        // measured), its least: earlier, the prior's (at Daedalus joined and the donations install's first snapshot, no
+        // income yet and no donations: levelling mode's 2.5e9 h in BN4.3). The Red Pill installed, levelling's choice.
+        levelFromMultipliersMs: priced ? (inputs.levelFromMultipliers?.() ?? null) : null,
         prior: note.prior,
         gang: route === "gang" ? destroyGangInputsOf(inputs.gang ?? null, formed, facts.lastAugReset) : null,
         blackOps: route === "blackOps" ? (inputs.blackOps ?? null) : null,

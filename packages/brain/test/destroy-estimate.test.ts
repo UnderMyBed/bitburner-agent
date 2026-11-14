@@ -633,7 +633,7 @@ describe("the brain's rule (#360)", () => {
     ]);
   });
 
-  test("D from m (#410): the controller's, read once The Red Pill's install is in view, before levelling's choice", () => {
+  test("D from m (#412's ruling): the prior's until The Red Pill is priced, its own moment, then the timing's least", () => {
     const { rule, events } = ruleOf();
     let reads = 0;
     const fromM = (ms: number | null) => () => {
@@ -645,7 +645,7 @@ describe("the brain's rule (#360)", () => {
       aug: number,
       count: number,
       ms: number | null,
-      more: { daedalus?: number; eta?: number; redPill?: boolean; levelling?: number } = {},
+      more: { daedalus?: number; eta?: number; redPill?: boolean; levelling?: number; priced?: boolean } = {},
     ) =>
       rule.update({
         slowData: slow(
@@ -658,28 +658,31 @@ describe("the brain's rule (#360)", () => {
         factionChoice: more.eta === undefined ? null : choice(more.eta),
         levelling: levellingView(more.levelling),
         nowMs: m(minute),
+        redPillPriced: more.priced ?? false,
         levelFromMultipliers: fromM(ms),
       });
     const d = () => events.at(-1)?.terms.find((term) => term.term === "D");
-    // The start and the count met: The Red Pill far off, m to rise with every install: the prior's, not read.
+    // The start, the count met, Daedalus joined and its donations install (BN4.3's 18:36:30 and 21:00:32): A6 can't price
+    // The Red Pill yet (no donations, or no income measured): the prior's 3 min, D from m never read.
     at(1, 0, 0, 45 * MINUTE);
     at(7, 6, 31, 45 * MINUTE);
+    at(9, 6, 31, 45 * MINUTE, { daedalus: 0, eta: 100 });
+    at(11, 10, 35, 45 * MINUTE, { daedalus: 152 });
+    expect(events.map((each) => each.moment)).toEqual(["start", "install", "joined", "install"]);
     expect(reads).toBe(0);
     expect(d()).toMatchObject({ ms: 3 * MINUTE });
-    // Daedalus joined: one moment, one read, D the controller's 45 min.
-    at(9, 6, 31, 45 * MINUTE, { daedalus: 0, eta: 100 });
-    at(10, 6, 31, 45 * MINUTE, { daedalus: 0, eta: 100 });
+    // Priced (BN4.3's 21:10:32, the income's window full): its own moment, once, D the timing's least.
+    at(12, 10, 35, 45 * MINUTE, { daedalus: 152, priced: true });
+    at(13, 10, 35, 40 * MINUTE, { daedalus: 152, priced: true });
+    expect(events.map((each) => each.moment)).toEqual(["start", "install", "joined", "install", "red pill priced"]);
     expect(reads).toBe(1);
     expect(d()).toMatchObject({ ms: 45 * MINUTE });
     expect(d()?.source).toMatch(/^D from m \(#410\)/);
-    // The donations install, unread: the prior's.
-    at(11, 10, 35, null, { daedalus: 152 });
-    expect(reads).toBe(2);
-    expect(d()).toMatchObject({ ms: 3 * MINUTE });
-    // After The Red Pill, levelling's choice: D its, D from m not read.
-    at(13, 12, 36, null, { redPill: true });
+    expect(events.at(-1)?.stage).toBe("red pill priced");
+    // The Red Pill installed: D from m no longer read; levelling's choice is D.
+    at(14, 12, 36, 45 * MINUTE, { redPill: true, priced: true });
     const before = reads;
-    at(14, 12, 36, 45 * MINUTE, { redPill: true, levelling: 1200 });
+    at(15, 12, 36, 45 * MINUTE, { redPill: true, levelling: 1200, priced: true });
     expect(reads).toBe(before);
     expect(d()).toMatchObject({ ms: 20 * MINUTE });
   });

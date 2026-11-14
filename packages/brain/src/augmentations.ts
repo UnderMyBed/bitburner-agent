@@ -137,6 +137,7 @@ import {
   daedalusCountOf,
   daedalusRequirements,
   daedalusSkillsReached,
+  donationsUnlocked,
   donationTermsOf,
   donationToReach,
   type FactionState,
@@ -168,7 +169,6 @@ import {
   type JoinedFaction,
   LATER_CYCLE_FACTIONS,
   LEVEL_RISE_TERM,
-  LEVELLING_INSTALL_MS,
   type LevellingCandidate,
   type LevellingRate,
   type LevelRise,
@@ -190,7 +190,6 @@ import {
   type RedPillPurchase,
   rateStandardError,
   redPillInstallTiming,
-  redPillLevelling as redPillLevellingSeconds,
   type SlowSnapshotData,
   SNAPSHOT_TIER_PERIOD_MS,
   THE_RED_PILL,
@@ -1936,8 +1935,12 @@ export class AugmentationRule {
   #redPillTiming: RedPillTimingView | null = null;
   /** The wait at The Red Pill for the levelling set (#410): its cycle, start and bound; null when not waiting. */
   #redPillWait: { lastAugReset: number; sinceOnlineMs: number; sinceMs: number; boundMs: number } | null = null;
-  /** D from m (#410) at the last decision's state, lazy; null where it isn't priced. */
+  /** D from m (#410) at the last decision's state, lazy; null where The Red Pill's timing can't price the route. */
   #levelFromMultipliers: (() => number) | null = null;
+  /** The last install chosen (#410): when, and its BitNode, for the commit's measured time to its install sent. */
+  #chosenAt: { atMs: number; lastNodeReset: number } | null = null;
+  /** The commit's measured time (#410), chosen to sent, the last in its BitNode; null with none. */
+  #commitMs: { lastNodeReset: number; ms: number } | null = null;
   /** The Red Pill's timing's choice last logged (#410): logged on a change. */
   #redPillTimingLogged: "now" | "wait" | null = null;
   /** The install held for Daedalus's count (#243), as last decided, or null: logged as it starts and ends. */
@@ -2164,11 +2167,27 @@ export class AugmentationRule {
   }
 
   /**
-   * D from m (#410), ms, for the destroy estimate (#360): levelling's own least candidate after The Red Pill's
-   * install with nothing more bought, priced as its timing prices it, from the last decision's state; null where it
-   * wasn't priced (The Red Pill installed, the destroy not wanted, off its route, or no levelling figures). Lazy: read
-   * only at an estimate's moment.
+   * D from m (#410), ms, for the destroy estimate (#360): The Red Pill's timing's least, the install now's or the best
+   * wait's (`redPillInstallTiming`), from the last decision's state, once it can price the route: Daedalus's donations
+   * unlocked and the income measured (`redPillPriced`); null before (the prior's then), or with The Red Pill installed,
+   * the destroy not wanted, off its route, or no levelling figures. Lazy: read only at an estimate's moment.
    */
+  redPillPriced(): boolean {
+    return this.#levelFromMultipliers !== null;
+  }
+
+  /**
+   * The install went out (#410, the controller's `augmentationInstallSent`): the commit's measured time, from its
+   * choice, for The Red Pill's commit money.
+   */
+  installSent(atMs: number): void {
+    const chosen = this.#chosenAt;
+    if (chosen !== null && atMs >= chosen.atMs) {
+      this.#commitMs = { lastNodeReset: chosen.lastNodeReset, ms: atMs - chosen.atMs };
+    }
+    this.#chosenAt = null;
+  }
+
   levelFromMultipliersMs(): number | null {
     const seconds = this.#levelFromMultipliers?.() ?? null;
     return seconds === null || Number.isNaN(seconds) ? null : seconds * 1000;
@@ -2980,13 +2999,36 @@ export class AugmentationRule {
         lastNodeReset: isFiniteNumber(slowData.resetInfo?.lastNodeReset) ? slowData.resetInfo.lastNodeReset : null,
         slowGameTimeMs,
       });
-      // D from m for the destroy estimate (#410): priced only if it's read, nothing more bought.
-      if (onRoute && redPillLevelling !== null) {
+      // D from m for the destroy estimate (#410), once The Red Pill's timing can price the route: Daedalus's donations
+      // unlocked (its reputation then bought) and the income measured. Priced only if it's read.
+      const daedalus = shopsView.joined.find((faction) => faction.name === DAEDALUS);
+      const income = this.#income();
+      if (
+        onRoute &&
+        redPillLevelling !== null &&
+        daedalus !== undefined &&
+        donationsUnlocked(daedalus.favor, multipliers) &&
+        income !== null &&
+        income > 0
+      ) {
+        const needed = augmentationCost(THE_RED_PILL, purchaseState).reputation;
+        const donation: Donation = {
+          faction: DAEDALUS,
+          reputation: needed,
+          amount:
+            daedalus.reputation >= needed
+              ? 0
+              : donationToReach(
+                  needed - daedalus.reputation,
+                  player.person.mults.faction_rep,
+                  multipliers.FactionWorkRepGain,
+                ),
+        };
         this.#levelFromMultipliers = () => {
           const figures = redPillLevelling();
           if (figures === null) return Number.NaN;
-          const { offer } = this.#redPillOffer(context(figures, null));
-          return redPillLevellingSeconds(offer, { levels: 0, augmentations: [] }).seconds;
+          const timing = redPillInstallTiming(this.#redPillOffer(context(figures, donation)).offer);
+          return Math.min(timing.now.seconds, timing.wait?.seconds ?? Number.POSITIVE_INFINITY);
         };
       }
       const redPillFigures = endgame.kind === "redPill" && onRoute ? (redPillLevelling?.() ?? null) : null;
@@ -3678,6 +3720,9 @@ export class AugmentationRule {
       this.#installing = false;
       this.#progress = null;
       this.#donationsSkipped.clear();
+      // The commit's time (#410): from here to the install sent.
+      const nodeReset = slowData.resetInfo?.lastNodeReset;
+      this.#chosenAt = isFiniteNumber(nodeReset) ? { atMs, lastNodeReset: nodeReset } : null;
       this.#emit({
         type: AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND,
         atMs,
@@ -4096,10 +4141,11 @@ export class AugmentationRule {
       neuroFluxLadder({ state: purchaseState, set, neuroFluxReputation: shops.neuroFluxReputation, donations: terms });
     const names = (set: AugmentationSet) => set.purchases.map((purchase) => purchase.name);
     // The income before the choice (the reserve's window, trailing), and the money the commit's own time brings at it:
-    // the commit buys a level at a time as the money comes (`LEVELLING_INSTALL_MS`, the model's commit; 5901be2's took
-    // 3.4 min at BN4.3's 21:13, so toward now).
+    // the commit buys a level at a time as the money comes. Its time is the last measured in the BitNode, chosen to
+    // sent (`installSent`; 5901be2's Red Pill commit at BN4.3's 21:13 took 3.4 min); none measured, 0 (cautious).
     const income = this.#income();
-    const commitMoney = income !== null && income > 0 ? (income * LEVELLING_INSTALL_MS) / 1000 : 0;
+    const commitMs = this.#commitMs !== null && this.#commitMs.lastNodeReset === lastNodeReset ? this.#commitMs.ms : 0;
+    const commitMoney = income !== null && income > 0 ? (income * commitMs) / 1000 : 0;
     // Now: the set the money after the donation and the commit's covers, then each level it still covers.
     const budget = money - redPillMoney + commitMoney;
     const nowSet = chooseAugmentationsToBuy(toBuy, purchaseState, budget, hackingLevel, terms, short);
