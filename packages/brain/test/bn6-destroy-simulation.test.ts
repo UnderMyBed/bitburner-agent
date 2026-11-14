@@ -30,7 +30,7 @@ import { runReport } from "../src/run-report.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { attemptsIn, expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
+import { expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -86,8 +86,6 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
   expect(path.lines[2]).toContain("off on this route (#398)");
 
   const startedAtMs = game.clock.now();
-  // #408's hindcast's start: this reading, Daedalus's rank met.
-  const startMedium = fresh.medium() as MediumSnapshotData | null;
   const backupsBefore = brain.saveBackupEvents.length;
   const sessionsBefore = agentSessions(brain);
   let daedalusSentAtMs: number | null = null;
@@ -113,12 +111,11 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
   expect(daedalusSentAtMs).not.toBeNull();
   expect(doneAtMs).not.toBeNull();
   // #408's hindcast: Daedalus done from its rank, against the grown estimate.
-  const hindcast = grownHindcast(
+  const hindcast = await grownHindcastIn(
+    fresh,
     "B6's Daedalus",
-    startMedium,
-    (doneAtMs ?? Number.NaN) - startedAtMs,
+    { fromMs: startedAtMs, untilMs: doneAtMs ?? Number.NaN },
     "next done",
-    await attemptsIn(simulation, startedAtMs, doneAtMs ?? Number.NaN),
   );
   console.log(hindcast.line);
   expectGrownHindcast(hindcast);
@@ -145,7 +142,7 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
       nextBitNode: 5,
       replay: null,
       skipped:
-        "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411); BN3 skipped: no hacking multipliers or prices yet",
+        "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411: 100.9 h at best, the bar 54.2 h); BN3 skipped: no hacking multipliers or prices yet",
     },
   ]);
   expect(brain.logLines).toContainEqual(

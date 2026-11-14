@@ -259,7 +259,7 @@ test("BN6's route is built (B6, #398), its estimate with installs past the bar (
   );
   expect(bitNodeUnplayableReason(7)).toBe(BITNODE_NO_WIN_ROUTE_REASON);
   expect(BITNODE_NO_WIN_ROUTE_REASON).toBe(
-    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411)",
+    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411: 100.9 h at best, the bar 54.2 h)",
   );
   // The Red Pill's route there: w0r1d_d43m0n at 3,000 (`Server/data/servers.ts:1536`) × 2 (`Server/ServerHelpers.ts:
   // 383-385`), at a level multiplier of 0.35, is 17,143 at ×1, against BN4's 9,000 (3,000 × 3).

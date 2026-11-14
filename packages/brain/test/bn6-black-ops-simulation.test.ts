@@ -25,7 +25,7 @@ import { BLADEBURNER_ACTIONS_HOLD } from "../src/bladeburner.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { attemptsIn, expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
+import { expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -54,9 +54,7 @@ test("BN6.1, an hour from a harness join at rank 2,500: Typhoon done, then Zero 
   const reading = () => (fresh.medium() as MediumSnapshotData | null)?.bladeburner;
   await fresh.game.runUntil(() => reading()?.blackOp !== undefined, 2 * MINUTE);
   const startedAtMs = fresh.game.clock.now();
-  // #408's hindcasts' starts: this reading (Typhoon's rank met), and the first at Zero's rank less 100.
-  const startMedium = fresh.medium() as MediumSnapshotData | null;
-  let zeroMedium: MediumSnapshotData | null = null;
+  // #408's hindcasts' windows: from this reading (Typhoon's rank met), and from the first at Zero's rank less 100.
   let zeroFromMs: number | null = null;
   expect(reading()?.blackOp?.name).toBe(TYPHOON.name);
   console.log(fresh.controller().bladeburnerView().line);
@@ -89,8 +87,7 @@ test("BN6.1, an hour from a harness join at rank 2,500: Typhoon done, then Zero 
       }
       lastNext = next.name;
     }
-    if (zeroMedium === null && typhoonDoneAtMs !== null && next?.name === ZERO.name && rank >= ZERO.rank - 101) {
-      zeroMedium = fresh.medium() as MediumSnapshotData | null;
+    if (zeroFromMs === null && typhoonDoneAtMs !== null && next?.name === ZERO.name && rank >= ZERO.rank - 101) {
       zeroFromMs = fresh.game.clock.now();
     }
     if (actions == null) continue;
@@ -131,19 +128,17 @@ test("BN6.1, an hour from a harness join at rank 2,500: Typhoon done, then Zero 
   }
   console.log(`${sent} readings sending a Black Op; ${waited} at its rank waiting (the look-ahead)`);
   // #408's hindcasts: Typhoon done from its rank, and Zero's rank from 100 under it, against the grown estimate.
-  const typhoonHindcast = grownHindcast(
+  const typhoonHindcast = await grownHindcastIn(
+    fresh,
     "B5's Typhoon",
-    startMedium,
-    (typhoonDoneAtMs ?? Number.NaN) - startedAtMs,
+    { fromMs: startedAtMs, untilMs: typhoonDoneAtMs ?? Number.NaN },
     "next done",
-    await attemptsIn(fresh.simulation, startedAtMs, typhoonDoneAtMs ?? Number.NaN),
   );
-  const zeroHindcast = grownHindcast(
+  const zeroHindcast = await grownHindcastIn(
+    fresh,
     "B5's climb to Zero",
-    zeroMedium,
-    (zeroRankAtMs ?? Number.NaN) - (zeroFromMs ?? Number.NaN),
+    { fromMs: zeroFromMs ?? Number.NaN, untilMs: zeroRankAtMs ?? Number.NaN },
     ZERO.rank,
-    await attemptsIn(fresh.simulation, zeroFromMs ?? Number.NaN, zeroRankAtMs ?? Number.NaN),
   );
   console.log(`${typhoonHindcast.line}\n${zeroHindcast.line}`);
   expectGrownHindcast(typhoonHindcast);

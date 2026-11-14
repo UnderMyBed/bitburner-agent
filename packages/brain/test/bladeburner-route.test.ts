@@ -401,23 +401,22 @@ describe("#408's hindcasts (#409's review, #411): the BN6 and BN7 suites' share 
         .join("; ") || "none";
     console.log(
       `#408's hindcasts, expected given the actions (#411): ${within.length} of ${rows.length} within ×2 against ` +
-        `decision 68's ${DECISION_68_SHARE.within} of ${DECISION_68_SHARE.of}; out: ${outOf("expectedWithin", "expected")}
-` +
+        `decision 68's ${DECISION_68_SHARE.within} of ${DECISION_68_SHARE.of}; out: ${outOf("expectedWithin", "expected")}\n` +
         `realised: ${realised.length} of ${rows.length}; out: ${outOf("within", "ratio")}`,
     );
     // The share, on the expected measure (the coordinator's ruling on #411), over every row, BN6's and BN7's.
     expect(within.length / rows.length).toBeGreaterThanOrEqual(DECISION_68_SHARE.within / DECISION_68_SHARE.of);
-    // Each row's figures on their sides; the realised out on Raid's lottery, with their reasons (section 8's lines).
+    // Each row's figures on their sides, each out with its cause (the realised: a lottery's draw; the expected: the
+    // one row out, B2's rank-0 hour in BN6, the first-passage time against a fixed window at a rank-0 lottery, #411).
     for (const [label, row] of rows) {
       expect(withinTwice(row.ratio), label).toBe(row.within);
       expect(withinTwice(row.expected), label).toBe(row.expectedWithin);
+      if (!row.within || !row.expectedWithin) expect(row.why, label).toBeDefined();
     }
-    expect(rows.filter(([, row]) => !row.within).map(([label]) => label)).toEqual([
-      "B4's hour, its chaos edited",
-      "B2's hour from a harness join, BN7",
+    expect(rows.filter(([, row]) => !row.expectedWithin).map(([label]) => label)).toEqual([
+      "B2's hour from a harness join",
     ]);
-    for (const [, row] of rows.filter(([, each]) => !each.within)) expect(row.why).toContain("Raid");
-    for (const [, row] of rows.filter(([, each]) => !each.expectedWithin)) expect(row.why).toContain("expected out");
+    expect(GROWN_HINDCASTS["B2's hour from a harness join"]?.why).toContain("first-passage");
     // Every row a BN6 or (#411) BN7 suite's, asserted there on its side (`expectGrownHindcast`); every suite's a row.
     const directory = new URL(".", import.meta.url);
     const suites = readdirSync(directory)
@@ -429,7 +428,9 @@ describe("#408's hindcasts (#409's review, #411): the BN6 and BN7 suites' share 
         label,
       ).toBe(true);
     }
-    const called = suites.flatMap((source) => [...source.matchAll(/grownHindcast\(\s*("[^"]+")/g)].map((m) => m[1]));
+    const called = suites.flatMap((source) =>
+      [...source.matchAll(/grownHindcastIn\(\s*fresh,\s*("[^"]+")/g)].map((m) => m[1]),
+    );
     expect(called.map((label) => JSON.parse(label as string)).sort()).toEqual(rows.map(([label]) => label).sort());
   });
 });

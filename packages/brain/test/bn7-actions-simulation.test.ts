@@ -21,7 +21,7 @@ import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-acti
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { attemptsIn, expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
+import { expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -57,8 +57,6 @@ test("BN7.1, an hour from a harness join at BN7's multipliers: each plan the lea
   await fresh.game.runUntil(() => fresh.controller().bladeburnerView().actions != null, 2 * MINUTE);
   const startedAtMs = fresh.game.clock.now();
   const first = fresh.controller().bladeburnerView();
-  // #408's hindcast's start: the reading the hour begins at.
-  const startMedium = medium();
   console.log(first.line);
   // No brain's work, which would stop the action: A5's, with a faction to work for, held for it.
   expect(fresh.controller().workView().desired).toBeNull();
@@ -102,12 +100,11 @@ test("BN7.1, an hour from a harness join at BN7's multipliers: each plan the lea
   }
   console.log(`the batcher: ${[...batcherRuns].join("; ") || "not sent"}`);
   // #408's hindcast: the grown estimate's time to the rank the hour reached, from its first reading.
-  const hindcast = grownHindcast(
+  const hindcast = await grownHindcastIn(
+    fresh,
     "B2's hour from a harness join, BN7",
-    startMedium,
-    fresh.game.clock.now() - startedAtMs,
+    { fromMs: startedAtMs, untilMs: fresh.game.clock.now() },
     medium()?.bladeburner?.rank ?? 0,
-    await attemptsIn(fresh.simulation, startedAtMs, fresh.game.clock.now()),
     7,
   );
   console.log(hindcast.line);

@@ -36,7 +36,7 @@ import { runReport } from "../src/run-report.ts";
 import { BITNODE_DESTROY_SENT_EVENT_KIND } from "../src/world-daemon.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { attemptsIn, expectGrownHindcast, grownHindcast } from "./helpers/grown-hindcast.ts";
+import { expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -149,12 +149,11 @@ test("BN7.1 with 20 Black Ops done at rank 400,000, its skills at ×2: Operation
   expect(route?.input.rankMultiplier).toBe(RANK_MULTIPLIER);
   expect(route?.growth.costMultiplier).toBe(COST_MULTIPLIER);
   // #408's hindcast at BN7's multipliers: Daedalus done from its rank, against the grown estimate.
-  const hindcast = grownHindcast(
+  const hindcast = await grownHindcastIn(
+    fresh,
     "B6's Daedalus, BN7",
-    startMedium,
-    (doneAtMs ?? Number.NaN) - startedAtMs,
+    { fromMs: startedAtMs, untilMs: doneAtMs ?? Number.NaN },
     "next done",
-    await attemptsIn(simulation, startedAtMs, doneAtMs ?? Number.NaN),
     7,
   );
   console.log(hindcast.line);
@@ -182,7 +181,7 @@ test("BN7.1 with 20 Black Ops done at rank 400,000, its skills at ×2: Operation
       nextBitNode: 5,
       replay: null,
       skipped:
-        "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411); BN3 skipped: no hacking multipliers or prices yet",
+        "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411: 100.9 h at best, the bar 54.2 h); BN3 skipped: no hacking multipliers or prices yet",
     },
   ]);
   expect(brain.logLines).toContainEqual(

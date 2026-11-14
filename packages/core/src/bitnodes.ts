@@ -222,13 +222,12 @@ export function knownBitNodes(): number[] {
  * 108.9 h at best, ×2.0 the bar: unplayable. What's left is BN6's list, with the money ×3 and the rank ×0.6 on each.
  *
  * Both at a start's range (#411): the grown estimate prices each contract's and operation's chance at its expected over
- * the range read, uniform in the population (core's `bladeburnerExpectedChance`), not its low end. The states above
- * read no range (the estimate the true population), so their figures stand. At seed 1's BN6.1 start (New Tokyo's
- * estimate 1.42× the true population, the same states read through that range): BN6 99.1 h at combat 100 and 78.7 h at
- * 300 as is, 68.0 h at combat 100 with the shop installed (kept at 300); BN7 191.1 h and 147.1 h, with the shop 109.2 h
- * and 139.4 h (core's bladeburner-growth.test.ts). At the low end (#411's diagnosis) BN6 213.7 h and BN7 572.9 h at
- * combat 100, as is.
- * Both still past the bar.
+ * the range read, uniform in the population (core's `bladeburnerExpectedChance`), not its low end; its skill points
+ * spent by B3's rule at the low end, as the brain runs it. The states above read no range (the estimate the true
+ * population), so their figures stand. At seed 1's BN6.1 start (New Tokyo's estimate 1.42× the true population, the
+ * same states read through that range): BN6 113.3 h at combat 100 and 72.9 h at 300 as is, 61.3 h at combat 100 with
+ * the shop installed (kept at 300); BN7 395.5 h and 140.8 h, with the shop 100.9 h and 130.4 h (core's
+ * bladeburner-growth.test.ts). So BN6 61.3 h and BN7 100.9 h at best, both past the bar.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [
@@ -237,7 +236,7 @@ const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   ],
   [
     7,
-    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411)",
+    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#411: 100.9 h at best, the bar 54.2 h)",
   ],
 ]);
 /** Why BN7 is skipped (#367, #398, #411): the Black Ops' grown estimate at its multipliers past the bar, the shop in. */

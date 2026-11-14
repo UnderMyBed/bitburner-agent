@@ -413,3 +413,85 @@ describe("the route's estimate with an install (#404, #408)", () => {
     expect(timing.installNowSeconds).toBe(timing.rebuildSeconds + after.seconds);
   });
 });
+
+describe("bn6-install's reading (#411): EsperTech a tie by #406's rule, the shop far past it", () => {
+  /** The suite's first reading in BN6.1 (seed 1): rank 1,000, Blade's Intuition 10, 208 points, Tracking's max 5. */
+  const READ: [string, number, number, [number, number]][] = [
+    ["Tracking", 5, 49.041, [0.4191381000451312, 1]],
+    ["Bounty Hunter", 1, 135.037, [0.2097667362490347, 0.8468730502979759]],
+    ["Retirement", 1, 140.047, [0.26220842031129343, 1]],
+    ["Investigation", 1, 19.027, [0.06384843494514195, 0.2577697485579916]],
+    ["Undercover Operation", 1, 39.027, [0.06335421937896919, 0.25577449491809817]],
+    ["Sting Operation", 1, 36.025, [0.03513253083245853, 0.14183751953622128]],
+    ["Raid", 1, 19.024, [0.03959725992159013, 0.1598625830428495]],
+    ["Stealth Retirement Operation", 1, 33.014, [0.03167780793727211, 0.1278900664342796]],
+    ["Assassination", 1, 112.012, [0.021118538624848072, 0.08526004428951973]],
+  ];
+  const each = (value: number) => Object.fromEntries(COMBAT_STATS.map((stat) => [stat, value]));
+  const combat = {
+    skills: each(100),
+    exp: each(5417.945721932005),
+    mults: Object.fromEntries(
+      COMBAT_STATS.flatMap((stat) => [
+        [stat, SF1_3],
+        [`${stat}_exp`, SF1_3],
+      ]),
+    ),
+  } as CombatPerson;
+  const person = {
+    skills: { hacking: 1, strength: 100, defense: 100, dexterity: 100, agility: 100, charisma: 1, intelligence: 1 },
+    mults: { bladeburner_success_chance: 1, bladeburner_max_stamina: 1, bladeburner_stamina_gain: 1 },
+  };
+  const input = {
+    readings: READ.map(([name, maxLevel, count, chance]) => {
+      const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === name);
+      if (action === undefined) throw new Error(name);
+      return { type: action.type, name, level: 1, maxLevel, count, chance };
+    }),
+    person,
+    stamina: 39.810717055349734,
+    maxStamina: 39.810717055349734,
+    rankMultiplier: 1,
+    speed: 1,
+    skills: { read: { "Blade's Intuition": 10 } },
+  };
+  const at = {
+    rank: 1000,
+    next: BLADEBURNER_BLACK_OPS[0] as BladeburnerBlackOp,
+    chanceRead: [0.02085761233486784, 0.039541732294602255] as [number, number],
+  };
+  const growth = { costMultiplier: 1, points: 208 };
+
+  test("EsperTech: installing leads by less than the step's error of the difference, so kept; the shop: installed", () => {
+    const esper = blackOpsInstallTiming({
+      input,
+      at,
+      combat,
+      gain: bladeburnerInstallGain(0, [ESPERTECH]),
+      installable: true,
+      growth,
+    });
+    const lead = esper.keepSeconds - (esper.installNowSeconds as number);
+    const shop = blackOpsInstallTiming({
+      input,
+      at,
+      combat,
+      gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", 6, null)),
+      installable: true,
+      growth,
+    });
+    const shopLead = shop.keepSeconds - (shop.installNowSeconds as number);
+    console.log(
+      `bn6-install's reading: keep ${(esper.keepSeconds / 3600).toFixed(1)} h; EsperTech install now ` +
+        `${((esper.installNowSeconds as number) / 3600).toFixed(1)} h, ${(lead / 3600).toFixed(2)} h ahead against a margin of ` +
+        `${((esper.marginSeconds as number) / 3600).toFixed(2)} h: ${esper.choice}; the shop ` +
+        `${((shop.installNowSeconds as number) / 3600).toFixed(1)} h, ${(shopLead / 3600).toFixed(1)} h ahead against ` +
+        `${((shop.marginSeconds as number) / 3600).toFixed(2)} h: ${shop.choice}`,
+    );
+    expect(lead).toBeGreaterThan(0);
+    expect(lead).toBeLessThanOrEqual(esper.marginSeconds as number);
+    expect(esper.choice).toBe("keep");
+    expect(shopLead).toBeGreaterThan(shop.marginSeconds as number);
+    expect(shop.choice).toBe("install");
+  });
+});

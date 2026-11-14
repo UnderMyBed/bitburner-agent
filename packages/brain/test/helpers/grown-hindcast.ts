@@ -56,30 +56,39 @@ export interface GrownHindcastRow {
  */
 export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
   "B2's hour from a harness join": {
-    ratio: 0.59,
-    within: true,
-    expected: 4.03,
-    expectedWithin: false,
-    why: "expected out: its 48 attempts' chances give 71.6 rank against 5.1 realised (at rank 0 a failure loses none), the estimate 4.03 h to it",
-  },
-  "B3's hour at rank 150": { ratio: 1.92, within: true, expected: 1.64, expectedWithin: true },
-  "B4's hour, its chaos edited": {
-    ratio: 4.07,
+    ratio: 0.49,
     within: false,
-    expected: 1.9,
-    expectedWithin: true,
-    why: "one Raid success in 12 attempts gave 54 of its 68 rank (σ 35, section 8's own line); the hour's other 14 within ×2",
+    expected: 2.64,
+    expectedWithin: false,
+    why:
+      "realised: no Raid success in 23 attempts at rank 0; expected out: those attempts' chances give 71.6 rank against " +
+      "5.1 realised, in jumps of 55 at rank 0 where a failure loses none, so the expected rank in the window is a " +
+      "lottery's mean and the estimate's first-passage time to it is long against the fixed window (#411's diagnosis)",
   },
-  "B5's Typhoon": { ratio: 1.95, within: true, expected: 0.95, expectedWithin: true },
-  "B5's climb to Zero": { ratio: 1.62, within: true, expected: 1.6, expectedWithin: true },
-  "B6's Daedalus": { ratio: 0.93, within: true, expected: 0.93, expectedWithin: true },
+  "B3's hour at rank 150": { ratio: 1.07, within: true, expected: 0.93, expectedWithin: true },
+  "B4's hour, its chaos edited": {
+    ratio: 2.38,
+    within: false,
+    expected: 0.95,
+    expectedWithin: true,
+    why: "realised: one Raid success in 12 attempts gave 54 of its 68 rank (σ 35, section 8's own line)",
+  },
+  "B5's Typhoon": {
+    ratio: 2.02,
+    within: false,
+    expected: 0.98,
+    expectedWithin: true,
+    why: "realised: Typhoon done at its first attempt, its chance 0.48",
+  },
+  "B5's climb to Zero": { ratio: 1.17, within: true, expected: 1.16, expectedWithin: true },
+  "B6's Daedalus": { ratio: 0.96, within: true, expected: 0.96, expectedWithin: true },
   // BN7's (#411): the same suites at BN7's multipliers.
   "B2's hour from a harness join, BN7": {
-    ratio: 4.28,
+    ratio: 2.93,
     within: false,
-    expected: 2.63,
-    expectedWithin: false,
-    why: "two Raid successes in 15 attempts gave 36 of its 44 rank (σ 22, section 8's own line); the hour's Field Analysis and Tracking 8.3 against 6.8 forecast; expected out: its 47 attempts' chances give 30.3 rank, the estimate 2.63 h to it",
+    expected: 1.67,
+    expectedWithin: true,
+    why: "realised: two Raid successes in 15 attempts gave 36 of its 44 rank (σ 22, section 8's own line)",
   },
   "B6's Daedalus, BN7": { ratio: 0.95, within: true, expected: 0.95, expectedWithin: true },
 };
@@ -234,4 +243,44 @@ export function expectGrownHindcast(hindcast: GrownHindcast & { label: string })
   expect(row, `${hindcast.label}: not in GROWN_HINDCASTS`).toBeDefined();
   expect(withinTwice(hindcast.ratio), hindcast.line).toBe(row?.within);
   expect(withinTwice(hindcast.expected), hindcast.line).toBe(row?.expectedWithin);
+}
+
+/** What `grownHindcastIn` reads of a suite's fresh start: the simulator and the brain's store. */
+interface HindcastSource {
+  simulation: Simulation;
+  data: { store: { snapshots(query: { environment: "E1" }): { tier: string; receivedAtMs: number; data: unknown }[] } };
+}
+
+/**
+ * The hindcast over a suite's window [`fromMs`, `untilMs`] (#411's ruling 3), from its first reading in the city the
+ * window's attempts ran in: a suite's first reading can predate B4's move (Sector-12's range read, the hour in New
+ * Tokyo's), and the estimate is the reading's. The window then starts at that reading; no attempt, its first reading.
+ */
+export async function grownHindcastIn(
+  fresh: HindcastSource,
+  label: string,
+  { fromMs, untilMs }: { fromMs: number; untilMs: number },
+  to: number | "next done",
+  bitNode = 6,
+): Promise<GrownHindcast & { label: string }> {
+  const city = (await attemptsIn(fresh.simulation, fromMs, untilMs))[0]?.city;
+  const readings = fresh.data.store
+    .snapshots({ environment: "E1" })
+    .filter((each) => each.tier === "medium" && each.receivedAtMs >= fromMs && each.receivedAtMs <= untilMs)
+    .filter((each) => Array.isArray((each.data as { bladeburner?: { actions?: unknown } }).bladeburner?.actions));
+  const inCity = readings.find(
+    (each) => city !== undefined && (each.data as { bladeburner?: { city?: unknown } }).bladeburner?.city === city,
+  );
+  const start = inCity ?? readings[0];
+  if (start === undefined) throw new Error(`${label}: no reading in the window`);
+  const hindcast = grownHindcast(
+    label,
+    start.data as MediumSnapshotData,
+    untilMs - start.receivedAtMs,
+    to,
+    await attemptsIn(fresh.simulation, start.receivedAtMs, untilMs),
+    bitNode,
+  );
+  const from = `from the reading ${((start.receivedAtMs - fromMs) / 1000).toFixed(0)} s in, in ${city ?? "its city"}`;
+  return { ...hindcast, line: `${hindcast.line} (${from})` };
 }
