@@ -15,7 +15,11 @@ import { buildInGameBundles } from "@bitburner-agent/ingame/build";
 import type { Simulation, SimulationOptions } from "@bitburner-agent/sim";
 import { useSimulations } from "@bitburner-agent/sim/test-helpers";
 import { afterAll, afterEach, beforeAll, expect } from "vitest";
-import { type InstallTimingPolicy, writeAugmentationsEnabled } from "../../src/augmentations.ts";
+import {
+  type InstallTimingPolicy,
+  type LevelTimingPolicy,
+  writeAugmentationsEnabled,
+} from "../../src/augmentations.ts";
 import { BATCHER_ENABLED_SETTING } from "../../src/batcher.ts";
 import type { DesiredStateController } from "../../src/desired-state.ts";
 import { readInGameBuild } from "../../src/in-game-build.ts";
@@ -84,6 +88,7 @@ export function useFreshStarts() {
     batcher = true,
     augmentations = true,
     installTiming = "planner",
+    levelTiming = "planner",
     bn2Route = "planner",
     gangRoute = bn2Route,
     fixedAgentStart = false,
@@ -106,6 +111,8 @@ export function useFreshStarts() {
     augmentations?: boolean;
     /** Who times installs short of Daedalus's count (#343): the planner, as on Steam; the count rule for an A/B. */
     installTiming?: InstallTimingPolicy;
+    /** Who times installs after Daedalus's count (#413): the planner, as on Steam; the count rule for an A/B. */
+    levelTiming?: LevelTimingPolicy;
     /** BN2's route (#357): the planner's, as on Steam; the rules' for an A/B. */
     bn2Route?: Bn2Route;
     /** The gang rule's own route (#357's (3) A/B): the planner's objective with the rules' installs. Absent, bn2Route. */
@@ -142,6 +149,7 @@ export function useFreshStarts() {
       data,
       withDesiredState,
       installTiming,
+      levelTiming,
       bn2Route,
       gangRoute,
       levellingBatch,

@@ -56,6 +56,7 @@ import {
   type AugmentationsView,
   type InstallAwaitingRestart,
   type InstallTimingPolicy,
+  type LevelTimingPolicy,
   type NotQueued,
   type RedPillLevellingFigures,
   readAugmentationsEnabled,
@@ -542,6 +543,7 @@ export class DesiredStateController {
     saveBackups = null,
     log = () => {},
     installTiming = "planner",
+    levelTiming = "planner",
     bn2Route = "planner",
     gangRoute = bn2Route,
     environment = null,
@@ -553,6 +555,8 @@ export class DesiredStateController {
     log?: (line: string) => void;
     /** Who times installs short of Daedalus's count (#343): the planner; the count rule for a test's A/B alone. */
     installTiming?: InstallTimingPolicy;
+    /** Who times installs after Daedalus's count (#413): the planner; the count rule for a test's A/B alone. */
+    levelTiming?: LevelTimingPolicy;
     /** BN2's route (#357): the planner's; the rules' (#343's before the gang, money at 12) for a test's A/B alone. */
     bn2Route?: Bn2Route;
     /**
@@ -581,6 +585,7 @@ export class DesiredStateController {
       log,
       emit: (event) => this.#emit(event),
       installTiming,
+      levelTiming,
       bn2Route,
       // A cycle first seen past its start (#388): its time online from this environment's slow snapshots of it.
       cycleLooks: environment === null ? null : (lastAugReset) => readCycleLooks(store, environment, lastAugReset),

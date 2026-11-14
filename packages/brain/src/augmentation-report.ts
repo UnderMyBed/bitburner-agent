@@ -39,6 +39,7 @@ import {
   AUGMENTATION_INSTALL_SENT_EVENT_KIND,
   AUGMENTATION_NOT_QUEUED_EVENT_KIND,
   AUGMENTATION_PROGRESS_EVENT_KIND,
+  AUGMENTATION_REBUILD_HELD_EVENT_KIND,
   AUGMENTATION_WAIT_OVERDUE_EVENT_KIND,
   advanceOnlineClock,
   describeDonation,
@@ -64,6 +65,7 @@ export const AUGMENTATION_EVENT_KINDS = [
   AUGMENTATION_DONATION_FAILED_EVENT_KIND,
   AUGMENTATION_WAIT_OVERDUE_EVENT_KIND,
   AUGMENTATION_INCOME_HELD_EVENT_KIND,
+  AUGMENTATION_REBUILD_HELD_EVENT_KIND,
 ];
 
 /**
@@ -516,6 +518,8 @@ export class AugmentationTimeline {
         });
       } else if (kind === AUGMENTATION_INCOME_HELD_EVENT_KIND) {
         entries.push({ atMs, text: describeIncomeHeld(fields) });
+      } else if (kind === AUGMENTATION_REBUILD_HELD_EVENT_KIND) {
+        entries.push({ atMs, text: describeRebuildHeld(fields) });
       } else if (kind === AUGMENTATION_WAIT_OVERDUE_EVENT_KIND) {
         entries.push({ atMs, text: describeWaitOverdue(fields) });
       } else if (kind === AUGMENTATION_DONATED_EVENT_KIND) {
@@ -840,6 +844,17 @@ export class AugmentationTimeline {
   }
 }
 
+/** Installs held after Daedalus's count for R too long (#413's review), in words. */
+function describeRebuildHeld(fields: Record<string, unknown>): string {
+  const eta = (ms: unknown) => formatEta(isFiniteNumber(ms) ? ms : null);
+  const since = isFiniteNumber(fields.sinceOnlineMs) ? fields.sinceOnlineMs : null;
+  const held = since !== null && isFiniteNumber(fields.onlineMs) ? fields.onlineMs - since : null;
+  return (
+    `R unmeasured: installs after Daedalus's count held for R (the cycle's first faction work) from ${eta(since)} ` +
+    `online, ${eta(held)} on${timingWords(fields.timing, ": ")}`
+  );
+}
+
 /** Installing now held for the income too long (#343), in words. */
 function describeIncomeHeld(fields: Record<string, unknown>): string {
   const eta = (ms: unknown) => formatEta(isFiniteNumber(ms) ? ms : null);
@@ -897,6 +912,10 @@ function timingLines(
     }
     if (kind === AUGMENTATION_INCOME_HELD_EVENT_KIND) {
       add(atMs, describeIncomeHeld(fields));
+      continue;
+    }
+    if (kind === AUGMENTATION_REBUILD_HELD_EVENT_KIND) {
+      add(atMs, describeRebuildHeld(fields));
       continue;
     }
     if (kind !== AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND) continue;

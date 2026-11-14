@@ -109,6 +109,7 @@ await sim.close();
   - `setHomeRam(gb)`: sets home's RAM (a power of 2 GB). A harness edit, for test and benchmark scenarios (`homeRamGb`).
   - `setMoney(money)`: sets the player's money (finite, 0 or more). A harness edit, for test scenarios (#145).
   - `giveInstalledAugmentation(augmentation)`: gives the player an augmentation, installed and unpaid (one of the game's names, not already installed). A harness edit, for test scenarios (#151).
+  - `applyInstalledAugmentations()`: applies the installed augmentations' multipliers, then the Source-Files', as the game's load does (`giveInstalledAugmentation` pushes each unapplied). A harness edit, for test scenarios at a BitNode's later cycles (#413).
   - `queueAugmentation(augmentation)`: queues an augmentation, unpaid and not yet installed, through the game's own `queueAugmentation` (one of the game's names, not owned already, but for NeuroFlux Governor). A harness edit, for test scenarios (#164).
   - `joinFactionWithReputation(faction, reputation)`: makes the player a member of the faction (the game's own `joinFaction`, which bans its enemies) with that reputation (finite, 0 or more). A harness edit, for test scenarios (#149).
   - `setFactionFavor(faction, favor)`: sets the faction's favour (finite, 0 or more) through the game's own `setFavor`, as an install banks it. A harness edit, for test scenarios (#225): donations unlocked at 150.

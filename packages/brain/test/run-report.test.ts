@@ -2269,6 +2269,29 @@ describe("augmentations and the reset (#210)", () => {
       expect(report.text.split("\n").filter((each) => each.endsWith(line))).toHaveLength(3);
     });
 
+    test("fails installs after Daedalus's count held for R too long (#413), listed with the decisions too", () => {
+      const words =
+        "after Daedalus's count, to its invitation's hacking 2,500 (#413): not priced yet (R not measured: …)";
+      const report = augmentationRun({
+        events: [
+          [
+            10 * MINUTE,
+            "augmentationRebuildHeld",
+            {
+              onlineMs: 20 * MINUTE,
+              sinceOnlineMs: 0,
+              timing: timing({ choice: null, words }),
+            },
+          ],
+        ],
+      });
+      const line =
+        "R unmeasured: installs after Daedalus's count held for R (the cycle's first faction work) from 0 s online, 20 " +
+        `min on: ${words}`;
+      expect(failuresOf(report)).toEqual([line]);
+      expect(report.text.split("\n").filter((each) => each.endsWith(line))).toHaveLength(3);
+    });
+
     test("fails a wait the brain found overdue, listed with the decisions too", () => {
       const report = augmentationRun({
         events: [

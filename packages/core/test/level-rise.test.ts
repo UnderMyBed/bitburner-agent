@@ -464,3 +464,26 @@ describe("the four Red Pill holds (#401): the ETA under model B, the level now a
     },
   );
 });
+
+describe("a dead time as a ramp in the rate (#413's review)", () => {
+  test("the rate rising from none to κ over R: the full rate's path at t²/(2R) inside, t − R/2 after; never flat", () => {
+    const full = { exp: 0, level: 1, levelMult: 3.5, kappa: 2000 };
+    const ramp = { ...full, rampSeconds: 600 };
+    for (const seconds of [60, 300, 599]) {
+      // Within the step it falls in: each step is a level, its time mapped at its ends.
+      expect(Math.abs(levelAlong(ramp, seconds) - levelAlong(full, seconds ** 2 / 1200))).toBeLessThan(1);
+      expect(levelAlong(ramp, seconds)).toBeGreaterThan(1);
+    }
+    for (const seconds of [600, 900, 3600]) {
+      expect(Math.abs(levelAlong(ramp, seconds) - levelAlong(full, seconds - 300))).toBeLessThan(1);
+    }
+    // A flat dead time of R is behind the ramp everywhere: the level rises during the ramp.
+    const flat = { ...full, delaySeconds: 600 };
+    expect(levelAlong(flat, 300)).toBe(1);
+    expect(levelAlong(ramp, 900)).toBeGreaterThan(levelAlong(flat, 900));
+    // laterCycleRise gives the ramp where asked, the flat dead time (#389's) otherwise.
+    const gain = { hacking: 1, hackingExp: 1, hackingSpeed: 1 };
+    expect(laterCycleRise(full, gain, 600, true)).toMatchObject({ rampSeconds: 600 });
+    expect(laterCycleRise(full, gain, 600)).toMatchObject({ delaySeconds: 600 });
+  });
+});
