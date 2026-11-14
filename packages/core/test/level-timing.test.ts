@@ -264,6 +264,7 @@ const timingOf = (reading: Reading, counts?: { priced: number; lookups: number; 
     rise: reading.rise,
     waits: reading.waits,
     later: reading.later,
+    commitMs: reading.commitMs,
     ...(counts === undefined ? {} : { counts }),
   });
 
@@ -273,7 +274,7 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
    * cycle before's end, at the install's multipliers), its dead time the brain would price with (the cycle before's
    * ramp, else the fallback's 10 min) a ramp in the rate, the level rising during it (#413's review: flat, BN4.3's c13
    * at 15 min was 1 against 1,607); BN4.2's c9 and BN4.3's c11, before the count, have one sample, their mean rate.
-   * 0.84-1.21 throughout, inside the ramp too: c13 0.88 and 0.95 at 5 and 10 min (in c12's 28.5); c14 1.00 at +5
+   * 0.84-1.21 throughout, within decision 68's ×2, inside the ramp too: c13 0.88 and 0.95 at 5 and 10 min (in c12's 28.5); c14 1.00 at +5
    * (2,597 against 2,608: past 2,500 there, as the c13 install's estimate says); BN4.2's c12 1.21 at +5.
    */
   test("the level at 5, 10 and each 15 min against the path's, inside the ramp too", () => {
@@ -282,8 +283,9 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
     );
     expect(rows).toHaveLength(8 + 8 + 8 + 9 + 1 + 1);
     for (const row of rows) {
-      expect(row.predicted / row.level).toBeGreaterThan(0.8);
-      expect(row.predicted / row.level).toBeLessThan(1.25);
+      // Decision 68's share: within ×2 (#413's review: no band chosen to fit).
+      expect(row.predicted / row.level).toBeGreaterThan(0.5);
+      expect(row.predicted / row.level).toBeLessThan(2);
     }
     const inRamp = rows.filter((row) => row.minutes < row.dead).map((row) => `${row.name} ${row.minutes}`);
     expect(inRamp).toEqual([
@@ -308,19 +310,18 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
 
   /**
    * Each post-count install's choice against what happened (each installed), with each option's time to 2,500 and
-   * the actual, minutes online from the choice to Daedalus joined. Install now is chosen at all four, as happened; its
-   * estimate within ×2 at the two that bought the next cycle (1.28, 0.88). The two last are under 10 min actual, the
-   * campaign report's rule for a ratio, so out of it, labelled with their cause: the estimate is the level's alone, the
-   * actual mostly the commit (1.8-1.9 min, chosen to sent) and the $100b (about +6 min), both left out. BN4.2's c11 0.3
-   * against 6 (its ramp under the evidence's 5-minute samples); BN4.3's c13 4.0 against 8.1 (0.49), the level itself on
-   * its path (c14's 2,597 against 2,608 at +5, the test above). Flat for c12's 28.5-min ramp, as before #413's review,
-   * c13 was 28.8.
+   * the actual, minutes online from the choice to Daedalus joined; each install's commit the measured one (chosen to
+   * sent, 110-111 s, #413's review). Install now is chosen at all four, as happened. Within ×2 (decision 68): BN4.2's
+   * c10 1.32, BN4.3's c12 0.90, and c13 0.73 (5.9 against 8.1, from the event times: the $100b and the invitation's
+   * check left out; flat for c12's 28.5-min ramp, before #413's review, it was 28.8). BN4.2's c11 (2.2 against about 6)
+   * is out of the ratio: its actual is snapshot-bound, the online time across c11's 7.5-hour gap the snapshots' (the
+   * issue's "about 100 min"), so a few minutes either way on 6.
    */
   const ROWS: [name: string, actual: number, installNow: number, bestWait: number, choice: number][] = [
-    ["BN4.2 c10", 106, 136.2, 154.6, 0],
-    ["BN4.2 c11", 6, 0.3, 298.8, 0],
-    ["BN4.3 c12", 171, 150.1, 168.5, 0],
-    ["BN4.3 c13", 8.1, 4.0, 288.4, 0],
+    ["BN4.2 c10", 106, 139.9, 158.3, 0],
+    ["BN4.2 c11", 6, 2.2, 300.6, 0],
+    ["BN4.3 c12", 171, 153.8, 172.2, 0],
+    ["BN4.3 c13", 8.1, 5.9, 290.2, 0],
   ];
 
   test("each install's choice: install now, as happened; every option's time to 2,500", () => {
@@ -336,23 +337,19 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
       ];
     });
     expect(rows).toEqual(ROWS);
-    // At 10 min or more actual, within ×2; under it, out of the ratio (the campaign report's rule), labelled above.
-    for (const [, actual, now] of rows as [string, number, number][]) {
-      if (actual < 10) continue;
+    // Within ×2 but BN4.2's c11, whose actual is snapshot-bound (labelled above).
+    for (const [name, actual, now] of rows as [string, number, number][]) {
+      if (name === "BN4.2 c11") continue;
       expect(now / actual).toBeGreaterThan(0.5);
       expect(now / actual).toBeLessThan(2);
     }
-    expect(rows.filter(([, actual]) => (actual as number) < 10).map(([name]) => name)).toEqual([
-      "BN4.2 c11",
-      "BN4.3 c13",
-    ]);
   });
 
   /**
    * A5's work at BN4.3's count (#413's question): from c12's start, The Black Hand's work (its reputation the report's
    * rate since R, 4 min), the dead time the brain would have then (#413's review: no hindsight): c12's own ramp once
    * measured (28.5 min), before it the fallback's 10. The planner's estimate against the time left to the join (268 min
-   * from the count): 0.79-0.99. It works The Black Hand throughout, its three there (Neuralstimulator, Enhanced Myelin
+   * from the count): 0.81-1.00, within ×2. It works The Black Hand throughout, its three there (Neuralstimulator, Enhanced Myelin
    * Sheathing, The Black Hand) first, as the brain did.
    */
   test("A5's work from the count: the faction whose next augmentation most cuts the time to 2,500", () => {
@@ -375,14 +372,14 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
       return [at, reading.actual, Number(minutes(timing?.estimateMs as number).toFixed(1)), chosen?.faction, chosen?.k];
     });
     expect(rows).toEqual([
-      [15, 253, 250.5, "The Black Hand", 3],
-      [30, 238, 210.0, "The Black Hand", 3],
-      [45, 223, 186.5, "The Black Hand", 3],
-      [60, 208, 164.5, "The Black Hand", 3],
+      [15, 253, 254.2, "The Black Hand", 3],
+      [30, 238, 213.7, "The Black Hand", 3],
+      [45, 223, 190.2, "The Black Hand", 3],
+      [60, 208, 168.2, "The Black Hand", 3],
     ]);
     for (const [, actual, estimate] of rows) {
-      expect((estimate as number) / (actual as number)).toBeGreaterThan(0.75);
-      expect((estimate as number) / (actual as number)).toBeLessThan(1.2);
+      expect((estimate as number) / (actual as number)).toBeGreaterThan(0.5);
+      expect((estimate as number) / (actual as number)).toBeLessThan(2);
     }
   });
 

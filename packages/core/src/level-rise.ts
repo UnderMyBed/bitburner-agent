@@ -178,7 +178,8 @@ const MOST_STEPS = 200_000;
  * m 1). The level is the level now plus the formula's rise, 32m·Δu, so the path starts at the snapshot's floored level.
  * Exported for #389's later cycles, which tabulate a path once and walk it many times (core's install-timing.ts).
  * A ramp (`rampSeconds` R, #413's review): #405's dead time is the time until the *rate* reaches κ, the level rising
- * meanwhile at the ramp's lower rate, taken as linear from none to κ over R. The experience is then the full rate's at
+ * meanwhile at the ramp's lower rate, taken as linear from none to κ over R: assumed, not the measured shape (BN4.3's
+ * c13 ran about 720 per level + 50, then 270, then rising), the simplest that keeps the level rising in it. The experience is then the full rate's at
  * the effective time τ = t²/(2R) for t ≤ R, t − R/2 after (de/dt = (t/R)·κ·(L + 50), so de/dτ = κ·(L + 50)): each step's
  * time maps back as t = √(2Rτ), or τ + R/2 past R/2. In the ramp, as after it, never a flat level.
  */

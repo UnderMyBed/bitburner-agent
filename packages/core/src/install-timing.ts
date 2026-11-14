@@ -577,6 +577,7 @@ function leastSplits(
   pricing: LaterPricing,
   left: readonly CountableLeft[],
   installing: readonly string[],
+  perCycleMs = 0,
 ): { best: { totalMs: number; from: number }[]; installs: Installs[] } {
   const known = left.length;
   const names = left.map((each) => each.augmentation);
@@ -593,7 +594,8 @@ function leastSplits(
     for (let i = 0; i < j; i++) {
       const before = best[i] as { totalMs: number };
       const installed = installs[i] as Installs;
-      const totalMs = before.totalMs + pricing.cycleMs(() => left.slice(i, j), groupKeys[i] as string, installed);
+      const totalMs =
+        before.totalMs + pricing.cycleMs(() => left.slice(i, j), groupKeys[i] as string, installed) + perCycleMs;
       if (totalMs < least.totalMs) least = { totalMs, from: i };
     }
     best.push(least);
@@ -979,6 +981,7 @@ export function levelInstallTiming({
   later,
   tauError = 0,
   held = null,
+  commitMs = 0,
   incomeMeasured = true,
   invitationHeld = false,
   counts,
@@ -997,6 +1000,11 @@ export function levelInstallTiming({
   /** The last reading's wait (#406's hysteresis), by faction and k; null none. */
   held?: { faction: string; k: number } | null;
   /**
+   * Each install's commit, ms (#413's review: the purchases, the gate and the restart, before the level starts again),
+   * added for every install a candidate makes, its own and each later cycle's; staying makes none. Absent, 0.
+   */
+  commitMs?: number;
+  /**
    * #343's guards: with no income measured (a restart or a gap: every money-bound τ is never, so no wait priced), or an
    * invitation's money held (#228), installing now is held: the best wait, else none. Absent: measured, none held.
    */
@@ -1012,7 +1020,7 @@ export function levelInstallTiming({
   const priceAfter = (waitedFor: readonly string[]) => {
     const remaining = left.filter((each) => !waitedFor.includes(each.augmentation));
     const installing = [...later.installing, ...waitedFor];
-    const { best, installs } = leastSplits(pricing, remaining, installing);
+    const { best, installs } = leastSplits(pricing, remaining, installing, commitMs);
     let at = 0;
     let totalMs = Number.POSITIVE_INFINITY;
     let levelMs = Number.POSITIVE_INFINITY;
@@ -1022,7 +1030,7 @@ export function levelInstallTiming({
           ? (installs[j] as Installs)
           : pricing.after([...installing, ...remaining.map((each) => each.augmentation)]);
       const ms = pricing.levelMs(after, required);
-      const total = (best[j] as { totalMs: number }).totalMs + ms;
+      const total = (best[j] as { totalMs: number }).totalMs + ms + commitMs;
       if (total < totalMs) {
         totalMs = total;
         at = j;

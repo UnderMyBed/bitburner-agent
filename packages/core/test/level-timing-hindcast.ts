@@ -96,7 +96,15 @@ export interface Reading {
   waits: LevelWait[];
   /** The dead time used, minutes, and whence. */
   dead: { minutes: number; from: string };
+  /** Each install's commit, ms: this install's, measured from its events (chosen to sent). */
+  commitMs: number;
 }
+
+/**
+ * The four post-count installs' commits, chosen to sent (`postcount.txt`'s events): 07:52:54 to 07:54:44 and 17:01:33 to
+ * 17:03:23 in BN4.2, 15:44:32 to 15:46:23 and 18:27:34 to 18:29:24 in BN4.3: 110, 110, 111 and 110 s.
+ */
+export const COMMIT_SECONDS = { "BN4.2 c10": 110, "BN4.2 c11": 110, "BN4.3 c12": 111, "BN4.3 c13": 110 } as const;
 
 /** The ramp dead time the brain prices with in `cycle` (#405): its own ramp, else the carried-in's, else the fallback. */
 export function deadIn(
@@ -170,7 +178,8 @@ export function readingAt({
     rateAt: (faction, level) => rateWith(after(faction), factor)(level),
     installing,
   };
-  return { name, actual, rise, later, waits, dead };
+  const commitMs = (COMMIT_SECONDS[name as keyof typeof COMMIT_SECONDS] ?? 110) * 1000;
+  return { name, actual, rise, later, waits, dead, commitMs };
 }
 
 /** BN4.3's measured factor in c12 (The Black Hand's work from R to the choice), and c13's (BitRunners'). */

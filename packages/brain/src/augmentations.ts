@@ -2805,10 +2805,11 @@ export class AugmentationRule {
    * τ error as #343's (#406: the share's, and κ's through the τ); staying's money, Daedalus's $100b at the income; the
    * later cycles as #343's (#389: R, the dead time, the rate at the favour after this install), the hacking set left
    * from the joined and later-cycle factions, along the level's rise as #343's takes it (the larger of the rate
-   * measured now and the one carried in), from any cycle: #389 prices only from the second, a κ carried over an
-   * install, as the BitNode's first cycle's rate is on its first RAM; after the count (installs made) no cycle is that
-   * one, and the store's first cycle (a fresh store) measures its own. Unpriced (no R, no rate measured or carried):
-   * null timing, logged on a change, and the count rule times installs, as before #413.
+   * measured now and the one carried in), only with a κ carried over an install (#389's rule, #413's review: never a
+   * rate measured now through an install not made); each install's commit, #343's 2 minutes (`GANG_ROUTE_COMMIT_MS`:
+   * BN4.2's and BN4.3's post-count installs took 1.8-1.9, chosen to sent). Unpriced: null timing, logged on a change;
+   * R waiting for the cycle's first faction work, installs held until it's measured (`#watchRebuildHold`), else the
+   * count rule, as before #413.
    */
   #levelTimingOf(args: {
     resetInfo: Parameters<typeof workConditionsOf>[0] & {
@@ -2942,6 +2943,7 @@ export class AugmentationRule {
       },
       tauError: tauRelativeError(shareError, null),
       held: held === null ? null : { faction: held.faction, k: held.k },
+      commitMs: GANG_ROUTE_COMMIT_MS,
       incomeMeasured: !unpricedByIncome,
       invitationHeld: args.invitationHeld,
     });
@@ -3634,8 +3636,9 @@ export class AugmentationRule {
             )
           : null;
       // After Daedalus's count, short of its invitation's hacking 2,500 (#413): install now, or wait for a faction's next
-      // of the hacking set, by the time to the level (core's `levelInstallTiming`). Unpriced: no install while R or the
-      // rate is soon measured, else the count rule, as before #413 (`#levelTimingOf`), the words say why.
+      // of the hacking set, by the time to the level (core's `levelInstallTiming`). Unpriced: no install while R waits
+      // for the cycle's first faction work, alerted past two windows; no κ carried, or R not measurable this cycle, the
+      // count rule, as before #413 (`#levelTimingOf`), the words say why.
       const levelRoute =
         this.#timingPolicy === "planner" &&
         this.#levelPolicy === "planner" &&
@@ -3676,6 +3679,8 @@ export class AugmentationRule {
       }
       if (level?.unpriced?.held !== true) this.#rebuildHeld = null;
       const levelPlanned = level !== null && (level.timing !== null || level.unpriced?.held === true);
+      // Fallen back to the count rule (#413's review): no A5 target of the level's.
+      if (!levelPlanned) this.#levelWork = null;
       // Short of Daedalus's count, the planner times installs (#343): install now, or wait for the next k countables,
       // the least estimated time to the count chosen, decided again at every update. With the gang, (3) (#357).
       const planned =
@@ -4589,6 +4594,8 @@ export class AugmentationRule {
       }
     }
     if (carried !== null && carried.kappa > measured.kappa) {
+      // This cycle's own dead time left is a flat level (#405's), not #413's ramp, which prices the cycles after an
+      // install: cautious for staying and for a wait's τ early in a cycle (labelled, #413's review).
       const deadMs = carried.deadMs ?? LEVEL_RAMP_FALLBACK_MS;
       return {
         rise: { ...measured, kappa: carried.kappa, delaySeconds: Math.max(0, deadMs - sinceInstallMs) / 1000 },
