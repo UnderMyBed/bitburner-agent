@@ -391,8 +391,20 @@ interface Installs {
  * the installs' `faction_rep` and its countables. Every candidate's DP draws on it: a wait's cycles are mostly install
  * now's, after the same installs. The figures are the same as each priced afresh (the same arithmetic, in the same order).
  */
+/**
+ * The later cycles' work in a reading (#399's round 3: counted, not timed, so a test can bound it on any machine): the
+ * cycles priced, and those asked for.
+ */
+export interface LaterPricingCounts {
+  /** Cycles C(i, j) priced: each a walk of the level's path per faction. */
+  priced: number;
+  /** Cycles asked for: the DP's B(i) + C(i, j) terms, each priced or found priced. */
+  lookups: number;
+}
+
 class LaterPricing {
   readonly #later: PricedLaterCycles;
+  readonly #counts: LaterPricingCounts | undefined;
   readonly #rates = new Map<string, readonly [number, number]>();
   readonly #tables = new Map<string, PathTable>();
   /** By the path and `faction_rep` after the installs: each with its cycles priced, by their countables' ids. */
@@ -401,8 +413,9 @@ class LaterPricing {
   /** Each group's factions in turn (`factionsOneAtATime`), by their countables' ids: the same after any installs. */
   readonly #worked = new Map<string, { faction: string; reputation: number }[]>();
 
-  constructor(later: PricedLaterCycles) {
+  constructor(later: PricedLaterCycles, counts?: LaterPricingCounts) {
     this.#later = later;
+    this.#counts = counts;
   }
 
   /** The path and `faction_rep` after the installs of `installed` (`laterCycleRise`, `levellingInstallMultipliers`). */
@@ -433,8 +446,10 @@ class LaterPricing {
    * levels 0 and 1).
    */
   cycleMs(group: () => readonly CountableLeft[], groupKey: string, installs: Installs): number {
+    if (this.#counts !== undefined) this.#counts.lookups += 1;
     const known = installs.cycles.get(groupKey);
     if (known !== undefined) return known;
+    if (this.#counts !== undefined) this.#counts.priced += 1;
     const later = this.#later;
     let seconds = later.rebuildMs / 1000;
     let worked = this.#worked.get(groupKey);
@@ -489,33 +504,34 @@ export function laterCyclesMs(args: {
   shapeMs: number;
   later?: LaterCycles | undefined;
 }): number[] {
-  return laterCyclesShaped(args, pricedBy(args.later) ? new LaterPricing(args.later) : undefined).cycles;
+  const { later } = args;
+  const priced = pricedBy(later)
+    ? { pricing: new LaterPricing(later), left: later.left, installing: later.installing }
+    : undefined;
+  return laterCyclesShaped(args, priced).cycles;
 }
 
 /**
- * `laterCyclesMs` with a reading's shared `pricing` (for `later`, where it prices), and how many of the cycles are
+ * `laterCyclesMs` with a reading's shared `pricing` where it prices (`priced`: the pricing, which holds R, the rise,
+ * the dead time and the rate, and the candidate's own countables left and installs), and how many of the cycles are
  * `shapeMs` itself (`shaped`: all unpriced; past the countables known with none priced, the rest): a wait's estimate
  * moves with its τ through them (#399's review).
  */
 function laterCyclesShaped(
-  {
-    count,
-    perCycle,
-    shapeMs,
-    later,
-  }: { count: number; perCycle: number; shapeMs: number; later?: LaterCycles | undefined },
-  pricing: LaterPricing | undefined,
+  { count, perCycle, shapeMs }: { count: number; perCycle: number; shapeMs: number },
+  priced: { pricing: LaterPricing; left: readonly CountableLeft[]; installing: readonly string[] } | undefined,
 ): { cycles: number[]; shaped: number } {
   if (!(count > 0)) return { cycles: [], shaped: 0 };
-  if (!pricedBy(later) || pricing === undefined) {
+  if (priced === undefined) {
     const shaped = Math.ceil(count / perCycle);
     return { cycles: Array.from({ length: shaped }, () => shapeMs), shaped };
   }
-  const left = later.left.slice(0, count);
+  const { pricing, installing } = priced;
+  const left = priced.left.slice(0, count);
   const known = left.length;
   const names = left.map((each) => each.augmentation);
   /** The installs before cycle i: `installing` and countables 0 to i − 1. */
-  const installs = Array.from({ length: known }, (_, i) => pricing.after([...later.installing, ...names.slice(0, i)]));
+  const installs = Array.from({ length: known }, (_, i) => pricing.after([...installing, ...names.slice(0, i)]));
   /** Countables i to j − 1's key, by their ids, for each i: grown by one as j grows. */
   const groupKeys: string[] = [];
   const best: { totalMs: number; from: number }[] = [{ totalMs: 0, from: 0 }];
@@ -677,6 +693,7 @@ export function installTiming({
   later,
   tauError = 0,
   held = null,
+  counts,
 }: {
   needed: number;
   adding: number;
@@ -688,20 +705,28 @@ export function installTiming({
   later?: LaterCycles;
   tauError?: number;
   held?: number | null;
+  /** Counts the later cycles' work (`LaterPricingCounts`), where priced: tests alone. */
+  counts?: LaterPricingCounts;
 }): InstallTiming {
   const priced = pricedBy(later);
   // Each candidate's later cycles priced once, from one reading's shared pricing (#399's review), as
   // `installNowEstimateMs` and `waitEstimateMs` price them.
-  const pricing = priced ? new LaterPricing(later) : undefined;
-  const cyclesOf = (count: number, perCycle: number, shapeMs: number, after: LaterCycles | undefined) =>
-    laterCyclesShaped({ count, perCycle, shapeMs, later: after }, pricing);
+  const pricing = priced ? new LaterPricing(later, counts) : undefined;
+  const cyclesOf = (
+    count: number,
+    perCycle: number,
+    shapeMs: number,
+    left: readonly CountableLeft[],
+    installing: readonly string[],
+  ) =>
+    laterCyclesShaped({ count, perCycle, shapeMs }, pricing === undefined ? undefined : { pricing, left, installing });
   /** A candidate's later cycles, where they're priced and there are any: `cyclesMs`. */
   const shown = (cycles: number[], count: number) => (priced && count > 0 ? { cyclesMs: cycles } : {});
   const candidates: InstallTimingCandidate[] = [];
   if (adding >= needed) {
     candidates.push({ k: 0, tauMs: 0, estimateMs: 0 });
   } else if (adding > 0) {
-    const { cycles } = cyclesOf(needed - adding, adding, onlineMs, later);
+    const { cycles } = cyclesOf(needed - adding, adding, onlineMs, later?.left ?? [], later?.installing ?? []);
     candidates.push({ k: 0, tauMs: 0, estimateMs: sum(cycles), ...shown(cycles, needed - adding) });
   }
   for (const [index, each] of next.entries()) {
@@ -711,10 +736,9 @@ export function installTiming({
     const waitedFor = next.slice(0, k).map((one) => one.augmentation);
     const left = (later?.left ?? []).filter((one) => !waitedFor.includes(one.augmentation));
     const installing = [...(later?.installing ?? []), ...next.slice(0, k).flatMap((one) => one.augmentation ?? [])];
-    const afterWait = later === undefined ? undefined : { ...later, left, installing };
     const count = needed - adding - k;
     const { cycles, shaped } =
-      count > 0 ? cyclesOf(count, adding + k, onlineMs + tauMs, afterWait) : { cycles: [], shaped: 0 };
+      count > 0 ? cyclesOf(count, adding + k, onlineMs + tauMs, left, installing) : { cycles: [], shaped: 0 };
     const estimateMs = count > 0 ? tauMs + sum(cycles) : tauMs;
     // #406: the estimate's error through the τ: the τ's own and each later cycle's of this one's shape, T + τ (unpriced,
     // c = ⌈(N − n − k) / (n + k)⌉ of them), so the τ's error times 1 + c (#399's review); the cycles priced from the

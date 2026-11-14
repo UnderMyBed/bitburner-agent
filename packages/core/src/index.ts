@@ -938,6 +938,7 @@ export {
   installTiming,
   LATER_CYCLE_FACTIONS,
   type LaterCycles,
+  type LaterPricingCounts,
   laterCyclesMs,
   meanRelativeError,
   type NextCountable,

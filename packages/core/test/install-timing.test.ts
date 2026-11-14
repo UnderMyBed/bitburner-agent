@@ -14,6 +14,7 @@ import {
   type CountableLeft,
   countablesLeft,
   factionRepGain,
+  factionsOneAtATime,
   type InstallTiming,
   installNowEstimateMs,
   installTiming,
@@ -916,36 +917,48 @@ describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's p
       ...c3,
       base: { ...c3.base, next: [{ augmentation: PC_MATRIX, tauMs: 30 * MINUTE }, ...c3.base.next] },
     });
+    // Round 3: unpriced (no R; no rise, the first cycle), past the countables known (3 of c3's 9), and none known.
+    cases.push({ ...c3, later: { ...c3.later, rebuildMs: null } });
+    cases.push({ ...c3, later: { ...c3.later, rise: null } });
+    cases.push({ ...c3, later: { ...c3.later, left: c3.later.left.slice(0, 3) } });
+    cases.push({ ...c3, later: { ...c3.later, left: [] } });
     for (const { base, later } of cases) {
       const timing = installTiming({ ...base, later });
+      expect(timing.candidates.length).toBeGreaterThan(1);
       for (const candidate of timing.candidates) {
         const waitedFor = base.next.slice(0, candidate.k).map((one) => one.augmentation);
+        const after = {
+          ...later,
+          left: later.left.filter((one) => !waitedFor.includes(one.augmentation)),
+          installing: [...later.installing, ...waitedFor],
+        };
         const alone = laterCyclesMs({
           count: base.needed - base.adding - candidate.k,
           perCycle: base.adding + candidate.k,
           shapeMs: base.onlineMs + candidate.tauMs,
-          later: {
-            ...later,
-            left: later.left.filter((one) => !waitedFor.includes(one.augmentation)),
-            installing: [...later.installing, ...waitedFor],
-          },
+          later: after,
         });
-        expect(candidate.cyclesMs ?? []).toEqual(alone);
+        expect(candidate.cyclesMs ?? []).toEqual(timing.later === undefined ? [] : alone);
+        expect(candidate.estimateMs).toBe(
+          candidate.k === 0
+            ? installNowEstimateMs(base.needed, base.adding, base.onlineMs, later)
+            : waitEstimateMs(base.needed, base.adding, candidate.k, candidate.tauMs, base.onlineMs, after),
+        );
       }
     }
   });
 
   /**
    * #399's review: priced afresh, a reading took about 80 ms at count 25 with 8 waits, and gang-start's rules arm spent
-   * 28.7 s in the augmentation rule against main's 0.71 s. The bound is main's own cost of a whole reading of the brain
-   * (the review's profile of that arm on main b2b7ef6: `DesiredStateRule`'s update, 2.94 s over 458 readings, 6.4 ms):
-   * at the count's most, the DP at most doubles a reading. Nothing installed, every hacking faction and the later
-   * cycles' joined (47 countables left), no favour, the 8 waits the cheapest left, as the brain's soonest mostly are
-   * (a wait's cycles then install now's, after the same installs; 8 spread among the 47, 3.3 ms against 1.6 here on
-   * 2026-11-14). Measured in CPU time, past the first reading (the code's compile).
+   * 28.7 s in the augmentation rule against main's 0.71 s. Its cost counted, not timed (round 3: a time bound flakes from
+   * machine to machine): nothing installed, every hacking faction and the later cycles' joined (47 countables left), the
+   * 8 waits the cheapest left, as the brain's soonest mostly are. Each candidate k's DP asks for its count's cycles,
+   * (25 − k)(26 − k) / 2, 2,109 for k 0 to 8; after the cheapest k, a wait's countables left are install now's from the
+   * k-th on and its installs install now's before them, the same list in the same order, so its cycles are install
+   * now's: 25 · 26 / 2 = 325 priced, every other found. The rate read twice a faction worked (levels 0 and 1), never
+   * again. The time is printed alone.
    */
-  test("its cost a reading at the count's most, 25 to go with 8 waits: within main's whole reading of the brain", () => {
-    const MAIN_READING_MS = 2_940 / 458;
+  test("its work a reading at the count's most, 25 to go with 8 waits: 325 cycles priced of 2,109 asked for", () => {
     const state: AugmentationPurchaseState = {
       ...STATE,
       bitNodeMultipliers: augmentationBitNodeMultipliers(4, { 4: 1 }),
@@ -958,8 +971,10 @@ describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's p
     });
     expect(left.length).toBe(47);
     const factor = measuredFactor(1);
-    const rateAt = (_faction: string, level: number) =>
-      factionReputationPerSecond(
+    const rateCalls: string[] = [];
+    const rateAt = (faction: string, level: number) => {
+      rateCalls.push(faction);
+      return factionReputationPerSecond(
         {
           skills: { hacking: level, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
           mults: { faction_rep: 1 },
@@ -974,6 +989,7 @@ describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's p
           shareBonus: factor,
         },
       );
+    };
     const later: LaterCycles = {
       left,
       rebuildMs: 4 * MINUTE,
@@ -985,22 +1001,26 @@ describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's p
     const next = left
       .slice(0, 8)
       .map((each, index) => ({ augmentation: each.augmentation, tauMs: (20 + 15 * index) * MINUTE }));
-    const reading = () => installTiming({ needed: 30, adding: 5, onlineMs: 40 * MINUTE, next, later, tauError: 0.02 });
-    const first = reading();
-    expect(first.candidates).toHaveLength(9);
-    expect(first.candidates.every((each) => each.cyclesMs !== undefined)).toBe(true);
-    // This process's CPU time over 40 readings (a test file runs in its own process): a shard's other files share the
-    // CPUs, which stretched the wall time 4 times on CI. 40, so Windows' 15.6 ms clock is within 0.4 ms a reading.
-    const READINGS = 40;
-    const timings: InstallTiming[] = [];
-    const before = process.cpuUsage();
-    for (let each = 0; each < READINGS; each++) timings.push(reading());
-    const used = process.cpuUsage(before);
-    const perReadingMs = (used.user + used.system) / 1000 / READINGS;
-    for (const timing of timings) expect(timing).toEqual(first);
+    const counts = { priced: 0, lookups: 0 };
+    const start = performance.now();
+    const timing = installTiming({ needed: 30, adding: 5, onlineMs: 40 * MINUTE, next, later, tauError: 0.02, counts });
+    const ms = performance.now() - start;
+    expect(timing.candidates).toHaveLength(9);
+    expect(timing.candidates.every((each) => each.cyclesMs !== undefined)).toBe(true);
+    const asked = Array.from({ length: 9 }, (_, k) => ((25 - k) * (26 - k)) / 2).reduce((sum, each) => sum + each, 0);
+    expect(asked).toBe(2_109);
+    expect(counts).toEqual({ priced: (25 * 26) / 2, lookups: asked });
+    // The factions worked: those of every group of the 25 cheapest, one faction at a time.
+    const worked = new Set<string>();
+    for (let i = 0; i < 25; i++) {
+      for (let j = i + 1; j <= 25; j++) {
+        for (const { faction } of factionsOneAtATime(left.slice(i, j))) worked.add(faction);
+      }
+    }
+    expect(new Set(rateCalls)).toEqual(worked);
+    expect(rateCalls).toHaveLength(2 * worked.size);
     console.log(
-      `count 25, 8 waits: ${perReadingMs.toFixed(2)} ms of CPU a reading; main's whole reading ${MAIN_READING_MS.toFixed(2)} ms`,
+      `count 25, 8 waits: ${counts.priced} cycles priced of ${counts.lookups}, ${ms.toFixed(2)} ms (printed)`,
     );
-    expect(perReadingMs).toBeLessThan(MAIN_READING_MS);
   });
 });
