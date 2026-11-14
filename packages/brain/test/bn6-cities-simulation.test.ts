@@ -283,7 +283,7 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
   // break-even at the reading now, gain = cost solved by bisection over (50, 52] (the margin rises with
   // the chaos: the more over 50, the more one Diplomacy's fall saves), and every city set halfway between 50 and it.
   const now = fresh.medium() as MediumSnapshotData;
-  let low = BLADEBURNER_CONSTANTS.chaosThreshold;
+  let low: number = BLADEBURNER_CONSTANTS.chaosThreshold;
   let high = 52;
   expect(diplomacyMargin(now, high)).toBeGreaterThan(0);
   for (let step = 0; step < 40; step++) {
