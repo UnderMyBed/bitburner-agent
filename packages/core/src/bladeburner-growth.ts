@@ -208,14 +208,14 @@ export function bladeburnerGrownInput(
  */
 export function bladeburnerPricedInput<T extends Omit<BladeburnerActionInput, "target">>(
   input: T,
-  { next, chanceRead }: { next: BladeburnerBlackOp; chanceRead?: readonly [number, number] },
+  { next, chanceRead }: { next: BladeburnerBlackOp; chanceRead: readonly [number, number] },
 ): { input: T; ratio: number | null } {
   const penalty = input.maxStamina > 0 ? staminaPenalty(input.stamina, input.maxStamina) : 0;
   const formula = blackOpSuccessChance(next, input.person, {
     penalty,
     skills: bladeburnerSkillMultsOf(input.skills?.read ?? {}),
   });
-  const ratio = chanceRead === undefined ? null : populationRatioOfBlackOpRange(chanceRead, formula);
+  const ratio = populationRatioOfBlackOpRange(chanceRead, formula);
   const readings = input.readings.map((read) => {
     const at = ratio === null ? null : actionChanceAtRatio(read.chance, ratio);
     const chance = at ?? actionChanceOverSpread(read.chance);
@@ -268,6 +268,8 @@ export interface BlackOpsGrownTime {
   path: { rank: number; seconds: number }[];
   /** The tail's mixes solved: the estimate's cost. */
   solves: number;
+  /** pop/popEst recovered from the next one's range read (#411), or null: the chances priced over the spread. */
+  populationRatio: number | null;
 }
 
 /**
@@ -310,7 +312,7 @@ export function blackOpsRouteGrownEstimate(
   },
 ): BlackOpsGrownTime {
   // #411: each contract's and operation's chance at the true population, recovered from the next one's range read.
-  const { input } = bladeburnerPricedInput(read, { next, chanceRead });
+  const { input, ratio: populationRatio } = bladeburnerPricedInput(read, { next, chanceRead });
   let state = bladeburnerGrowthStart(input, { rank, points, combat });
   let earned = 0;
   let seconds = 0;
@@ -464,7 +466,7 @@ export function blackOpsRouteGrownEstimate(
     state = rise(state, gain);
     path.push({ rank: state.rank, seconds });
   }
-  return { steps, seconds, rate: rateNow, path, solves };
+  return { steps, seconds, rate: rateNow, path, solves, populationRatio };
 }
 
 /** The combat stats' experience multipliers of `combat`. */

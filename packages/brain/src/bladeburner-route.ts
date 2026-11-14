@@ -220,7 +220,7 @@ export function blackOpsRouteOf({
         );
   const grownKept =
     done === BLACK_OPS_COUNT
-      ? { value: { steps: [], seconds: 0, rate: 0, path: [], solves: 0 }, atMs: null }
+      ? { value: { steps: [], seconds: 0, rate: 0, path: [], solves: 0, populationRatio: null }, atMs: null }
       : grownMemo === undefined
         ? { value: solveGrown(), atMs: null }
         : grownMemo.memo.get(

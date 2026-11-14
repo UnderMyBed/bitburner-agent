@@ -346,6 +346,8 @@ describe("the route's grown estimate in the brain (#408)", () => {
     const truth = stock(bladeburnerPricedInput(input, at).input);
     const low = stock(input);
     expect(truth).toBeLessThan(low as number);
+    // The ratio recovered from Centurion's range: the true population over its estimate, 1/1.42.
+    expect(view.grown?.populationRatio).toBeCloseTo(1 / 1.42, 12);
     expect(view.grown?.seconds).toBe(grownWith(truth));
     expect(view.grown?.seconds).not.toBe(grownWith(low));
   });
@@ -439,7 +441,7 @@ describe("the route's grown estimate in the brain (#408)", () => {
   test("kept between solves: again after 10 min, at a new key (an install or Black Op next), the time gone back; null never kept", () => {
     const memo = new GrownEstimateMemo();
     let solves = 0;
-    const route = { steps: [], seconds: 1, rate: 1, path: [], solves: 1 };
+    const route = { steps: [], seconds: 1, rate: 1, path: [], solves: 1, populationRatio: null };
     const solve = () => {
       solves += 1;
       return route;
@@ -622,7 +624,8 @@ describe("the controller (#398)", () => {
   test("the grown estimate (#408): the path's and the destroy estimate's, kept 10 min between solves", () => {
     const { controller, send } = connected();
     send("slow", slow(6, { lastAugReset: 1 }));
-    const centurion = { name: CENTURION.name, chance: [0.3, 0.35] as [number, number] };
+    // #414's round 2: each Black Op's range with one end at its formula (here a point: the estimate the truth).
+    const centurion = { name: CENTURION.name, chance: [CENTURION_CHANCE, CENTURION_CHANCE] as [number, number] };
     const gameAtMs = send("medium", withCombat(reading(295_000, centurion)));
     const view = controller.worldDaemonView().path?.blackOps;
     expect(view?.grown).not.toBeNull();
@@ -631,6 +634,9 @@ describe("the controller (#398)", () => {
     // Clocked by the game's time, the medium snapshot's (#409's review), not the events'.
     expect(solvedAt).toBe(gameAtMs);
     expect(controller.worldDaemonView().lines[1]).toContain("with the competence's growth (#408");
+    expect(controller.worldDaemonView().lines[1]).toContain(
+      "the chances at the true population: recovered, pop/popEst 1.000",
+    );
     // Within 10 min the figures stand (a new reading, the same Black Op next); a new Black Op next solves again.
     const readAtMs = send("medium", withCombat(reading(296_000, centurion)));
     expect(controller.worldDaemonView().path?.blackOps?.grown).toBe(view?.grown);
@@ -643,7 +649,15 @@ describe("the controller (#398)", () => {
     expect(controller.worldDaemonView().path?.blackOps?.grownAtMs).toBe(readAtMs);
     send("medium", withCombat(reading(296_000, centurion)));
     expect(controller.worldDaemonView().path?.blackOps?.grown).toBe(installed);
-    send("medium", withCombat(reading(301_000, { name: "Operation Vindictus", chance: [0.3, 0.35] })));
+    const vindictusOp = BLADEBURNER_BLACK_OPS[19] as (typeof BLADEBURNER_BLACK_OPS)[number];
+    const vindictusChance = blackOpSuccessChance(vindictusOp, PERSON, {
+      penalty: 1,
+      skills: bladeburnerSkillMultsOf(LEVELS),
+    });
+    send(
+      "medium",
+      withCombat(reading(301_000, { name: vindictusOp.name, chance: [vindictusChance, vindictusChance] })),
+    );
     const vindictus = controller.worldDaemonView().path?.blackOps?.grown;
     expect(vindictus).not.toBe(view?.grown);
     expect(vindictus?.steps[0]?.name).toBe("Operation Vindictus");

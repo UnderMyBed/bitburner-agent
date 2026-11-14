@@ -533,10 +533,33 @@ describe("the true population from the range (#411's ruling 4): the grown estima
         else expect(recovered, `${formula} at ${ratio}`).toBeCloseTo(ratio, 12);
       }
     }
-    expect(populationRatioOfBlackOpRange([0.1, 0.2], 0.15)).toBeNull();
     expect(populationRatioOfBlackOpRange([0, 0], 0)).toBeNull();
+    expect(populationRatioOfBlackOpRange([0, 0.2], 0.2)).toBeNull();
     expect(populationRatioOfBlackOpRange([1, 1], 1)).toBeNull();
     expect(populationRatioOfBlackOpRange([0.6, 1], 1)).toBeCloseTo(0.6, 12);
+  });
+  test("the person read apart from the range (#414's round 2): a level between moves nothing, the ends' ratio taken", () => {
+    // The player and the Bladeburner reading are different workers, up to a reading apart: the range at combat 300,
+    // the formula at 301 (a level up between). The formula only picks the end.
+    const read = person(300);
+    const later = person(301);
+    // Any chance stands in for the Black Op's (Assassination's, under 1 at combat 300): only its value matters here.
+    for (const ratio of [1 / 0.6, 1 / 1.42]) {
+      const at = (who: BladeburnerPerson) =>
+        actionSuccessChance(
+          BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === "Assassination") as never,
+          1,
+          who,
+          {
+            city: { population: 1e9, communities: 20, chaos: 0 },
+            penalty: 1,
+          },
+        );
+      // A Black Op's range, as the game reads it: its chance at the reading's person, × the ratio on one end.
+      const range = actionSuccessRange(at(read), at(read), ratio, 1);
+      expect(at(later)).not.toBe(at(read));
+      expect(populationRatioOfBlackOpRange(range, at(later)), `ratio ${ratio}`).toBeCloseTo(ratio, 12);
+    }
   });
   test("each action's chance at the true population from its range and the ratio, the clipped cases too", () => {
     let compared = 0;
@@ -563,6 +586,18 @@ describe("the true population from the range (#411's ruling 4): the grown estima
       }
     }
     expect(compared).toBeGreaterThan(200);
+  });
+  test("where the ratio isn't recovered, at most 1 (#414's round 2): a high end at 1", () => {
+    for (const range of [
+      [1, 1],
+      [0.9, 1],
+      [0.5, 1],
+    ] as [number, number][]) {
+      expect(actionChanceOverSpread(range), JSON.stringify(range)).toBeLessThanOrEqual(1);
+      for (const ratio of [1 / 1.5, 1 / 1.42, 1 / 0.9]) {
+        expect(actionChanceAtRatio(range, ratio) ?? 0, `${JSON.stringify(range)} at ${ratio}`).toBeLessThanOrEqual(1);
+      }
+    }
   });
   test("where the ratio isn't recovered: the mean over the estimate's spread, the true population the estimate over U", () => {
     const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === "Bounty Hunter");

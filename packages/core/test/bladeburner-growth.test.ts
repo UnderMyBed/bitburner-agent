@@ -895,46 +895,46 @@ describe("the playability at a start's range (#411's ruling 4): the estimate at 
   /** Seed 1's New Tokyo at a BN6.1 start (an overcount, `City.ts:19-23`), and an undercount of 0.6. */
   const SEED_1 = 2_016_312_413 / 1_421_276_822;
 
-  test("BN6 and BN7, combat 100 and 300, as is and with the shop, at the truth, an undercount and an overcount", () => {
-    const rows: string[] = [];
-    for (const bitNode of [6, 7]) {
-      const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
-      const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
-      for (const combat of [100, 300]) {
-        const row: string[] = [];
-        const keeps: number[] = [];
-        for (const [label, over] of [
+  // One case each (CI's 30 s limit, #414: the table at once was 37 s there): B7's choice gives keeping's figure too.
+  const CASES = [6, 7].flatMap((bitNode) =>
+    [100, 300].flatMap((combat) =>
+      (
+        [
           ["the truth", 1],
           ["0.6×", 0.6],
           [`${SEED_1.toFixed(2)}×`, SEED_1],
-        ] as const) {
-          const { combat: figures, input: read, at } = rangedStartAt(combat, over);
-          const input = { ...read, rankMultiplier };
-          // The chances priced at the truth wherever read: the ratio recovered from Typhoon's range.
-          const priced = bladeburnerPricedInput(input, at);
-          expect(priced.ratio, label).toBeCloseTo(1 / over, 9);
-          const keep = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier }).seconds;
-          const shop = blackOpsInstallTiming({
-            input,
-            at,
-            combat: figures,
-            gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null)),
-            installable: true,
-            growth: { costMultiplier },
-          });
-          const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
-          row.push(
-            `${label} ${(keep / HOUR).toFixed(1)} h, the shop ${shop.choice} ${(shopSeconds / HOUR).toFixed(1)} h`,
-          );
-          keeps.push(keep);
-          expect(keep).toBeGreaterThan(BAR_SECONDS);
-          expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
-        }
-        rows.push(`BN${bitNode} combat ${combat}: ${row.join("; ")}`);
-      }
-    }
-    console.log(`${rows.join("\n")}\nthe bar ${(BAR_SECONDS / HOUR).toFixed(2)} h`);
-  });
+        ] as const
+      ).map(([label, over]) => ({ bitNode, combat, label, over })),
+    ),
+  );
+  test.each(CASES)(
+    "BN$bitNode, combat $combat, read at $label: as is and with the shop, past the bar",
+    ({ bitNode, combat, label, over }) => {
+      const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+      const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+      const { combat: figures, input: read, at } = rangedStartAt(combat, over);
+      const input = { ...read, rankMultiplier };
+      // The chances priced at the truth wherever read: the ratio recovered from Typhoon's range.
+      expect(bladeburnerPricedInput(input, at).ratio, label).toBeCloseTo(1 / over, 9);
+      const started = performance.now();
+      const shop = blackOpsInstallTiming({
+        input,
+        at,
+        combat: figures,
+        gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null)),
+        installable: true,
+        growth: { costMultiplier },
+      });
+      const ms = performance.now() - started;
+      const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
+      console.log(
+        `BN${bitNode} combat ${combat}, read at ${label}: as is ${(shop.keepSeconds / HOUR).toFixed(1)} h, the shop ` +
+          `${shop.choice} ${(shopSeconds / HOUR).toFixed(1)} h (${ms.toFixed(0)} ms)`,
+      );
+      expect(shop.keepSeconds).toBeGreaterThan(BAR_SECONDS);
+      expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+    },
+  );
 
   test("at the truth, the figures with no range read; read through a range, only B3's low-end spending moves them", () => {
     const flat = startAt(100);

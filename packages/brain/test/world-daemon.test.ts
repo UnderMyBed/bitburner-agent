@@ -1204,10 +1204,17 @@ describe("the Black Ops' route (#398): BN6", () => {
     const grownStep = { name: "Operation Daedalus", chance: 0.052 } as NonNullable<
       BlackOpsRouteView["grown"]
     >["steps"][number];
-    const grown = { steps: [grownStep], seconds: 36_000, rate: 1, path: [], solves: 10 };
+    const grown = { steps: [grownStep], seconds: 36_000, rate: 1, path: [], solves: 10, populationRatio: 1.896 };
     expect(describeWorldDaemonPath({ ...path, blackOps: view({ grown, grownAtMs: 0 }) })[1]).toMatch(
-      /^the planner \(#398\): the Black Ops' about 10.0 h with the competence's growth \(#408: the skills from the rank, the stats from the actions, the levels from the successes; the last one at 5\.2%\), about 33\.3 h at the competence now \(B6's\); /,
+      /^the planner \(#398\): the Black Ops' about 10.0 h with the competence's growth \(#408: the skills from the rank, the stats from the actions, the levels from the successes; the last one at 5\.2%; the chances at the true population: recovered, pop\/popEst 1\.896\), about 33\.3 h at the competence now \(B6's\); /,
     );
+    // The fallback said (#414's round 2): the population not recovered from the Black Op's range.
+    expect(
+      describeWorldDaemonPath({
+        ...path,
+        blackOps: view({ grown: { ...grown, populationRatio: null }, grownAtMs: 0 }),
+      })[1],
+    ).toContain("the chances over the estimate's spread: the population not recovered, the fallback)");
     // Unread: said.
     expect(describeWorldDaemonPath({ ...path, blackOps: null })[0]).toBe(
       "the Black Ops (#398): no reading yet (the division joined, and home's RAM for its reader)",
