@@ -103,6 +103,8 @@ export interface GrownHindcast {
   /** The expected measure's ratio (#411). */
   expected: number;
   line: string;
+  /** The start reading's city and the window's attempts' (`grownHindcastIn`), where it found one in that city. */
+  cities?: { start: unknown; attempts: string };
 }
 
 /** The game seconds the path reaches `rank` at, linear between its steps; Infinity past its end. */
@@ -243,6 +245,8 @@ export function expectGrownHindcast(hindcast: GrownHindcast & { label: string })
   expect(row, `${hindcast.label}: not in GROWN_HINDCASTS`).toBeDefined();
   expect(withinTwice(hindcast.ratio), hindcast.line).toBe(row?.within);
   expect(withinTwice(hindcast.expected), hindcast.line).toBe(row?.expectedWithin);
+  // Its start reading in the city its attempts ran in (#411's ruling 3), where one was found.
+  if (hindcast.cities !== undefined) expect(hindcast.cities.start, hindcast.line).toBe(hindcast.cities.attempts);
 }
 
 /** What `grownHindcastIn` reads of a suite's fresh start: the simulator and the brain's store. */
@@ -285,5 +289,11 @@ export async function grownHindcastIn(
     inCity === undefined
       ? `from the window's first reading: none in ${city ?? "the attempts' city (no attempt)"}`
       : `from the reading ${((start.receivedAtMs - fromMs) / 1000).toFixed(0)} s in, in ${city}`;
-  return { ...hindcast, line: `${hindcast.line} (${from})` };
+  return {
+    ...hindcast,
+    line: `${hindcast.line} (${from})`,
+    ...(inCity === undefined || city === undefined
+      ? {}
+      : { cities: { start: (start.data as { bladeburner?: { city?: unknown } }).bladeburner?.city, attempts: city } }),
+  };
 }
