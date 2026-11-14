@@ -4,6 +4,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
+  actionChanceAtRatio,
+  actionChanceOverSpread,
   actionDifficulty,
   actionHpLoss,
   actionMoney,
@@ -21,8 +23,6 @@ import {
   BLADEBURNER_REST_SECONDS,
   type BladeburnerActionReading,
   type BladeburnerPerson,
-  bladeburnerExpectedChance,
-  bladeburnerExpectedInput,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
@@ -36,6 +36,8 @@ import {
   FIELD_ANALYSIS,
   fieldAnalysisRank,
   maxStaminaOf,
+  POPULATION_ESTIMATE_SPREAD,
+  populationRatioOfBlackOpRange,
   populationSuccessFactor,
   REGENERATION_CHAMBER,
   staminaGainPerSecond,
@@ -518,57 +520,67 @@ describe("the rule's choice (#375): the most rank a second over a cycle of work 
   });
 });
 
-describe("the expected chance over the range (#411): the grown estimate's pricing", () => {
-  /** The chance's mean over populations uniform in [from, to], by Simpson's rule on the game's formula (core's). */
-  const meanOver = (chanceAt: (population: number) => number, from: number, to: number) => {
-    const n = 2000;
-    const h = (to - from) / n;
-    let sum = chanceAt(from) + chanceAt(to);
-    for (let i = 1; i < n; i++) sum += (i % 2 === 1 ? 4 : 2) * chanceAt(from + i * h);
-    return (sum * h) / 3 / (to - from);
-  };
-  test("its mean over the populations whose chances are the range's ends, uniform: to the formula's, not the midpoint", () => {
-    const who = person(150);
-    for (const name of ["Raid", "Tracking", "Undercover Operation", "Assassination"]) {
-      const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === name);
-      if (action === undefined) throw new Error(name);
-      const chanceAt = (population: number) =>
-        actionSuccessChance(action, 1, who, { city: { population, communities: 20, chaos: 0 }, penalty: 1 });
-      for (const [from, to] of [
-        [0.7e9, 1.3e9],
-        [1.2e9, 1.45e9],
-      ] as const) {
-        const range: [number, number] = [chanceAt(from), chanceAt(to)];
-        if (!(range[1] < 1)) continue;
-        const mean = meanOver(chanceAt, from, to);
-        expect(bladeburnerExpectedChance(range), `${name} over ${from}-${to}`).toBeCloseTo(mean, 9);
-        // Not the midpoint: pop^0.7 is concave in the population, so its mean is over the chord's.
-        expect(bladeburnerExpectedChance(range)).toBeGreaterThan((range[0] + range[1]) / 2);
+describe("the true population from the range (#411's ruling 4): the grown estimate's pricing", () => {
+  /** Ratios of the true population over its estimate: undercounts over 1, overcounts under. */
+  const RATIOS = [1 / 0.5, 1 / 0.6, 1 / 0.9, 1, 1 / 1.1, 1 / 1.42, 1 / 1.5];
+  test("pop/popEst from a Black Op's range: one end its formula, the other that × the ratio; null where clipped", () => {
+    for (const formula of [0.02, 0.3, 0.55]) {
+      for (const ratio of RATIOS) {
+        // The game's range for a Black Op: est = real (no population factor), the ratio on one end.
+        const range = actionSuccessRange(formula, formula, ratio, 1);
+        const recovered = populationRatioOfBlackOpRange(range, formula);
+        if (formula * ratio >= 1) expect(recovered, `${formula} at ${ratio}`).toBeNull();
+        else expect(recovered, `${formula} at ${ratio}`).toBeCloseTo(ratio, 12);
       }
     }
+    expect(populationRatioOfBlackOpRange([0.1, 0.2], 0.15)).toBeNull();
+    expect(populationRatioOfBlackOpRange([0, 0], 0)).toBeNull();
+    expect(populationRatioOfBlackOpRange([1, 1], 1)).toBeNull();
+    expect(populationRatioOfBlackOpRange([0.6, 1], 1)).toBeCloseTo(0.6, 12);
   });
-  test("a point its own; a high end clamped at 1 leaves out the populations past the cap (cautious); the input's", () => {
-    expect(bladeburnerExpectedChance([0.3, 0.3])).toBe(0.3);
-    const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === "Tracking");
-    if (action === undefined) throw new Error("Tracking");
-    const chanceAt = (population: number) =>
-      actionSuccessChance(action, 1, person(300), { city: { population, communities: 20, chaos: 0 }, penalty: 1 });
-    const [from, to] = [0.5e9, 3e9];
-    expect(chanceAt(to)).toBe(1);
-    expect(bladeburnerExpectedChance([chanceAt(from), 1])).toBeLessThan(meanOver(chanceAt, from, to));
-    // Seed 1's New Tokyo at a BN6.1 start (the estimate 1.42× the truth): Raid's range read and its expected.
-    expect(bladeburnerExpectedChance([0.0261, 0.0655])).toBeCloseTo(0.047, 3);
-    const read: BladeburnerActionReading = {
-      type: "Operations",
-      name: "Raid",
-      level: 1,
-      maxLevel: 1,
-      count: 10,
-      chance: [0.0261, 0.0655],
-    };
-    expect(bladeburnerExpectedInput({ readings: [read] }).readings[0]?.chance).toEqual([
-      bladeburnerExpectedChance(read.chance),
-      0.0655,
-    ]);
+  test("each action's chance at the true population from its range and the ratio, the clipped cases too", () => {
+    let compared = 0;
+    for (const combat of [60, 150, 400, 2000]) {
+      const who = person(combat);
+      for (const action of BLADEBURNER_LEVELLED_ACTIONS) {
+        for (const ratio of RATIOS) {
+          const population = 1.2e9;
+          const estimate = population / ratio;
+          const at = (pop: number) =>
+            actionSuccessChance(action, 1, who, { city: { population: pop, communities: 20, chaos: 0 }, penalty: 1 });
+          const real = at(population);
+          const range = actionSuccessRange(real, at(estimate), population, estimate);
+          const recovered = actionChanceAtRatio(range, ratio);
+          if (recovered === null) {
+            // Only an overcount whose estimate's chance clips at 1 and low end at 0: under ½ truly.
+            expect(ratio).toBeLessThan(1);
+            expect(range).toEqual([0, 1]);
+            continue;
+          }
+          expect(recovered, `${action.name}, combat ${combat}, ratio ${ratio}`).toBeCloseTo(real, 12);
+          compared++;
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(200);
+  });
+  test("where the ratio isn't recovered: the mean over the estimate's spread, the true population the estimate over U", () => {
+    const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === "Bounty Hunter");
+    if (action === undefined) throw new Error("Bounty Hunter");
+    const at = (pop: number) =>
+      actionSuccessChance(action, 1, person(150), { city: { population: pop, communities: 20, chaos: 0 }, penalty: 1 });
+    const [from, to] = POPULATION_ESTIMATE_SPREAD;
+    for (const ratio of [1 / 0.6, 1 / 1.42]) {
+      const estimate = 1.2e9 / ratio;
+      const range = actionSuccessRange(at(1.2e9), at(estimate), 1.2e9, estimate);
+      // Each U's ratio 1/U, its chance recovered from the same range: their mean, by Simpson's rule on 2,000 steps.
+      const n = 2000;
+      const h = (to - from) / n;
+      const f = (u: number) => actionChanceAtRatio(range, 1 / u) as number;
+      let sum = f(from) + f(to);
+      for (let i = 1; i < n; i++) sum += (i % 2 === 1 ? 4 : 2) * f(from + i * h);
+      // The midpoint rule on 200 steps against Simpson's on 2,000: within 1e-3.
+      expect(actionChanceOverSpread(range)).toBeCloseTo((sum * h) / 3 / (to - from), 3);
+    }
   });
 });

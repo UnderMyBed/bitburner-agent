@@ -2,7 +2,7 @@
 // game time (B2-B6's BN6 simulator suites, and since #411 B8's BN7 two at its multipliers). The estimate's time to a
 // rank under the next Black Op's is the least of its growth's tail (the path, linear between its steps) and B5's stock
 // (the least expected time to it, core's `chooseBladeburnerAction` under that target, priced as the estimate prices the
-// actions since #411: at the expected chance over the range read), as the estimate takes the next one's rank; to the
+// actions since #411: at the true population recovered from the Black Op's range read), as the estimate takes the next one's rank; to the
 // next one done, that and its attempts. Decision 68's tolerance is ×2. #409's review: each
 // suite asserts its row's side of ×2 against `GROWN_HINDCASTS` (`expectGrownHindcast`), and bladeburner-route.test.ts
 // asserts their share, in one place.
@@ -20,7 +20,7 @@
 import {
   BLACK_OPERATIONS,
   blackOpsRouteGrownEstimate,
-  bladeburnerExpectedInput,
+  bladeburnerPricedInput,
   chooseBladeburnerAction,
   type MediumSnapshotData,
 } from "@bitburner-agent/core";
@@ -187,8 +187,8 @@ export function grownHindcast(
     const stock =
       target <= at.rank
         ? 0
-        : (chooseBladeburnerAction({ ...bladeburnerExpectedInput(input), target: { rank: at.rank, target } }).toTarget
-            ?.seconds ?? null);
+        : (chooseBladeburnerAction({ ...bladeburnerPricedInput(input, at).input, target: { rank: at.rank, target } })
+            .toTarget?.seconds ?? null);
     const tail = target <= at.rank ? 0 : pathSecondsTo(grown.path, target);
     return { stock, tail, seconds: Math.min(tail, stock ?? Number.POSITIVE_INFINITY) };
   };

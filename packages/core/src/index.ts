@@ -271,6 +271,8 @@ export {
   slowestTrainingSeconds,
 } from "./bladeburner.ts";
 export {
+  actionChanceAtRatio,
+  actionChanceOverSpread,
   actionDifficulty,
   actionHpLoss,
   actionMoney,
@@ -304,8 +306,6 @@ export {
   type BladeburnerRestName,
   type BladeburnerTailWork,
   type BladeburnerWork,
-  bladeburnerExpectedChance,
-  bladeburnerExpectedInput,
   bladeburnerForecastRater,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
@@ -327,7 +327,9 @@ export {
   maxStaminaAtSkills,
   maxStaminaOf,
   memoizedBladeburnerChoice,
+  POPULATION_ESTIMATE_SPREAD,
   personCompetenceFactor,
+  populationRatioOfBlackOpRange,
   populationSuccessFactor,
   REGENERATION_CHAMBER,
   staminaGainPerSecond,
@@ -391,6 +393,7 @@ export {
   blackOpsRouteGrownEstimate,
   bladeburnerGrownInput,
   bladeburnerGrowthStart,
+  bladeburnerPricedInput,
   maxLevelOfSuccesses,
   successesOfMaxLevel,
 } from "./bladeburner-growth.ts";

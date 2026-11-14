@@ -3,6 +3,8 @@
 // - **Every multiplier** of `getBitNodeMultipliers` at BN6 and BN7 (`BitNode/BitNode.tsx:694-727`, `:728-769`): each is
 //   core's (its table's value the engine's), or core takes it at 1 (the engine's 1 in both), or the route doesn't read
 //   it, and the table says why. The table is the engine's keys, all of them, so a game bump that adds one fails here.
+// - **The true population from a Black Op's range** (#411's ruling 4): pop/popEst and each action's drawn chance, at
+//   an undercount and an overcount, the stamina under half.
 // - **The simulator's record of attempts** (#411, the hindcasts' expected measure): each chance the one drawn against.
 // - **In BN7.2** (SF1.3, SF5.1 and SF7.1, as B2's parity test is in BN6, bladeburner-parity.test.ts): every contract's
 //   and operation's estimate's range, time and rank gained and lost over two cities, the stamina and the levels; every
@@ -11,6 +13,7 @@
 // The augmentations' prices and reputation at BN6's and BN7's multipliers are sim's game-data.test.ts's (every
 // augmentation against `getAugCost`, queued one by one).
 import {
+  actionChanceAtRatio,
   actionRankGain,
   actionRankLoss,
   actionSeconds,
@@ -37,6 +40,7 @@ import {
   bladeburnerSkillCost,
   bladeburnerSkillCostMultiplierOf,
   bladeburnerSkillMultsOf,
+  populationRatioOfBlackOpRange,
   skillExpFor,
   staminaPenalty,
 } from "@bitburner-agent/core";
@@ -435,4 +439,67 @@ out(reads);`,
         .map((attempt) => attempt.chance.toFixed(3))
         .join(", "),
   );
+}, 240_000);
+
+test("the true population from a Black Op's range (#411's ruling 4): at an undercount and an overcount, as drawn", async () => {
+  const sim = await start({
+    seed: 1,
+    epochMs: Date.UTC(2026, 0, 1),
+    fixture: { kind: "bitnode", n: 7, sourceFiles: { 1: 3, 5: 1, 7: 1 } },
+  });
+  await sim.diagnostics.setHomeRam(128);
+  await sim.diagnostics.gainCombatExp(skillExpFor(300, 1.28));
+  const joined = await runScript(sim, "out(ns.bladeburner.joinBladeburnerDivision());");
+  expect(joined.out).toEqual([true]);
+  const typhoon = bladeburnerBlackOp("Operation Typhoon");
+  if (typhoon === null) throw new Error("no Typhoon");
+  const rows: string[] = [];
+  for (const [label, population, estimate] of [
+    ["an undercount (the estimate 0.6× the truth)", 1.3e9, 0.78e9],
+    ["an overcount (the estimate 1.42× the truth)", 1.1e9, 1.562e9],
+  ] as const) {
+    const max = (await runScript(sim, "out(ns.bladeburner.getStamina()[1]);")).out[0] as number;
+    await sim.diagnostics.setBladeburnerFigures({
+      population,
+      estimate,
+      communities: 30,
+      chaos: 0,
+      stamina: max * 0.4,
+    });
+    const { out, log } = await runScript(
+      sim,
+      `out({
+  person: ns.getPlayer(),
+  stamina: ns.bladeburner.getStamina(),
+  blackOp: ns.bladeburner.getActionEstimatedSuccessChance("${BLACK_OPERATIONS}", "${typhoon.name}"),
+  actions: ${ACTIONS}.map(({ type, name }) => ({ type, name, range: ns.bladeburner.getActionEstimatedSuccessChance(type, name) })),
+});`,
+    );
+    expect(log.filter((line) => !line.startsWith("out:"))).toEqual([]);
+    const figures = out[0] as {
+      person: unknown;
+      stamina: [number, number];
+      blackOp: [number, number];
+      actions: { type: string; name: string; range: [number, number] }[];
+    };
+    const person = bladeburnerPersonOf(figures.person) as BladeburnerPerson;
+    const penalty = staminaPenalty(figures.stamina[0], figures.stamina[1]);
+    expect(penalty).toBeLessThan(1);
+    const ratio = populationRatioOfBlackOpRange(figures.blackOp, blackOpSuccessChance(typhoon, person, { penalty }));
+    expect(ratio, label).toBeCloseTo(population / estimate, 9);
+    let compared = 0;
+    for (const read of figures.actions) {
+      const action = bladeburnerLevelledAction(read.type, read.name);
+      if (action === null) throw new Error(`no ${read.name}`);
+      // The chance the game draws against: at the true population (`Action.ts:83-85`, `:169-196`).
+      const drawn = actionSuccessChance(action, 1, person, {
+        city: { population, communities: 30, chaos: 0 },
+        penalty,
+      });
+      expect(actionChanceAtRatio(read.range, ratio as number), `${read.name} at ${label}`).toBeCloseTo(drawn, 9);
+      compared++;
+    }
+    rows.push(`${label}: pop/popEst ${(ratio as number).toFixed(4)} recovered, ${compared} actions' drawn chances`);
+  }
+  console.log(rows.join("\n"));
 }, 240_000);

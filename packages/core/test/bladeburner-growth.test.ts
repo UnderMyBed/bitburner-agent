@@ -17,7 +17,6 @@ import {
   BLADEBURNER_LEVELLED_ACTIONS,
   type BladeburnerActionReading,
   type BladeburnerPerson,
-  bladeburnerExpectedChance,
   bladeburnerForecastRater,
   bladeburnerLevelledAction,
   bladeburnerRankMultiplierOf,
@@ -44,6 +43,7 @@ import {
   blackOpsRouteGrownEstimate,
   bladeburnerGrownInput,
   bladeburnerGrowthStart,
+  bladeburnerPricedInput,
   maxLevelOfSuccesses,
   successesOfMaxLevel,
 } from "../src/bladeburner-growth.ts";
@@ -866,86 +866,118 @@ describe("BN7's playability by the grown estimate (#411): the same route at its 
   });
 });
 
-describe("the playability at a start's range (#411): the estimate at the expected chance over the range read", () => {
-  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
-  /** Seed 1's New Tokyo at a BN6.1 start: its estimate 1.42× the true population (`City.ts:19-23`, × U(0.5, 1.5)). */
-  const ESTIMATE_OVER_TRUE = 2_016_312_413 / 1_421_276_822;
+/**
+ * The start at combat `combat` read through a population estimate `estimateOverTrue` × the truth (#411): each action's
+ * range and Typhoon's, as the game reads them (`Actions/Action.ts:144-167`).
+ */
+function rangedStartAt(combat: number, estimateOverTrue: number) {
+  const start = startAt(combat);
+  const population = CITY.population;
+  const estimate = population * estimateOverTrue;
+  const readings = start.input.readings.map((read) => {
+    const action = bladeburnerLevelledAction(read.type, read.name) as NonNullable<
+      ReturnType<typeof bladeburnerLevelledAction>
+    >;
+    const chanceAt = (at: number) =>
+      actionSuccessChance(action, 1, start.who, { city: { ...CITY, population: at }, penalty: 1 });
+    return { ...read, chance: actionSuccessRange(chanceAt(population), chanceAt(estimate), population, estimate) };
+  });
+  const typhoon = start.at.chanceRead[0];
+  return {
+    ...start,
+    input: { ...start.input, readings },
+    at: { ...start.at, chanceRead: actionSuccessRange(typhoon, typhoon, population, estimate) },
+  };
+}
 
-  test("BN6 and BN7, combat 100 and 300, as is and with the shop: past the bar at every one", () => {
+describe("the playability at a start's range (#411's ruling 4): the estimate at the true population recovered", () => {
+  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
+  /** Seed 1's New Tokyo at a BN6.1 start (an overcount, `City.ts:19-23`), and an undercount of 0.6. */
+  const SEED_1 = 2_016_312_413 / 1_421_276_822;
+
+  test("BN6 and BN7, combat 100 and 300, as is and with the shop, at the truth, an undercount and an overcount", () => {
     const rows: string[] = [];
-    const population = CITY.population;
-    const estimate = population * ESTIMATE_OVER_TRUE;
     for (const bitNode of [6, 7]) {
       const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
       const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
       for (const combat of [100, 300]) {
-        const { combat: figures, input: flat, at: point, who } = startAt(combat);
-        // The range read at that start: each action's at the true population and its estimate; Typhoon's the same.
-        const readings = flat.readings.map((read) => {
-          const action = bladeburnerLevelledAction(read.type, read.name) as NonNullable<
-            ReturnType<typeof bladeburnerLevelledAction>
-          >;
-          const chanceAt = (at: number) =>
-            actionSuccessChance(action, 1, who, { city: { ...CITY, population: at }, penalty: 1 });
-          return {
-            ...read,
-            chance: actionSuccessRange(chanceAt(population), chanceAt(estimate), population, estimate),
-          };
-        });
-        const typhoon = point.chanceRead[0];
-        const input = { ...flat, readings, rankMultiplier };
-        const at = { ...point, chanceRead: actionSuccessRange(typhoon, typhoon, population, estimate) };
-        const growth = { costMultiplier };
-        const keep = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier }).seconds;
-        const shop = blackOpsInstallTiming({
-          input,
-          at,
-          combat: figures,
-          gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null)),
-          installable: true,
-          growth,
-        });
-        const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
-        const raid = readings.find((read) => read.name === "Raid")?.chance as [number, number];
-        rows.push(
-          `BN${bitNode} combat ${combat}: as is ${(keep / HOUR).toFixed(1)} h; the shop ${shop.choice} ` +
-            `${(shopSeconds / HOUR).toFixed(1)} h (Raid read ${raid[0].toFixed(3)}-${raid[1].toFixed(3)}, priced ` +
-            `${bladeburnerExpectedChance(raid).toFixed(3)})`,
-        );
-        expect(keep).toBeGreaterThan(BAR_SECONDS);
-        expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+        const row: string[] = [];
+        const keeps: number[] = [];
+        for (const [label, over] of [
+          ["the truth", 1],
+          ["0.6×", 0.6],
+          [`${SEED_1.toFixed(2)}×`, SEED_1],
+        ] as const) {
+          const { combat: figures, input: read, at } = rangedStartAt(combat, over);
+          const input = { ...read, rankMultiplier };
+          // The chances priced at the truth wherever read: the ratio recovered from Typhoon's range.
+          const priced = bladeburnerPricedInput(input, at);
+          expect(priced.ratio, label).toBeCloseTo(1 / over, 9);
+          const keep = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier }).seconds;
+          const shop = blackOpsInstallTiming({
+            input,
+            at,
+            combat: figures,
+            gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null)),
+            installable: true,
+            growth: { costMultiplier },
+          });
+          const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
+          row.push(
+            `${label} ${(keep / HOUR).toFixed(1)} h, the shop ${shop.choice} ${(shopSeconds / HOUR).toFixed(1)} h`,
+          );
+          keeps.push(keep);
+          expect(keep).toBeGreaterThan(BAR_SECONDS);
+          expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+        }
+        rows.push(`BN${bitNode} combat ${combat}: ${row.join("; ")}`);
       }
     }
     console.log(`${rows.join("\n")}\nthe bar ${(BAR_SECONDS / HOUR).toFixed(2)} h`);
+  });
+
+  test("at the truth, the figures with no range read; read through a range, only B3's low-end spending moves them", () => {
+    const flat = startAt(100);
+    const truth = rangedStartAt(100, 1);
+    const options = { combat: flat.combat, costMultiplier: 2 };
+    const bn7 = (input: typeof flat.input) => ({ ...input, rankMultiplier: 0.6 });
+    const ratio = (a: number, b: number) => Math.abs(a / b - 1);
+    // Within 1e-4: the ratio recovered to the bit, the integration's choices (levels, mixes) sensitive below it.
+    expect(
+      ratio(
+        blackOpsRouteGrownEstimate(bn7(truth.input), truth.at, options).seconds,
+        blackOpsRouteGrownEstimate(bn7(flat.input), flat.at, options).seconds,
+      ),
+    ).toBeLessThan(1e-4);
+    // An overcount: priced at the truth, its skills bought at the low end read (B3's rule as the brain runs it); with
+    // the skills off, the truth's figure.
+    const over = rangedStartAt(100, 2_016_312_413 / 1_421_276_822);
+    const noSkills = { skills: false, stats: true, levels: true };
+    expect(
+      ratio(
+        blackOpsRouteGrownEstimate(bn7(over.input), over.at, { ...options, grow: noSkills }).seconds,
+        blackOpsRouteGrownEstimate(bn7(flat.input), flat.at, { ...options, grow: noSkills }).seconds,
+      ),
+    ).toBeLessThan(1e-4);
   });
 });
 
 describe("the skills along the route at a range read (#411): B3's rule's, as the brain runs it", () => {
   test("bought at the low end read, as the rule buys them, whatever the estimate prices the actions at", () => {
-    const { combat: figures, input: flat, at, who } = startAt(100);
-    // A range read (the estimate 1.42× the true population, seed 1's New Tokyo at a BN6.1 start).
-    const estimate = CITY.population * 1.42;
-    const readings = flat.readings.map((read) => {
-      const action = bladeburnerLevelledAction(read.type, read.name) as NonNullable<
-        ReturnType<typeof bladeburnerLevelledAction>
-      >;
-      const chanceAt = (population: number) =>
-        actionSuccessChance(action, 1, who, { city: { ...CITY, population }, penalty: 1 });
-      return {
-        ...read,
-        chance: actionSuccessRange(chanceAt(CITY.population), chanceAt(estimate), CITY.population, estimate),
-      };
-    });
-    const ranged = { ...flat, readings };
+    const { combat: figures, input: ranged, at } = rangedStartAt(100, 1.42);
     const lowOnly = {
-      ...flat,
-      readings: readings.map((read) => ({ ...read, chance: [read.chance[0], read.chance[0]] as [number, number] })),
+      ...ranged,
+      readings: ranged.readings.map((read) => ({
+        ...read,
+        chance: [read.chance[0], read.chance[0]] as [number, number],
+      })),
     };
+    const lowAt = { ...at, chanceRead: [at.chanceRead[1], at.chanceRead[1]] as [number, number] };
     // The skills alone growing: the levels at each step are the rule's choices at the ranks reached, the rank grid
     // the same; so they're the same at the range read as at its low end alone, though the estimate's times differ.
     const grow = { skills: true, stats: false, levels: false };
     const priced = blackOpsRouteGrownEstimate(ranged, at, { combat: figures, costMultiplier: 1, points: 300, grow });
-    const low = blackOpsRouteGrownEstimate(lowOnly, at, { combat: figures, costMultiplier: 1, points: 300, grow });
+    const low = blackOpsRouteGrownEstimate(lowOnly, lowAt, { combat: figures, costMultiplier: 1, points: 300, grow });
     expect(priced.seconds).toBeLessThan(low.seconds);
     expect(priced.steps.map((step) => step.levels)).toEqual(low.steps.map((step) => step.levels));
   });
