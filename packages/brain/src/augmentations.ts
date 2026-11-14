@@ -2806,8 +2806,9 @@ export class AugmentationRule {
    * later cycles as #343's (#389: R, the dead time, the rate at the favour after this install), the hacking set left
    * from the joined and later-cycle factions, along the level's rise as #343's takes it (the larger of the rate
    * measured now and the one carried in), only with a κ carried over an install (#389's rule, #413's review: never a
-   * rate measured now through an install not made); each install's commit, #343's 2 minutes (`GANG_ROUTE_COMMIT_MS`:
-   * BN4.2's and BN4.3's post-count installs took 1.8-1.9, chosen to sent). Unpriced: null timing, logged on a change;
+   * rate measured now through an install not made); each install's commit, the last measured in this BitNode (#410's
+   * `installSent`, chosen to sent), else #343's 2 minutes (`GANG_ROUTE_COMMIT_MS`; BN4.2's and BN4.3's post-count
+   * installs took 110-111 s). Unpriced: null timing, logged on a change;
    * R waiting for the cycle's first faction work, installs held until it's measured (`#watchRebuildHold`), else the
    * count rule, as before #413.
    */
@@ -2835,6 +2836,8 @@ export class AugmentationRule {
     installing: readonly string[];
     netburners: NetburnersRoute | null;
     invitationHeld: boolean;
+    /** The commit's measured time in this BitNode (#410), ms; null none measured. */
+    commitMs: number | null;
   }): { timing: LevelTiming | null; waits: Map<string, NextCountable[]>; unpriced: LevelUnpriced | null } {
     const { resetInfo, slowData, purchaseState, set, budget, levelRise, person } = args;
     const income = this.#income();
@@ -2943,7 +2946,9 @@ export class AugmentationRule {
       },
       tauError: tauRelativeError(shareError, null),
       held: held === null ? null : { faction: held.faction, k: held.k },
-      commitMs: GANG_ROUTE_COMMIT_MS,
+      // The commit measured, the last chosen to sent in this BitNode (#410's `installSent`); none measured yet, #343's
+      // 2 minutes (`GANG_ROUTE_COMMIT_MS`, its tables; BN4.2's and BN4.3's post-count installs took 110-111 s).
+      commitMs: args.commitMs ?? GANG_ROUTE_COMMIT_MS,
       incomeMeasured: !unpricedByIncome,
       invitationHeld: args.invitationHeld,
     });
@@ -3671,6 +3676,12 @@ export class AugmentationRule {
             ],
             netburners,
             invitationHeld: invitationHold > 0,
+            commitMs:
+              this.#commitMs !== null &&
+              this.#commitMs.lastNodeReset ===
+                (slowData.resetInfo as { lastNodeReset?: unknown } | undefined)?.lastNodeReset
+                ? this.#commitMs.ms
+                : null,
           })
         : null;
       if (!levelRoute) {

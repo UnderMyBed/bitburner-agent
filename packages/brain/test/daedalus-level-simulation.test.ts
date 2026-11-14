@@ -10,7 +10,8 @@
 // Accelerator and Embedded Netburner Module Core Implant reached, Cranial Signal Processors - Gen V 10,000 off,
 // Artificial Bio-neural Network Implant 35,000), $1t again; each arm runs to Daedalus's invitation, 45 virtual minutes
 // at most. Each arm, a test of its own, logs its time to the invitation from that grant, its installs from the prior
-// install on (minutes from the grant), and the level each minute; a measure, not a bar. Measured 2026-11-14, seeds
+// install on (minutes from the grant), and the level each minute; the planner no slower, per seed. Measured
+// 2026-11-14, seeds
 // 1-3: in the 21 minutes the count rule makes a quick install of NeuroFlux Governor alone (at -7 min), so at the grant
 // it is in a quick install's window again and installs Neural Accelerator and the Core Implant at 1 min; the planner
 // installs NeuroFlux Governor's levels at -10 min (its level timing's choice, the levels raising m) and the two at 0 or
@@ -198,13 +199,14 @@ test.each(SEEDS.flatMap((seed) => (["count rule", "planner"] as const).map((poli
         expect(each.reason).toBe("Daedalus's level");
         expect(each.timing?.words).toMatch(/^after Daedalus's count, to its invitation's hacking 2,500 \(#413\)/);
       }
-      // Against main's (the count rule's arm, run first): a measure, not a bar (#413's second review: as it comes).
+      // No slower than main's (the count rule's arm, run first), per seed: #413's done-when; the seeds are deterministic.
       const baseline = invited.get(seed)?.["count rule"];
       expect(baseline).toBeDefined();
       console.log(
         `seed ${seed}: the planner ${((invitedAtMs as number) - startMs) / MINUTE} min against the count rule's ` +
           `${(baseline as number) / MINUTE}`,
       );
+      expect((invitedAtMs as number) - startMs).toBeLessThanOrEqual(baseline as number);
     }
   },
 );

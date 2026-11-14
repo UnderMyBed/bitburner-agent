@@ -365,6 +365,8 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
         reputation: { "The Black Hand": 23.56 * Math.max(0, at - 4) * 60 },
         favor: FAVOUR_C12,
         factor: FACTOR_C12,
+        // c12's install's measured commit: the install these readings price.
+        commitOf: "BN4.3 c12",
         dead: at >= DEAD_BN4_3_C12.minutes ? DEAD_BN4_3_C12 : { minutes: RAMP_FALLBACK_MINUTES, from: "the fallback" },
       });
       const timing = timingOf(reading);
@@ -401,6 +403,7 @@ describe("the hindcast (#413): BN4.2's c10-c11 and BN4.3's c12-c13", () => {
       reputation: { "The Black Hand": 23.56 * 11 * 60 },
       favor: FAVOUR_C12,
       factor: FACTOR_C12,
+      commitOf: "BN4.3 c12",
       dead: { minutes: RAMP_FALLBACK_MINUTES, from: "the fallback" },
     });
     const counts = { priced: 0, lookups: 0 };

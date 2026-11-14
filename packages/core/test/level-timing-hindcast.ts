@@ -137,6 +137,7 @@ export function readingAt({
   favor,
   factor,
   dead,
+  commitOf,
 }: {
   name: string;
   actual: number;
@@ -149,6 +150,8 @@ export function readingAt({
   favor: Record<string, number>;
   factor: number;
   dead: { minutes: number; from: string };
+  /** Whose measured commit (`COMMIT_SECONDS`) prices the installs: the install's own; absent, `name`'s. */
+  commitOf?: keyof typeof COMMIT_SECONDS;
 }): Reading {
   const state: AugmentationPurchaseState = {
     installed: Object.fromEntries(installed.map((each) => [each, 1])),
@@ -178,7 +181,10 @@ export function readingAt({
     rateAt: (faction, level) => rateWith(after(faction), factor)(level),
     installing,
   };
-  const commitMs = (COMMIT_SECONDS[name as keyof typeof COMMIT_SECONDS] ?? 110) * 1000;
+  // Measured for every install the hindcast reads (#413's review: no fallback): a reading without one fails.
+  const seconds = (COMMIT_SECONDS as Record<string, number>)[commitOf ?? name];
+  if (seconds === undefined) throw new RangeError(`no measured commit for ${commitOf ?? name}`);
+  const commitMs = seconds * 1000;
   return { name, actual, rise, later, waits, dead, commitMs };
 }
 
