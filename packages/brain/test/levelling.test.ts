@@ -1221,7 +1221,9 @@ describe("the controller (#336): every branch that changes the hack loop, holds 
       expect.objectContaining({ reason: "The Red Pill" }),
     ]);
     expect(lines.filter((line) => line.startsWith("augmentations: The Red Pill's install timed (#410)"))).toEqual([
-      expect.stringMatching(/: D about [\d.e+]+ h now \(NeuroFlux Governor ×\d+[^)]*\): now, no income measured to batch with$/),
+      expect.stringMatching(
+        /: D about [\d.e+]+ h now \(NeuroFlux Governor ×\d+[^)]*\): now, no income measured to batch with$/,
+      ),
     ]);
   });
 
