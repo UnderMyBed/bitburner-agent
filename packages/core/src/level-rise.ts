@@ -173,8 +173,9 @@ const MOST_STEPS = 200_000;
  * The path's steps, one level of the formula each: with u = ln(exp + 534.6), de = e^u du and L = m·(32u − 200), so
  * dt = e^u du / (κ·(L + 50)), integrated by the trapezoid rule across each step (e^u grows by e^(1/(32m)) a step: 3% at
  * m 1). The level is the level now plus the formula's rise, 32m·Δu, so the path starts at the snapshot's floored level.
+ * Exported for #389's later cycles, which tabulate a path once and walk it many times (core's install-timing.ts).
  */
-function* steps(rise: LevelRise): Generator<{ toSeconds: number; toLevel: number }> {
+export function* steps(rise: LevelRise): Generator<{ toSeconds: number; toLevel: number }> {
   const m = rise.levelMult;
   if (!rising(rise)) return;
   // The dead time first: one flat step.
