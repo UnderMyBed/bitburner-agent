@@ -510,6 +510,11 @@ export interface HostMethods {
    */
   "diagnostics.gainHackingExp"(params: { exp: number }): void;
   /**
+   * Applies the installed augmentations' multipliers (each `giveInstalledAugmentation` pushes one unapplied), then the
+   * Source-Files', as the game's load does, for test scenarios at a BitNode's later cycles (#413). A harness edit.
+   */
+  "diagnostics.applyInstalledAugmentations"(params: Record<string, never>): void;
+  /**
    * Sets a gang member's experience and ascension points (`hack_exp`, `hack_asc_points` and the other stats', each
    * finite and 0 or more), then its levels from them, for test scenarios (#330). A harness edit, not something a player
    * can do. No gang, no such member, or another field throws.

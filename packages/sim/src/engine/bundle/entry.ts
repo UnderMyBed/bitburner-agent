@@ -274,6 +274,18 @@ export function gainHackingExp(exp: number) {
   Player.gainHackingExp(exp);
 }
 
+/**
+ * Applies every installed augmentation's multipliers, then the Source-Files', and the skills from them, as the game's
+ * load does (`reapplyAllAugmentations`, `PersonObjects/Player/PlayerObjectGeneralMethods.ts:412-430`, then
+ * `reapplyAllSourceFiles`): `giveInstalledAugmentation` pushes one unapplied, as an install's next load would apply it.
+ * A harness edit for test scenarios (#413), not something a player can do.
+ */
+export function applyInstalledAugmentations() {
+  Player.reapplyAllAugmentations(true);
+  Player.reapplyAllSourceFiles();
+  Player.updateSkillLevels();
+}
+
 /** The gang member figures `setGangMemberFigures` sets: each stat's experience and ascension points. */
 const GANG_MEMBER_FIGURES = ["hack", "str", "def", "dex", "agi", "cha"].flatMap((stat) => [
   `${stat}_exp`,

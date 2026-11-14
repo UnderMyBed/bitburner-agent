@@ -56,6 +56,8 @@ import {
   formatEta,
   type InstallTimingPolicy,
   type InstallTimingView,
+  LEVEL_ROUTE,
+  type LevelTimingPolicy,
   purchaseIntent,
   readAugmentationCycle,
   readAugmentationsEnabled,
@@ -5048,5 +5050,188 @@ describe("The Red Pill's install timed (#410): now, or first batching for the le
     const wait = rule.redPillTiming()?.wait as NonNullable<NonNullable<ReturnType<typeof rule.redPillTiming>>["wait"]>;
     // The batching from the money after the donation and 120 s of the income.
     expect(wait.batchingSeconds).toBeCloseTo((wait.money - 120 * INCOME) / INCOME, 0);
+  });
+});
+
+describe("after Daedalus's count (#413): installs and A5's work by the time to its invitation's hacking 2,500", () => {
+  const BITRUNNERS = "BitRunners";
+  const minutes = (ms: number) => ms / MINUTE;
+  const ABNI = "Artificial Bio-neural Network Implant";
+  const POOL = [BITRUNNERS, "CyberSec", "NiteSec", "The Black Hand", ...LATER_CYCLE_FACTIONS];
+  /** Augmentations none of these factions sell: the count's fillers. */
+  const FILLERS = AUGMENTATION_NAMES.filter(
+    (name) =>
+      name !== NFG &&
+      name !== "The Red Pill" &&
+      ![...POOL, "Netburners", "Daedalus"].some((faction) => augmentationsSoldBy(faction, 1, null).includes(name)),
+  );
+  /** Daedalus's 30 installed (NeuroFlux Governor once), or 29 short of it. */
+  const owned = (count: number) => Object.fromEntries([NFG, ...FILLERS.slice(0, count - 1)].map((name) => [name, 1]));
+  const MONEY = 1e15;
+  /** m 3.5, as BN4's after the count's first install: 2,500 is about 2.5e12 experience off, never within a cycle. */
+  const M = 3.5;
+  let exp = 0;
+  /** A medium snapshot at the experience now, its level the game's (`calculateSkill`) at m. */
+  let money = MONEY;
+  const levelMedium = (): MediumSnapshotData => {
+    const data = medium({ money });
+    const level = Math.floor(M * (32 * Math.log(exp + 534.6) - 200));
+    const player = data.player as { skills: Record<string, number> };
+    return {
+      ...data,
+      player: {
+        ...(data.player as object),
+        skills: { ...player.skills, hacking: level },
+        exp: { hacking: exp },
+        mults: { faction_rep: 1, hacking: M },
+      },
+    };
+  };
+  let earned = 0;
+  const slowAt = (count: number, bitRunners: number, queued: string[], invitations: string[] = []) => {
+    const data = slow({
+      joined: [{ name: BITRUNNERS, reputation: bitRunners, favor: 0 }],
+      queued,
+      ownedAugs: owned(count),
+      earned,
+    });
+    const factions = data.factions as { state: FactionState };
+    return { ...data, factions: { ...factions, state: { ...factions.state, invitations } } } as SlowSnapshotData;
+  };
+  /**
+   * The rule an hour online this cycle with R 4 min stored (none with `rebuild` false), a κ carried over an install
+   * (2e6 a second at level 1,900, as the one measured now), and 11 minutes on, the experience rising 2e6 a second, the
+   * income $1b a second: the income and the rate measured.
+   */
+  const at = ({
+    count = 30,
+    bitRunners = 0,
+    queued = [] as string[],
+    invitations = [] as string[],
+    rebuild = true,
+    onlineMinutes = 60,
+    steps = 11,
+    levelTiming = "planner" as LevelTimingPolicy,
+    held = MONEY,
+  }) => {
+    exp = hackingExpOfLevel(1900, M);
+    money = held;
+    earned = 0;
+    store.setSetting(
+      AUGMENTATION_LEVEL_RISE_SETTING,
+      JSON.stringify({ lastNodeReset: 0, lastAugReset: -1, kappa: 2e6 / 1950, deadMs: null }),
+    );
+    store.setSetting(
+      AUGMENTATION_ONLINE_SETTING,
+      JSON.stringify({ lastAugReset: 0, onlineMs: onlineMinutes * MINUTE, lastGameTimeMs: gameTimeMs }),
+    );
+    store.setSetting(AUGMENTATION_CYCLE_SEEN_SETTING, JSON.stringify({ lastAugReset: 0, gameTimeMs: 0 }));
+    if (rebuild) {
+      store.setSetting(AUGMENTATION_CYCLE_REBUILD_SETTING, JSON.stringify({ lastAugReset: 0, rebuildMs: 4 * MINUTE }));
+    }
+    rule = new AugmentationRule({
+      store,
+      log: (line) => lines.push(line),
+      emit: (event) => events.push(event),
+      installTiming: "planner",
+      levelTiming,
+    });
+    for (let minute = 0; minute < steps; minute += 1) {
+      gameTimeMs += MINUTE;
+      earned += 60e9;
+      exp += 1.2e8;
+      update({
+        slowData: slowAt(count, bitRunners, queued, invitations),
+        mediumData: levelMedium(),
+        mediumGameTimeMs: gameTimeMs,
+      });
+    }
+  };
+  const chosen = () =>
+    events.filter((event) => event.type === "augmentationInstallChosen").at(-1) as
+      | { reason: string; timing?: InstallTimingView }
+      | undefined;
+  /** BitRunners' three that raise the level most: m × 1.42, 2,500 within the next cycle's first half hour or so. */
+  const BIG = ["Neural Accelerator", ABNI, "BitRunners Neurolink"];
+
+  test("a set that reaches 2,500 soon after the install: installed now, at once, by the time to the level", () => {
+    expect(Object.keys(owned(30))).toHaveLength(30);
+    at({ queued: BIG });
+    const install = chosen();
+    expect(install?.reason).toBe("Daedalus's level");
+    const timing = install?.timing as InstallTimingView;
+    expect(timing.route).toBe(LEVEL_ROUTE);
+    expect(timing.choice).toBe(0);
+    const now = timing.level?.candidates[0];
+    expect(now?.k).toBe(0);
+    // The level after it: from 0 at m × 1.42, κ × the set's experience and speed gains, after the 10-minute fallback.
+    expect(minutes(now?.levelMs as number)).toBeGreaterThan(10);
+    expect(minutes(now?.levelMs as number)).toBeLessThan(60);
+    // Staying: never within a cycle at m 3.5 (2.5e12 experience at 2e6 a second, rising with the level: 284 h).
+    expect(minutes(timing.level?.stayMs as number)).toBeGreaterThan(200 * 60);
+    expect(timing.words).toMatch(/^after Daedalus's count, to its invitation's hacking 2,500 \(#413\)/);
+    expect(timing.words).toMatch(/; chosen: install now/);
+    expect(describeReason("Daedalus's level", {})).toMatch(/^Daedalus's level: after its count/);
+  });
+
+  test("a wait at BitRunners whose next cuts the time by more than its τ: no install, A5 works there", () => {
+    // ABNI 5,000 reputation off at BitRunners: minutes of work, where the next cycle would take hours to buy it; the
+    // money $1m (the set none of the rest reached), so installing now installs Neural Accelerator alone.
+    at({ queued: ["Neural Accelerator"], bitRunners: 270_000, held: 1e6 });
+    expect(chosen()).toBeUndefined();
+    const timing = rule.view().progress?.timing as InstallTimingView;
+    expect(timing.route).toBe(LEVEL_ROUTE);
+    expect(timing.choice).not.toBe(0);
+    expect(timing.choice).not.toBeNull();
+    const wait = timing.level?.candidates[timing.level.choice as number];
+    expect(wait).toMatchObject({ faction: BITRUNNERS, waitedFor: [ABNI] });
+    expect(rule.countHoldTarget()).toEqual({ faction: BITRUNNERS, augmentation: ABNI });
+    expect(rule.view().progress?.countdown).toBeNull();
+    expect(rule.view().waitingFor).toMatch(/^the planner's time to Daedalus's invitation: /);
+    expect(lines.some((line) => line.startsWith("augmentations: the planner's install timing: after Daedalus's"))).toBe(
+      true,
+    );
+  });
+
+  test("before the count (29 of 30): #343's timing, unchanged; with Daedalus inviting, not the level's either", () => {
+    at({ count: 29, queued: BIG });
+    const timing = chosen()?.timing ?? rule.view().progress?.timing;
+    expect(timing?.route).toBeUndefined();
+    expect(timing?.level).toBeUndefined();
+    // The first one's install committed (#343's, at 29): a fresh cycle for the second.
+    store.deleteSetting(AUGMENTATION_CYCLE_SETTING);
+    events = [];
+    lines = [];
+    at({ queued: BIG, invitations: ["Daedalus"] });
+    expect(events.filter((event) => (event as { reason?: string }).reason === "Daedalus's level")).toEqual([]);
+    expect(lines.filter((line) => line.includes("after Daedalus's count"))).toEqual([]);
+  });
+
+  test("the A/B's baseline (`levelTiming` count rule): the count rule after the count, as before #413", () => {
+    at({ queued: BIG, levelTiming: "count rule" });
+    expect(rule.view().progress?.timing).toBeUndefined();
+    expect(chosen()?.reason ?? "none").not.toBe("Daedalus's level");
+  });
+
+  test("unpriced early in the cycle (R and the rate soon measured): no install, for the rate's window at most", () => {
+    at({ queued: BIG, rebuild: false, onlineMinutes: 0, steps: 5 });
+    expect(chosen()).toBeUndefined();
+    const timing = rule.view().progress?.timing as InstallTimingView;
+    expect(timing).toMatchObject({ route: LEVEL_ROUTE, choice: null, candidates: [] });
+    expect(timing.words).toMatch(/: not priced yet \(R not measured: no faction work yet\): no install until it is/);
+    expect(lines.filter((line) => line.includes("the planner's level timing isn't priced"))).toEqual([
+      "augmentations: after Daedalus's count, the planner's level timing isn't priced (R not measured: no faction " +
+        "work yet): no install until it is, for the rate's window (10 min online) at most (#413)",
+    ]);
+  });
+
+  test("unpriced (R not measured): the count rule meanwhile, its reason logged once", () => {
+    at({ queued: BIG, rebuild: false });
+    expect(rule.view().progress?.timing).toBeUndefined();
+    const logged = lines.filter((line) => line.includes("the planner's level timing isn't priced"));
+    expect(logged).toEqual([
+      "augmentations: after Daedalus's count, the planner's level timing isn't priced (R not measured: no faction " +
+        "work yet): the count rule times installs meanwhile (#413)",
+    ]);
   });
 });

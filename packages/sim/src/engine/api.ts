@@ -72,6 +72,8 @@ export interface EngineApi {
   giveInstalledAugmentation(augmentation: string): void;
   /** Gives the player hacking experience, through the game's own gain. A harness edit, for test scenarios (#162). */
   gainHackingExp(exp: number): void;
+  /** Applies the installed augmentations' multipliers, as a load does. A harness edit, for test scenarios (#413). */
+  applyInstalledAugmentations(): void;
   /** Gives the player charisma experience, through the game's own gain. A harness edit, for test scenarios (#155). */
   gainCharismaExp(exp: number): void;
   /** Gives the player each combat stat's experience, through the game's own gains. A harness edit, for tests (#367). */
@@ -174,6 +176,7 @@ const API_FUNCTIONS = {
   employWithReputation: true,
   giveInstalledAugmentation: true,
   gainHackingExp: true,
+  applyInstalledAugmentations: true,
   gainCharismaExp: true,
   gainCombatExp: true,
   gainIntelligenceExp: true,

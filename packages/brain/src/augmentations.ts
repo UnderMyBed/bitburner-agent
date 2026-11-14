@@ -102,10 +102,20 @@
 //   four times where installing leads). Installing now goes at once (`reason` "the Black Ops' route"), through the
 //   controller's gate, only with something to install; keeping is a wait with no countdown and no money held. With the
 //   reading not in (or all 21 done), no estimate and no install. Before the join, the count rule as before (labelled).
-//   Once the count is met (Daedalus inviting or joined), or never short (The Red Pill elsewhere), the count rule times
-//   installs as before (amended #343: until the planner's next slice, the Daedalus/Red Pill stretch), with The Red
-//   Pill's way, Daedalus donations and levelling. The count rule short of the count stays only as the A/B's baseline
-//   (`installTiming` "count rule", tests alone).
+// - After Daedalus's count, short of its invitation's hacking 2,500 (#413, core's `levelInstallTiming`): the planner
+//   chooses install now, or wait for a faction's next of the hacking set (those adding to levelling), by the time to
+//   the level: the cycle after each install along #405's path, the later cycles by #389's DP; staying (this cycle's own
+//   path and Daedalus's $100b at the income) where that's sooner. Decided again at every update, the last choice held
+//   in memory (#406's hysteresis). Installing now goes at once (`reason` "Daedalus's level"), only past the best wait's
+//   error (#406), held with no income measured or an invitation's money held (#343's guards, `augmentationIncomeHeld`
+//   past two windows); never of nothing that adds to the level. Waiting: no countdown, the wait's money held within the
+//   lookahead, A5 working for the wait's faction, else the best wait's (`countHoldTarget`: the faction whose next
+//   augmentation most cuts the time). Unpriced: no install while R or the rate is soon measured (the rate's window,
+//   10 min online, at most), else the count rule, logged. The A/B's baseline (`levelTiming` "count rule", tests alone)
+//   keeps the count rule there.
+//   Once Daedalus invites or joins, or never short (The Red Pill elsewhere), the count rule times installs as before,
+//   with The Red Pill's way, Daedalus donations and levelling. The count rule short of the count stays only as the
+//   A/B's baseline (`installTiming` "count rule", tests alone).
 import {
   type AugmentationPurchaseState,
   type AugmentationSet,
@@ -115,6 +125,7 @@ import {
   augmentationCost,
   augmentationEndgame,
   augmentationShops,
+  augmentationsSoldBy,
   type BlackOpsInstallTiming,
   type Bn2Route,
   bestWorkRate,
@@ -123,6 +134,7 @@ import {
   bladeburnerInstallGain,
   type CountableToCome,
   type CountableWithinReach,
+  type CountableWithMoney,
   chooseAugmentationsToBuy,
   countAfterInstall,
   countablesLeft,
@@ -172,6 +184,8 @@ import {
   type LevellingCandidate,
   type LevellingRate,
   type LevelRise,
+  type LevelTiming,
+  levelInstallTiming,
   levellingInstallMultipliers,
   levelRiseOf,
   type MediumSnapshotData,
@@ -374,7 +388,7 @@ export type InstallTimingView = InstallTiming & {
    * BN2 before the gang (#357's (1)): its candidates in place of #343's, install now (k 0) and wait for the gang (k 1),
    * each by the time to the gang formed; absent, #343's.
    */
-  route?: typeof GANG_FORMING_ROUTE | typeof GANG_FORMED_ROUTE | typeof BLACK_OPS_ROUTE;
+  route?: typeof GANG_FORMING_ROUTE | typeof GANG_FORMED_ROUTE | typeof BLACK_OPS_ROUTE | typeof LEVEL_ROUTE;
   /** (1)'s figures (#357): τ_g, R, the level, avmnite-02h's roll, the rate and the install's multipliers. */
   gang?: GangFormingTiming;
   /**
@@ -387,6 +401,8 @@ export type InstallTimingView = InstallTiming & {
    * estimate of the time to the destroy. Its candidates are k 0 install now, 1 keep the cycle.
    */
   blackOps?: BlackOpsInstallView;
+  /** After Daedalus's count (#413, `route` "Daedalus's level"): staying, each candidate's time to the level, A5's work. */
+  level?: LevelTimingView;
 };
 
 /** The planner's route on the Black Ops (#404, BN6 and BN7, in the division): keep the cycle or install now. */
@@ -451,13 +467,189 @@ export function describeBlackOpsInstallTiming(view: BlackOpsInstallView | null):
   );
 }
 
-/** The reason of the planner's install now on `route` (#343, #357, #404). */
+/** The reason of the planner's install now on `route` (#343, #357, #404, #413). */
 function plannedReasonOf(route: InstallTimingView["route"]): InstallReason {
   return route === GANG_FORMED_ROUTE
     ? "the gang's favour"
     : route === BLACK_OPS_ROUTE
       ? "the Black Ops' route"
-      : "Daedalus's count";
+      : route === LEVEL_ROUTE
+        ? "Daedalus's level"
+        : "Daedalus's count";
+}
+
+/**
+ * The planner's route after Daedalus's count (#413): its invitation waits on hacking 2,500, so installs and A5's work go
+ * by the time to it (core's `levelInstallTiming`).
+ */
+export const LEVEL_ROUTE = "Daedalus's level";
+
+/**
+ * Who times installs after Daedalus's count (#413): the planner (the brain's), or the count rule, as before #413, kept as
+ * the A/B's baseline: a test's choice alone.
+ */
+export type LevelTimingPolicy = "planner" | "count rule";
+
+/**
+ * Why the level's timing isn't priced (#413), and whether installs are held meanwhile (R or the rate soon measured,
+ * within the rate's window online) or the count rule times them.
+ */
+interface LevelUnpriced {
+  why: string;
+  held: boolean;
+}
+
+/** The level's timing as the view and the events keep it (#413, core's `LevelTiming`): ms, null for never. */
+export interface LevelTimingView {
+  required: number;
+  stayMs: number | null;
+  estimateMs: number | null;
+  /** Each candidate: k 0 install now, else a wait for `faction`'s next k; their order core's. */
+  candidates: {
+    k: number;
+    faction: string | null;
+    waitedFor: string[];
+    tauMs: number;
+    estimateMs: number | null;
+    cyclesMs: number[];
+    levelMs: number | null;
+    stays?: true;
+  }[];
+  /** The candidate chosen, by its index in `candidates`; null, none (no install, nothing waited for: staying). */
+  choice: number | null;
+  /** A5's work: the chosen wait's faction and first augmentation, else the best wait's. */
+  work: { faction: string; augmentation: string } | null;
+  later: { rebuildMs: number; deadSeconds: number; kappa: number; left: number };
+}
+
+/**
+ * Core's level timing as the progress, the event and the dashboard give it (#413): `InstallTiming`'s shape (k 0 install
+ * now, each wait numbered after it in core's order), the route, and the level's figures.
+ */
+export function levelInstallViewOf(
+  timing: LevelTiming,
+  {
+    needed,
+    adding,
+    cycleMs,
+    onlineMs,
+    unseen,
+  }: {
+    needed: number;
+    adding: number;
+    cycleMs: number;
+    onlineMs: number;
+    unseen: Pick<InstallTimingView, "onlineBeforeMs" | "unseenMs" | "unseenGaps">;
+  },
+): Omit<InstallTimingView, "words"> {
+  const now = timing.candidates[0]?.k === 0;
+  const viewK = (index: number) => (now ? index : index + 1);
+  const ms = (value: number) => (Number.isFinite(value) ? value : null);
+  const level: LevelTimingView = {
+    required: timing.required,
+    stayMs: ms(timing.stayMs),
+    estimateMs: ms(timing.estimateMs),
+    candidates: timing.candidates.map((each) => ({
+      k: each.k,
+      faction: each.faction ?? null,
+      waitedFor: each.waitedFor,
+      tauMs: each.tauMs,
+      estimateMs: ms(each.estimateMs),
+      cyclesMs: each.cyclesMs,
+      levelMs: ms(each.levelMs),
+      ...(each.stays === true ? { stays: true as const } : {}),
+    })),
+    choice: timing.choice,
+    work: timing.work,
+    later: timing.later,
+  };
+  return {
+    needed,
+    adding,
+    onlineMs: cycleMs,
+    candidates: timing.candidates.map((each, index) => ({
+      k: viewK(index),
+      tauMs: each.tauMs,
+      estimateMs: each.estimateMs,
+      cyclesMs: each.cyclesMs,
+      ...(each.errorMs === undefined ? {} : { errorMs: each.errorMs }),
+    })),
+    choice: timing.choice === null ? null : viewK(timing.choice),
+    heldForIncome: timing.heldForIncome,
+    heldForInvitation: timing.heldForInvitation,
+    tauScale: 1,
+    tauError: timing.tauError,
+    kept: timing.kept,
+    ...(timing.marginMs === undefined ? {} : { marginMs: timing.marginMs }),
+    next: [],
+    timeOnlineMs: onlineMs,
+    ...unseen,
+    route: LEVEL_ROUTE,
+    level,
+  };
+}
+
+/**
+ * The level's timing in words (#413), for the log, the dashboard and the run report: "after Daedalus's count, to its
+ * invitation's hacking 2,500 (#413): staying 9.6e4 h; install now 3.2 h (then 2.7 h, the level 32 min after); at The
+ * Black Hand, wait for 1 (Embedded Netburner Module Core Implant, 28 min) 3.5 h; …; chosen: install now; A5 works for
+ * BitRunners (Embedded Netburner Module Core Implant)". Each faction's best wait alone, and the chosen one.
+ */
+export function describeLevelTiming(timing: Omit<InstallTimingView, "words">): string {
+  const level = timing.level;
+  if (level === undefined) return "after Daedalus's count (#413): no estimate";
+  const then = ({ cyclesMs, levelMs }: { cyclesMs: number[]; levelMs: number | null }) =>
+    `${cyclesMs.length === 0 ? "" : `then ${cyclesMs.map(formatEta).join(", ")}, `}the level ${formatEta(levelMs)} ` +
+    "after the install";
+  const chosen = level.choice === null ? null : (level.candidates[level.choice] ?? null);
+  const best = new Map<string, LevelTimingView["candidates"][number]>();
+  for (const each of level.candidates) {
+    const faction = each.faction;
+    if (faction === null) continue;
+    const known = best.get(faction);
+    if (known === undefined || (each.estimateMs ?? Infinity) < (known.estimateMs ?? Infinity)) best.set(faction, each);
+  }
+  if (chosen?.faction != null) best.set(chosen.faction, chosen);
+  const now = level.candidates.find((each) => each.k === 0);
+  const options = [
+    `staying ${formatEta(level.stayMs)}`,
+    ...(now === undefined ? [] : [`install now ${formatEta(now.estimateMs)} (${then(now)})`]),
+    ...[...best].map(([faction, each]) => {
+      const last = each.waitedFor.at(-1) ?? "";
+      const which = each.k === 1 ? last : `${each.k}, to ${last}`;
+      return (
+        `at ${faction}, wait for ${which} (${formatEta(each.tauMs)}) ${formatEta(each.estimateMs)}` +
+        (each.stays === true ? " (staying's: the level comes first)" : ` (${then(each)})`)
+      );
+    }),
+  ];
+  const choice =
+    chosen === null
+      ? "no install: staying, or nothing priced"
+      : chosen.k === 0
+        ? "install now"
+        : `wait at ${chosen.faction} for ${chosen.k}`;
+  const error = `±${formatEta(timing.marginMs ?? 0)}`;
+  const kept =
+    timing.kept === "margin"
+      ? `; install now not shorter than the best wait by more than its error (${error}): the wait`
+      : timing.kept === "held"
+        ? `; the wait under way kept: no rival shorter by more than the error (${error})`
+        : "";
+  const held = timing.heldForIncome
+    ? "; install now held: no income measured yet (10 minutes of slow snapshots)"
+    : timing.heldForInvitation
+      ? "; install now held: the money held for an invitation (#228)"
+      : kept;
+  const work = level.work === null ? "" : `; A5 works for ${level.work.faction} (${level.work.augmentation})`;
+  const parts = describeTParts(timing);
+  return (
+    `after Daedalus's count, to its invitation's hacking ${level.required.toLocaleString("en-US")} (#413), ` +
+    `${formatEta(timing.onlineMs)} this cycle (T${parts === "" ? "" : `; ${parts}`}): ${options.join("; ")}; later ` +
+    `cycles from the ${level.later.left} of the hacking set left, cheapest first, split to the least: R ` +
+    `${formatEta(level.later.rebuildMs)}, the level along its rise after ${formatEta(level.later.deadSeconds * 1000)}` +
+    `; chosen: ${choice}${held}${work}`
+  );
 }
 
 /** The planner's route before the gang in BN2 (#357's (1)), as the timing view, the wait and the events name it. */
@@ -1097,6 +1289,12 @@ export function describeReason(reason: InstallReason | string, figures: Partial<
   if (reason === "The Red Pill") return "The Red Pill reached: it links w0r1d_d43m0n once installed";
   if (reason === "Daedalus's count") {
     return "Daedalus's count: the planner's shortest time to it is installing now (#343)";
+  }
+  if (reason === "Daedalus's level") {
+    return (
+      "Daedalus's level: after its count, the planner's shortest time to its invitation's hacking 2,500 is installing " +
+      "now (#413)"
+    );
   }
   if (reason === "the gang's favour") {
     return (
@@ -1951,6 +2149,12 @@ export class AugmentationRule {
   readonly #timingPolicy: InstallTimingPolicy;
   /** BN2's route (#357): the planner's before the gang, or (the A/B's baseline) #343's candidates there too. */
   readonly #bn2Route: Bn2Route;
+  /** Who times installs after Daedalus's count (#413): the planner unless a test asks for the count rule. */
+  readonly #levelPolicy: LevelTimingPolicy;
+  /** The last reading's wait after Daedalus's count (#413, #406's hysteresis): in memory, a restart decides afresh. */
+  #levelHeld: { lastAugReset: number; faction: string; k: number } | null = null;
+  /** Why the level's timing wasn't priced, as last logged (#413): logged on a change. */
+  #levelUnpriced: string | null = null;
   /** The store's slow snapshots of a cycle, by its `lastAugReset` (#388), or null: none read. */
   readonly #cycleLooks: ((lastAugReset: number) => number[]) | null;
   /** The hacking experience rate (#357's τ_g and R), from the medium snapshots: a 10-minute window, a minute at least. */
@@ -2010,6 +2214,7 @@ export class AugmentationRule {
     emit = () => {},
     installTiming: timingPolicy = "planner",
     bn2Route = "planner",
+    levelTiming = "planner",
     cycleLooks = null,
   }: {
     store: TelemetryStore;
@@ -2019,6 +2224,8 @@ export class AugmentationRule {
     installTiming?: InstallTimingPolicy;
     /** BN2's route (#357): the planner's unless a test asks for the rules' (#343's before the gang). */
     bn2Route?: Bn2Route;
+    /** Who times installs after Daedalus's count (#413): the planner unless a test asks for the count rule. */
+    levelTiming?: LevelTimingPolicy;
     /** The store's slow snapshots of a cycle (#388, `readCycleLooks`); null, none read (no environment given). */
     cycleLooks?: ((lastAugReset: number) => number[]) | null;
   }) {
@@ -2027,6 +2234,7 @@ export class AugmentationRule {
     this.#emit = emit;
     this.#timingPolicy = timingPolicy;
     this.#bn2Route = bn2Route;
+    this.#levelPolicy = levelTiming;
     this.#cycleLooks = cycleLooks;
     readAugmentationCycle(store);
     readCountHold(store);
@@ -2089,7 +2297,8 @@ export class AugmentationRule {
   /**
    * The faction and augmentation an install held for Daedalus's count waits on by work (#243 review), for A5 to work
    * for (the owner's work and A5's switch still win); null when none is held, or the hold waits on a donation or money.
-   * The planner's wait for the count (#343) likewise: the first of the countables it waits for by work.
+   * The planner's wait for the count (#343) likewise: the first of the countables it waits for by work; after the count
+   * (#413), the chosen wait's first at its faction, else the best wait's.
    */
   countHoldTarget(): { faction: string; augmentation: string } | null {
     // Not one of a faction not joined yet (Netburners', #387): A5 works for the next meanwhile.
@@ -2506,6 +2715,232 @@ export class AugmentationRule {
    * Installing now held for the income (#343), without a break, `INCOME_HELD_TOO_LONG_MS` online: once,
    * `augmentationIncomeHeld` and a log line (a run report failure). In memory: a restart measures the income afresh.
    */
+  /**
+   * T (#388): the time online this cycle, the bars' clock, gaps over 3 minutes left out, as the run report's cycles show
+   * it. For a cycle first seen past its start: the time online in its slow snapshots stored before the clock began
+   * (`onlineBeforeMs`, T's alone); with none stored (a save first seen mid-cycle, an install made while the brain was
+   * down), the game's time before, counted whole (`cycleUnseenMs`), leaning towards waiting, and labelled. A store from
+   * before #343 has no record for a cycle its clock has: its first slow snapshot of the cycle stored is when the clock
+   * began. Never the clock's last time less its time online, which counts the gaps it left out (#388: BN4.2's first
+   * cycle chose with T 543.9 min against 240.2 online, a 5 h gap); with none stored, the game's time, labelled as mostly
+   * the clock's gaps (`fromClock`).
+   */
+  #cycleTime(
+    lastAugReset: number,
+    onlineMs: number,
+  ): {
+    cycleMs: number;
+    unseen: Pick<InstallTimingView, "onlineBeforeMs" | "unseenMs" | "unseenGaps">;
+  } {
+    let seen = readCycleSeen(this.#store);
+    const clock = this.#onlineClock;
+    if (seen?.lastAugReset !== lastAugReset && clock?.lastAugReset === lastAugReset) {
+      const first = this.#cycleLooks?.(clock.lastAugReset).find((look) => look <= clock.lastGameTimeMs);
+      seen =
+        first === undefined
+          ? { lastAugReset: clock.lastAugReset, gameTimeMs: clock.lastGameTimeMs - clock.onlineMs, fromClock: true }
+          : { lastAugReset: clock.lastAugReset, gameTimeMs: first };
+      this.#store.setSetting(AUGMENTATION_CYCLE_SEEN_SETTING, JSON.stringify(seen));
+    }
+    const cycleSeen = seen?.lastAugReset === lastAugReset ? seen : null;
+    const unseenMs = cycleSeen === null ? 0 : cycleUnseenMs(cycleSeen);
+    const onlineBeforeMs = cycleSeen?.onlineBeforeMs ?? 0;
+    return {
+      cycleMs: onlineBeforeMs + onlineMs + unseenMs,
+      unseen: {
+        ...(onlineBeforeMs > 0 ? { onlineBeforeMs } : {}),
+        ...(unseenMs > 0 ? { unseenMs, ...(cycleSeen?.fromClock === true ? { unseenGaps: true as const } : {}) } : {}),
+      },
+    };
+  }
+
+  /**
+   * Whether the planner's route after Daedalus's count applies (#413): its count met (installed, kept through every
+   * install), its invitation not come (neither joined nor invited), hacking 2,500 and every combat skill 1,500 not
+   * reached (`FactionInfo.tsx:141-145`), The Red Pill Daedalus's in this BitNode and not owned, on The Red Pill's route
+   * (not the Black Ops', nor the gang's faction's in BN2).
+   */
+  #afterCount(
+    count: DaedalusCount,
+    state: { joined: readonly { name: string }[]; invitations: readonly string[] },
+    currentNode: number,
+    ownedSF: Readonly<Record<string, number>>,
+    skills: Parameters<typeof daedalusSkillsReached>[0],
+    owned: (name: string) => boolean,
+    gangFaction: string | null,
+  ): boolean {
+    if (count.installed < count.required) return false;
+    if (winRouteOf(currentNode) !== "redPill" || gangSellsRedPill(gangFaction, currentNode)) return false;
+    if (state.joined.some((faction) => faction.name === DAEDALUS) || state.invitations.includes(DAEDALUS)) return false;
+    if (owned(THE_RED_PILL) || !augmentationsSoldBy(DAEDALUS, currentNode, null).includes(THE_RED_PILL)) return false;
+    return !daedalusSkillsReached(skills, daedalusRequirements(currentNode, ownedSF));
+  }
+
+  /**
+   * The planner's timing after Daedalus's count (#413, core's `levelInstallTiming`), and each faction's next of the
+   * hacking set by work there in turn (`nextCountables` on its countables by work that add to levelling): each wait's
+   * τ error as #343's (#406: the share's, and κ's through the τ); staying's money, Daedalus's $100b at the income; the
+   * later cycles as #343's (#389: R, the dead time, the rate at the favour after this install), the hacking set left
+   * from the joined and later-cycle factions, along the level's rise as #343's takes it (the larger of the rate
+   * measured now and the one carried in), from any cycle: #389 prices only from the second, a κ carried over an
+   * install, as the BitNode's first cycle's rate is on its first RAM; after the count (installs made) no cycle is that
+   * one, and the store's first cycle (a fresh store) measures its own. Unpriced (no R, no rate measured or carried):
+   * null timing, logged on a change, and the count rule times installs, as before #413.
+   */
+  #levelTimingOf(args: {
+    resetInfo: Parameters<typeof workConditionsOf>[0] & {
+      lastAugReset: number;
+      currentNode: number;
+      ownedSF: Readonly<Record<string, number>>;
+    };
+    slowData: SlowSnapshotData;
+    onlineMs: number;
+    purchaseState: AugmentationPurchaseState;
+    set: AugmentationSet;
+    sold: readonly string[];
+    joined: readonly JoinedFaction[];
+    shops: ReadonlyMap<string, readonly string[]>;
+    terms: Parameters<typeof countablesToCome>[0]["terms"];
+    person: Parameters<typeof countablesToCome>[0]["person"];
+    shareBonus: number;
+    holdWork: HoldWork;
+    budget: number;
+    money: number;
+    levelRise: { rise: LevelRise; from: string | null };
+    hackingLevel: number;
+    installing: readonly string[];
+    netburners: NetburnersRoute | null;
+    invitationHeld: boolean;
+  }): { timing: LevelTiming | null; waits: Map<string, NextCountable[]>; unpriced: LevelUnpriced | null } {
+    const { resetInfo, slowData, purchaseState, set, budget, levelRise, person } = args;
+    const income = this.#income();
+    const conditions = workConditionsOf(resetInfo, slowData, args.shareBonus);
+    const byWork = (rise: LevelRise) =>
+      countablesToCome({
+        sold: args.sold,
+        state: purchaseState,
+        set,
+        joined: args.joined,
+        shops: args.shops,
+        terms: args.terms,
+        person,
+        conditions,
+        work: args.holdWork,
+        rise,
+        money: budget,
+        income,
+      }).filter((each) => each.way === "work" && addsToLevelling([each.augmentation]));
+    const grouped = (toCome: readonly CountableWithMoney[]) =>
+      new Map(
+        [...new Set(toCome.map((each) => each.faction))].map((faction) => [
+          faction,
+          nextCountables({
+            toCome: toCome.filter((each) => each.faction === faction),
+            set,
+            state: purchaseState,
+            money: budget,
+            income,
+            upTo: Number.POSITIVE_INFINITY,
+          }),
+        ]),
+      );
+    const waits = grouped(byWork(levelRise.rise));
+    // #406: each τ's error, the share's and κ's through the τ (the waits again at κ lowered by its measured error).
+    const shareError = meanRelativeError(this.#shareSamples.map((sample) => sample.bonus));
+    const kappaError = levelRise.from === "measured now" ? this.#expRate.relativeError() : null;
+    const lowered =
+      kappaError !== null && kappaError > 0
+        ? grouped(byWork({ ...levelRise.rise, kappa: levelRise.rise.kappa * Math.max(0, 1 - kappaError) }))
+        : null;
+    const { cycleMs } = this.#cycleTime(resetInfo.lastAugReset, args.onlineMs);
+    const rebuild = this.#cycleRebuild(resetInfo.lastAugReset, cycleMs);
+    const dead = this.#laterDeadMs(resetInfo.lastAugReset, slowData);
+    const { keep: _keep, ...rateConditions } = conditions;
+    const workAt = new Map<string, { workType: FactionWorkType; favor: number } | null>();
+    const rateAt = (faction: string, level: number) => {
+      if (!workAt.has(faction)) {
+        const seller = args.joined.find((each) => each.name === faction);
+        const favor = seller === undefined ? 0 : favorAfterInstall(seller.favor, seller.reputation);
+        const best = bestWorkRate(person, { name: faction, reputation: 0, favor }, conditions);
+        workAt.set(faction, best === null ? null : { workType: best.workType, favor });
+      }
+      const work = workAt.get(faction);
+      if (work == null) return 0;
+      const at = { ...person, skills: { ...person.skills, hacking: level } };
+      return factionReputationPerSecond(at, work.workType, { favor: work.favor, ...rateConditions });
+    };
+    const left = countablesLeft({
+      factions: [
+        ...args.joined.map((each) => each.name),
+        ...LATER_CYCLE_FACTIONS,
+        ...(args.netburners ? [NETBURNERS] : []),
+      ],
+      bitNode: resetInfo.currentNode,
+      state: purchaseState,
+      set: set.purchases.map((purchase) => purchase.name),
+    });
+    const rebuildMs = "rebuildMs" in rebuild ? rebuild.rebuildMs : null;
+    const measured = levelRise.from !== null;
+    const required = daedalusRequirements(resetInfo.currentNode, resetInfo.ownedSF);
+    const moneyMs =
+      args.money >= required.money
+        ? 0
+        : income !== null && income > 0
+          ? ((required.money - args.money) / income) * 1000
+          : Number.POSITIVE_INFINITY;
+    const held = this.#levelHeld?.lastAugReset === resetInfo.lastAugReset ? this.#levelHeld : null;
+    const timing = levelInstallTiming({
+      required: required.hacking,
+      rise: levelRise.rise,
+      moneyMs,
+      kappaError: kappaError ?? 0,
+      waits: [...waits].map(([faction, next]) => ({
+        faction,
+        next: next.map(({ augmentation, tauMs }) => {
+          const low = lowered?.get(faction)?.find((one) => one.augmentation === augmentation)?.tauMs;
+          const kappaPart = low !== undefined && tauMs > 0 ? Math.max(0, low - tauMs) / tauMs : null;
+          return { augmentation, tauMs, tauError: tauRelativeError(shareError, kappaPart) };
+        }),
+      })),
+      later: {
+        left,
+        rebuildMs,
+        rise: measured ? levelRise.rise : null,
+        deadSeconds: dead.deadMs / 1000,
+        rateAt,
+        installing: args.installing,
+      },
+      tauError: tauRelativeError(shareError, null),
+      held: held === null ? null : { faction: held.faction, k: held.k },
+      incomeMeasured: income !== null,
+      invitationHeld: args.invitationHeld,
+    });
+    // Unpriced: R waiting for the cycle's first faction work, or the rate's window filling, is soon measured, so no
+    // install meanwhile, for the rate's window (`HACKING_EXP_WINDOW_MS`, 10 min) online at most; past it, or R not
+    // measurable this cycle (first seen with its work going on), the count rule, as before #413.
+    const why =
+      timing !== null
+        ? null
+        : rebuildMs === null
+          ? `R not measured: ${"waiting" in rebuild ? "no faction work yet" : "the cycle first seen with its work going on"}`
+          : !measured
+            ? "no level's rise measured or carried yet"
+            : "a level that doesn't rise (κ or m 0)";
+    const soon = args.onlineMs < HACKING_EXP_WINDOW_MS && (rebuildMs === null ? "waiting" in rebuild : !measured);
+    const unpriced = why === null ? null : { why, held: soon };
+    const words = unpriced === null ? null : `${why}${soon ? ": no install until it is" : ": the count rule"}`;
+    if (words !== null && words !== this.#levelUnpriced) {
+      this.#log(
+        `augmentations: after Daedalus's count, the planner's level timing isn't priced (${why}): ` +
+          (soon
+            ? `no install until it is, for the rate's window (${formatEta(HACKING_EXP_WINDOW_MS)} online) at most (#413)`
+            : "the count rule times installs meanwhile (#413)"),
+      );
+    }
+    this.#levelUnpriced = words;
+    return { timing, waits, unpriced };
+  }
+
   /** This cycle's rebuild (#389), R or null: the store's, moved on by this look (`nextCycleRebuild`) and kept. */
   #cycleRebuild(lastAugReset: number, cycleMs: number): CycleRebuild {
     const stored = readCycleRebuild(this.#store);
@@ -3143,10 +3578,52 @@ export class AugmentationRule {
               [...installable, ...setNames].filter((name) => name !== NEUROFLUX_GOVERNOR),
             )
           : null;
+      // After Daedalus's count, short of its invitation's hacking 2,500 (#413): install now, or wait for a faction's next
+      // of the hacking set, by the time to the level (core's `levelInstallTiming`). Unpriced: no install while R or the
+      // rate is soon measured, else the count rule, as before #413 (`#levelTimingOf`), the words say why.
+      const levelRoute =
+        this.#timingPolicy === "planner" &&
+        this.#levelPolicy === "planner" &&
+        !blackOpsPlanned &&
+        !gangPlanned &&
+        endgame.kind === "none" &&
+        this.#afterCount(count, state, currentNode, ownedSF, player.person.skills, owned, gangShop?.name ?? null);
+      const level = levelRoute
+        ? this.#levelTimingOf({
+            resetInfo,
+            slowData,
+            onlineMs,
+            purchaseState,
+            set,
+            sold,
+            joined,
+            shops,
+            terms,
+            person: player.person,
+            shareBonus,
+            holdWork,
+            budget,
+            money,
+            levelRise,
+            hackingLevel,
+            installing: [
+              ...installable,
+              ...setNames,
+              ...Array.from({ length: counts.neuroFluxLevels }, () => NEUROFLUX_GOVERNOR),
+            ],
+            netburners,
+            invitationHeld: invitationHold > 0,
+          })
+        : null;
+      if (!levelRoute) this.#levelHeld = null;
+      const levelPlanned = level !== null && (level.timing !== null || level.unpriced?.held === true);
       // Short of Daedalus's count, the planner times installs (#343): install now, or wait for the next k countables,
       // the least estimated time to the count chosen, decided again at every update. With the gang, (3) (#357).
       const planned =
-        gangPlanned || blackOpsPlanned || (this.#timingPolicy === "planner" && short && endgame.kind === "none");
+        gangPlanned ||
+        blackOpsPlanned ||
+        levelPlanned ||
+        (this.#timingPolicy === "planner" && short && endgame.kind === "none");
       let timing: InstallTimingView | null = null;
       if (!planned) {
         if (readInstallWait(this.#store) !== null) writeInstallWait(this.#store, null);
@@ -3154,35 +3631,7 @@ export class AugmentationRule {
         this.#incomeHeld = null;
       } else {
         const income = this.#income();
-        // T (#388): the time online this cycle, the bars' clock, gaps over 3 minutes left out, as the run report's
-        // cycles show it. For a cycle first seen past its start: the time online in its slow snapshots stored before
-        // the clock began (`onlineBeforeMs`, T's alone); with none stored (a save first seen mid-cycle, an install made
-        // while the brain was down), the game's time before, counted whole (`cycleUnseenMs`), leaning towards waiting,
-        // and labelled.
-        // A store from before #343 has no record for a cycle its clock has: its first slow snapshot of the cycle stored
-        // is when the clock began. Never the clock's last time less its time online, which counts the gaps it left out
-        // (#388: BN4.2's first cycle chose with T 543.9 min against 240.2 online, a 5 h gap); with none stored, the
-        // game's time, labelled as mostly the clock's gaps (`fromClock`).
-        let seen = readCycleSeen(this.#store);
-        const clock = this.#onlineClock;
-        if (seen?.lastAugReset !== resetInfo.lastAugReset && clock?.lastAugReset === resetInfo.lastAugReset) {
-          const first = this.#cycleLooks?.(clock.lastAugReset).find((look) => look <= clock.lastGameTimeMs);
-          seen =
-            first === undefined
-              ? { lastAugReset: clock.lastAugReset, gameTimeMs: clock.lastGameTimeMs - clock.onlineMs, fromClock: true }
-              : { lastAugReset: clock.lastAugReset, gameTimeMs: first };
-          this.#store.setSetting(AUGMENTATION_CYCLE_SEEN_SETTING, JSON.stringify(seen));
-        }
-        const cycleSeen = seen?.lastAugReset === resetInfo.lastAugReset ? seen : null;
-        const unseenMs = cycleSeen === null ? 0 : cycleUnseenMs(cycleSeen);
-        const onlineBeforeMs = cycleSeen?.onlineBeforeMs ?? 0;
-        const cycleMs = onlineBeforeMs + onlineMs + unseenMs;
-        const unseen = {
-          ...(onlineBeforeMs > 0 ? { onlineBeforeMs } : {}),
-          ...(unseenMs > 0
-            ? { unseenMs, ...(cycleSeen?.fromClock === true ? { unseenGaps: true as const } : {}) }
-            : {}),
-        };
+        const { cycleMs, unseen } = this.#cycleTime(resetInfo.lastAugReset, onlineMs);
         const needed = count.required - count.installed;
         // New to the count: NeuroFlux Governor's levels only while none is installed (one entry).
         const adding = countAfterInstall(ownedAugs, installing) - count.installed;
@@ -3190,7 +3639,50 @@ export class AugmentationRule {
         // BN2 before the gang (#357's (1)): wait for the gang or install now, in place of #343's candidates.
         const gangRoute = this.#bn2Route === "planner" && gangForming !== null ? gangForming : null;
         let next: NextCountable[] = [];
-        if (blackOpsPlanned) {
+        /** After Daedalus's count (#413): what A5 works for and the reserve holds, the chosen wait's (else the best's). */
+        let levelWaitedFor: NextCountable[] | null = null;
+        if (levelPlanned && level !== null && level.timing === null) {
+          // Unpriced, soon measured (#413): no install, nothing waited for, the words say why.
+          if (stored !== null) writeInstallWait(this.#store, null);
+          timing = {
+            needed,
+            adding,
+            onlineMs: cycleMs,
+            candidates: [],
+            choice: null,
+            heldForIncome: false,
+            heldForInvitation: false,
+            tauScale: 1,
+            tauError: 0,
+            kept: null,
+            next: [],
+            timeOnlineMs: onlineMs,
+            ...unseen,
+            route: LEVEL_ROUTE,
+            words:
+              `after Daedalus's count, to its invitation's hacking 2,500 (#413): not priced yet (${level.unpriced?.why}): ` +
+              `no install until it is, for the rate's window (${formatEta(HACKING_EXP_WINDOW_MS)} online) at most`,
+          };
+          levelWaitedFor = [];
+          this.#incomeHeld = null;
+        } else if (levelPlanned && level?.timing != null) {
+          // After Daedalus's count (#413): decided again at every update from the reading; no wait kept in the store
+          // (a restart decides afresh), the last choice held in memory (#406's hysteresis).
+          if (stored !== null) writeInstallWait(this.#store, null);
+          const figures = levelInstallViewOf(level.timing, { needed, adding, cycleMs, onlineMs, unseen });
+          timing = { ...figures, words: describeLevelTiming(figures) };
+          const chosen = level.timing.choice === null ? null : level.timing.candidates[level.timing.choice];
+          this.#levelHeld =
+            chosen != null && chosen.k > 0 && chosen.faction !== undefined
+              ? { lastAugReset: resetInfo.lastAugReset, faction: chosen.faction, k: chosen.k }
+              : null;
+          // A5's work (#413): the chosen wait's faction, else the best wait's; its countables, the reserve's.
+          const work = level.timing.work;
+          const working = chosen != null && chosen.k > 0 ? chosen : null;
+          const list = work === null ? [] : (level.waits.get(work.faction) ?? []);
+          levelWaitedFor = working === null ? list.slice(0, 1) : list.slice(0, working.k);
+          this.#watchIncomeHold(timing, resetInfo.lastAugReset, onlineMs, atMs);
+        } else if (blackOpsPlanned) {
           // The Black Ops' route (#404): keep or install now, decided again at every update from the reading; no wait is
           // kept (the World Daemon's stalls watch the rank, the Bladeburner rule's rebuild after an install).
           if (stored !== null) writeInstallWait(this.#store, null);
@@ -3470,13 +3962,15 @@ export class AugmentationRule {
                 ? "the planner times installs with the gang"
                 : timing.route === BLACK_OPS_ROUTE
                   ? "the planner times installs on the Black Ops' route"
-                  : "the planner times installs short of Daedalus's count",
+                  : timing.route === LEVEL_ROUTE
+                    ? "the planner times installs after Daedalus's count"
+                    : "the planner times installs short of Daedalus's count",
           );
           // Keeping or banking with the gang (#357's (3)): installs held for The Red Pill there, the World Daemon's
           // stall to watch (its reputation not rising), a pause to train included (#372's re-review): while the plan
           // earns no respect, past twice the gang rule's estimate of the time until it does and 10 minutes (#374).
           if (timing.route === GANG_FORMED_ROUTE) this.#redPillHeldAtGang = true;
-          const waitedFor = timing.choice === null ? [] : next.slice(0, timing.choice);
+          const waitedFor = levelWaitedFor ?? (timing.choice === null ? [] : next.slice(0, timing.choice));
           this.#waitedFor = waitedFor;
           this.#setMoneyBeforeNetburners = set.money + set.donationMoney;
           const last = waitedFor.at(-1);
@@ -3497,7 +3991,9 @@ export class AugmentationRule {
                   ? `the planner's time to ${THE_RED_PILL}'s reputation: ${timing.words}`
                   : timing.route === BLACK_OPS_ROUTE
                     ? `the planner's time to the destroy: ${timing.words}`
-                    : `the planner's time to Daedalus's count: ${timing.words}`,
+                    : timing.route === LEVEL_ROUTE
+                      ? `the planner's time to Daedalus's invitation: ${timing.words}`
+                      : `the planner's time to Daedalus's count: ${timing.words}`,
           });
         }
         // Installing now: the progress it's chosen on, for the run report (the counts and donations, as a countdown's).

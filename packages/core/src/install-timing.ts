@@ -91,7 +91,7 @@ import {
 import { THE_RED_PILL } from "./bitnodes.ts";
 import { CITY_FACTION_GROUPS, TIAN_DI_HUI } from "./factions.ts";
 import { type LevelRise, laterCycleRise, steps as levelSteps } from "./level-rise.ts";
-import { levellingInstallMultipliers } from "./levelling.ts";
+import { addsToLevelling, levellingInstallMultipliers } from "./levelling.ts";
 
 /** One of the next countables (`nextCountables`), with the time and money of it and those before it together. */
 export type NextCountable = CountableWithMoney & {
@@ -316,12 +316,51 @@ class PathTable {
   readonly #levelTime: number[] = [0];
   /** Each step's mean level, Σ L·dt over it over its Δt (0 for a step of no length). */
   readonly #meanLevels: number[] = [];
+  /** The level at each end (#413): the path's start, then each step's. */
+  readonly #levels: number[];
+  /** The seconds to each level asked for (#413, `secondsToLevel`), found once a path. */
+  readonly #toLevel = new Map<number, number>();
   #level: number;
   #done = false;
 
   constructor(rise: LevelRise) {
     this.#steps = levelSteps(rise);
     this.#level = rise.level;
+    this.#levels = [rise.level];
+  }
+
+  /**
+   * The seconds along the path until the level reaches `level` (#413): 0 at or past it now; linear across the step it's
+   * reached in (as `levelAlong`); Infinity where the path never does (flat, or past its steps). `fresh` says whether it
+   * was walked now or found (the cost's count).
+   */
+  secondsToLevel(level: number): { seconds: number; fresh: boolean } {
+    const known = this.#toLevel.get(level);
+    if (known !== undefined) return { seconds: known, fresh: false };
+    const levels = this.#levels;
+    let seconds = 0;
+    if ((levels[0] as number) < level) {
+      while ((levels.at(-1) as number) < level) {
+        if (!this.#extend()) break;
+      }
+      if ((levels.at(-1) as number) < level) {
+        seconds = Number.POSITIVE_INFINITY;
+      } else {
+        // The first end at or past the level (the levels never fall): the step before it starts below it.
+        let low = 1;
+        let high = levels.length - 1;
+        while (low < high) {
+          const middle = (low + high) >>> 1;
+          if ((levels[middle] as number) >= level) high = middle;
+          else low = middle + 1;
+        }
+        const [from, to] = [levels[low - 1] as number, levels[low] as number];
+        const [start, end] = [this.#ends[low - 1] as number, this.#ends[low] as number];
+        seconds = start + ((end - start) * (level - from)) / (to - from);
+      }
+    }
+    this.#toLevel.set(level, seconds);
+    return { seconds, fresh: true };
   }
 
   /** Extends the table by a step: false past its end. */
@@ -340,6 +379,7 @@ class PathTable {
     this.#levelTime.push(levelTime);
     this.#ends.push(to);
     this.#meanLevels.push(to > from ? (levelTime - levelTimeAt) / (to - from) : 0);
+    this.#levels.push(next.value.toLevel);
     this.#level = next.value.toLevel;
     return true;
   }
@@ -400,6 +440,8 @@ export interface LaterPricingCounts {
   priced: number;
   /** Cycles asked for: the DP's B(i) + C(i, j) terms, each priced or found priced. */
   lookups: number;
+  /** Paths walked to Daedalus's level (#413, `levelInstallTiming`): each path once; absent where none was. */
+  levels?: number;
 }
 
 class LaterPricing {
@@ -468,6 +510,17 @@ class LaterPricing {
     return ms;
   }
 
+  /**
+   * The cycle after `installs` to Daedalus's `level`, ms (#413): from its install along its path (`after`'s, flat for
+   * the dead time first: the restart, the hack loop and the servers again, #405), the work's R aside, as the level
+   * rises from the install whatever the work does. Each path walked once a reading (`levels` counts them).
+   */
+  levelMs(installs: Installs, level: number): number {
+    const { seconds, fresh } = installs.table.secondsToLevel(level);
+    if (fresh && this.#counts !== undefined) this.#counts.levels = (this.#counts.levels ?? 0) + 1;
+    return seconds * 1000;
+  }
+
   /** A countable's id in the cycles' keys, by name (a reading's countables left are the same throughout). */
   id(augmentation: string): number {
     let id = this.#ids.get(augmentation);
@@ -512,22 +565,15 @@ export function laterCyclesMs(args: {
 }
 
 /**
- * `laterCyclesMs` with a reading's shared `pricing` where it prices (`priced`: the pricing, which holds R, the rise,
- * the dead time and the rate, and the candidate's own countables left and installs), and how many of the cycles are
- * `shapeMs` itself (`shaped`: all unpriced; past the countables known with none priced, the rest): a wait's estimate
- * moves with its τ through them (#399's review).
+ * The recurrence (#389), shared by the count's DP and the level's (#413): with C(i, j) the cycle of `left`'s i to j − 1
+ * after the installs of `installing` and `left`'s 0 to i − 1 (`LaterPricing`), B(j) = min over i < j of B(i) + C(i, j),
+ * B(0) = 0, for every j to `left`'s length; each B(j) with the i it came from, and the installs before each cycle i.
  */
-function laterCyclesShaped(
-  { count, perCycle, shapeMs }: { count: number; perCycle: number; shapeMs: number },
-  priced: { pricing: LaterPricing; left: readonly CountableLeft[]; installing: readonly string[] } | undefined,
-): { cycles: number[]; shaped: number } {
-  if (!(count > 0)) return { cycles: [], shaped: 0 };
-  if (priced === undefined) {
-    const shaped = Math.ceil(count / perCycle);
-    return { cycles: Array.from({ length: shaped }, () => shapeMs), shaped };
-  }
-  const { pricing, installing } = priced;
-  const left = priced.left.slice(0, count);
+function leastSplits(
+  pricing: LaterPricing,
+  left: readonly CountableLeft[],
+  installing: readonly string[],
+): { best: { totalMs: number; from: number }[]; installs: Installs[] } {
   const known = left.length;
   const names = left.map((each) => each.augmentation);
   /** The installs before cycle i: `installing` and countables 0 to i − 1. */
@@ -548,11 +594,39 @@ function laterCyclesShaped(
     }
     best.push(least);
   }
+  return { best, installs };
+}
+
+/** The cycles to B(`to`), each one's length, from the recurrence's `best` (`leastSplits`). */
+function splitCycles(best: readonly { totalMs: number; from: number }[], to: number): number[] {
   const cycles: number[] = [];
-  for (let j = known; j > 0; j = (best[j] as { from: number }).from) {
+  for (let j = to; j > 0; j = (best[j] as { from: number }).from) {
     const { totalMs, from } = best[j] as { totalMs: number; from: number };
     cycles.unshift(totalMs - (best[from] as { totalMs: number }).totalMs);
   }
+  return cycles;
+}
+
+/**
+ * `laterCyclesMs` with a reading's shared `pricing` where it prices (`priced`: the pricing, which holds R, the rise,
+ * the dead time and the rate, and the candidate's own countables left and installs), and how many of the cycles are
+ * `shapeMs` itself (`shaped`: all unpriced; past the countables known with none priced, the rest): a wait's estimate
+ * moves with its τ through them (#399's review).
+ */
+function laterCyclesShaped(
+  { count, perCycle, shapeMs }: { count: number; perCycle: number; shapeMs: number },
+  priced: { pricing: LaterPricing; left: readonly CountableLeft[]; installing: readonly string[] } | undefined,
+): { cycles: number[]; shaped: number } {
+  if (!(count > 0)) return { cycles: [], shaped: 0 };
+  if (priced === undefined) {
+    const shaped = Math.ceil(count / perCycle);
+    return { cycles: Array.from({ length: shaped }, () => shapeMs), shaped };
+  }
+  const { pricing, installing } = priced;
+  const left = priced.left.slice(0, count);
+  const known = left.length;
+  const { best } = leastSplits(pricing, left, installing);
+  const cycles = splitCycles(best, known);
   const rest = count - known;
   let shaped = 0;
   if (rest > 0) {
@@ -801,3 +875,249 @@ export function installTiming({
     ...(marginMs === null ? {} : { marginMs }),
   };
 }
+
+/**
+ * One faction's next of the hacking set by work there (#413), in turn: the brain's `nextCountables` on that faction's
+ * countables by work alone, each τ the work there to it (and the money for the set and them at the income).
+ */
+export interface LevelWait {
+  faction: string;
+  next: readonly { augmentation: string; tauMs: number; tauError?: number }[];
+}
+
+/** A candidate of the level's timing (#413): install now (k 0), or wait for `faction`'s next k and then install. */
+export interface LevelTimingCandidate {
+  k: number;
+  /** The faction a wait works at (A5's there); absent installing now. */
+  faction?: string;
+  /** The augmentations waited for, in turn. */
+  waitedFor: string[];
+  tauMs: number;
+  /** Its estimated time to Daedalus's level, ms: τ, the later cycles, and the last one's time to the level. */
+  estimateMs: number;
+  /** The later cycles before the one that reaches the level (#389's DP, split to the least total), each's length, ms. */
+  cyclesMs: number[];
+  /** That cycle's time from its install to the level, along its path, ms (Infinity never). */
+  levelMs: number;
+  /** A wait whose τ is past this cycle's own time to the invitation (`stayMs`): its estimate is that. */
+  stays?: true;
+  /** A wait's estimate's error (#406): its τ's relative error times its τ; staying, κ's times `stayMs`. */
+  errorMs?: number;
+}
+
+/** The planner's install timing after Daedalus's count (#413): the candidates, staying, the choice and A5's work. */
+export interface LevelTiming {
+  /** Daedalus's hacking level (`daedalusRequirements`). */
+  required: number;
+  /** This cycle's own time to the invitation, no install: its path to the level, the money at the income; ms. */
+  stayMs: number;
+  candidates: LevelTimingCandidate[];
+  /** The candidate chosen, by its index; null: none to install now or wait for, or staying beat them (no install). */
+  choice: number | null;
+  /** The chosen estimate (staying's where none is chosen), ms: the time to Daedalus's invitation. */
+  estimateMs: number;
+  /**
+   * A5's work (#413): the chosen wait's faction and its first augmentation; installing now or staying, the best
+   * wait's (the faction whose next augmentation most cuts the time to the level); null with no wait priced.
+   */
+  work: { faction: string; augmentation: string } | null;
+  tauError: number;
+  /** As `InstallTiming`'s (#406): what the margin kept, and the margin, ms. */
+  kept: "margin" | "held" | null;
+  marginMs?: number;
+  /** Installing now was the least but held (#343's guards): no income measured; an invitation's money held. */
+  heldForIncome: boolean;
+  heldForInvitation: boolean;
+  /** What priced the later cycles: R, the dead time, κ, and the hacking set left (its count). */
+  later: { rebuildMs: number; deadSeconds: number; kappa: number; left: number };
+}
+
+/**
+ * The planner's install timing after Daedalus's count (#413, roadmap #347 Track 2 item 4): with the count met
+ * (`FactionInfo.tsx:141-145`: `DaedalusAugsRequirement` installed, kept through every install: `Prestige.ts:55-110`
+ * and `PlayerObjectGeneralMethods.ts:80-134` reset the skills, the experience and the money and reapply `augmentations`),
+ * the invitation waits on hacking 2,500 (`haveSkill("hacking", 2500)`) and $100b held (`haveMoney(100e9)`). The level
+ * is m·(32·ln(exp + 534.6) − 200) (`calculateSkill`, `skill.ts:7-15`), so at a level multiplier m it needs
+ * exp((2500/m + 200)/32) − 534.6 experience: at BN4's m 2.75 after the count about 1e15 against the 7e9 a cycle earns,
+ * so only an install that raises m gets there. Each candidate's time to the level:
+ * - **install now:** the cycle after it along `laterCycleRise` at the install's multipliers (#405's level path, flat
+ *   for the dead time), to the level (`levelMs`); or, where the hacking set's later cycles reach it sooner, those by
+ *   #389's DP (`leastSplits`, `LaterPricing`: the same recurrence and the same cycles, shared by every candidate of a
+ *   reading) and the last one's time to the level: the least over j of B(j) and its level's time after j;
+ * - **wait for a faction's next k** (`waits`, A5's work there): τ_k, then likewise after the install of them too; or
+ *   this cycle's own time to the invitation where that's sooner (`stays`).
+ * The hacking set: the countables left that add to levelling (`addsToLevelling`: the level's multiplier, its
+ * experience's or its speed's), cheapest first, from the joined and later-cycle factions (`countablesLeft`). Installing
+ * now is chosen only past the best wait's error (#406's rule, `marginMs`), or staying's (κ's), a tie to the wait; a
+ * wait under way (`held`, by faction and k) is kept unless a rival beats it by more than the larger error. Never an
+ * install of nothing that adds to the level (it would only reset it). Null where the later cycles aren't priced (no R
+ * measured, no level's rise, `pricedBy`): the caller's count rule, labelled.
+ * Left out, each labelled:
+ * - the money after an install: the invitation's $100b taken as there when the level is (BN4.2's c12 and BN4.3's c14
+ *   held $8.5e10 and $9.3e10 at +5 min, their level past 2,500): optimistic by a minute or two;
+ * - the combat route (every combat skill 1,500, `haveCombatSkills(1500)`): BN4 and BN1 are hacking BitNodes, the brain
+ *   trains no combat and works no field work for it (A5 works hacking), so it isn't priced (the Black Ops' route,
+ *   #404, prices combat where it's the way);
+ * - Intelligence (`calculateIntelligenceBonus`, the level's and the work's): left at none, cautious, as level-rise.ts;
+ * - the countables bought by a donation or the money alone, and the work at two factions within a wait: not among the
+ *   waits (cautious for waiting); the faction_rep-only augmentations (no level, faster work): not in the hacking set
+ *   (cautious); NeuroFlux Governor's levels at a wait's end: today's, held (`installing`'s);
+ * - level-rise.ts's and #389's own (RAM bought later, the share's change, the batcher's target; the favour after the
+ *   install, the work type, restarts and time offline).
+ */
+export function levelInstallTiming({
+  required,
+  rise,
+  moneyMs = 0,
+  kappaError = 0,
+  waits,
+  later,
+  tauError = 0,
+  held = null,
+  incomeMeasured = true,
+  invitationHeld = false,
+  counts,
+}: {
+  required: number;
+  /** This cycle's level's path now (the brain's: κ measured now, or carried after its dead time). */
+  rise: LevelRise;
+  /** This cycle's time to the invitation's money at the income, ms: 0 held; Infinity never. Absent, 0. */
+  moneyMs?: number;
+  /** κ's measured relative error (#406), staying's error's. Absent, 0. */
+  kappaError?: number;
+  waits: readonly LevelWait[];
+  later: LaterCycles;
+  /** The relative error of a τ with none of its own (#406). */
+  tauError?: number;
+  /** The last reading's wait (#406's hysteresis), by faction and k; null none. */
+  held?: { faction: string; k: number } | null;
+  /**
+   * #343's guards: with no income measured (a restart or a gap: every money-bound τ is never, so no wait priced), or an
+   * invitation's money held (#228), installing now is held: the best wait, else none. Absent: measured, none held.
+   */
+  incomeMeasured?: boolean;
+  invitationHeld?: boolean;
+  counts?: LaterPricingCounts;
+}): LevelTiming | null {
+  if (!pricedBy(later)) return null;
+  const pricing = new LaterPricing(later, counts);
+  const left = later.left.filter((each) => addsToLevelling([each.augmentation]));
+  /** After installing `installing` and `waitedFor`: the least over j of B(j) and the level's time after j. */
+  const priceAfter = (waitedFor: readonly string[]) => {
+    const remaining = left.filter((each) => !waitedFor.includes(each.augmentation));
+    const installing = [...later.installing, ...waitedFor];
+    const { best, installs } = leastSplits(pricing, remaining, installing);
+    let at = 0;
+    let totalMs = Number.POSITIVE_INFINITY;
+    let levelMs = Number.POSITIVE_INFINITY;
+    for (let j = 0; j <= remaining.length; j++) {
+      const after =
+        j < remaining.length
+          ? (installs[j] as Installs)
+          : pricing.after([...installing, ...remaining.map((each) => each.augmentation)]);
+      const ms = pricing.levelMs(after, required);
+      const total = (best[j] as { totalMs: number }).totalMs + ms;
+      if (total < totalMs) {
+        totalMs = total;
+        at = j;
+        levelMs = ms;
+      }
+    }
+    return { totalMs, cyclesMs: splitCycles(best, at), levelMs };
+  };
+  const stayLevelMs = new PathTable(rise).secondsToLevel(required).seconds * 1000;
+  const stayMs = Math.max(stayLevelMs, moneyMs);
+  const stayErrorMs = Number.isFinite(stayMs) ? kappaError * stayMs : 0;
+  const candidates: LevelTimingCandidate[] = [];
+  if (addsToLevelling(later.installing)) {
+    const now = priceAfter([]);
+    candidates.push({ k: 0, waitedFor: [], tauMs: 0, estimateMs: now.totalMs, ...pick(now) });
+  }
+  for (const { faction, next } of waits) {
+    for (const [index, each] of next.entries()) {
+      if (!Number.isFinite(each.tauMs)) break;
+      const waitedFor = next.slice(0, index + 1).map((one) => one.augmentation);
+      const after = priceAfter(waitedFor);
+      const estimateMs = each.tauMs + after.totalMs;
+      const stays = stayMs <= estimateMs;
+      const errorMs = stays ? stayErrorMs : (each.tauError ?? tauError) * each.tauMs;
+      candidates.push({
+        k: index + 1,
+        faction,
+        waitedFor,
+        tauMs: each.tauMs,
+        estimateMs: stays ? stayMs : estimateMs,
+        ...pick(after),
+        ...(stays ? { stays: true as const } : {}),
+        ...(errorMs > 0 ? { errorMs } : {}),
+      });
+    }
+  }
+  const least = (allowed: (candidate: LevelTimingCandidate) => boolean) => {
+    let best: LevelTimingCandidate | null = null;
+    for (const candidate of candidates) {
+      if (allowed(candidate) && (best === null || candidate.estimateMs < best.estimateMs)) best = candidate;
+    }
+    return best;
+  };
+  const best = least(() => true);
+  const bestWait = least((candidate) => candidate.k > 0);
+  const errorOf = (candidate: LevelTimingCandidate | null) =>
+    candidate === null ? stayErrorMs : (candidate.errorMs ?? 0);
+  let chosen = best;
+  let kept: LevelTiming["kept"] = null;
+  let marginMs: number | null = null;
+  if (best?.k === 0) {
+    // #406: installing now only by more than the best wait's error; with none, staying's (its own time, κ's error).
+    const rival = bestWait === null ? (Number.isFinite(stayMs) ? stayMs : null) : bestWait.estimateMs;
+    const margin = errorOf(bestWait);
+    if (rival !== null && !(best.estimateMs < rival - margin)) {
+      chosen = bestWait;
+      kept = "margin";
+      marginMs = margin;
+    }
+  } else if (best !== null && best.stays !== true && !(best.estimateMs < stayMs)) {
+    // No install and no wait beats staying (a tie stays): no install, nothing waited for.
+    chosen = null;
+  }
+  const installing = chosen?.k === 0;
+  const heldForIncome = installing && !incomeMeasured;
+  const heldForInvitation = installing && invitationHeld;
+  if (heldForIncome || heldForInvitation) chosen = bestWait;
+  const last =
+    held === null ? undefined : candidates.find((each) => each.k === held.k && each.faction === held.faction);
+  if (last !== undefined && chosen !== null && chosen !== last) {
+    const margin = Math.max(errorOf(chosen), errorOf(last));
+    if (!(chosen.estimateMs < last.estimateMs - margin)) {
+      chosen = last;
+      kept = "held";
+      marginMs = margin;
+    }
+  }
+  const choice = chosen === null ? null : candidates.indexOf(chosen);
+  const working = chosen !== null && chosen.k > 0 ? chosen : bestWait;
+  const first = working?.waitedFor[0];
+  return {
+    required,
+    stayMs,
+    candidates,
+    choice,
+    estimateMs: chosen === null ? stayMs : chosen.estimateMs,
+    work:
+      working?.faction === undefined || first === undefined ? null : { faction: working.faction, augmentation: first },
+    tauError,
+    kept,
+    ...(marginMs === null ? {} : { marginMs }),
+    heldForIncome,
+    heldForInvitation,
+    later: {
+      rebuildMs: later.rebuildMs,
+      deadSeconds: later.deadSeconds,
+      kappa: later.rise.kappa,
+      left: left.length,
+    },
+  };
+}
+
+/** A priced candidate's later cycles and its last cycle's time to the level. */
+const pick = ({ cyclesMs, levelMs }: { cyclesMs: number[]; levelMs: number }) => ({ cyclesMs, levelMs });

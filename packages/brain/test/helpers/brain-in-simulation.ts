@@ -11,7 +11,7 @@ import {
   type InGameBuild,
 } from "@bitburner-agent/bridge";
 import type { Bn2Route } from "@bitburner-agent/core";
-import type { InstallTimingPolicy } from "../../src/augmentations.ts";
+import type { InstallTimingPolicy, LevelTimingPolicy } from "../../src/augmentations.ts";
 import { DesiredStateController } from "../../src/desired-state.ts";
 import { readPinnedDefinitions } from "../../src/in-game-build.ts";
 import { IncomeWatch } from "../../src/income-watch.ts";
@@ -83,6 +83,7 @@ export function startBrainInSimulation(
     data,
     withDesiredState = false,
     installTiming = "planner",
+    levelTiming = "planner",
     bn2Route = "planner",
     gangRoute = bn2Route,
     levellingBatch = true,
@@ -102,6 +103,8 @@ export function startBrainInSimulation(
     withDesiredState?: boolean;
     /** Who times installs short of Daedalus's count (#343): the planner, as main.ts has it; the count rule for an A/B. */
     installTiming?: InstallTimingPolicy;
+    /** Who times installs after Daedalus's count (#413): the planner, as main.ts has it; the count rule for an A/B. */
+    levelTiming?: LevelTimingPolicy;
     /** BN2's route (#357): the planner's, as main.ts has it; the rules' for an A/B. */
     bn2Route?: Bn2Route;
     /** The gang rule's own route (#357's (3) A/B): the planner's objective with the rules' installs. Absent, bn2Route. */
@@ -134,6 +137,7 @@ export function startBrainInSimulation(
       saveBackups,
       log: (line) => logLines.push(line),
       installTiming,
+      levelTiming,
       bn2Route,
       gangRoute,
       levellingBatch,

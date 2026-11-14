@@ -612,7 +612,9 @@ export function affordableCounts({
  * shortest way to the count; and "the gang's favour" (#357's (3)): in BN2 with a gang, the planner chose to install now
  * (or at the reputation it banked to), its favour the shortest way to The Red Pill's reputation there; and "the Black
  * Ops' route" (#404): on it (BN6, BN7), the planner chose to install now, the rebuild and the route after it shorter
- * than keeping the cycle (core's `blackOpsInstallTiming`). `installRule` gives none of these.
+ * than keeping the cycle (core's `blackOpsInstallTiming`); and "Daedalus's level" (#413): after Daedalus's count,
+ * short of its invitation's hacking 2,500, the planner chose to install now, the shortest time to the level (core's
+ * `levelInstallTiming`). `installRule` gives none of these.
  */
 export type InstallReason =
   | "count reached"
@@ -623,7 +625,8 @@ export type InstallReason =
   | "the hacking level"
   | "Daedalus's count"
   | "the gang's favour"
-  | "the Black Ops' route";
+  | "the Black Ops' route"
+  | "Daedalus's level";
 
 export interface InstallRuleInputs extends InstallCounts {
   /** The game's time the brain saw online since the last install: the bars' clock. */
