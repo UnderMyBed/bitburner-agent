@@ -38,11 +38,13 @@
  * c3 (a wait for 3, about 20 min worse in hindsight, right in expectation) and c8 (a wait for the last, 4 min better).
  * The caller prices from its second cycle alone (#389's decision; the brain's: a κ carried over an install): in the
  * first, every later cycle's rate is this cycle's κ through an install not made, and install now mustn't win on that.
- * Installing now is chosen only by more than the best wait's τ error (#406, `installTiming`).
+ * Installing now is chosen only by more than the best wait's error through its τ (#406, `installTiming`).
  * Left out, each labelled:
  * - level-rise.ts's own (home RAM and servers bought later, the share's change, the batcher's target): see there;
  * - the favour gained at the install and after: the caller's rate at the favour after this install, none after it
  *   (cautious for "install now"); a faction not joined at none (cautious);
+ * - the work type and its rate at the skills other than hacking now (the brain's), which the install resets:
+ *   optimistic for "install now" where a type other than hacking is best (#399's review);
  * - the work at factions bought nothing from (BN4.2's needed over earned 0.67-0.87): optimistic for "install now";
  * - the factions within a cycle worked dearest first, each from where the last ended: either way;
  * - the city groups' exclusion (`CITY_FACTION_GROUPS`: one group a cycle), so a cycle may take two groups' countables:
@@ -241,14 +243,21 @@ export function factionsOneAtATime(
   countables: readonly { reputation: number; sellers: readonly string[] }[],
 ): { faction: string; reputation: number }[] {
   const dearest = [...countables].sort((a, b) => b.reputation - a.reputation);
-  const sells = (faction: string) => countables.filter((each) => each.sellers.includes(faction)).length;
-  const worked: { faction: string; reputation: number }[] = [];
-  for (const each of dearest) {
-    if (each.sellers.length === 0 || each.sellers.some((faction) => worked.some((one) => one.faction === faction))) {
-      continue;
+  /** How many of them each faction sells, counted once. */
+  const sold = new Map<string, number>();
+  for (const { sellers } of countables) {
+    for (const [index, faction] of sellers.entries()) {
+      if (sellers.indexOf(faction) === index) sold.set(faction, (sold.get(faction) ?? 0) + 1);
     }
+  }
+  const sells = (faction: string) => sold.get(faction) ?? 0;
+  const worked: { faction: string; reputation: number }[] = [];
+  const workedAt = new Set<string>();
+  for (const each of dearest) {
+    if (each.sellers.length === 0 || each.sellers.some((faction) => workedAt.has(faction))) continue;
     const seller = each.sellers.reduce((best, faction) => (sells(faction) > sells(best) ? faction : best));
     worked.push({ faction: seller, reputation: each.reputation });
+    workedAt.add(seller);
   }
   return worked;
 }
@@ -297,12 +306,16 @@ export function factionRepGain(names: readonly string[]): number {
 /**
  * A level's path tabulated (#389), walked many times by the later cycles' recurrence: each step's end (seconds), and
  * the reputation a level-linear rate a + b·L earns to it, as Σ over the steps of (a + b·(L₀ + L₁)/2)·Δt (the same
- * trapezoid as `workSecondsAlong`), kept as Σ Δt and Σ ((L₀ + L₁)/2)·Δt; extended as far as asked.
+ * trapezoid as `workSecondsAlong`), kept as Σ Δt and Σ ((L₀ + L₁)/2)·Δt, each step's mean level from them; extended as
+ * far as asked. A walk starts at its step found by bisection on the ends (#399's review: a scan from the first step
+ * was most of the cost).
  */
 class PathTable {
   readonly #steps: Generator<{ toSeconds: number; toLevel: number }>;
   readonly #ends: number[] = [0];
   readonly #levelTime: number[] = [0];
+  /** Each step's mean level, Σ L·dt over it over its Δt (0 for a step of no length). */
+  readonly #meanLevels: number[] = [];
   #level: number;
   #done = false;
 
@@ -311,26 +324,24 @@ class PathTable {
     this.#level = rise.level;
   }
 
-  /** The step from `index` (its start, end, and Σ L·dt at its start), extending the table: null past its end. */
-  #step(index: number): { from: number; to: number; meanLevel: number; levelTimeAt: number } | null {
-    while (this.#ends.length <= index + 1 && !this.#done) {
-      const next = this.#steps.next();
-      if (next.done === true) {
-        this.#done = true;
-        break;
-      }
-      const from = this.#ends.at(-1) as number;
-      const meanLevel = (this.#level + next.value.toLevel) / 2;
-      this.#levelTime.push((this.#levelTime.at(-1) as number) + meanLevel * (next.value.toSeconds - from));
-      this.#ends.push(next.value.toSeconds);
-      this.#level = next.value.toLevel;
+  /** Extends the table by a step: false past its end. */
+  #extend(): boolean {
+    if (this.#done) return false;
+    const next = this.#steps.next();
+    if (next.done === true) {
+      this.#done = true;
+      return false;
     }
-    if (this.#ends.length <= index + 1) return null;
-    const from = this.#ends[index] as number;
-    const to = this.#ends[index + 1] as number;
-    const levelTimeAt = this.#levelTime[index] as number;
-    const meanLevel = to > from ? ((this.#levelTime[index + 1] as number) - levelTimeAt) / (to - from) : 0;
-    return { from, to, meanLevel, levelTimeAt };
+    const from = this.#ends.at(-1) as number;
+    const meanLevel = (this.#level + next.value.toLevel) / 2;
+    const levelTimeAt = this.#levelTime.at(-1) as number;
+    const levelTime = levelTimeAt + meanLevel * (next.value.toSeconds - from);
+    const to = next.value.toSeconds;
+    this.#levelTime.push(levelTime);
+    this.#ends.push(to);
+    this.#meanLevels.push(to > from ? (levelTime - levelTimeAt) / (to - from) : 0);
+    this.#level = next.value.toLevel;
+    return true;
   }
 
   /**
@@ -339,83 +350,184 @@ class PathTable {
    */
   workSeconds(a: number, b: number, reputation: number, fromSeconds: number): number {
     if (!(reputation > 0)) return fromSeconds;
+    const ends = this.#ends;
+    const meanLevels = this.#meanLevels;
+    // The first step ending past `fromSeconds` (the ends never fall): those before it earn nothing.
+    while ((ends.at(-1) as number) <= fromSeconds) {
+      if (!this.#extend()) break;
+    }
+    let low = 0;
+    let high = ends.length - 1;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if ((ends[middle + 1] as number) <= fromSeconds) low = middle + 1;
+      else high = middle;
+    }
     let earned = 0;
-    for (let index = 0; ; index++) {
-      const step = this.#step(index);
-      if (step === null) return Number.POSITIVE_INFINITY;
-      if (step.to <= fromSeconds) continue;
-      const start = Math.max(step.from, fromSeconds);
-      const rate = a + b * step.meanLevel;
-      const gained = rate * (step.to - start);
+    for (let index = low; ; index++) {
+      if (ends.length <= index + 1 && !this.#extend()) return Number.POSITIVE_INFINITY;
+      const to = ends[index + 1] as number;
+      // Past the first step, its own start: every later one starts after fromSeconds.
+      const start = index === low ? Math.max(ends[index] as number, fromSeconds) : (ends[index] as number);
+      const rate = a + b * (meanLevels[index] as number);
+      const gained = rate * (to - start);
       if (rate > 0 && earned + gained >= reputation) return start + (reputation - earned) / rate;
       earned += Math.max(0, gained);
     }
   }
 }
 
+/** The path and `faction_rep` after some installs (`LaterPricing.after`), and the cycles priced after them. */
+interface Installs {
+  table: PathTable;
+  repGain: number;
+  cycles: Map<string, number>;
+}
+
 /**
- * A later cycle's length, ms (#389): from its install, the level's path after every install before it (`installed`:
- * `laterCycleRise` at their multipliers, `levellingInstallMultipliers`, flat for the dead time; tabulated once a path,
- * `tables`), the work from R at each faction of `group` in turn (`factionsOneAtATime`), each to its reputation along the
- * path at the work's rate times their `faction_rep`, the rate linear in the level (hacking work's formula,
- * `reputation.ts:16-52`: the caller's, read at levels 0 and 1).
+ * What one reading's later cycles share (#399's review: priced afresh, a reading took 80 ms, the brain's rule 40 times
+ * main's): the work's rate at each faction, read once (`rateAt` at levels 0 and 1); the level's paths, tabulated once a
+ * path (`PathTable`); and each cycle C(i, j), priced once for what it depends on: its path (κ, m and the dead time),
+ * the installs' `faction_rep` and its countables. Every candidate's DP draws on it: a wait's cycles are mostly install
+ * now's, after the same installs. The figures are the same as each priced afresh (the same arithmetic, in the same order).
  */
-function cycleMs(
-  later: PricedLaterCycles,
-  group: readonly CountableLeft[],
-  installed: readonly string[],
-  tables: Map<string, PathTable>,
-): number {
-  const rise = laterCycleRise(later.rise, levellingInstallMultipliers(0, installed), later.deadSeconds);
-  const key = `${rise.levelMult} ${rise.kappa} ${rise.delaySeconds ?? 0}`;
-  let table = tables.get(key);
-  if (table === undefined) {
-    table = new PathTable(rise);
-    tables.set(key, table);
+class LaterPricing {
+  readonly #later: PricedLaterCycles;
+  readonly #rates = new Map<string, readonly [number, number]>();
+  readonly #tables = new Map<string, PathTable>();
+  /** By the path and `faction_rep` after the installs: each with its cycles priced, by their countables' ids. */
+  readonly #installs = new Map<string, Installs>();
+  readonly #ids = new Map<string, number>();
+  /** Each group's factions in turn (`factionsOneAtATime`), by their countables' ids: the same after any installs. */
+  readonly #worked = new Map<string, { faction: string; reputation: number }[]>();
+
+  constructor(later: PricedLaterCycles) {
+    this.#later = later;
   }
-  const repGain = factionRepGain(installed);
-  let seconds = later.rebuildMs / 1000;
-  for (const { faction, reputation } of factionsOneAtATime(group)) {
-    const a = later.rateAt(faction, 0) * repGain;
-    const b = later.rateAt(faction, 1) * repGain - a;
-    seconds = table.workSeconds(a, b, reputation, seconds);
+
+  /** The path and `faction_rep` after the installs of `installed` (`laterCycleRise`, `levellingInstallMultipliers`). */
+  after(installed: readonly string[]): Installs {
+    const later = this.#later;
+    const rise = laterCycleRise(later.rise, levellingInstallMultipliers(0, installed), later.deadSeconds);
+    const pathKey = `${rise.levelMult} ${rise.kappa} ${rise.delaySeconds ?? 0}`;
+    const repGain = factionRepGain(installed);
+    const key = `${pathKey} ${repGain}`;
+    let installs = this.#installs.get(key);
+    if (installs === undefined) {
+      let table = this.#tables.get(pathKey);
+      if (table === undefined) {
+        table = new PathTable(rise);
+        this.#tables.set(pathKey, table);
+      }
+      installs = { table, repGain, cycles: new Map() };
+      this.#installs.set(key, installs);
+    }
+    return installs;
   }
-  return seconds * 1000;
+
+  /**
+   * A later cycle's length, ms (#389): from its install, the level's path after every install before it (`installs`,
+   * from `after`: flat for the dead time), the work from R at each faction of `group` (its countables, `groupKey` their
+   * ids, `id`) in turn (`factionsOneAtATime`), each to its reputation along the path at the work's rate times their
+   * `faction_rep`, the rate linear in the level (hacking work's formula, `reputation.ts:16-52`: the caller's, read at
+   * levels 0 and 1).
+   */
+  cycleMs(group: () => readonly CountableLeft[], groupKey: string, installs: Installs): number {
+    const known = installs.cycles.get(groupKey);
+    if (known !== undefined) return known;
+    const later = this.#later;
+    let seconds = later.rebuildMs / 1000;
+    let worked = this.#worked.get(groupKey);
+    if (worked === undefined) {
+      worked = factionsOneAtATime(group());
+      this.#worked.set(groupKey, worked);
+    }
+    for (const { faction, reputation } of worked) {
+      const [at0, at1] = this.#rate(faction);
+      const a = at0 * installs.repGain;
+      const b = at1 * installs.repGain - a;
+      seconds = installs.table.workSeconds(a, b, reputation, seconds);
+    }
+    const ms = seconds * 1000;
+    installs.cycles.set(groupKey, ms);
+    return ms;
+  }
+
+  /** A countable's id in the cycles' keys, by name (a reading's countables left are the same throughout). */
+  id(augmentation: string): number {
+    let id = this.#ids.get(augmentation);
+    if (id === undefined) {
+      id = this.#ids.size;
+      this.#ids.set(augmentation, id);
+    }
+    return id;
+  }
+
+  #rate(faction: string): readonly [number, number] {
+    let rate = this.#rates.get(faction);
+    if (rate === undefined) {
+      rate = [this.#later.rateAt(faction, 0), this.#later.rateAt(faction, 1)];
+      this.#rates.set(faction, rate);
+    }
+    return rate;
+  }
 }
 
 /**
  * The later cycles' lengths, ms (#389), the cheapest first (`left`) split into cycles to the least total, the policy the
  * planner itself runs (install timing falls out of the rollouts, architecture §4.5.3): with C(i, j) the cycle of
- * countables i to j − 1 after the installs of `installing` and countables 0 to i − 1 (`cycleMs`), the least total to j
- * is B(j) = min over i < j of B(i) + C(i, j), B(0) = 0, for the `count` (at most those known), and the cycles are B's
- * own. Its cost: count · (count + 1) / 2 cycles priced, each a walk of the level's path per faction (465 at 30, the
- * count's most; BN4.2's c2, 13 left, 0.04 s for its 4 candidates: the test's timing). Unpriced (`pricedBy`),
- * ⌈`count` / `perCycle`⌉ cycles of `shapeMs` each (this one's shape, as before #389); past the countables known, those
- * left priced ⌈rest / `perCycle`⌉ cycles of the last priced cycle's length again (labelled: either way).
+ * countables i to j − 1 after the installs of `installing` and countables 0 to i − 1 (`LaterPricing`), the least total
+ * to j is B(j) = min over i < j of B(i) + C(i, j), B(0) = 0, for the `count` (at most those known), and the cycles are
+ * B's own. Its cost: count · (count + 1) / 2 cycles, each a walk of the level's path per faction (465 at 30, the count's
+ * most), shared between a reading's candidates (`installTiming`). Unpriced (`pricedBy`), ⌈`count` / `perCycle`⌉ cycles
+ * of `shapeMs` each (this one's shape, as before #389); past the countables known, those left priced ⌈rest /
+ * `perCycle`⌉ cycles of the last priced cycle's length again (labelled: either way).
  */
-export function laterCyclesMs({
-  count,
-  perCycle,
-  shapeMs,
-  later,
-}: {
+export function laterCyclesMs(args: {
   count: number;
   perCycle: number;
   shapeMs: number;
   later?: LaterCycles | undefined;
 }): number[] {
-  if (!(count > 0)) return [];
-  if (!pricedBy(later)) return Array.from({ length: Math.ceil(count / perCycle) }, () => shapeMs);
+  return laterCyclesShaped(args, pricedBy(args.later) ? new LaterPricing(args.later) : undefined).cycles;
+}
+
+/**
+ * `laterCyclesMs` with a reading's shared `pricing` (for `later`, where it prices), and how many of the cycles are
+ * `shapeMs` itself (`shaped`: all unpriced; past the countables known with none priced, the rest): a wait's estimate
+ * moves with its τ through them (#399's review).
+ */
+function laterCyclesShaped(
+  {
+    count,
+    perCycle,
+    shapeMs,
+    later,
+  }: { count: number; perCycle: number; shapeMs: number; later?: LaterCycles | undefined },
+  pricing: LaterPricing | undefined,
+): { cycles: number[]; shaped: number } {
+  if (!(count > 0)) return { cycles: [], shaped: 0 };
+  if (!pricedBy(later) || pricing === undefined) {
+    const shaped = Math.ceil(count / perCycle);
+    return { cycles: Array.from({ length: shaped }, () => shapeMs), shaped };
+  }
   const left = later.left.slice(0, count);
   const known = left.length;
-  const tables = new Map<string, PathTable>();
+  const names = left.map((each) => each.augmentation);
+  /** The installs before cycle i: `installing` and countables 0 to i − 1. */
+  const installs = Array.from({ length: known }, (_, i) => pricing.after([...later.installing, ...names.slice(0, i)]));
+  /** Countables i to j − 1's key, by their ids, for each i: grown by one as j grows. */
+  const groupKeys: string[] = [];
   const best: { totalMs: number; from: number }[] = [{ totalMs: 0, from: 0 }];
   for (let j = 1; j <= known; j++) {
+    const id = pricing.id(names[j - 1] as string);
+    for (let i = 0; i < j - 1; i++) groupKeys[i] = `${groupKeys[i]},${id}`;
+    groupKeys[j - 1] = `${id}`;
     let least = { totalMs: Number.POSITIVE_INFINITY, from: 0 };
     for (let i = 0; i < j; i++) {
       const before = best[i] as { totalMs: number };
-      const installed = [...later.installing, ...left.slice(0, i).map((each) => each.augmentation)];
-      const totalMs = before.totalMs + cycleMs(later, left.slice(i, j), installed, tables);
+      const installed = installs[i] as Installs;
+      const totalMs = before.totalMs + pricing.cycleMs(() => left.slice(i, j), groupKeys[i] as string, installed);
       if (totalMs < least.totalMs) least = { totalMs, from: i };
     }
     best.push(least);
@@ -426,11 +538,14 @@ export function laterCyclesMs({
     cycles.unshift(totalMs - (best[from] as { totalMs: number }).totalMs);
   }
   const rest = count - known;
+  let shaped = 0;
   if (rest > 0) {
     const lastMs = cycles.at(-1) ?? shapeMs;
-    cycles.push(...Array.from({ length: Math.ceil(rest / perCycle) }, () => lastMs));
+    const more = Math.ceil(rest / perCycle);
+    if (cycles.length === 0) shaped = more;
+    cycles.push(...Array.from({ length: more }, () => lastMs));
   }
-  return cycles;
+  return { cycles, shaped };
 }
 
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
@@ -477,7 +592,11 @@ export interface InstallTimingCandidate {
   estimateMs: number;
   /** Its later cycles' lengths, ms, where they're priced from the countables left (#389); absent, this one's shape. */
   cyclesMs?: number[];
-  /** A wait's τ's error, ms (#406): its relative error (its own, else `tauError`) times its τ; absent where 0. */
+  /**
+   * A wait's estimate's error through its τ, ms (#406): its τ's relative error (its own, else `tauError`) times its τ
+   * as measured (no `tauScale`), times 1 + its later cycles of this one's shape, T + τ (unpriced; #399's review);
+   * absent where 0.
+   */
   errorMs?: number;
 }
 
@@ -537,10 +656,11 @@ export function tauRelativeError(shareError: number | null, kappaPart: number | 
  * The candidates and the choice (#343): install now (with n above 0) and each next k with a τ (times `tauScale`, an
  * overdue wait's measured error; never, with a τ above 0 times a scale of Infinity), the least estimate chosen, a tie to
  * the fewer to wait for. Installing now, irreversible, is chosen over the best wait only when it beats it by more than
- * the error of their difference (#406): their later cycles' terms in common cancel, so it's the wait's τ's, `tauError`
- * times its τ; within it, or a tie, the wait, which the next reading decides again. And a choice the last reading made
- * (`held`, a k above 0: the wait under way) is kept until a rival beats it by more than the error of the larger τ of
- * the two (the hysteresis #406 filed: a choice doesn't flap within the error). With no income
+ * the error of their difference (#406): the wait's estimate's through its τ (`errorMs`: `tauError` times its τ, times
+ * 1 + its later cycles of this one's shape, T + τ, where unpriced; priced from the countables left, they don't move with
+ * the τ); within it, or a tie, the wait, which the next reading decides again. And a choice the last reading made
+ * (`held`, a k above 0: the wait under way) is kept until a rival beats it by more than the larger error of the two
+ * (the hysteresis #406 filed: a choice doesn't flap within the error). With no income
  * measured (`incomeMeasured` false), installing now is chosen only once the set meets the count; else the least wait,
  * or none (`heldForIncome` says so); likewise while an invitation's money is held (`invitationHeld`,
  * `heldForInvitation`). With `later` (#389), each candidate's later cycles are priced from the countables left (a
@@ -570,33 +690,38 @@ export function installTiming({
   held?: number | null;
 }): InstallTiming {
   const priced = pricedBy(later);
-  /** A candidate's later cycles, where they're priced and there are any: `cyclesMs`. */
+  // Each candidate's later cycles priced once, from one reading's shared pricing (#399's review), as
+  // `installNowEstimateMs` and `waitEstimateMs` price them.
+  const pricing = priced ? new LaterPricing(later) : undefined;
   const cyclesOf = (count: number, perCycle: number, shapeMs: number, after: LaterCycles | undefined) =>
-    priced && count > 0 ? { cyclesMs: laterCyclesMs({ count, perCycle, shapeMs, later: after }) } : {};
+    laterCyclesShaped({ count, perCycle, shapeMs, later: after }, pricing);
+  /** A candidate's later cycles, where they're priced and there are any: `cyclesMs`. */
+  const shown = (cycles: number[], count: number) => (priced && count > 0 ? { cyclesMs: cycles } : {});
   const candidates: InstallTimingCandidate[] = [];
-  const now = installNowEstimateMs(needed, adding, onlineMs, later);
-  if (now !== null) {
-    const cycles = cyclesOf(needed - adding, adding, onlineMs, later);
-    candidates.push({ k: 0, tauMs: 0, estimateMs: now, ...cycles });
+  if (adding >= needed) {
+    candidates.push({ k: 0, tauMs: 0, estimateMs: 0 });
+  } else if (adding > 0) {
+    const { cycles } = cyclesOf(needed - adding, adding, onlineMs, later);
+    candidates.push({ k: 0, tauMs: 0, estimateMs: sum(cycles), ...shown(cycles, needed - adding) });
   }
   for (const [index, each] of next.entries()) {
     const k = index + 1;
     const tauMs = each.tauMs === 0 ? 0 : each.tauMs * tauScale;
+    if (!Number.isFinite(tauMs)) continue;
     const waitedFor = next.slice(0, k).map((one) => one.augmentation);
     const left = (later?.left ?? []).filter((one) => !waitedFor.includes(one.augmentation));
     const installing = [...(later?.installing ?? []), ...next.slice(0, k).flatMap((one) => one.augmentation ?? [])];
     const afterWait = later === undefined ? undefined : { ...later, left, installing };
-    const estimateMs = waitEstimateMs(needed, adding, k, tauMs, onlineMs, afterWait);
-    if (estimateMs !== null) {
-      const errorMs = (each.tauError ?? tauError) * tauMs;
-      candidates.push({
-        k,
-        tauMs,
-        estimateMs,
-        ...cyclesOf(needed - adding - k, adding + k, onlineMs + tauMs, afterWait),
-        ...(errorMs > 0 ? { errorMs } : {}),
-      });
-    }
+    const count = needed - adding - k;
+    const { cycles, shaped } =
+      count > 0 ? cyclesOf(count, adding + k, onlineMs + tauMs, afterWait) : { cycles: [], shaped: 0 };
+    const estimateMs = count > 0 ? tauMs + sum(cycles) : tauMs;
+    // #406: the estimate's error through the τ: the τ's own and each later cycle's of this one's shape, T + τ (unpriced,
+    // c = ⌈(N − n − k) / (n + k)⌉ of them), so the τ's error times 1 + c (#399's review); the cycles priced from the
+    // countables left don't move with it. On the τ as measured: an overdue wait's scale would strengthen a stalled
+    // wait's hold, against the overdue rule (#399's review).
+    const errorMs = (each.tauError ?? tauError) * each.tauMs * (1 + shaped);
+    candidates.push({ k, tauMs, estimateMs, ...shown(cycles, count), ...(errorMs > 0 ? { errorMs } : {}) });
   }
   const least = (allowed: (candidate: InstallTimingCandidate) => boolean) => {
     let best: InstallTimingCandidate | null = null;

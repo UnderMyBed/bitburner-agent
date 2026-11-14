@@ -3058,7 +3058,8 @@ export class AugmentationRule {
           // #406: each τ's error, the share's (its samples' over the window) and κ's propagated through the τ: the
           // next countables again at κ lowered by its measured error (the window's own, "measured now"; the carried
           // rate's isn't measured: left out), each τ's change over it (the countable matched by name: its place among
-          // them may move, labelled).
+          // them may move, labelled). The share's is taken on every τ, a money or donation one too, which the share
+          // doesn't move (labelled, #399's review): cautious, a wider margin for installing now to beat.
           const shareError = meanRelativeError(this.#shareSamples.map((sample) => sample.bonus));
           const kappaError = levelRise.from === "measured now" ? this.#expRate.relativeError() : null;
           const lowered =
@@ -3103,7 +3104,9 @@ export class AugmentationRule {
           // The later cycles priced from the countables left (#389): R, this cycle's rebuild from its first work (kept
           // in the store); the level's path now (#401) and the dead time after an install (#405); the work's rate at a
           // faction, at the work type best at the level now, the favour after this install where it's joined (none
-          // where it isn't: the brain reads only the joined), the share's mean; and what this install installs.
+          // where it isn't: the brain reads only the joined), the share's mean; and what this install installs. The
+          // work type, and its rate, at the non-hacking skills now, which the install resets (labelled, #399's
+          // review): optimistic for install now where a type other than hacking is best.
           const rebuild = this.#cycleRebuild(resetInfo.lastAugReset, cycleMs);
           const dead = this.#laterDeadMs(resetInfo.lastAugReset, slowData);
           const conditions = workConditionsOf(resetInfo, slowData, shareBonus);

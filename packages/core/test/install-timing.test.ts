@@ -248,7 +248,8 @@ describe("the margin (#406): installing only by more than the error, a choice ke
     expect(tauRelativeError(null, null)).toBe(0);
   });
 
-  // 9 to go, 4 new, T 59: install now 2T = 118; waiting for 1 at τ, τ + T + τ.
+  // 9 to go, 4 new, T 59: install now 2T = 118; waiting for 1 at τ, τ + T + τ, unpriced: its estimate moves by twice
+  // the τ's error, the τ's own and its later cycle's, T + τ (#399's review).
   const at59 = (tauMinutes: number, fields: Partial<Parameters<typeof installTiming>[0]> = {}) =>
     installTiming({ needed: 9, adding: 4, onlineMs: 59 * MINUTE, next: [{ tauMs: tauMinutes * MINUTE }], ...fields });
 
@@ -259,7 +260,7 @@ describe("the margin (#406): installing only by more than the error, a choice ke
     expect(at59(29.6, { tauError: 0.1 })).toMatchObject({ choice: 1, kept: "margin", tauError: 0.1 });
     // τ 33: the wait 125 against 118, install now by 7 min, more than 10% of 33's 3.3: install.
     expect(at59(33, { tauError: 0.1 })).toMatchObject({ choice: 0, kept: null });
-    // A wait's own error (its `tauError`) over the scalar: τ 33 at 50%, 16.5 min, more than install now's 7: the wait.
+    // A wait's own error (its `tauError`) over the scalar: τ 33 at 50%, 16.5 min, twice: more than install now's 7.
     expect(
       installTiming({
         needed: 9,
@@ -271,12 +272,54 @@ describe("the margin (#406): installing only by more than the error, a choice ke
     ).toMatchObject({
       choice: 1,
       kept: "margin",
-      marginMs: 16.5 * MINUTE,
-      candidates: [{ k: 0 }, { k: 1, errorMs: 16.5 * MINUTE }],
+      marginMs: 33 * MINUTE,
+      candidates: [{ k: 0 }, { k: 1, errorMs: 33 * MINUTE }],
     });
-    // The edge: install now wins by 2τ − 59, the margin 0.1τ: τ 31.05. Under it, the wait; over it, install.
-    expect(at59(31, { tauError: 0.1 })).toMatchObject({ choice: 1, kept: "margin" });
-    expect(at59(31.2, { tauError: 0.1 })).toMatchObject({ choice: 0, kept: null });
+    // The edge: install now wins by 2τ − 59, the margin 2 × 0.1τ: τ 32.78. Under it, the wait; over it, install.
+    expect(at59(32.7, { tauError: 0.1 })).toMatchObject({ choice: 1, kept: "margin" });
+    expect(at59(32.9, { tauError: 0.1 })).toMatchObject({ choice: 0, kept: null });
+  });
+
+  test("unpriced, the margin is the τ's error times 1 + c, the later cycles of the shape T + τ; priced, the τ's alone", () => {
+    // Both sides of the first cycle's margin (#399's review): 10 to go, 4 new, T 60: install now ⌈6 / 4⌉ = 2 cycles,
+    // 120; waiting for 1 at τ, τ + ⌈5 / 5⌉ = 1 cycle of 60 + τ. At τ 31, install now by 2 min: the τ's error at 5%,
+    // 1.55 min, is less, but the estimate's, 3.1, isn't: the wait. At τ 32.5, by 5 min, more than 3.25: install.
+    const at60 = (tauMinutes: number, fields: Partial<Parameters<typeof installTiming>[0]> = {}) =>
+      installTiming({
+        needed: 10,
+        adding: 4,
+        onlineMs: 60 * MINUTE,
+        next: [{ tauMs: tauMinutes * MINUTE }],
+        ...fields,
+      });
+    const near = at60(31, { tauError: 0.05 });
+    expect(near).toMatchObject({ choice: 1, kept: "margin", candidates: [{ estimateMs: 120 * MINUTE }, { k: 1 }] });
+    expect(near.candidates[1]?.estimateMs).toBeCloseTo(122 * MINUTE, 6);
+    expect(near.candidates[1]?.errorMs).toBeCloseTo(0.05 * 31 * 2 * MINUTE, 6);
+    expect(near.marginMs).toBeCloseTo(3.1 * MINUTE, 6);
+    expect(at60(32.5, { tauError: 0.05 })).toMatchObject({ choice: 0, kept: null });
+    // c 2: 14 to go, 4 new, a wait for 1: ⌈9 / 5⌉ = 2 cycles of T + τ, so 3 times the τ's error.
+    const two = installTiming({
+      needed: 14,
+      adding: 4,
+      onlineMs: 60 * MINUTE,
+      next: [{ tauMs: 30 * MINUTE }],
+      tauError: 0.1,
+    });
+    expect(two.candidates[1]?.errorMs).toBeCloseTo(0.1 * 30 * 3 * MINUTE, 6);
+    // The last one (c 0): the τ's alone.
+    const last = installTiming({
+      needed: 5,
+      adding: 4,
+      onlineMs: 60 * MINUTE,
+      next: [{ tauMs: 30 * MINUTE }],
+      tauError: 0.1,
+    });
+    expect(last.candidates[1]?.errorMs).toBeCloseTo(3 * MINUTE, 6);
+    // An overdue wait: the error on the τ as measured, not the scaled one, so a stalled wait's hold doesn't grow.
+    const overdue = at60(31, { tauError: 0.05, tauScale: 2 });
+    expect(overdue.candidates[1]?.tauMs).toBe(62 * MINUTE);
+    expect(overdue.candidates[1]?.errorMs).toBeCloseTo(0.05 * 31 * 2 * MINUTE, 6);
   });
 
   test("a held choice doesn't flap within the error: a rival beating it by less is passed over; by more, taken", () => {
@@ -286,12 +329,13 @@ describe("the margin (#406): installing only by more than the error, a choice ke
     const free = installTiming(base);
     const [, one, two] = free.candidates;
     expect(free.choice).toBe((one?.estimateMs as number) <= (two?.estimateMs as number) ? 1 : 2);
-    // Held at the other (wait for 2): kept while the least beats it by less than the error of the larger τ, 26 min's.
+    // Held at the other (wait for 2): kept while the least beats it by less than the larger error, 26 min's τ's twice
+    // (unpriced, each with a later cycle of T + τ).
     const other = free.choice === 1 ? 2 : 1;
     const gap = Math.abs((one?.estimateMs as number) - (two?.estimateMs as number)) / MINUTE;
-    const within = installTiming({ ...base, held: other, tauError: (gap + 0.1) / 26 });
+    const within = installTiming({ ...base, held: other, tauError: (gap + 0.1) / (2 * 26) });
     expect(within).toMatchObject({ choice: other, kept: "held" });
-    const beyond = installTiming({ ...base, held: other, tauError: (gap - 0.1) / 26 });
+    const beyond = installTiming({ ...base, held: other, tauError: (gap - 0.1) / (2 * 26) });
     expect(beyond).toMatchObject({ choice: free.choice, kept: null });
     // Held, and install now beats it by more than its τ's error: install; within it: kept.
     expect(at59(40, { held: 1, tauError: 0.1 })).toMatchObject({ choice: 0, kept: null });
@@ -776,6 +820,7 @@ function hindcastAt({ index, T, next }: (typeof CHOICES)[number]) {
   return {
     before389: installTiming(base),
     priced: installTiming({ ...base, later }),
+    base,
     later,
     count: needed - cycle.bought.length,
   };
@@ -838,9 +883,80 @@ describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's p
     expect(ROWS.filter(([, actual, , , priced]) => within(priced / actual))).toHaveLength(7);
   });
 
-  test("its cost a reading: c2's (13 left, 3 waits) under a tenth of a second", () => {
-    const start = performance.now();
-    hindcastAt(CHOICES[0] as (typeof CHOICES)[number]);
-    expect(performance.now() - start).toBeLessThan(100);
+  test("priced, a wait's error is its τ's alone: its later cycles, from the countables left, don't move with it", () => {
+    for (const choice of CHOICES) {
+      const { base, later } = hindcastAt(choice);
+      const timing = installTiming({ ...base, later, tauError: 0.05 });
+      for (const each of timing.candidates.filter((one) => one.k > 0)) {
+        expect(each.errorMs).toBe(0.05 * each.tauMs);
+      }
+    }
+  });
+
+  /**
+   * #399's review: priced afresh, a reading took about 80 ms at count 25 with 8 waits, and gang-start's rules arm spent
+   * 28.7 s in the augmentation rule against main's 0.71 s. The bound is main's own cost of a whole reading of the brain
+   * (the review's profile of that arm on main b2b7ef6: `DesiredStateRule`'s update, 2.94 s over 458 readings, 6.4 ms):
+   * at the count's most, the DP at most doubles a reading. Nothing installed, every hacking faction and the later
+   * cycles' joined (47 countables left), no favour, the 8 waits the cheapest left, as the brain's soonest mostly are
+   * (a wait's cycles then install now's, after the same installs; 8 spread among the 47, 3.3 ms against 1.6 here on
+   * 2026-11-14). The least of 5 readings, past the first (the code's compile).
+   */
+  test("its cost a reading at the count's most, 25 to go with 8 waits: within main's whole reading of the brain", () => {
+    const MAIN_READING_MS = 2_940 / 458;
+    const state: AugmentationPurchaseState = {
+      ...STATE,
+      bitNodeMultipliers: augmentationBitNodeMultipliers(4, { 4: 1 }),
+    };
+    const left = countablesLeft({
+      factions: ["CyberSec", "NiteSec", "The Black Hand", "BitRunners", "Netburners", ...LATER_CYCLE_FACTIONS],
+      bitNode: 4,
+      state,
+      set: [],
+    });
+    expect(left.length).toBe(47);
+    const factor = measuredFactor(1);
+    const rateAt = (_faction: string, level: number) =>
+      factionReputationPerSecond(
+        {
+          skills: { hacking: level, strength: 1, defense: 1, dexterity: 1, agility: 1, charisma: 1, intelligence: 0 },
+          mults: { faction_rep: 1 },
+        },
+        "hacking",
+        {
+          favor: 0,
+          sourceFile15Level: 0,
+          focused: true,
+          implant: false,
+          factionWorkRepGain: BN4_FACTION_WORK_REP_GAIN,
+          shareBonus: factor,
+        },
+      );
+    const later: LaterCycles = {
+      left,
+      rebuildMs: 4 * MINUTE,
+      rise: endRise(1),
+      deadSeconds: 300,
+      rateAt,
+      installing: ["Neurotrainer I", "Synaptic Enhancement Implant", NEUROFLUX, NEUROFLUX, NEUROFLUX],
+    };
+    const next = left
+      .slice(0, 8)
+      .map((each, index) => ({ augmentation: each.augmentation, tauMs: (20 + 15 * index) * MINUTE }));
+    const reading = () => installTiming({ needed: 30, adding: 5, onlineMs: 40 * MINUTE, next, later, tauError: 0.02 });
+    const first = reading();
+    expect(first.candidates).toHaveLength(9);
+    expect(first.candidates.every((each) => each.cyclesMs !== undefined)).toBe(true);
+    const costs = Array.from({ length: 5 }, () => {
+      const start = performance.now();
+      const timing = reading();
+      const cost = performance.now() - start;
+      expect(timing).toEqual(first);
+      return cost;
+    });
+    console.log(
+      `count 25, 8 waits: ${Math.min(...costs).toFixed(2)} ms a reading; main's whole reading ${MAIN_READING_MS.toFixed(2)} ms`,
+    );
+    expect(Math.min(...costs)).toBeLessThan(MAIN_READING_MS);
   });
 });
