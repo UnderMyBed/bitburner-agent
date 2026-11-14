@@ -21,6 +21,8 @@ import {
   BLADEBURNER_REST_SECONDS,
   type BladeburnerActionReading,
   type BladeburnerPerson,
+  bladeburnerExpectedChance,
+  bladeburnerExpectedInput,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
@@ -513,5 +515,60 @@ describe("the rule's choice (#375): the most rank a second over a cycle of work 
     expect(bladeburnerResting({ stamina: 20, maxStamina: 40, wasResting: false })).toBe(false);
     expect(bladeburnerResting({ stamina: 39.9, maxStamina: 40, wasResting: true })).toBe(true);
     expect(bladeburnerResting({ stamina: 40, maxStamina: 40, wasResting: true })).toBe(false);
+  });
+});
+
+describe("the expected chance over the range (#411): the grown estimate's pricing", () => {
+  /** The chance's mean over populations uniform in [from, to], by Simpson's rule on the game's formula (core's). */
+  const meanOver = (chanceAt: (population: number) => number, from: number, to: number) => {
+    const n = 2000;
+    const h = (to - from) / n;
+    let sum = chanceAt(from) + chanceAt(to);
+    for (let i = 1; i < n; i++) sum += (i % 2 === 1 ? 4 : 2) * chanceAt(from + i * h);
+    return (sum * h) / 3 / (to - from);
+  };
+  test("its mean over the populations whose chances are the range's ends, uniform: to the formula's, not the midpoint", () => {
+    const who = person(150);
+    for (const name of ["Raid", "Tracking", "Undercover Operation", "Assassination"]) {
+      const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === name);
+      if (action === undefined) throw new Error(name);
+      const chanceAt = (population: number) =>
+        actionSuccessChance(action, 1, who, { city: { population, communities: 20, chaos: 0 }, penalty: 1 });
+      for (const [from, to] of [
+        [0.7e9, 1.3e9],
+        [1.2e9, 1.45e9],
+      ] as const) {
+        const range: [number, number] = [chanceAt(from), chanceAt(to)];
+        if (!(range[1] < 1)) continue;
+        const mean = meanOver(chanceAt, from, to);
+        expect(bladeburnerExpectedChance(range), `${name} over ${from}-${to}`).toBeCloseTo(mean, 9);
+        // Not the midpoint: pop^0.7 is concave in the population, so its mean is over the chord's.
+        expect(bladeburnerExpectedChance(range)).toBeGreaterThan((range[0] + range[1]) / 2);
+      }
+    }
+  });
+  test("a point its own; a high end clamped at 1 leaves out the populations past the cap (cautious); the input's", () => {
+    expect(bladeburnerExpectedChance([0.3, 0.3])).toBe(0.3);
+    const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === "Tracking");
+    if (action === undefined) throw new Error("Tracking");
+    const chanceAt = (population: number) =>
+      actionSuccessChance(action, 1, person(300), { city: { population, communities: 20, chaos: 0 }, penalty: 1 });
+    const [from, to] = [0.5e9, 3e9];
+    expect(chanceAt(to)).toBe(1);
+    expect(bladeburnerExpectedChance([chanceAt(from), 1])).toBeLessThan(meanOver(chanceAt, from, to));
+    // Seed 1's New Tokyo at a BN6.1 start (the estimate 1.42× the truth): Raid's range read and its expected.
+    expect(bladeburnerExpectedChance([0.0261, 0.0655])).toBeCloseTo(0.047, 3);
+    const read: BladeburnerActionReading = {
+      type: "Operations",
+      name: "Raid",
+      level: 1,
+      maxLevel: 1,
+      count: 10,
+      chance: [0.0261, 0.0655],
+    };
+    expect(bladeburnerExpectedInput({ readings: [read] }).readings[0]?.chance).toEqual([
+      bladeburnerExpectedChance(read.chance),
+      0.0655,
+    ]);
   });
 });

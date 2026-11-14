@@ -52,6 +52,7 @@ import {
   blackOpsRouteEstimate,
   blackOpsRouteGrownEstimate,
   bladeburnerBlackOp,
+  bladeburnerExpectedInput,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
@@ -200,12 +201,16 @@ export function blackOpsRouteOf({
       ? null
       : blackOpsRouteGrownEstimate(
           input,
-          // The first one's rank: B6's time to it (B5's stock where solved) where shorter than the growth's tail.
+          // The first one's rank: B5's stock where shorter than the growth's tail, priced as the grown estimate prices
+          // the actions (#411: at the expected chance over the range, core's `bladeburnerExpectedInput`).
           {
             rank,
             next: op,
-            chanceRead: nextRead.chance,
-            firstToRankSeconds: estimate?.steps[0]?.toRankSeconds ?? null,
+            firstToRankSeconds:
+              rank >= op.rank
+                ? 0
+                : (chooseBladeburnerAction({ ...bladeburnerExpectedInput(input), target: { rank, target: op.rank } })
+                    .toTarget?.seconds ?? null),
           },
           { combat, costMultiplier, points: actions?.skills?.points ?? 0 },
         );

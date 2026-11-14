@@ -476,6 +476,39 @@ export function actionSuccessRange(real: number, est: number, population: number
   return [clamp(low), clamp(high)];
 }
 
+/**
+ * The expected chance over the game's range (#411, the coordinator's second ruling there): the brain can't know the
+ * true population, only the range, the game's own statement of its uncertainty (the estimate the true × U(0.5, 1.5) at
+ * a start, `Bladeburner/City.ts:19-23`, narrowed by Field Analysis, `Bladeburner.ts:1124-1143`). A contract's or
+ * operation's chance is k·pop^0.7 under 1 (`Actions/Action.ts:88-92`, `:169-196`), not linear in the population, so not
+ * the midpoint: its mean over the populations whose chances are the range's ends, uniform in the population (labelled:
+ * the uniform is assumed, not the game's), (top^(1.7/0.7) − low^(1.7/0.7)) / (1.7 · (top^(1/0.7) − low^(1/0.7)))
+ * with top the high end at most 1. Cautious where clamped: a high end at 1 leaves out the populations past the cap
+ * (their chance 1), and a low end at 0 spans down to none. The low end where the range is a point.
+ */
+export function bladeburnerExpectedChance([low, high]: readonly [number, number]): number {
+  const top = Math.min(1, high);
+  if (!(top > low)) return low;
+  const power = 1 + BLADEBURNER_CONSTANTS.populationExponent;
+  const a = 1 / BLADEBURNER_CONSTANTS.populationExponent;
+  return (top ** (power * a) - low ** (power * a)) / (power * (top ** a - low ** a));
+}
+
+/**
+ * The input with each contract's and operation's chance at its expected over the range (#411,
+ * `bladeburnerExpectedChance`): the low end the expected, the high end as read (its cap still says where a rise can't
+ * be credited). The grown estimate's pricing; B2's rule keeps the low end, a choice with its own caution.
+ */
+export function bladeburnerExpectedInput<T extends Pick<BladeburnerActionInput, "readings">>(input: T): T {
+  return {
+    ...input,
+    readings: input.readings.map((read) => ({
+      ...read,
+      chance: [bladeburnerExpectedChance(read.chance), read.chance[1]] as [number, number],
+    })),
+  };
+}
+
 /** statFac: ½(agi^0.04 + dex^0.035 + agi/10,000 + dex/10,000), at the effective levels (`Actions/Action.ts:110-117`). */
 export function actionStatFactor(person: BladeburnerPerson, skills: BladeburnerSkillMults): number {
   const c = BLADEBURNER_CONSTANTS;

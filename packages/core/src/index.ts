@@ -304,6 +304,8 @@ export {
   type BladeburnerRestName,
   type BladeburnerTailWork,
   type BladeburnerWork,
+  bladeburnerExpectedChance,
+  bladeburnerExpectedInput,
   bladeburnerForecastRater,
   bladeburnerLevelledAction,
   bladeburnerPersonOf,

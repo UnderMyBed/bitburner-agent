@@ -13,9 +13,11 @@ import {
   actionRankGain,
   actionRankLoss,
   actionSuccessChance,
+  actionSuccessRange,
   BLADEBURNER_LEVELLED_ACTIONS,
   type BladeburnerActionReading,
   type BladeburnerPerson,
+  bladeburnerExpectedChance,
   bladeburnerForecastRater,
   bladeburnerLevelledAction,
   bladeburnerRankMultiplierOf,
@@ -506,13 +508,16 @@ describe("the route's grown estimate (#408): the integration", () => {
     // Spent before the first step, not after it: the first step's at the levels bought.
     const firstStep = (route: typeof spent) => route.path[1]?.seconds as number;
     expect(Math.abs(firstStep(unspent) / firstStep(spent) - 1)).toBeLessThan(1e-3);
-    // Never with no chance at all (the next one read at 0: its share 0), as B6's.
-    const hopeless = blackOpsRouteGrownEstimate(
+    // A range read at 0 isn't never (#411): a Black Op priced at its formula (the population doesn't move it), the
+    // rank by Field Analysis alone, so finite, and longer than the route at the chances read.
+    const zero = blackOpsRouteGrownEstimate(
       { ...input, readings: input.readings.map((read) => ({ ...read, chance: [0, 0] as [number, number] })) },
       { ...at, chanceRead: [0, 0] as [number, number] },
       { combat, costMultiplier: 1 },
     );
-    expect(hopeless.seconds).toBe(Number.POSITIVE_INFINITY);
+    expect(Number.isFinite(zero.seconds)).toBe(true);
+    expect(zero.seconds).toBeGreaterThan(tail.seconds);
+    expect(zero.steps[0]?.chance).toBeCloseTo(blackOpSuccessChance(at.next, input.person, { penalty: 1 }), 12);
   });
 });
 
@@ -856,6 +861,60 @@ describe("BN7's playability by the grown estimate (#411): the same route at its 
       expect(route.seconds).toBeGreaterThan(Math.max(rankAlone, costAlone));
       expect(route.seconds).toBeGreaterThan(BAR_SECONDS);
       expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+    }
+    console.log(`${rows.join("\n")}\nthe bar ${(BAR_SECONDS / HOUR).toFixed(2)} h`);
+  });
+});
+
+describe("the playability at a start's range (#411): the estimate at the expected chance over the range read", () => {
+  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
+  /** Seed 1's New Tokyo at a BN6.1 start: its estimate 1.42× the true population (`City.ts:19-23`, × U(0.5, 1.5)). */
+  const ESTIMATE_OVER_TRUE = 2_016_312_413 / 1_421_276_822;
+
+  test("BN6 and BN7, combat 100 and 300, as is and with the shop: past the bar at every one", () => {
+    const rows: string[] = [];
+    const population = CITY.population;
+    const estimate = population * ESTIMATE_OVER_TRUE;
+    for (const bitNode of [6, 7]) {
+      const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+      const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+      for (const combat of [100, 300]) {
+        const { combat: figures, input: flat, at: point, who } = startAt(combat);
+        // The range read at that start: each action's at the true population and its estimate; Typhoon's the same.
+        const readings = flat.readings.map((read) => {
+          const action = bladeburnerLevelledAction(read.type, read.name) as NonNullable<
+            ReturnType<typeof bladeburnerLevelledAction>
+          >;
+          const chanceAt = (at: number) =>
+            actionSuccessChance(action, 1, who, { city: { ...CITY, population: at }, penalty: 1 });
+          return {
+            ...read,
+            chance: actionSuccessRange(chanceAt(population), chanceAt(estimate), population, estimate),
+          };
+        });
+        const typhoon = point.chanceRead[0];
+        const input = { ...flat, readings, rankMultiplier };
+        const at = { ...point, chanceRead: actionSuccessRange(typhoon, typhoon, population, estimate) };
+        const growth = { costMultiplier };
+        const keep = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier }).seconds;
+        const shop = blackOpsInstallTiming({
+          input,
+          at,
+          combat: figures,
+          gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null)),
+          installable: true,
+          growth,
+        });
+        const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
+        const raid = readings.find((read) => read.name === "Raid")?.chance as [number, number];
+        rows.push(
+          `BN${bitNode} combat ${combat}: as is ${(keep / HOUR).toFixed(1)} h; the shop ${shop.choice} ` +
+            `${(shopSeconds / HOUR).toFixed(1)} h (Raid read ${raid[0].toFixed(3)}-${raid[1].toFixed(3)}, priced ` +
+            `${bladeburnerExpectedChance(raid).toFixed(3)})`,
+        );
+        expect(keep).toBeGreaterThan(BAR_SECONDS);
+        expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+      }
     }
     console.log(`${rows.join("\n")}\nthe bar ${(BAR_SECONDS / HOUR).toFixed(2)} h`);
   });

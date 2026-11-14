@@ -320,6 +320,12 @@ export interface BladeburnerAttempt {
   /** The level attempted (1 for a Black Op). */
   level: number;
   chance: number;
+  /** The game's range at that state (`getSuccessRange`, `Bladeburner/Actions/Action.ts:144-167`), as the API reads it. */
+  range: [number, number];
+  /** The city it ran in, its true population and its estimate then. */
+  city: string;
+  population: number;
+  estimate: number;
   success: boolean;
   /** The mean rank a success gains (0 where the action gains none). */
   gain: number;

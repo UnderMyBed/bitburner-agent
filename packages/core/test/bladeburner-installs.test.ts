@@ -286,15 +286,19 @@ describe("the planner's install timing on the route (#404): keep, or install now
     const none = blackOpsInstallTiming({ input, at, combat, gain: NO_INSTALL_GAIN, installable: true, growth: GROWTH });
     expect(none.afterSeconds).toBeGreaterThanOrEqual(none.keepSeconds);
     expect(none.choice).toBe("keep");
-    // Never either way (a chance of 0 now and after): a tie, kept.
+    // Every action read at 0 (#411: no longer never, a Black Op priced at its formula): both sides finite, the choice
+    // #406's rule's.
     const hopeless = { ...at, chanceRead: [0, 0] as [number, number] };
     const weak = {
       ...input,
       readings: input.readings.map((read) => ({ ...read, chance: [0, 0] as [number, number] })),
     };
     const tie = blackOpsInstallTiming({ input: weak, at: hopeless, combat, gain, installable: true, growth: GROWTH });
-    expect(tie.keepSeconds).toBe(Number.POSITIVE_INFINITY);
-    expect(tie.choice).toBe("keep");
+    expect(Number.isFinite(tie.keepSeconds)).toBe(true);
+    const leads = (tie.installNowSeconds as number) < tie.keepSeconds;
+    expect(tie.choice).toBe(
+      leads && tie.keepSeconds - (tie.installNowSeconds as number) > (tie.marginSeconds as number) ? "install" : "keep",
+    );
   });
 
   test("mid-rebuild (#407's review): both priced at its targets, keeping finishing it first", () => {

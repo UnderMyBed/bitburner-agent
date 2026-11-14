@@ -404,6 +404,10 @@ out(reads);`,
     if (index === 0) {
       expect(read.range[0]).toBeCloseTo(read.range[1], 12);
       expect(attempt.chance, "the first attempt's chance").toBeCloseTo(read.range[0], 9);
+      // The range and the city recorded with it: the API's, and the population set (its estimate the truth).
+      expect(attempt.range[0]).toBeCloseTo(read.range[0], 12);
+      expect(attempt.range[1]).toBeCloseTo(read.range[1], 12);
+      expect([attempt.population, attempt.estimate]).toEqual([1.2e9, 1.2e9]);
     }
     expect(attempt.chance, `attempt ${index}'s chance`).toBeGreaterThanOrEqual(read.range[0] - 1e-9);
     expect(attempt.chance, `attempt ${index}'s chance`).toBeLessThanOrEqual(read.range[1] + 1e-9);
