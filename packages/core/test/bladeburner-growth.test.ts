@@ -1,7 +1,8 @@
 // Bladeburner #408: the Black Ops' route's estimate with the competence's growth. The tail's mix (the linear
 // programme's primal) against its dual, B3's forecast to the bit, the game's experience and levels by hand, the input at
 // a state against the game's own formulas there, the integration (with no growth B6's; each growth only shortens it;
-// its step), a seeded walk of the game's attempts, the install choice on both sides, and BN6's playability.
+// its step), a seeded walk of the game's attempts, the install choice on both sides, and BN6's and (#411) BN7's
+// playability.
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { AUGMENTATIONS } from "../src/augmentation-data.ts";
@@ -12,11 +13,13 @@ import {
   actionRankGain,
   actionRankLoss,
   actionSuccessChance,
+  actionSuccessRange,
   BLADEBURNER_LEVELLED_ACTIONS,
   type BladeburnerActionReading,
   type BladeburnerPerson,
   bladeburnerForecastRater,
   bladeburnerLevelledAction,
+  bladeburnerRankMultiplierOf,
   bladeburnerTailMix,
   bladeburnerTailRate,
   chooseBladeburnerAction,
@@ -40,6 +43,7 @@ import {
   blackOpsRouteGrownEstimate,
   bladeburnerGrownInput,
   bladeburnerGrowthStart,
+  bladeburnerPricedInput,
   maxLevelOfSuccesses,
   successesOfMaxLevel,
 } from "../src/bladeburner-growth.ts";
@@ -54,6 +58,7 @@ import {
 import { blackOpsRouteEstimate } from "../src/bladeburner-route.ts";
 import {
   BLADEBURNER_SKILL_NAMES,
+  bladeburnerSkillCostMultiplierOf,
   bladeburnerSkillMultsOf,
   cheapestBladeburnerSkillLevel,
 } from "../src/bladeburner-skills.ts";
@@ -503,13 +508,16 @@ describe("the route's grown estimate (#408): the integration", () => {
     // Spent before the first step, not after it: the first step's at the levels bought.
     const firstStep = (route: typeof spent) => route.path[1]?.seconds as number;
     expect(Math.abs(firstStep(unspent) / firstStep(spent) - 1)).toBeLessThan(1e-3);
-    // Never with no chance at all (the next one read at 0: its share 0), as B6's.
-    const hopeless = blackOpsRouteGrownEstimate(
+    // A range read at 0 isn't never (#411): a Black Op priced at its formula (the population doesn't move it), the
+    // rank by Field Analysis alone, so finite, and longer than the route at the chances read.
+    const zero = blackOpsRouteGrownEstimate(
       { ...input, readings: input.readings.map((read) => ({ ...read, chance: [0, 0] as [number, number] })) },
       { ...at, chanceRead: [0, 0] as [number, number] },
       { combat, costMultiplier: 1 },
     );
-    expect(hopeless.seconds).toBe(Number.POSITIVE_INFINITY);
+    expect(Number.isFinite(zero.seconds)).toBe(true);
+    expect(zero.seconds).toBeGreaterThan(tail.seconds);
+    expect(zero.steps[0]?.chance).toBeCloseTo(blackOpSuccessChance(at.next, input.person, { penalty: 1 }), 12);
   });
 });
 
@@ -802,5 +810,175 @@ describe("BN6's playability by the grown estimate (#408): within ×2 of the slow
       expect(Math.min(keep, shopNow)).toBeGreaterThan(BAR_SECONDS);
     }
     console.log(`${rows.join("\n")}\nthe bar ${(BAR_SECONDS / HOUR).toFixed(2)} h`);
+  });
+});
+
+describe("BN7's playability by the grown estimate (#411): the same route at its own multipliers, against the same bar", () => {
+  /** The bar: BN4.1's 27 h 5 min online, the slowest destroy in the campaign report (2026-11-12), twice. */
+  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
+
+  test("at a BN7.1 start (rank 0, combat 100 and 300), rank ×0.6 and skills ×2: as is, the shop and every one", () => {
+    const rankMultiplier = bladeburnerRankMultiplierOf(7) as number;
+    const costMultiplier = bladeburnerSkillCostMultiplierOf(7) as number;
+    expect([rankMultiplier, costMultiplier]).toEqual([0.6, 2]);
+    const growth = { costMultiplier };
+    const rows: string[] = [];
+    for (const combat of [100, 300]) {
+      const { combat: figures, input: read, at } = startAt(combat);
+      const input = { ...read, rankMultiplier };
+      const started = performance.now();
+      const route = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier });
+      const ms = performance.now() - started;
+      const bn6 = blackOpsRouteGrownEstimate(read, at, { combat: figures, costMultiplier: 1 }).seconds;
+      const rankAlone = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier: 1 }).seconds;
+      const costAlone = blackOpsRouteGrownEstimate(read, at, { combat: figures, costMultiplier }).seconds;
+      const choosing = performance.now();
+      const shop = blackOpsInstallTiming({
+        input,
+        at,
+        combat: figures,
+        gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", 7, null)),
+        installable: true,
+        growth,
+      });
+      const choiceMs = performance.now() - choosing;
+      // B7's choice with #406's margin: installing only where it beats keeping by more than the step's error.
+      const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
+      const every = blackOpsInstallTiming({ input, at, combat: figures, gain: EVERY(), installable: true, growth });
+      const everyNow = every.installNowSeconds as number;
+      rows.push(
+        `combat ${combat}: as is ${(route.seconds / HOUR).toFixed(1)} h (BN6's ${(bn6 / HOUR).toFixed(1)} h, the rank alone ` +
+          `${(rankAlone / HOUR).toFixed(1)} h, the skills alone ${(costAlone / HOUR).toFixed(1)} h); ` +
+          `the shop ${shop.choice} ${(shopSeconds / HOUR).toFixed(1)} h (keep ${(shop.keepSeconds / HOUR).toFixed(1)} h, ` +
+          `install now ${((shop.installNowSeconds as number) / HOUR).toFixed(1)} h, its rebuild ` +
+          `${(shop.rebuildSeconds / HOUR).toFixed(2)} h, the margin ${((shop.marginSeconds ?? 0) / 60).toFixed(1)} min); ` +
+          `every one ${(everyNow / HOUR).toFixed(1)} h (rebuild ${(every.rebuildSeconds / HOUR).toFixed(2)} h); ` +
+          `a solve ${ms.toFixed(0)} ms, ${route.solves} mixes; the shop's choice ${choiceMs.toFixed(0)} ms`,
+      );
+      // Each of BN7's multipliers on the route only lengthens it, alone and together: BN6's at the same state shortest.
+      expect(rankAlone).toBeGreaterThan(bn6);
+      expect(costAlone).toBeGreaterThan(bn6);
+      expect(route.seconds).toBeGreaterThan(Math.max(rankAlone, costAlone));
+      expect(route.seconds).toBeGreaterThan(BAR_SECONDS);
+      expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+    }
+    console.log(`${rows.join("\n")}\nthe bar ${(BAR_SECONDS / HOUR).toFixed(2)} h`);
+  });
+});
+
+/**
+ * The start at combat `combat` read through a population estimate `estimateOverTrue` × the truth (#411): each action's
+ * range and Typhoon's, as the game reads them (`Actions/Action.ts:144-167`).
+ */
+function rangedStartAt(combat: number, estimateOverTrue: number) {
+  const start = startAt(combat);
+  const population = CITY.population;
+  const estimate = population * estimateOverTrue;
+  const readings = start.input.readings.map((read) => {
+    const action = bladeburnerLevelledAction(read.type, read.name) as NonNullable<
+      ReturnType<typeof bladeburnerLevelledAction>
+    >;
+    const chanceAt = (at: number) =>
+      actionSuccessChance(action, 1, start.who, { city: { ...CITY, population: at }, penalty: 1 });
+    return { ...read, chance: actionSuccessRange(chanceAt(population), chanceAt(estimate), population, estimate) };
+  });
+  const typhoon = start.at.chanceRead[0];
+  return {
+    ...start,
+    input: { ...start.input, readings },
+    at: { ...start.at, chanceRead: actionSuccessRange(typhoon, typhoon, population, estimate) },
+  };
+}
+
+describe("the playability at a start's range (#411's ruling 4): the estimate at the true population recovered", () => {
+  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
+  /** Seed 1's New Tokyo at a BN6.1 start (an overcount, `City.ts:19-23`), and an undercount of 0.6. */
+  const SEED_1 = 2_016_312_413 / 1_421_276_822;
+
+  // One case each (CI's 30 s limit, #414: the table at once was 37 s there): B7's choice gives keeping's figure too.
+  const CASES = [6, 7].flatMap((bitNode) =>
+    [100, 300].flatMap((combat) =>
+      (
+        [
+          ["the truth", 1],
+          ["0.6×", 0.6],
+          [`${SEED_1.toFixed(2)}×`, SEED_1],
+        ] as const
+      ).map(([label, over]) => ({ bitNode, combat, label, over })),
+    ),
+  );
+  test.each(CASES)(
+    "BN$bitNode, combat $combat, read at $label: as is and with the shop, past the bar",
+    ({ bitNode, combat, label, over }) => {
+      const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+      const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+      const { combat: figures, input: read, at } = rangedStartAt(combat, over);
+      const input = { ...read, rankMultiplier };
+      // The chances priced at the truth wherever read: the ratio recovered from Typhoon's range.
+      expect(bladeburnerPricedInput(input, at).ratio, label).toBeCloseTo(1 / over, 9);
+      const started = performance.now();
+      const shop = blackOpsInstallTiming({
+        input,
+        at,
+        combat: figures,
+        gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null)),
+        installable: true,
+        growth: { costMultiplier },
+      });
+      const ms = performance.now() - started;
+      const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
+      console.log(
+        `BN${bitNode} combat ${combat}, read at ${label}: as is ${(shop.keepSeconds / HOUR).toFixed(1)} h, the shop ` +
+          `${shop.choice} ${(shopSeconds / HOUR).toFixed(1)} h (${ms.toFixed(0)} ms)`,
+      );
+      expect(shop.keepSeconds).toBeGreaterThan(BAR_SECONDS);
+      expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+    },
+  );
+
+  test("at the truth, the figures with no range read; read through a range, only B3's low-end spending moves them", () => {
+    const flat = startAt(100);
+    const truth = rangedStartAt(100, 1);
+    const options = { combat: flat.combat, costMultiplier: 2 };
+    const bn7 = (input: typeof flat.input) => ({ ...input, rankMultiplier: 0.6 });
+    const ratio = (a: number, b: number) => Math.abs(a / b - 1);
+    // Within 1e-4: the ratio recovered to the bit, the integration's choices (levels, mixes) sensitive below it.
+    expect(
+      ratio(
+        blackOpsRouteGrownEstimate(bn7(truth.input), truth.at, options).seconds,
+        blackOpsRouteGrownEstimate(bn7(flat.input), flat.at, options).seconds,
+      ),
+    ).toBeLessThan(1e-4);
+    // An overcount: priced at the truth, its skills bought at the low end read (B3's rule as the brain runs it); with
+    // the skills off, the truth's figure.
+    const over = rangedStartAt(100, 2_016_312_413 / 1_421_276_822);
+    const noSkills = { skills: false, stats: true, levels: true };
+    expect(
+      ratio(
+        blackOpsRouteGrownEstimate(bn7(over.input), over.at, { ...options, grow: noSkills }).seconds,
+        blackOpsRouteGrownEstimate(bn7(flat.input), flat.at, { ...options, grow: noSkills }).seconds,
+      ),
+    ).toBeLessThan(1e-4);
+  });
+});
+
+describe("the skills along the route at a range read (#411): B3's rule's, as the brain runs it", () => {
+  test("bought at the low end read, as the rule buys them, whatever the estimate prices the actions at", () => {
+    const { combat: figures, input: ranged, at } = rangedStartAt(100, 1.42);
+    const lowOnly = {
+      ...ranged,
+      readings: ranged.readings.map((read) => ({
+        ...read,
+        chance: [read.chance[0], read.chance[0]] as [number, number],
+      })),
+    };
+    const lowAt = { ...at, chanceRead: [at.chanceRead[1], at.chanceRead[1]] as [number, number] };
+    // The skills alone growing: the levels at each step are the rule's choices at the ranks reached, the rank grid
+    // the same; so they're the same at the range read as at its low end alone, though the estimate's times differ.
+    const grow = { skills: true, stats: false, levels: false };
+    const priced = blackOpsRouteGrownEstimate(ranged, at, { combat: figures, costMultiplier: 1, points: 300, grow });
+    const low = blackOpsRouteGrownEstimate(lowOnly, lowAt, { combat: figures, costMultiplier: 1, points: 300, grow });
+    expect(priced.seconds).toBeLessThan(low.seconds);
+    expect(priced.steps.map((step) => step.levels)).toEqual(low.steps.map((step) => step.levels));
   });
 });

@@ -30,8 +30,17 @@
  *   batched a step at a time, with the stats and levels rising under them come out short on balance. Each Black Op's
  *   attempts: the n-th made with the chance all before it failed, at the state their rebuilds left (each a failure's
  *   loss rebuilt at ρ's mix), so Σₙ P(n made)·(Tₙ + (1 − pₙ)·L/ρₙ), B6's (T + (1 − p)·L/ρ)/p where nothing grows; its chance
- *   the formula there times the share read (B6's); the state after it its expected failures' rebuilds' (their mean),
- *   then its gain's points.
+ *   the formula there (#411: not B6's share of the low end read); the state after it its expected failures' rebuilds'
+ *   (their mean), then its gain's points.
+ * - **The chances** (#411, the coordinator's ruling 4 there; `bladeburnerPricedInput`): each contract's and operation's
+ *   at the true population, the chance the game draws against, the true population over its estimate recovered from the
+ *   next Black Op's range read (core's `populationRatioOfBlackOpRange`: one end its formula, the other that × the
+ *   ratio); where it can't be, the mean over the estimate's own spread at a start (`actionChanceOverSpread`, labelled
+ *   there, either way). Each Black Op's at its formula (it doesn't depend on the population). B2's rule, B3's spending
+ *   (above) and B6's flat estimate keep the low end, a follow-up's: on seed 1's New Tokyo (its estimate 1.42× the
+ *   truth) Raid's 0.026 low end against 0.051 drawn. Labelled: past the reading, a chance scaled by the competence's
+ *   rise is clipped at 1 (`bladeburnerGrownInput`), exact at the true chance; at the spread's mean, min(1, E × rise) is
+ *   over E[min(1, chance × rise)] past the cap (Jensen), optimistic there.
  * - **Its check** (core's bladeburner-growth.test.ts): a seeded walk of the game's attempts (each success drawn at the
  *   game's formula at the walk's own state, its experience, levels and points the game's, the points spent by B3's
  *   rule as they cover a level): combat 100 from rank 0 to Operation Titan done, within 1% (0.76%); the whole route
@@ -59,6 +68,8 @@
  */
 import { COMBAT_STATS, type CombatPerson, type CombatStat, skillLevelOf } from "./bladeburner.ts";
 import {
+  actionChanceAtRatio,
+  actionChanceOverSpread,
   actionDifficulty,
   actionSkillCompetence,
   type BladeburnerActionInput,
@@ -71,6 +82,7 @@ import {
   difficultyMultiplier,
   maxStaminaAtSkills,
   personCompetenceFactor,
+  populationRatioOfBlackOpRange,
   staminaPenalty,
   successesForNextLevel,
 } from "./bladeburner-actions.ts";
@@ -78,7 +90,6 @@ import {
   BLADEBURNER_BLACK_OPS,
   BLADEBURNER_RANKS_PER_SKILL_POINT,
   type BladeburnerBlackOp,
-  blackOpChanceLow,
   blackOpRankGain,
   blackOpRankLoss,
   blackOpSeconds,
@@ -178,12 +189,39 @@ export function bladeburnerGrownInput(
     const raw = readCompetence > 0 ? (actionSkillCompetence(action, person, mults) / readCompetence) * personRatio : 1;
     const ratio = read.chance[1] >= 1 ? Math.min(1, raw) : raw;
     const level = Math.max(read.maxLevel, maxLevelOfSuccesses(action, state.successes[action.name] ?? 0));
+    // Clipped at 1: exact at a true chance (#411's pricing); at the spread's mean, min(1, E × rise) is over
+    // E[min(1, chance × rise)] past the cap (Jensen), optimistic there.
     const chance = Math.min(1, (read.chance[0] / penalty) * ratio * action.difficultyFac ** (read.level - level));
     return { ...read, level, maxLevel: level, chance: [chance, chance] };
   });
   const maxStamina = maxStaminaAtSkills(input.person, input.maxStamina, readMults, mults, person);
   const { forecast: _forecast, ...rest } = input;
   return { ...rest, readings, person, stamina: maxStamina, maxStamina, skills: { read: { ...state.levels } } };
+}
+
+/**
+ * The input the grown estimate prices (#411, the coordinator's ruling 4): each contract's and operation's chance at the
+ * true population (a point), pop/popEst recovered from the next Black Op's range read `chanceRead` against its formula
+ * at the reading (its stamina's penalty in; core's `populationRatioOfBlackOpRange`, `actionChanceAtRatio`); where it
+ * can't be (no range read, or clipped), each at its mean over the estimate's spread (`actionChanceOverSpread`).
+ * `ratio`: the one recovered, or null.
+ */
+export function bladeburnerPricedInput<T extends Omit<BladeburnerActionInput, "target">>(
+  input: T,
+  { next, chanceRead }: { next: BladeburnerBlackOp; chanceRead: readonly [number, number] },
+): { input: T; ratio: number | null } {
+  const penalty = input.maxStamina > 0 ? staminaPenalty(input.stamina, input.maxStamina) : 0;
+  const formula = blackOpSuccessChance(next, input.person, {
+    penalty,
+    skills: bladeburnerSkillMultsOf(input.skills?.read ?? {}),
+  });
+  const ratio = populationRatioOfBlackOpRange(chanceRead, formula);
+  const readings = input.readings.map((read) => {
+    const at = ratio === null ? null : actionChanceAtRatio(read.chance, ratio);
+    const chance = at ?? actionChanceOverSpread(read.chance);
+    return { ...read, chance: [chance, chance] as [number, number] };
+  });
+  return { input: { ...input, readings }, ratio };
 }
 
 /** The least step of the integration, in rank: 10 skill points' worth. */
@@ -230,6 +268,8 @@ export interface BlackOpsGrownTime {
   path: { rank: number; seconds: number }[];
   /** The tail's mixes solved: the estimate's cost. */
   solves: number;
+  /** pop/popEst recovered from the next one's range read (#411), or null: the chances priced over the spread. */
+  populationRatio: number | null;
 }
 
 /**
@@ -239,7 +279,7 @@ export interface BlackOpsGrownTime {
  * shorter than the growth's; null or absent: the growth's tail alone). `fraction`: the step (the tests halve it).
  */
 export function blackOpsRouteGrownEstimate(
-  input: Omit<BladeburnerActionInput, "target">,
+  read: Omit<BladeburnerActionInput, "target">,
   {
     rank,
     next,
@@ -248,6 +288,10 @@ export function blackOpsRouteGrownEstimate(
   }: {
     rank: number;
     next: BladeburnerBlackOp;
+    /**
+     * The next one's range read: the population's ratio from it (#411); every Black Op priced at its formula. Required
+     * (#414's round 2: the brain's call had dropped it, so every action was priced over the spread).
+     */
     chanceRead: readonly [number, number];
     firstToRankSeconds?: number | null;
   },
@@ -267,12 +311,8 @@ export function blackOpsRouteGrownEstimate(
     leastStep?: number;
   },
 ): BlackOpsGrownTime {
-  const readMults = bladeburnerSkillMultsOf(input.skills?.read ?? {});
-  const penalty = input.maxStamina > 0 ? staminaPenalty(input.stamina, input.maxStamina) : 0;
-  const nextLow = blackOpChanceLow(chanceRead, penalty);
-  const nextFormula = blackOpSuccessChance(next, input.person, { penalty: 1, skills: readMults });
-  // The low end's share of the formula's (B6's): common to every Black Op; 1 where unknown.
-  const share = nextLow !== null && nextFormula > 0 && nextFormula < 1 ? Math.min(1, nextLow / nextFormula) : 1;
+  // #411: each contract's and operation's chance at the true population, recovered from the next one's range read.
+  const { input, ratio: populationRatio } = bladeburnerPricedInput(read, { next, chanceRead });
   let state = bladeburnerGrowthStart(input, { rank, points, combat });
   let earned = 0;
   let seconds = 0;
@@ -303,9 +343,12 @@ export function blackOpsRouteGrownEstimate(
     return { ...at, exp, successes };
   };
   // The points unspent at a state, spent by B3's rule there.
+  // The points spent as B3's rule spends them (#411): its forecast at the low end read, as the brain runs it, not at the
+  // estimate's pricing (at the expected chances the success skills look worth less to the actions, and the rule would
+  // be credited purchases it doesn't make).
   const spend = (at: BladeburnerGrowthState): BladeburnerGrowthState => {
     if (!grow.skills || !(at.points > 0)) return at;
-    const plan = chooseBladeburnerSkills(bladeburnerGrownInput(input, combat, at), {
+    const plan = chooseBladeburnerSkills(bladeburnerGrownInput(read, combat, at), {
       levels: at.levels,
       points: at.points,
       costMultiplier,
@@ -360,12 +403,9 @@ export function blackOpsRouteGrownEstimate(
       const { grown, mix } = tailAt(at);
       const mults = bladeburnerSkillMultsOf(at.levels);
       const formula = blackOpSuccessChance(op, grown.person, { penalty: 1, skills: mults });
-      const chance =
-        index === 0 && nextLow !== null
-          ? nextFormula > 0
-            ? Math.min(1, (nextLow * formula) / nextFormula)
-            : Math.min(1, share * formula)
-          : Math.min(1, share * formula);
+      // Its formula (#411): a Black Op's chance doesn't depend on the population (`Actions/BlackOperation.ts:55-61`),
+      // so its mean over any span the range stands for is the formula's.
+      const chance = Math.min(1, formula);
       const rebuild = mix.rate > 0 ? loss / mix.rate : Number.POSITIVE_INFINITY;
       return { grown, mix, chance, seconds: blackOpSeconds(op, grown.person, mults), rebuild };
     };
@@ -426,7 +466,7 @@ export function blackOpsRouteGrownEstimate(
     state = rise(state, gain);
     path.push({ rank: state.rank, seconds });
   }
-  return { steps, seconds, rate: rateNow, path, solves };
+  return { steps, seconds, rate: rateNow, path, solves, populationRatio };
 }
 
 /** The combat stats' experience multipliers of `combat`. */

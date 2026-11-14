@@ -14,6 +14,7 @@ import {
   bladeburnerTailRate,
   chooseBladeburnerAction,
   maxStaminaOf,
+  populationRatioOfBlackOpRange,
 } from "../src/bladeburner-actions.ts";
 import { BLADEBURNER_BLACK_OPS, type BladeburnerBlackOp, blackOpSuccessChance } from "../src/bladeburner-black-ops.ts";
 import { blackOpsRouteGrownEstimate } from "../src/bladeburner-growth.ts";
@@ -286,15 +287,19 @@ describe("the planner's install timing on the route (#404): keep, or install now
     const none = blackOpsInstallTiming({ input, at, combat, gain: NO_INSTALL_GAIN, installable: true, growth: GROWTH });
     expect(none.afterSeconds).toBeGreaterThanOrEqual(none.keepSeconds);
     expect(none.choice).toBe("keep");
-    // Never either way (a chance of 0 now and after): a tie, kept.
+    // Every action read at 0 (#411: no longer never, a Black Op priced at its formula): both sides finite, the choice
+    // #406's rule's.
     const hopeless = { ...at, chanceRead: [0, 0] as [number, number] };
     const weak = {
       ...input,
       readings: input.readings.map((read) => ({ ...read, chance: [0, 0] as [number, number] })),
     };
     const tie = blackOpsInstallTiming({ input: weak, at: hopeless, combat, gain, installable: true, growth: GROWTH });
-    expect(tie.keepSeconds).toBe(Number.POSITIVE_INFINITY);
-    expect(tie.choice).toBe("keep");
+    expect(Number.isFinite(tie.keepSeconds)).toBe(true);
+    const leads = (tie.installNowSeconds as number) < tie.keepSeconds;
+    expect(tie.choice).toBe(
+      leads && tie.keepSeconds - (tie.installNowSeconds as number) > (tie.marginSeconds as number) ? "install" : "keep",
+    );
   });
 
   test("mid-rebuild (#407's review): both priced at its targets, keeping finishing it first", () => {
@@ -407,5 +412,98 @@ describe("the route's estimate with an install (#404, #408)", () => {
     });
     expect(timing.afterSeconds).toBe(after.seconds);
     expect(timing.installNowSeconds).toBe(timing.rebuildSeconds + after.seconds);
+  });
+});
+
+describe("bn6-install's reading (#411): an undercount, EsperTech and the shop each installed past #406's margin", () => {
+  /** The suite's first reading in BN6.1 (seed 1): rank 1,000, Blade's Intuition 10, 208 points, Tracking's max 5. */
+  const READ: [string, number, number, [number, number]][] = [
+    ["Tracking", 5, 49.041, [0.4191381000451312, 1]],
+    ["Bounty Hunter", 1, 135.037, [0.2097667362490347, 0.8468730502979759]],
+    ["Retirement", 1, 140.047, [0.26220842031129343, 1]],
+    ["Investigation", 1, 19.027, [0.06384843494514195, 0.2577697485579916]],
+    ["Undercover Operation", 1, 39.027, [0.06335421937896919, 0.25577449491809817]],
+    ["Sting Operation", 1, 36.025, [0.03513253083245853, 0.14183751953622128]],
+    ["Raid", 1, 19.024, [0.03959725992159013, 0.1598625830428495]],
+    ["Stealth Retirement Operation", 1, 33.014, [0.03167780793727211, 0.1278900664342796]],
+    ["Assassination", 1, 112.012, [0.021118538624848072, 0.08526004428951973]],
+  ];
+  const each = (value: number) => Object.fromEntries(COMBAT_STATS.map((stat) => [stat, value]));
+  const combat = {
+    skills: each(100),
+    exp: each(5417.945721932005),
+    mults: Object.fromEntries(
+      COMBAT_STATS.flatMap((stat) => [
+        [stat, SF1_3],
+        [`${stat}_exp`, SF1_3],
+      ]),
+    ),
+  } as CombatPerson;
+  const person = {
+    skills: { hacking: 1, strength: 100, defense: 100, dexterity: 100, agility: 100, charisma: 1, intelligence: 1 },
+    mults: { bladeburner_success_chance: 1, bladeburner_max_stamina: 1, bladeburner_stamina_gain: 1 },
+  };
+  const input = {
+    readings: READ.map(([name, maxLevel, count, chance]) => {
+      const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === name);
+      if (action === undefined) throw new Error(name);
+      return { type: action.type, name, level: 1, maxLevel, count, chance };
+    }),
+    person,
+    stamina: 39.810717055349734,
+    maxStamina: 39.810717055349734,
+    rankMultiplier: 1,
+    speed: 1,
+    skills: { read: { "Blade's Intuition": 10 } },
+  };
+  const at = {
+    rank: 1000,
+    next: BLADEBURNER_BLACK_OPS[0] as BladeburnerBlackOp,
+    chanceRead: [0.02085761233486784, 0.039541732294602255] as [number, number],
+  };
+  const growth = { costMultiplier: 1, points: 208 };
+
+  // Ruling 3 pinned EsperTech kept here (0.90 h ahead against 1.15 h), its chances at their expected over the range;
+  // since ruling 4 they're at the true population, recovered from Typhoon's range: pop/popEst 1.90, an undercount,
+  // where that pricing was optimistic, so keeping rose (76.7 h to 82.3 h) and EsperTech now leads past its margin. A pin
+  // of one reading's figures, inverted; the margin's keep side is the constructed reading of #406's rule's test
+  // (combat 108, core's bladeburner-growth.test.ts: 20.4 min ahead against 33.9 min, kept).
+  test("Typhoon's range an undercount; EsperTech: installing leads past the step's error of the difference; the shop too", () => {
+    const formula = blackOpSuccessChance(at.next, person, {
+      penalty: 1,
+      skills: bladeburnerSkillMultsOf({ "Blade's Intuition": 10 }),
+    });
+    const ratio = populationRatioOfBlackOpRange(at.chanceRead, formula) as number;
+    expect(ratio).toBeCloseTo(at.chanceRead[1] / at.chanceRead[0], 9);
+    expect(ratio).toBeGreaterThan(1);
+    const esper = blackOpsInstallTiming({
+      input,
+      at,
+      combat,
+      gain: bladeburnerInstallGain(0, [ESPERTECH]),
+      installable: true,
+      growth,
+    });
+    const lead = esper.keepSeconds - (esper.installNowSeconds as number);
+    const shop = blackOpsInstallTiming({
+      input,
+      at,
+      combat,
+      gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", 6, null)),
+      installable: true,
+      growth,
+    });
+    const shopLead = shop.keepSeconds - (shop.installNowSeconds as number);
+    console.log(
+      `bn6-install's reading: pop/popEst ${ratio.toFixed(3)} recovered; keep ${(esper.keepSeconds / 3600).toFixed(1)} h; EsperTech install now ` +
+        `${((esper.installNowSeconds as number) / 3600).toFixed(1)} h, ${(lead / 3600).toFixed(2)} h ahead against a margin of ` +
+        `${((esper.marginSeconds as number) / 3600).toFixed(2)} h: ${esper.choice}; the shop ` +
+        `${((shop.installNowSeconds as number) / 3600).toFixed(1)} h, ${(shopLead / 3600).toFixed(1)} h ahead against ` +
+        `${((shop.marginSeconds as number) / 3600).toFixed(2)} h: ${shop.choice}`,
+    );
+    expect(lead).toBeGreaterThan(esper.marginSeconds as number);
+    expect(esper.choice).toBe("install");
+    expect(shopLead).toBeGreaterThan(shop.marginSeconds as number);
+    expect(shop.choice).toBe("install");
   });
 });

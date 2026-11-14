@@ -476,6 +476,67 @@ export function actionSuccessRange(real: number, est: number, population: number
   return [clamp(low), clamp(high)];
 }
 
+/**
+ * pop/popEst, the true population over its estimate, from a Black Op's range read (#411, the coordinator's ruling 4):
+ * a Black Op's chance has no population factor (`Actions/BlackOperation.ts:55-61`), so the game's range is its chance
+ * at one end and that × pop/popEst at the other (`Actions/Action.ts:144-167`: est = real, the low end × the ratio
+ * under 1, the high end over it). The ratio is the read ends' own (low/high under 1, high/low over), so a person read
+ * apart from the range (the player and the Bladeburner reading are different workers, up to a reading apart: a level
+ * between, #414's round 2) moves nothing; `formula`, the chance at the person (core's `blackOpSuccessChance`, its
+ * stamina's penalty in), only picks which end is the formula's, the nearer in log ratio. Null where it can't be
+ * recovered: an end 0 or the formula 0, or the scaled end clipped at 1 (a ratio over 1 with the high end at 1, or both
+ * ends 1: only a bound).
+ */
+export function populationRatioOfBlackOpRange([low, high]: readonly [number, number], formula: number): number | null {
+  if (!(formula > 0) || !(low > 0) || !(high >= low)) return null;
+  if (low === high) return high >= 1 ? null : 1;
+  const formulaHigh = Math.abs(Math.log(high / formula)) <= Math.abs(Math.log(low / formula));
+  if (formulaHigh) return low / high;
+  return high >= 1 ? null : high / low;
+}
+
+/**
+ * A contract's or operation's chance at the true population (#411's ruling 4) from its range read and pop/popEst
+ * `ratio` (`Actions/Action.ts:144-167`, `:169-196`): its chance at the estimate is the true one × ratio^−0.7 (the
+ * population factor, `:88-92`; chaos and the rest alike in both), each clipped at 1. Under 1 (an overcount), the high
+ * end is the estimate's chance: the true one high × ratio^0.7, or where that clips at 1, (low/ratio + 1)/2. Over 1 (an
+ * undercount), the low end is the estimate's: low × ratio^0.7, at most 1. Null where the end it needs clips at 0.
+ */
+export function actionChanceAtRatio([low, high]: readonly [number, number], ratio: number): number | null {
+  if (ratio === 1) return low;
+  const factor = ratio ** BLADEBURNER_CONSTANTS.populationExponent;
+  if (ratio < 1) {
+    if (high < 1) return high * factor;
+    return low > 0 ? Math.min(1, (low / ratio + 1) / 2) : null;
+  }
+  return Math.min(1, low * factor);
+}
+
+/** The estimate's spread at a start (`Bladeburner/City.ts:19-23`): the estimate the true × U, U uniform on [0.5, 1.5]. */
+export const POPULATION_ESTIMATE_SPREAD: readonly [number, number] = [0.5, 1.5];
+
+/**
+ * A contract's or operation's expected chance where pop/popEst isn't recovered (#411's ruling 4): over the estimate's
+ * own spread, the true population the estimate over U (ratio 1/U), U uniform on `POPULATION_ESTIMATE_SPREAD`, each
+ * ratio's chance from the range read (`actionChanceAtRatio`), by the midpoint rule on 200 steps; the low end where none
+ * is recovered; each at most 1. Labelled: the spread is a start's (Field Analysis narrows it, `Bladeburner.ts:1124-1143`),
+ * and a range read is one ratio's, so the mean errs by where that ratio sits in the spread: optimistic at an undercount,
+ * pessimistic at an overcount (#414's round 2, a chance of 0.2: ×1.58 at U = 0.5, ×1.24 at 0.7, ×0.87 at 1.42).
+ */
+export function actionChanceOverSpread(range: readonly [number, number]): number {
+  const [from, to] = POPULATION_ESTIMATE_SPREAD;
+  const steps = 200;
+  let sum = 0;
+  let count = 0;
+  for (let step = 0; step < steps; step++) {
+    const chance = actionChanceAtRatio(range, 1 / (from + ((step + 0.5) * (to - from)) / steps));
+    if (chance === null) continue;
+    sum += chance;
+    count++;
+  }
+  return count === 0 ? range[0] : sum / count;
+}
+
 /** statFac: ½(agi^0.04 + dex^0.035 + agi/10,000 + dex/10,000), at the effective levels (`Actions/Action.ts:110-117`). */
 export function actionStatFactor(person: BladeburnerPerson, skills: BladeburnerSkillMults): number {
   const c = BLADEBURNER_CONSTANTS;
