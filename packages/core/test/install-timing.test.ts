@@ -891,6 +891,48 @@ describe("BN4.2's choices c2-c8 hindcast (#389): install now along the level's p
         expect(each.errorMs).toBe(0.05 * each.tauMs);
       }
     }
+    // Priced with no countables known: every later cycle is this one's shape, T + τ, so 1 + c again (c 1 here).
+    const { later } = hindcastAt(CHOICES[1] as (typeof CHOICES)[number]);
+    const none = installTiming({
+      needed: 10,
+      adding: 4,
+      onlineMs: 60 * MINUTE,
+      next: [{ tauMs: 31 * MINUTE }],
+      later: { ...later, left: [] },
+      tauError: 0.05,
+    });
+    expect(none.later).toBeDefined();
+    expect(none.candidates[1]?.errorMs).toBeCloseTo(0.05 * 31 * 2 * MINUTE, 6);
+  });
+
+  test("a reading's candidates share the pricing (#399's review): each one's cycles as priced alone, bit for bit", () => {
+    // A wait for PCMatrix (Aevum's, faction_rep and no hacking): after it, the level's path is install
+    // now's, but not the work's rate, so its cycles are its own.
+    const PC_MATRIX = "PCMatrix";
+    const cases = CHOICES.map((choice) => hindcastAt(choice));
+    const c3 = cases[1] as (typeof cases)[number];
+    expect(c3.later.left.map((each) => each.augmentation)).toContain(PC_MATRIX);
+    cases.push({
+      ...c3,
+      base: { ...c3.base, next: [{ augmentation: PC_MATRIX, tauMs: 30 * MINUTE }, ...c3.base.next] },
+    });
+    for (const { base, later } of cases) {
+      const timing = installTiming({ ...base, later });
+      for (const candidate of timing.candidates) {
+        const waitedFor = base.next.slice(0, candidate.k).map((one) => one.augmentation);
+        const alone = laterCyclesMs({
+          count: base.needed - base.adding - candidate.k,
+          perCycle: base.adding + candidate.k,
+          shapeMs: base.onlineMs + candidate.tauMs,
+          later: {
+            ...later,
+            left: later.left.filter((one) => !waitedFor.includes(one.augmentation)),
+            installing: [...later.installing, ...waitedFor],
+          },
+        });
+        expect(candidate.cyclesMs ?? []).toEqual(alone);
+      }
+    }
   });
 
   /**
