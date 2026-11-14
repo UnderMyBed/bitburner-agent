@@ -354,8 +354,9 @@ export const LEVELLING_OFF_SHORTEST_FAILS_AFTER_MS = HACKING_EXP_WINDOW_MS;
  * The time the hacking level has been all that's left in a BitNode (#355's review), added up across its levelling
  * installs (each breaks it while w0r1d_d43m0n is rooted again): each interval between two medium snapshots that both
  * show it, up to `HACKING_EXP_GAP_MS` (a longer one, the brain down, counts none); another BitNode starts it at 0. The
- * run report's (./world-daemon-report.ts) and the levelling rule's (#410), so the alert fires exactly where the report
- * fails.
+ * run report's (./world-daemon-report.ts) and the levelling rule's (#410), so the alert fires where the report fails:
+ * exactly within one brain process (the brain's clock starts again with it, the report's reads the store), and the
+ * brain's level-only also asks w0r1d_d43m0n reachable (`levelAllThatsLeft`), which a rooted server always is.
  */
 export class LevelOnlyClock {
   #ms = 0;

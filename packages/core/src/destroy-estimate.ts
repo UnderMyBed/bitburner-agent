@@ -308,8 +308,9 @@ function levelTerm(inputs: DestroyEstimateInputs, requiredLevel: number): Destro
       atLeast: false,
       source:
         `D from m (#410): w0r1d_d43m0n's level ${requiredLevel.toLocaleString("en-US")} from 0 experience at the ` +
-        "multipliers The Red Pill's install would leave, levelling's own least candidate then (levelling mode's factor " +
-        "unmeasured, 1: optimistic; what's bought before the install as the money now buys it)" +
+        "multipliers The Red Pill's install would leave with nothing more bought, levelling's own least candidate then " +
+        "((d) by donation where the favour the next install brings unlocks them; levelling mode's factor unmeasured, 1: " +
+        "optimistic)" +
         (inputs.redPillInstalled ? ", levelling not yet chosen" : ""),
       label: "either way",
     };

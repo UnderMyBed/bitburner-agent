@@ -514,6 +514,12 @@ export interface RedPillPurchase {
 export interface RedPillInstallOffer {
   money: number;
   redPillMoney: number;
+  /**
+   * The money the commit's own time brings at the income (A6's: the income × `LEVELLING_INSTALL_MS`), on both sides:
+   * the commit buys a level at a time as the money comes (5901be2's at BN4.3's 21:13 bought ×10 in 3.4 min, not the ×6
+   * the money at the choice covered). Absent, 0.
+   */
+  commitMoney?: number;
   incomePerSecond: number | null;
   incomeError?: number | null;
   batchingExp: LevellingRate | null;
@@ -622,7 +628,8 @@ export function redPillInstallTiming(offer: RedPillInstallOffer): RedPillInstall
   const income = offer.incomePerSecond;
   const fixedSeconds = (LEVELLING_INSTALL_MS + LEVELLING_REROOT_MS) / 1000;
   const now = redPillLevelling(offer, offer.now);
-  const available = offer.money - offer.redPillMoney;
+  // The money the purchase can take: after The Red Pill's donation, with what the commit's time brings, both sides.
+  const available = offer.money - offer.redPillMoney + (offer.commitMoney ?? 0);
   const setAdds = addsToLevelling(offer.augmentations);
   let wait: RedPillInstallTiming["wait"] = null;
   if (income !== null && income > 0 && Number.isFinite(income)) {
@@ -651,7 +658,8 @@ export function redPillInstallTiming(offer: RedPillInstallOffer): RedPillInstall
           : "no more of the levelling set within the BitNode's time so far of batching",
     };
   }
-  // The difference's error (#406): each rate moved by its standard error, both sides at the wait's purchase.
+  // The difference's error (#406): each rate moved by its standard error either way (time goes as one over a rate, so
+  // the larger change), both sides at the wait's purchase; the commit's money held at the income measured.
   const best = wait;
   const difference = (perSecond: number, exp: LevellingRate | null) =>
     (best.money - available) / perSecond +
@@ -661,12 +669,18 @@ export function redPillInstallTiming(offer: RedPillInstallOffer): RedPillInstall
   const incomeError = offer.incomeError ?? 0;
   const exp = offer.batchingExp;
   const expError = offer.batchingExpError ?? 0;
-  const moved = (value: number) => (Number.isFinite(value) ? value - base : 0);
-  const byIncome = incomeError > 0 ? moved(difference(income + incomeError, exp)) : 0;
-  const byExp =
-    expError > 0 && exp !== null
-      ? moved(difference(income, { expPerSecond: exp.expPerSecond + expError, atLevel: exp.atLevel }))
+  const moved = (value: number) => (Number.isFinite(value) ? Math.abs(value - base) : 0);
+  const eitherWay = (rate: number, error: number, differenceAt: (rate: number) => number) =>
+    error > 0
+      ? Math.max(moved(differenceAt(rate + error)), rate - error > 0 ? moved(differenceAt(rate - error)) : 0)
       : 0;
+  const byIncome = eitherWay(income, incomeError, (rate) => difference(rate, exp));
+  const byExp =
+    exp === null
+      ? 0
+      : eitherWay(exp.expPerSecond, expError, (rate) =>
+          difference(income, { expPerSecond: rate, atLevel: exp.atLevel }),
+        );
   const marginSeconds = Math.hypot(byIncome, byExp);
   const installNow = Number.isFinite(now.seconds) && beatsTheWait(base, marginSeconds);
   return {

@@ -11,6 +11,7 @@ import { donationTermsOf } from "../src/augmentation-reach.ts";
 import { augmentationBitNodeMultipliers, NEUROFLUX_GOVERNOR } from "../src/augmentations.ts";
 import { hackingLevelOfExp } from "../src/batcher.ts";
 import { destroyEstimate } from "../src/destroy-estimate.ts";
+import { favorAfterInstall, favorToDonate } from "../src/donations.ts";
 import type { JoinedFaction } from "../src/faction-state.ts";
 import type { HackingPlayer, HackingTarget } from "../src/hacking-ceiling.ts";
 import {
@@ -195,7 +196,15 @@ function afterInstallOf(installed: Record<string, number>, joined: JoinedFaction
     for (const name of purchase.augmentations) after[name] = 1;
     const state = { installed: after, queued: [], sourceFile11Level: 0, bitNodeMultipliers: BN4 };
     const owned = (name: string) => Object.hasOwn(after, name);
-    const reset = joined.map((faction) => ({ ...faction, reputation: 0 }));
+    const reset = joined.map((faction) => ({
+      ...faction,
+      // Daedalus's unlocked by its route's donations install before The Red Pill's (A6's).
+      favor: Math.max(
+        favorAfterInstall(faction.favor, faction.reputation),
+        faction.name === "Daedalus" ? favorToDonate(BN4) : 0,
+      ),
+      reputation: 0,
+    }));
     const shops = augmentationShops(reset, 4, state, owned, null);
     const wanted = shops.sold.filter((name) => !owned(name) && addsToLevelling([name]));
     const terms = donationTermsOf(reset, shops.shops, wanted, factionRep, BN4);
@@ -234,7 +243,9 @@ function redPillOfferOf({
   mults: { m: number; he: number; hs: number };
 }): RedPillInstallOffer {
   const { state, ladder, set, shops, terms } = ladderAt(joined, installed, factionRep, level);
-  const budget = money - redPillMoney;
+  // The commit's money (#410's review): what its own time brings at the income, both sides (A6's).
+  const commitMoney = incomePerSecond === null ? 0 : (incomePerSecond * LEVELLING_INSTALL_MS) / 1000;
+  const budget = money - redPillMoney + commitMoney;
   const toBuy = shops.reached.filter((name) => name !== "The Red Pill" && addsToLevelling([name]));
   const nowSet = chooseAugmentationsToBuy(toBuy, state, budget, level, terms);
   const nowLadder = neuroFluxLadder({
@@ -246,6 +257,7 @@ function redPillOfferOf({
   return {
     money,
     redPillMoney,
+    commitMoney,
     incomePerSecond,
     incomeError,
     batchingExp,
@@ -281,9 +293,11 @@ const BN43_RED_PILL = {
   // The two donations the commit planned, the least the choice implies.
   money: 1.4634e12,
   redPillMoney: 1.2134e12,
-  // The hacking money from 21:10:00 to 21:16:30 ($2.441e11 to $7.711e12); the experience 3.9248e8 to 7.5498e8.
-  incomePerSecond: 1.91e10,
-  batchingExp: { expPerSecond: (7.5498e8 - 3.9248e8) / 390, atLevel: 2938 },
+  // A6's trailing income at the choice: the hacking money since the 21:00:27 install, $4.479e11 by 21:13:15 (the money
+  // then, nothing bought since), over 768 s (its window from 21:03:35 is no faster: cautious either way); batching's
+  // experience 3.9248e8 by 21:10:00, over 573 s. The window after the choice ($1.91e10/s) saw the commit's rise.
+  incomePerSecond: 4.479e11 / 768,
+  batchingExp: { expPerSecond: 3.9248e8 / 573, atLevel: 2869 },
   mults: { m: 6.6236, he: 8.7904, hs: 2.777 },
 };
 
@@ -384,16 +398,75 @@ describe("D from m: the hindcast on BN4.1, BN4.2 and BN4.3 (#410)", () => {
     );
     expect(bn41.candidate).toBe("batch");
     expect(bn41.seconds / HOUR).toBeCloseTo(1.01, 2);
-    // BN4.3 with what 5901be2's commit bought (the Analyze Engine and NeuroFlux Governor ×10): (d) after it, 8.3 h at
-    // the income before the install, 21.4 h at the $4.97e8/s measured after it (the 21:21 replay's 20.7 h, and the
-    // install's fixed 15 min, the root's 3.4 and the preparation).
+    // BN4.3 with what 5901be2's commit bought (the Analyze Engine and NeuroFlux Governor ×10): (d) after it, 20.5 h at
+    // A6's trailing income before the install, 21.4 h at the $4.97e8/s measured after it (the 21:21 replay's 20.7 h,
+    // and the install's fixed 15 min, the root's 3.4 and the preparation).
     const offer = redPillOfferOf(BN43_RED_PILL);
     const bought = { levels: 10, augmentations: ["Embedded Netburner Module Analyze Engine"] };
     expect(redPillLevelling(offer, bought)).toMatchObject({ candidate: "batch" });
-    expect(redPillLevelling(offer, bought).seconds / HOUR).toBeCloseTo(8.29, 2);
+    expect(redPillLevelling(offer, bought).seconds / HOUR).toBeCloseTo(20.46, 2);
     expect(redPillLevelling(offer, bought, 4.97e8).seconds / HOUR).toBeCloseTo(21.37, 2);
     expect(redPillLevelling(offer, bought, 4.97e8).seconds).toBeGreaterThan(BN43_SO_FAR);
   });
+  test("#360's D at each stage it's read in BN4.3: joined 1.8e5 h, the donations install 160 h, levelling's choice 20.7 h", () => {
+    // D from m as the brain reads it at each moment (nothing more bought, A6's offer; Daedalus's donations unlocked by
+    // its route's donations install, the rest by the favour the next install brings), from evidence.txt's states. The
+    // measured D: none, BN4.3 never destroyed (stopped at 27 h 29 min, hacking 5,669 of 9,000); the prior's 8 h (BN4.2)
+    // stood at every stage before #410.
+    const nothing = { levels: 0, augmentations: [] };
+    // Daedalus joined (20:00): m 6.43, Daedalus at 260,949 (favour 0, its donations not unlocked yet), BitRunners'
+    // 73,299 at favour 133.8 not unlocking them at the next install: (d)'s set only the Analyze Engine, its levels by
+    // Daedalus's donations; the income since the 18:29 install ($5.785e15 over 5,436 s).
+    const joined = redPillOfferOf({
+      installed: installedOf(50),
+      joined: [
+        { name: "Daedalus", reputation: 260_949, favor: 0 },
+        { name: "BitRunners", reputation: 73_299, favor: 133.8 },
+        { name: "The Black Hand", reputation: 57_276, favor: 114.2 },
+        { name: "NiteSec", reputation: 54_332, favor: 103.0 },
+        { name: "Aevum", reputation: 6_569, favor: 7.27 },
+        { name: "CyberSec", reputation: 16_178, favor: 34.66 },
+      ],
+      factionRep: 2.663,
+      level: 3421,
+      money: 5.766e15,
+      redPillMoney: 0,
+      incomePerSecond: 5.785e15 / 5436,
+      batchingExp: { expPerSecond: 8.6633e9 / 5436, atLevel: 3000 },
+      mults: { m: 6.4287, he: 8.5318, hs: 2.6953 },
+    });
+    expect(joined.afterInstall(nothing).augmentations).toEqual(["Embedded Netburner Module Analyze Engine"]);
+    const atJoined = redPillLevelling(joined, nothing);
+    expect(atJoined.candidate).toBe("batch");
+    expect(atJoined.seconds / HOUR / 1e5).toBeCloseTo(1.85, 2);
+    // The donations install (21:10): m 6.62, both factions unlocked (favour 150.3, 150.5), the income since the 21:00
+    // install ($2.441e11 over 573 s): 160 h.
+    const donations = redPillOfferOf({
+      installed: installedOf(53),
+      joined: [
+        { name: "Daedalus", reputation: 1_326, favor: 150.28 },
+        { name: "BitRunners", reputation: 2_454, favor: 150.45 },
+        { name: "The Black Hand", reputation: 2_337, favor: 132.2 },
+        { name: "NiteSec", reputation: 2_310, favor: 123.7 },
+        { name: "Aevum", reputation: 12_869, favor: 24.5 },
+        { name: "CyberSec", reputation: 1_265, favor: 57.9 },
+      ],
+      factionRep: 2.744,
+      level: 2869,
+      money: 2.563e11,
+      redPillMoney: 0,
+      incomePerSecond: 2.441e11 / 573,
+      batchingExp: { expPerSecond: 3.9248e8 / 573, atLevel: 2869 },
+      mults: { m: 6.6236, he: 8.7904, hs: 2.777 },
+    });
+    const atDonations = redPillLevelling(donations, nothing);
+    expect(atDonations.candidate).toBe("batch");
+    expect(atDonations.seconds / HOUR).toBeCloseTo(159.9, 1);
+    // After The Red Pill (21:21): levelling's own choice is D, (d)'s 20.7 h (the replay below); every stage past the
+    // BitNode's time so far but the last, each far above the prior's 8 h.
+    expect(atJoined.seconds).toBeGreaterThan(atDonations.seconds);
+  });
+
   test("the destroy estimate (#360) takes D from m before levelling's choice, in place of the prior's constant", () => {
     const prior = {
       bitNode: "BN4.2",
@@ -461,7 +534,7 @@ describe("BN4.3's three moments through main's code (#410's replay)", () => {
     expect(counts.money / 1e9).toBeCloseTo(4.13, 2);
   });
 
-  test("21:13, The Red Pill's install: main installs at once; #410 batches 38 min for the set and ×11 first, 5.2 h against 15.1 h", () => {
+  test("21:13, The Red Pill's install: main installs at once; #410 batches 1.9 h for the set and ×8 first, 19.3 h against 32.6 h", () => {
     // evidence 21:13:35: The Red Pill by Daedalus's donation ($1.213e12 for 2.5m), installed at once, as on main (its
     // endgame `redPill`: no D weighed). The levelling set by donation at BitRunners (favour 150.4) and Daedalus (150.3, at
     // 2.5m after The Red Pill's donation): Core V2, Core V3, the Analyze Engine and Neurolink, $5.54e11 with their
@@ -474,24 +547,34 @@ describe("BN4.3's three moments through main's code (#410's replay)", () => {
       "BitRunners Neurolink",
     ]);
     expect((offer.ladder[0] as number) / 1e11).toBeCloseTo(5.54, 2);
-    // Now: the $2.5e11 after the donation buys the Analyze Engine and NeuroFlux Governor ×6; after the install
-    // levelling's least is (d), re-buying the rest of the set by donation from reputation 0: 15.1 h.
-    expect(offer.now).toEqual({ levels: 6, augmentations: ["Embedded Netburner Module Analyze Engine"] });
+    // A6's trailing income, $5.83e8/s; the commit's 15 min of it, $5.25e11, with the $2.5e11 after the donation buys
+    // the whole set and NeuroFlux Governor ×4 now; after the install, levelling's least is (d), its NeuroFlux Governor
+    // levels by donation from reputation 0: 32.6 h.
+    expect(offer.incomePerSecond as number).toBeCloseTo(5.832e8, -5);
+    expect(offer.now).toEqual({ levels: 4, augmentations: offer.augmentations });
     const timing = redPillInstallTiming(offer);
     expect(timing.now.candidate).toBe("batch");
-    expect(timing.now.seconds / HOUR).toBeCloseTo(15.13, 2);
-    // The wait: 37.6 min at $1.91e10/s to $4.34e13 for the whole set and ×11, at The Red Pill's 2.5m at Daedalus, then
-    // (d) after it: 5.2 h in all. No error measured (two readings in the evidence), so the margin is 0: the wait.
-    expect(timing.wait).toMatchObject({ candidate: "batch", levels: 11 });
-    expect((timing.wait?.batchingSeconds as number) / 60).toBeCloseTo(37.6, 1);
-    expect((timing.wait?.money as number) / 1e13).toBeCloseTo(4.34, 2);
-    expect((timing.wait?.seconds as number) / HOUR).toBeCloseTo(5.23, 2);
+    expect(timing.now.seconds / HOUR).toBeCloseTo(32.62, 2);
+    // The wait: 1.9 h of batching to $4.76e12 for the set and ×8, at The Red Pill's 2.5m at Daedalus, then (d): 19.3 h
+    // in all. No error measured (the evidence's readings are too few for one), so the margin is 0: the wait.
+    expect(timing.wait).toMatchObject({ candidate: "batch", levels: 8 });
+    expect((timing.wait?.batchingSeconds as number) / HOUR).toBeCloseTo(1.9, 1);
+    expect((timing.wait?.money as number) / 1e12).toBeCloseTo(4.76, 2);
+    expect((timing.wait?.seconds as number) / HOUR).toBeCloseTo(19.31, 2);
     expect(timing.marginSeconds).toBe(0);
     expect(timing.choice).toBe("wait");
-    // At the income measured after the install ($4.97e8/s), the wait still: 2.5 h of batching, 20.9 h against 40.1 h.
-    const slow = redPillInstallTiming({ ...offer, incomePerSecond: 4.97e8 });
-    expect(slow.choice).toBe("wait");
-    expect((slow.wait?.seconds as number) < slow.now.seconds).toBe(true);
+    // It waits at faster trailing incomes too: $1e9/s 15.2 h against 24.1 h; $3e9/s 10.0 h against 12.9 h; and at the
+    // window after the choice (the commit's rise, $1.91e10/s) 5.0 h against 6.1 h.
+    for (const [incomePerSecond, wait, now] of [
+      [1e9, 15.23, 24.06],
+      [3e9, 9.99, 12.91],
+      [1.91e10, 4.98, 6.09],
+    ] as const) {
+      const faster = redPillInstallTiming(redPillOfferOf({ ...BN43_RED_PILL, incomePerSecond }));
+      expect(faster.choice).toBe("wait");
+      expect((faster.wait?.seconds as number) / HOUR).toBeCloseTo(wait, 2);
+      expect(faster.now.seconds / HOUR).toBeCloseTo(now, 2);
+    }
   });
   test("21:21, levelling's choice: main's (d) batches 5.9 h to the set and ×8, 20.7 h in all, not levelling mode's 8.6e6 h", () => {
     // 5901be2 chose levelling mode (evidence: money 1.85e13 s, levelling mode 3.31e10 s; (d) not in it) and stayed 9 h
@@ -614,7 +697,8 @@ describe("The Red Pill's install timed (#410): #406's margin, the measured error
     // The wait's batching from the money after the donation.
     const timing = redPillInstallTiming(offer);
     expect(timing.wait?.batchingSeconds).toBeCloseTo(
-      ((timing.wait?.money as number) - (offer.money - offer.redPillMoney)) / (offer.incomePerSecond as number),
+      ((timing.wait?.money as number) - (offer.money - offer.redPillMoney + (offer.commitMoney ?? 0))) /
+        (offer.incomePerSecond as number),
       6,
     );
   });

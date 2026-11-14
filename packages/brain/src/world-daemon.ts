@@ -1290,12 +1290,16 @@ export class WorldDaemonRule {
               `${formatDuration(paused.estimateMs)}, and 10 min)`) +
           waitWords,
         sinceMs,
-        ...(pauseEndsMs === null
+        // The gang's pause (#374) and A6's wait for the levelling set (#410): the later of their bounds, where given.
+        ...(pauseEndsMs === null && redPillWait === null
           ? {}
-          : { withinMs: Math.max(RED_PILL_REPUTATION_STALLED_AFTER_MS, pauseEndsMs - sinceMs) }),
-        ...(redPillWait === null
-          ? {}
-          : { withinMs: waitWithin(sinceMs, RED_PILL_REPUTATION_STALLED_AFTER_MS) as number }),
+          : {
+              withinMs: Math.max(
+                RED_PILL_REPUTATION_STALLED_AFTER_MS,
+                pauseEndsMs === null ? 0 : pauseEndsMs - sinceMs,
+                waitWithin(sinceMs, RED_PILL_REPUTATION_STALLED_AFTER_MS) ?? 0,
+              ),
+            }),
       });
     } else {
       this.#reputation = null;

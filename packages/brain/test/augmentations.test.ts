@@ -4410,25 +4410,28 @@ describe("The Red Pill's install timed (#410): now, or first batching for the le
     expect(timing?.augmentations.toSorted()).toEqual(LEVELLING_SET.toSorted());
     const wait = timing?.wait as NonNullable<NonNullable<typeof timing>["wait"]>;
     expect(wait.seconds).toBeLessThan(timing?.now.seconds as number);
-    expect(wait.batchingSeconds).toBeCloseTo(wait.money / INCOME, 0);
+    // From the money after the donation and the commit's 15 min at the income (#410's review).
+    expect(wait.batchingSeconds).toBeCloseTo((wait.money - INCOME * 900) / INCOME, 0);
     expect(timing?.marginSeconds).toBe(0);
     expect(timing?.now.candidate).not.toBeNull();
     expect(rule.view().waitingFor).toMatch(
-      /^The Red Pill's install timed \(#410\): now \(NeuroFlux Governor ×0\), D about .+ \((?:batching for money|levelling mode|batching for the money, then an install)\); batching .+ first to \$[\d,]+ for NeuroFlux Governor ×\d+ and .*BitRunners Neurolink, about .+ in all \(.+ after\); the difference's error 0 s: batching first, the wait no longer than the install now, within their difference's measured error \(#406\): a tie waits$/,
+      /^The Red Pill's install timed \(#410\): now \(NeuroFlux Governor ×\d+[^)]*\), D about .+ \((?:batching for money|levelling mode|batching for the money, then an install)\); batching .+ first to \$[\d,]+ for NeuroFlux Governor ×\d+ and .*BitRunners Neurolink, about .+ in all \(.+ after\); the difference's error 0 s: batching first, the wait no longer than the install now, within their difference's measured error \(#406\): a tie waits$/,
     );
-    // Its progress, at the reading it began (the run report's held line), and The Red Pill's donation's money still
+    // Its progress, at the reading it began (the run report's held line); the wait's money and The Red Pill's donation
     // held.
     const timed = progressEvents().filter((event) => /install timed \(#410\)/.test(String(event.held)));
     expect(timed).toEqual([expect.objectContaining({ atMs: gameTimeMs, held: rule.view().waitingFor })]);
-    expect(rule.view().reserve).toBe(RED_PILL_DONATION);
+    expect(rule.view().reserve).toBe(RED_PILL_DONATION + wait.money);
     expect(lines.filter((line) => line.startsWith("augmentations: The Red Pill's install timed (#410)"))).toHaveLength(
       1,
     );
     // The World Daemon's stall bound: twice the first wait's batching and the income's window (#343's waits').
     const boundMs = 2 * wait.batchingSeconds * 1000 + AUGMENTATION_INCOME_WINDOW_MS;
     expect(rule.redPillWait()).toEqual({ sinceMs: gameTimeMs, withinMs: boundMs });
-    // D from m for the destroy estimate: levelling's least after the install with nothing bought, as priced here.
-    expect(rule.levelFromMultipliersMs()).toBeCloseTo((timing?.now.seconds as number) * 1000, 0);
+    // D from m for the destroy estimate: levelling's least after the install with nothing bought (and no donation), so
+    // longer than now's, which buys the commit's.
+    expect(rule.levelFromMultipliersMs()).toBeGreaterThan((timing?.now.seconds as number) * 1000);
+    expect(Number.isFinite(rule.levelFromMultipliersMs())).toBe(true);
     // The money flat: the wait goes on to its bound, then The Red Pill now, said.
     const until = gameTimeMs + boundMs;
     while (gameTimeMs < until - MINUTE) minute(RED_PILL_DONATION);

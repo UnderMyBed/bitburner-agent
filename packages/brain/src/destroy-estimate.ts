@@ -753,13 +753,11 @@ export class DestroyEstimateRule {
         daedalus: stage,
         holdEtaMs,
         levellingMs: redPillInstalled ? levellingMs : null,
-        // D from m (#410) once The Red Pill's install is in view (Daedalus joined, its donations install, The Red Pill
-        // installed before levelling's choice), where D is the level's: earlier, m rises with every install to come,
-        // so the multipliers now say nothing of The Red Pill's (BN2's start: 5e201 ms), and the prior's stands.
+        // D from m (#410) once The Red Pill's install is in view (Daedalus joined, its donations install), where D is the
+        // level's: earlier, m rises with every install to come, so the multipliers now say nothing of The Red Pill's (BN2's
+        // start: 5e201 ms), and the prior's stands. The Red Pill installed, A6 prices none (levelling's own choice is D).
         levelFromMultipliersMs:
-          route !== "blackOps" &&
-          !(redPillInstalled && levellingMs !== null) &&
-          (redPillInstalled || stage === "joined" || stage === "donations installed")
+          route !== "blackOps" && !redPillInstalled && (stage === "joined" || stage === "donations installed")
             ? (inputs.levelFromMultipliers?.() ?? null)
             : null,
         prior: note.prior,

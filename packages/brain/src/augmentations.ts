@@ -134,6 +134,8 @@ import {
   factionReadingKind,
   factionReadingOf,
   factionRepInstallMultiplier,
+  favorAfterInstall,
+  favorToDonate,
   GANG_RED_PILL_HOLD_MS,
   GANG_ROUTE_COMMIT_MS,
   GANG_ROUTE_SERVER,
@@ -154,6 +156,7 @@ import {
   intentId,
   type JoinedFaction,
   LEVEL_RISE_TERM,
+  LEVELLING_INSTALL_MS,
   type LevellingCandidate,
   type LevellingRate,
   type LevelRise,
@@ -1651,6 +1654,61 @@ interface RedPillContext {
   slowGameTimeMs: number | null;
 }
 
+/**
+ * (d)'s offer after The Red Pill's install with `purchase` (#410): what's left of the levelling set, and NeuroFlux
+ * Governor's ladder from the levels it leaves, the queue empty (prices ×1.9 afresh, `AugmentationHelpers.ts:29-31`)
+ * and every faction's reputation 0 (`Faction/Faction.ts:77-85`), so all of it by donation where the favour the
+ * install brings unlocks them (`favorAfterInstall`, `Faction/Faction.ts:77-81`; one install's, where two may come
+ * before The Red Pill's: cautious). Daedalus's unlocked whatever its reputation now: its route's donations install
+ * (#225, "Daedalus donations") comes before The Red Pill's, for that (`favorToDonate`), so from Daedalus joined (d) is
+ * priced.
+ */
+function afterRedPill({
+  purchase,
+  queuedLevels,
+  installable,
+  purchaseState,
+  shops,
+  factionRep,
+  multipliers,
+  hackingLevel,
+  short,
+}: {
+  purchase: RedPillPurchase;
+  queuedLevels: number;
+  installable: readonly string[];
+  purchaseState: AugmentationPurchaseState;
+  shops: AugmentationShops;
+  factionRep: number;
+  multipliers: ReturnType<typeof augmentationBitNodeMultipliers>;
+  hackingLevel: number;
+  short: boolean;
+}): { ladder: number[]; augmentations: string[] } {
+  const installed: Record<string, number> = { ...purchaseState.installed, [THE_RED_PILL]: 1 };
+  for (const name of [...installable, ...purchase.augmentations]) {
+    if (name !== NEUROFLUX_GOVERNOR) installed[name] = 1;
+  }
+  const neuroFlux = (purchaseState.installed[NEUROFLUX_GOVERNOR] ?? 0) + queuedLevels + purchase.levels;
+  if (neuroFlux > 0) installed[NEUROFLUX_GOVERNOR] = neuroFlux;
+  const state: AugmentationPurchaseState = { ...purchaseState, installed, queued: [] };
+  const owned = (name: string) => Object.hasOwn(installed, name);
+  const reset = shops.joined.map((faction) => ({
+    ...faction,
+    favor: Math.max(
+      favorAfterInstall(faction.favor, faction.reputation),
+      faction.name === DAEDALUS ? favorToDonate(multipliers) : 0,
+    ),
+    reputation: 0,
+  }));
+  const wanted = shops.sold.filter((name) => !owned(name) && addsToLevelling([name]));
+  const terms = donationTermsOf(reset, shops.shops, wanted, factionRep, multipliers);
+  const set = chooseAugmentationsToBuy([], state, Number.MAX_VALUE, hackingLevel, terms, short);
+  return {
+    ladder: neuroFluxLadder({ state, set, neuroFluxReputation: 0, donations: terms }),
+    augmentations: set.purchases.map((each) => each.name),
+  };
+}
+
 /** Levelling's candidates in the words the dashboard and the run report use (./levelling.ts's). */
 const RED_PILL_CANDIDATE_WORDS: Record<LevellingCandidate, string> = {
   money: "batching for money",
@@ -1754,8 +1812,6 @@ export class AugmentationRule {
   #redPillTiming: RedPillTimingView | null = null;
   /** The wait at The Red Pill for the levelling set (#410): its cycle, start and bound; null when not waiting. */
   #redPillWait: { lastAugReset: number; sinceOnlineMs: number; sinceMs: number; boundMs: number } | null = null;
-  /** (d)'s offer after The Red Pill's install, by purchase (#410): priced once a decision's state. */
-  readonly #afterRedPillCache = new Map<string, { ladder: number[]; augmentations: string[] }>();
   /** D from m (#410) at the last decision's state, lazy; null where it isn't priced. */
   #levelFromMultipliers: (() => number) | null = null;
   /** The Red Pill's timing's choice last logged (#410): logged on a change. */
@@ -2773,7 +2829,13 @@ export class AugmentationRule {
       if (endgame.kind === "redPill" && redPillFigures !== null) {
         const timing = this.#timeRedPill({ ...context(redPillFigures, endgame.donation), onlineMs, atMs });
         if (timing.choice === "wait") {
-          endgame = { kind: "hold", why: "redPill", reserve: redPillAmount, waitingFor: timing.words };
+          // The wait's money held back too (cloud servers and home RAM wait for it): its purchase and the donation.
+          endgame = {
+            kind: "hold",
+            why: "redPill",
+            reserve: redPillAmount + (timing.wait?.money ?? 0),
+            waitingFor: timing.words,
+          };
         }
       } else this.#redPillWait = null;
       // The destroy's hold (#336): what the money buys of NeuroFlux Governor, and (#355) the set's augmentations that
@@ -3762,8 +3824,13 @@ export class AugmentationRule {
     const ladderOf = (set: AugmentationSet) =>
       neuroFluxLadder({ state: purchaseState, set, neuroFluxReputation: shops.neuroFluxReputation, donations: terms });
     const names = (set: AugmentationSet) => set.purchases.map((purchase) => purchase.name);
-    // Now: the set the money after the donation covers, then each level it still covers.
-    const budget = money - redPillMoney;
+    // The income before the choice (the reserve's window, trailing), and the money the commit's own time brings at it:
+    // the commit buys a level at a time as the money comes (`LEVELLING_INSTALL_MS`, the model's commit; 5901be2's took
+    // 3.4 min at BN4.3's 21:13, so toward now).
+    const income = this.#income();
+    const commitMoney = income !== null && income > 0 ? (income * LEVELLING_INSTALL_MS) / 1000 : 0;
+    // Now: the set the money after the donation and the commit's covers, then each level it still covers.
+    const budget = money - redPillMoney + commitMoney;
     const nowSet = chooseAugmentationsToBuy(toBuy, purchaseState, budget, hackingLevel, terms, short);
     const nowLevels = Math.max(
       0,
@@ -3776,11 +3843,13 @@ export class AugmentationRule {
     const queuedGain = levellingInstallMultipliers(queuedLevels, queuedAdds);
     const soFarSeconds =
       slowGameTimeMs === null || lastNodeReset === null ? null : Math.max(0, slowGameTimeMs - lastNodeReset) / 1000;
-    const income = this.#income();
     const exp = this.#expRate.windowFull() ? this.#expRate.perSecond() : null;
+    // (d)'s offer after the install, priced once a purchase within this offer (one reading's state).
+    const afterInstall = new Map<string, { ladder: number[]; augmentations: string[] }>();
     const offer: RedPillInstallOffer = {
       money,
       redPillMoney,
+      commitMoney,
       incomePerSecond: income,
       incomeError: rateStandardError(
         this.#incomeSamples.map(({ gameTimeMs, earned }) => ({ atMs: gameTimeMs, value: earned })),
@@ -3790,8 +3859,11 @@ export class AugmentationRule {
       now: { levels: nowLevels, augmentations: names(nowSet) },
       ladder: ladderOf(whole),
       augmentations: names(whole),
-      afterInstall: (purchase) =>
-        this.#afterRedPill({
+      afterInstall: (purchase) => {
+        const key = JSON.stringify([purchase.levels, purchase.augmentations]);
+        const cached = afterInstall.get(key);
+        if (cached !== undefined) return cached;
+        const after = afterRedPill({
           purchase,
           queuedLevels,
           installable,
@@ -3801,7 +3873,10 @@ export class AugmentationRule {
           multipliers,
           hackingLevel,
           short,
-        }),
+        });
+        afterInstall.set(key, after);
+        return after;
+      },
       homeThreads: figures.homeThreads,
       perThread: {
         expPerSecond: figures.perThread.expPerSecond * queuedGain.hackingExp * queuedGain.hackingSpeed,
@@ -3814,65 +3889,6 @@ export class AugmentationRule {
       levelMult: figures.levelMult * queuedGain.hacking,
     };
     return { offer, nowSet: names(nowSet), nowLevels };
-  }
-
-  /**
-   * (d)'s offer after The Red Pill's install with `purchase` (#410): what's left of the levelling set, and NeuroFlux
-   * Governor's ladder from the levels it leaves, the queue empty (prices ×1.9 afresh, `AugmentationHelpers.ts:29-31`)
-   * and every faction's reputation 0 (`Faction/Faction.ts:77-85`), so all of it by donation at the factions taking
-   * them now (the favour the install adds left out: cautious). Kept for the decision's state (the installed list and
-   * the queue), so a reading prices each purchase once.
-   */
-  #afterRedPill({
-    purchase,
-    queuedLevels,
-    installable,
-    purchaseState,
-    shops,
-    factionRep,
-    multipliers,
-    hackingLevel,
-    short,
-  }: {
-    purchase: RedPillPurchase;
-    queuedLevels: number;
-    installable: readonly string[];
-    purchaseState: AugmentationPurchaseState;
-    shops: AugmentationShops;
-    factionRep: number;
-    multipliers: ReturnType<typeof augmentationBitNodeMultipliers>;
-    hackingLevel: number;
-    short: boolean;
-  }): { ladder: number[]; augmentations: string[] } {
-    const key = JSON.stringify([
-      Object.keys(purchaseState.installed).length,
-      purchaseState.installed[NEUROFLUX_GOVERNOR] ?? 0,
-      installable,
-      purchase.levels,
-      purchase.augmentations,
-      factionRep,
-    ]);
-    const cached = this.#afterRedPillCache.get(key);
-    if (cached !== undefined) return cached;
-    const installed: Record<string, number> = { ...purchaseState.installed, [THE_RED_PILL]: 1 };
-    for (const name of [...installable, ...purchase.augmentations]) {
-      if (name !== NEUROFLUX_GOVERNOR) installed[name] = 1;
-    }
-    const neuroFlux = (purchaseState.installed[NEUROFLUX_GOVERNOR] ?? 0) + queuedLevels + purchase.levels;
-    if (neuroFlux > 0) installed[NEUROFLUX_GOVERNOR] = neuroFlux;
-    const state: AugmentationPurchaseState = { ...purchaseState, installed, queued: [] };
-    const owned = (name: string) => Object.hasOwn(installed, name);
-    const reset = shops.joined.map((faction) => ({ ...faction, reputation: 0 }));
-    const wanted = shops.sold.filter((name) => !owned(name) && addsToLevelling([name]));
-    const terms = donationTermsOf(reset, shops.shops, wanted, factionRep, multipliers);
-    const set = chooseAugmentationsToBuy([], state, Number.MAX_VALUE, hackingLevel, terms, short);
-    const after = {
-      ladder: neuroFluxLadder({ state, set, neuroFluxReputation: 0, donations: terms }),
-      augmentations: set.purchases.map((each) => each.name),
-    };
-    if (this.#afterRedPillCache.size > 256) this.#afterRedPillCache.clear();
-    this.#afterRedPillCache.set(key, after);
-    return after;
   }
 
   /**
