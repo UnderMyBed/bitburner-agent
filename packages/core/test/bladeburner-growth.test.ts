@@ -1130,6 +1130,30 @@ describe("the playability under the route's replays (#423): the gate's figures, 
     );
   };
 
+  // R423 TEMP: the figures to every digit, to compare machines.
+  test("R423 DIGEST", () => {
+    for (const bitNode of [6, 7]) {
+      const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+      const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+      const { combat: figures, input: read, at, who } = startAt(100);
+      const input = { ...read, rankMultiplier, drift: { cities: SIX, city: "Sector-12" } };
+      const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
+      const forecast = { ...input, forecast: bladeburnerPersonAfterInstall(who, gain) };
+      const routes = {
+        keep: blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier, replays: 0 }),
+        after: blackOpsRouteGrownEstimate(forecast, at, { combat: combatAfter(figures, gain), costMultiplier, replays: 0 }),
+        keepReplays: blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier }),
+      };
+      for (const [label, r] of Object.entries(routes)) {
+        const digits = r.path.map((p) => p.seconds.toPrecision(17));
+        console.log(
+          `R423DIGEST BN${bitNode} ${label} seconds ${r.seconds.toPrecision(17)} solves ${r.solves} points ${digits.length} ` +
+            `replaysSum ${(r.replays?.times ?? []).reduce((a, b) => a + b, 0).toPrecision(17)} path ${digits.join(",")}`,
+        );
+      }
+    }
+  }, 300_000);
+
   test("BN6, combat 100: both sides pass, so the replays; B7's margin the step's error and 3 of the paired replays'", () => {
     const { keep, after, timing, step } = solve(6);
     for (const route of [keep, after]) {
