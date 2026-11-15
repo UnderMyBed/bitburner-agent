@@ -1,5 +1,5 @@
 // #426's research, WIP (never to merge as is): each replay's climb steps re-chosen by the route's own step solver at
-// the replay's drawn cities, against #427's held mix. Runs with R426=1 locally, and on CI (CI=true) on the WIP branch,
+// the replay's drawn cities, against #427's held mix. Runs with R426=1 (locally, and on Linux by the WIP branch's workflow, .github/workflows/r426-research.yml),
 // so both machines' figures are read. Knobs: R426_REPLAYS (200), R426_SERIES (10), R426_ROUTES (the list below),
 // R426_VARIANTS ("held,mean,rechosen": the held mix in this harness's clock; re-chosen with #427's rebuilds; re-chosen
 // rebuilds too), R426_OUT (a JSONL file for the rows).
@@ -39,7 +39,7 @@ import {
 } from "../src/bladeburner-replays.ts";
 import { bladeburnerSkillCostMultiplierOf } from "../src/bladeburner-skills.ts";
 
-const RUN = process.env.R426 === "1" || process.env.CI === "true";
+const RUN = process.env.R426 === "1";
 const REPLAYS = Number(process.env.R426_REPLAYS ?? 200);
 const SERIES = Number(process.env.R426_SERIES ?? 10);
 const ROUTES =
