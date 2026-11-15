@@ -1072,6 +1072,33 @@ describe("#423 research: B4's pick among the six's spread", () => {
           first: `${again[0]?.work?.name} ${again[0]?.work?.level} ${again[0]?.rest.name}`,
         };
       };
+      // Ruling 2, item 3: the plan difference across disjoint-seed runs of 500 (the chaos as drawn; Raid, which
+      // drains, on the mean path: its ratio 1), against the walks' gap error.
+      {
+        const diffs: number[] = [];
+        const levels: number[] = [];
+        for (let r = 0; r < 5; r++) {
+          const run = eventsMonteCarlo(horizon, 500, 81000001 + 2000003 * r);
+          const ratio = new Map<string, number>();
+          for (const [name, kind] of [
+            ["Bounty Hunter", "chain"],
+            ["Retirement", "horizon"],
+          ] as const) {
+            const sc = relevant.find((each) => each.name === name && each.kind === kind) as Scenario;
+            ratio.set(name, optionThree(sc, run) / sc.priced);
+          }
+          const x = repriced(ratio);
+          diffs.push(x.raid - x.bh);
+          levels.push(x.bh);
+        }
+        const d = meanOf(diffs);
+        const l = meanOf(levels);
+        console.log(
+          `R423 item 3: Raid first − BH first priced over 5 runs of 500: ${(d.mean / 60).toFixed(2)} min, sd a run ` +
+            `${((d.error * Math.sqrt(5)) / 60).toFixed(2)} min (the walks' gap error 6.0 min); BH first's level ` +
+            `${(l.mean / 60).toFixed(1)} min, sd a run ${((l.error * Math.sqrt(5)) / 60).toFixed(1)} min; each: ${diffs.map((x) => (x / 60).toFixed(1)).join(", ")}`,
+        );
+      }
       const base = repriced(new Map());
       const three = repriced(ratios.three);
       const ideal = repriced(ratios.walked);
@@ -1454,3 +1481,113 @@ function walkPlan(
     terms: Object.fromEntries(Object.entries(terms).map(([key, value]) => [key, value / walks])) as typeof terms,
   };
 }
+
+// ---- #423 ruling 2, item 5: the grown estimate's factor shared by time against a fresh run from its projected state ----
+
+/** Option 3's run from any six (the chaos as drawn: B4 sees each city's own), on G + 1 times over `horizon`. */
+function spreadRunFrom(cities: readonly BladeburnerDriftCity[], horizon: number, walks: number, seed: number, G = 64) {
+  const most = Array.from({ length: G + 1 }, () => new Float64Array(walks));
+  const popMeans = Array.from({ length: G + 1 }, () => new Float64Array(6));
+  const chaosMeans = Array.from({ length: G + 1 }, () => new Float64Array(6));
+  for (let walk = 0; walk < walks; walk++) {
+    const events = seeded(seed + 7919 * walk);
+    const pops = cities.map((city) => city.population);
+    const comms = cities.map((city) => city.communities);
+    const chaos = cities.map((city) => city.chaos);
+    let decayed = 0;
+    let next = intIn(events, 240, 600);
+    const decayTo = (t: number) => {
+      for (const i of chaos.keys()) chaos[i] = Math.max(0, (chaos[i] as number) - 0.0001 * (t - decayed));
+      decayed = t;
+    };
+    for (let g = 0; g <= G; g++) {
+      const t = (g * horizon) / G;
+      while (next <= t) {
+        decayTo(next);
+        eventsOn(pops, comms, chaos, events);
+        next += intIn(events, 240, 600);
+      }
+      decayTo(t);
+      let best = 0;
+      for (let i = 0; i < 6; i++) {
+        const f = factorOf(pops[i] as number, chaos[i] as number);
+        (popMeans[g] as Float64Array)[i] += (pops[i] as number) / walks;
+        (chaosMeans[g] as Float64Array)[i] += Math.min(50, chaos[i] as number) / walks;
+        if (f > best) best = f;
+      }
+      (most[g] as Float64Array)[walk] = best;
+    }
+  }
+  return { most, popMeans, chaosMeans, G, horizon, walks };
+}
+type SpreadRun = ReturnType<typeof spreadRunFrom>;
+/** The factor's mean over [from, to] (its grid's points in it, the ends interpolated at the grid's resolution). */
+function meanFactor(run: SpreadRun, c: number, ref: number, from: number, to: number, points = 16): number {
+  let sum = 0;
+  for (let k = 0; k < points; k++) {
+    const t = from + ((k + 0.5) * (to - from)) / points;
+    const g = Math.max(0, Math.min(run.G, Math.round((t / run.horizon) * run.G)));
+    const xs = run.most[g] as Float64Array;
+    let e = 0;
+    for (const x of xs) e += Math.min(1, (c * x) / ref);
+    e /= xs.length;
+    let maxE = 0;
+    for (let i = 0; i < 6; i++)
+      maxE = Math.max(maxE, factorOf((run.popMeans[g] as Float64Array)[i] as number, (run.chaosMeans[g] as Float64Array)[i] as number));
+    sum += e / Math.min(1, (c * maxE) / ref);
+  }
+  return sum / points;
+}
+
+describe("#423 ruling 2, item 5: the grown estimate's factor shared by time", () => {
+  test("bn6-skills' projected states: the reading's run at the state's time against a fresh run from the state", async () => {
+    const { readFileSync } = await import("node:fs");
+    const file =
+      process.env.R423_GROWN ??
+      "C:/Users/Matt/AppData/Local/Temp/claude/f9d10e1727648ecd/8fa44f8b-3eb6-48ce-9496-c91c002b8eb4/scratchpad/m4/423/grown-states.json";
+    const { records } = JSON.parse(readFileSync(file, "utf8")) as {
+      records: {
+        seconds: number;
+        horizon: number;
+        cities: BladeburnerDriftCity[];
+        reference: { population: number; chaos: number };
+        readings: { name: string; chance: [number, number] }[];
+      }[];
+    };
+    const reading = records[0] as (typeof records)[number];
+    const ref = factorOf(reading.reference.population, reading.reference.chaos);
+    const pickAt = (hours: number) =>
+      records.reduce((best, each) => (Math.abs(each.seconds / 3600 - hours) < Math.abs(best.seconds / 3600 - hours) ? each : best));
+    const states = [pickAt(10), pickAt(40), pickAt(100)];
+    const WALKS = 500;
+    const REPS = 5;
+    const end = Math.max(...states.map((s) => s.seconds + s.horizon));
+    // The reading's run, to the last state's step's end, on a grid fine enough for a step (about half an hour).
+    const G = Math.ceil(end / 900);
+    const shared = Array.from({ length: REPS }, (_, r) => spreadRunFrom(reading.cities, end, WALKS, 41000001 + 2000003 * r, G));
+    for (const state of states) {
+      for (const name of ["Bounty Hunter", "Retirement", "Tracking"]) {
+        const c = (reading.readings.find((r) => r.name === name) as { chance: [number, number] }).chance[0];
+        const sharedFactors = shared.map((run) => meanFactor(run, c, ref, state.seconds, state.seconds + state.horizon));
+        const fresh = Array.from({ length: REPS }, (_, r) =>
+          meanFactor(
+            spreadRunFrom(state.cities, state.horizon, WALKS, 61000001 + 2000003 * r, 16),
+            c,
+            ref,
+            0,
+            state.horizon,
+          ),
+        );
+        const a = meanOf(sharedFactors);
+        const b = meanOf(fresh);
+        const bar = 3 * Math.sqrt(a.error ** 2 * REPS + b.error ** 2 * REPS);
+        console.log(
+          `R423 item 5, ${name} at ${(state.seconds / 3600).toFixed(1)} h (its step ${(state.horizon / 3600).toFixed(2)} h): ` +
+            `shared by time ${a.mean.toFixed(4)} (sd a run ${(a.error * Math.sqrt(REPS)).toFixed(4)}), fresh from the state ` +
+            `${b.mean.toFixed(4)} (sd ${(b.error * Math.sqrt(REPS)).toFixed(4)}); |diff| ${Math.abs(a.mean - b.mean).toFixed(4)} against ` +
+            `3√(σ² sum) ${bar.toFixed(4)}: ${Math.abs(a.mean - b.mean) <= bar ? "passes" : "FAILS"}`,
+        );
+      }
+    }
+  }, 600_000);
+});
