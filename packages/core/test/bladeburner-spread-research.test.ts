@@ -1806,3 +1806,400 @@ describe("#423 ruling 3: the grown estimate against walks of its own route", () 
     }
   }, 600_000);
 });
+
+// ---- #423 ruling 4: the playability figures re-priced under walks of their own routes ----
+
+interface PricedPart {
+  name: string;
+  level: number;
+  chance: number;
+  perSecond: number;
+}
+type PricedStep =
+  | {
+      kind: "climb";
+      seconds: number;
+      dt: number;
+      by: number;
+      rate: number;
+      parts: PricedPart[];
+      state: { cities: BladeburnerDriftCity[]; worked: number; ceiling: number };
+      reference: BladeburnerDriftCity;
+    }
+  | {
+      kind: "blackop";
+      name: string;
+      seconds: number;
+      span: number;
+      failures: number;
+      works: { dt: number; rate: number; parts: PricedPart[] }[];
+    };
+interface PricedRoute {
+  seconds: number;
+  rankMultiplier: number;
+  readings: { name: string; chance: [number, number] }[];
+  steps: PricedStep[];
+}
+type Mode = { population: "drawn" | "mean"; chaos: "drawn" | "mean" };
+
+/**
+ * A route's time re-priced under walks of the route itself (#423's ruling 4): the route's attempts at the route's
+ * times (each climb step's mix evenly over it; a Black Op's expected rebuilds back to back from its start, its own
+ * attempts moving no city), the events and the decay, each walk's cities drained by the route's own attempts, B4 by
+ * each city's figures (Raid's among those with communities), Diplomacy to 50 after an attempt. Each step's rate
+ * re-priced at the walk's mean chance drawn for each of its parts, its actions, levels and attempts a second held:
+ * rate' = rate + Σ x·(p̄ − p)·(gain + loss); its time by over rate'. A Black Op's span: its rebuilds' share at their
+ * mix's rate over the re-priced one. `mode`: the figure B4 and the chance read each city at, drawn or the route's
+ * mean path's (its state at the step), population and chaos apart.
+ */
+function repriceRoute(route: PricedRoute, mode: Mode, walks: number, seed: number) {
+  type Climb = Extract<PricedStep, { kind: "climb" }>;
+  const climbs = route.steps.filter((s) => s.kind === "climb") as Climb[];
+  const first = climbs[0] as Climb;
+  const ref = cityChanceFactor(first.reference);
+  const readCities = first.state.cities;
+  const competence = (step: Climb, part: PricedPart) => {
+    const factor = driftedChance(
+      { action: action(part.name), chance: 1e-6 },
+      first.reference,
+      step.state.cities[step.state.worked] as BladeburnerDriftCity,
+      step.state.ceiling,
+    );
+    // The factor uncapped (a tiny chance through the same formula), Raid's P(some communities) in it.
+    return factor > 0 ? (part.chance * 1e-6) / factor : part.chance;
+  };
+  // Each part of each step (a climb's, a Black Op's rebuild's): its accumulator, and the attempts in time order.
+  const keys: { part: PricedPart; step: number; work: number }[] = [];
+  const attempts: { t: number; key: number; c: number; mean: Climb }[] = [];
+  let climbAt = first;
+  for (const [s, step] of route.steps.entries()) {
+    if (step.kind === "climb") {
+      climbAt = step;
+      for (const part of step.parts) {
+        const key = keys.push({ part, step: s, work: -1 }) - 1;
+        const n = Math.round(part.perSecond * step.dt);
+        const c = competence(step, part);
+        for (let j = 0; j < n; j++) attempts.push({ t: step.seconds + ((j + 0.5) * step.dt) / n, key, c, mean: step });
+      }
+    } else {
+      let t = step.seconds;
+      for (const [w, work] of step.works.entries()) {
+        for (const part of work.parts) {
+          const key = keys.push({ part, step: s, work: w }) - 1;
+          const n = Math.round(part.perSecond * work.dt);
+          const c = competence(climbAt, part);
+          for (let j = 0; j < n; j++) attempts.push({ t: t + ((j + 0.5) * work.dt) / n, key, c, mean: climbAt });
+        }
+        t += work.dt;
+      }
+    }
+  }
+  attempts.sort((a, b) => a.t - b.t);
+  const gainOf = keys.map(({ part }) => {
+    const each = action(part.name);
+    return actionRankGain(each, part.level, route.rankMultiplier) + actionRankLoss(each, part.level);
+  });
+  const times: number[] = [];
+  const started = performance.now();
+  const sums = new Float64Array(keys.length);
+  const counts = new Float64Array(keys.length);
+  for (let walk = 0; walk < walks; walk++) {
+    sums.fill(0);
+    counts.fill(0);
+    const events = seeded(seed + 7919 * walk);
+    const random = seeded(seed + 7919 * walk + 104729);
+    const pops = readCities.map((city) => city.population);
+    const comms = readCities.map((city) => city.communities);
+    const chaos = readCities.map((city) => city.chaos);
+    let decayed = 0;
+    let next = intIn(events, 240, 600);
+    const decayTo = (to: number) => {
+      for (const i of chaos.keys()) chaos[i] = Math.max(0, (chaos[i] as number) - 0.0001 * (to - decayed));
+      decayed = to;
+    };
+    for (const each of attempts) {
+      while (next <= each.t) {
+        decayTo(next);
+        eventsOn(pops, comms, chaos, events);
+        next += intIn(events, 240, 600);
+      }
+      decayTo(each.t);
+      const name = (keys[each.key] as { part: PricedPart }).part.name;
+      const raid = name === "Raid";
+      const meanCities = each.mean.state.cities;
+      const popOf = (i: number) =>
+        mode.population === "drawn" ? (pops[i] as number) : (meanCities[i] as BladeburnerDriftCity).population;
+      const chaosOf = (i: number) =>
+        mode.chaos === "drawn" ? (chaos[i] as number) : (meanCities[i] as BladeburnerDriftCity).chaos;
+      let city = -1;
+      let best = -1;
+      for (let i = 0; i < 6; i++) {
+        if (raid && !((comms[i] as number) > 0)) continue;
+        const f = factorOf(popOf(i), chaosOf(i));
+        if (f > best) {
+          best = f;
+          city = i;
+        }
+      }
+      const p = city < 0 ? 0 : Math.min(1, (each.c * best) / ref);
+      sums[each.key] = (sums[each.key] as number) + p;
+      counts[each.key] = (counts[each.key] as number) + 1;
+      if (city >= 0) attemptOn(name, random() < p, city, pops, comms, chaos, random);
+    }
+    // The route's time at the walk's chances.
+    const drawnOf = (key: number) => {
+      const n = counts[key] as number;
+      return n > 0 ? (sums[key] as number) / n : (keys[key] as { part: PricedPart }).part.chance;
+    };
+    let total = 0;
+    let k = 0;
+    for (const [s, step] of route.steps.entries()) {
+      if (step.kind === "climb") {
+        let rate = step.rate;
+        for (const _ of step.parts) {
+          rate += (keys[k] as { part: PricedPart }).part.perSecond * (drawnOf(k) - (keys[k] as { part: PricedPart }).part.chance) * (gainOf[k] as number);
+          k++;
+        }
+        total += rate > 0 ? step.by / rate : Number.POSITIVE_INFINITY;
+      } else {
+        let span = step.span;
+        for (const work of step.works) {
+          let rate = work.rate;
+          for (const _ of work.parts) {
+            rate += (keys[k] as { part: PricedPart }).part.perSecond * (drawnOf(k) - (keys[k] as { part: PricedPart }).part.chance) * (gainOf[k] as number);
+            k++;
+          }
+          span += rate > 0 ? work.dt * (work.rate / rate - 1) : Number.POSITIVE_INFINITY;
+        }
+        total += span;
+      }
+      void s;
+    }
+    times.push(total);
+  }
+  const finite = times.filter((x) => Number.isFinite(x));
+  const sorted = [...times].sort((a, b) => a - b);
+  return {
+    finite,
+    finiteMean: finite.length > 1 ? meanOf(finite) : { mean: Number.POSITIVE_INFINITY, error: 0 },
+    median: sorted[Math.floor(sorted.length / 2)] as number,
+    ms: performance.now() - started,
+    attempts: attempts.length,
+  };
+}
+
+describe("#423 ruling 4: the playability figures under walks of their own routes", () => {
+  test("BN6's best case, BN7's and bn6-skills' routes re-priced at their walked chances, the spread split", async () => {
+    const { readFileSync } = await import("node:fs");
+    const dir = "C:/Users/Matt/AppData/Local/Temp/claude/f9d10e1727648ecd/8fa44f8b-3eb6-48ce-9496-c91c002b8eb4/scratchpad/m4/423/";
+    const WALKS = Number(process.env.R423_REPRICE_WALKS ?? 500);
+    const only = process.env.R423_REPRICE_ONLY;
+    const cases = [
+      { label: "BN6, combat 100, the shop (113.6 h)", file: "route-bn6-c100.json" },
+      { label: "BN7, combat 100, the shop (182.6 h)", file: "route-bn7-c100.json" },
+      { label: "bn6-skills' first reading (161 h)", file: "route-bn6-skills.json" },
+    ].filter((each) => only === undefined || each.file.includes(only));
+    const modes: { label: string; mode: Mode }[] = [
+      { label: "both drawn", mode: { population: "drawn", chaos: "drawn" } },
+      { label: "population at the mean path's", mode: { population: "mean", chaos: "drawn" } },
+      { label: "chaos at the mean path's", mode: { population: "drawn", chaos: "mean" } },
+      { label: "both at the mean path's", mode: { population: "mean", chaos: "mean" } },
+    ];
+    for (const each of cases) {
+      const saved = JSON.parse(readFileSync(dir + each.file, "utf8")) as {
+        timing?: { rebuildSeconds: number; afterSeconds: number };
+        after: PricedRoute;
+      };
+      const rebuild = saved.timing?.rebuildSeconds ?? 0;
+      const route = saved.after;
+      const rows: string[] = [];
+      for (const { label, mode } of modes) {
+        // One seed series for every mode (common random numbers): 9100001 + 7919·walk, its attempts' + 104729.
+        const r = repriceRoute(route, mode, WALKS, 9100001);
+        const h = (x: number) => ((rebuild + x) / 3600).toFixed(1);
+        rows.push(
+          `${label}: ${r.finite.length < WALKS ? `${WALKS - r.finite.length} of ${WALKS} walks never reach it (a step's rate at 0 or under); of the rest ` : ""}` +
+            `${h(r.finiteMean.mean)} ± ${(r.finiteMean.error / 3600).toFixed(1)} h, median ${h(r.median)} h ` +
+            `(${(100 * ((rebuild + r.finiteMean.mean) / (rebuild + route.seconds) - 1)).toFixed(1)}%; ${r.attempts} route attempts, ${r.ms.toFixed(0)} ms)`,
+        );
+      }
+      console.log(
+        `R423 ${each.label}: the mean path's ${((rebuild + route.seconds) / 3600).toFixed(1)} h (the route ` +
+          `${(route.seconds / 3600).toFixed(1)} h + the rebuild ${(rebuild / 3600).toFixed(2)} h); re-priced over ${WALKS} walks:\n  ${rows.join("\n  ")}`,
+      );
+    }
+  }, 600_000);
+});
+
+// ---- #423 ruling 4, item 3: the route walk against the full simulator over the bn6-skills route's opening hour ----
+
+interface SimAttempt {
+  name: string;
+  chance: number;
+  city: string;
+  population: number;
+  chaos: number;
+  communities: number;
+  success: boolean;
+  atSeconds: number;
+}
+interface SimCity {
+  name: string;
+  population: number;
+  communities: number;
+  chaos: number;
+}
+
+/**
+ * The instrument's walk of a list of attempts (`at` seconds, `name`, `c` the chance's competence part over `ref`)
+ * from `cities` to `end`: the events and the decay, B4's pick, each attempt's effects, Diplomacy to 50. Each city's
+ * figures at the end, the successes and the mean chance drawn, over `walks` walks.
+ */
+function walkAttempts(
+  cities: readonly SimCity[],
+  list: readonly { at: number; name: string; c: number }[],
+  ref: number,
+  end: number,
+  walks: number,
+  seed: number,
+) {
+  const ends = cities.map(() => ({ population: [] as number[], communities: [] as number[], chaos: [] as number[] }));
+  const successes: number[] = [];
+  const drawnChance: number[] = [];
+  for (let walk = 0; walk < walks; walk++) {
+    const events = seeded(seed + 7919 * walk);
+    const random = seeded(seed + 7919 * walk + 104729);
+    const pops = cities.map((city) => city.population);
+    const comms = cities.map((city) => city.communities);
+    const chaos = cities.map((city) => city.chaos);
+    let decayed = 0;
+    let next = intIn(events, 240, 600);
+    const decayTo = (to: number) => {
+      for (const i of chaos.keys()) chaos[i] = Math.max(0, (chaos[i] as number) - 0.0001 * (to - decayed));
+      decayed = to;
+    };
+    const pass = (t: number) => {
+      while (next <= t) {
+        decayTo(next);
+        eventsOn(pops, comms, chaos, events);
+        next += intIn(events, 240, 600);
+      }
+      decayTo(t);
+    };
+    let won = 0;
+    let drawn = 0;
+    for (const each of list) {
+      pass(each.at);
+      const city = pick(each.name === "Raid", pops, comms, chaos);
+      if (city < 0) continue;
+      const p = Math.min(1, (each.c * factorOf(pops[city] as number, chaos[city] as number)) / ref);
+      drawn += p;
+      const success = random() < p;
+      if (success) won++;
+      attemptOn(each.name, success, city, pops, comms, chaos, random);
+    }
+    pass(end);
+    for (const [i, out] of ends.entries()) {
+      out.population.push(pops[i] as number);
+      out.communities.push(comms[i] as number);
+      out.chaos.push(chaos[i] as number);
+    }
+    successes.push(won);
+    drawnChance.push(drawn / Math.max(1, list.length));
+  }
+  const sd = (xs: number[]) => meanOf(xs).error * Math.sqrt(xs.length);
+  return {
+    ends: ends.map((out) => ({
+      population: { mean: meanOf(out.population).mean, sd: sd(out.population) },
+      communities: { mean: meanOf(out.communities).mean, sd: sd(out.communities) },
+      chaos: { mean: meanOf(out.chaos).mean, sd: sd(out.chaos) },
+    })),
+    successes: { mean: meanOf(successes).mean, sd: sd(successes) },
+    drawn: meanOf(drawnChance),
+  };
+}
+
+describe("#423 ruling 4, item 3: the walk against the simulator", () => {
+  test("the bn6-skills route's opening hour: the simulator's six after the hour within 4 sd of the walks'", async () => {
+    const { readFileSync } = await import("node:fs");
+    const dir = "C:/Users/Matt/AppData/Local/Temp/claude/f9d10e1727648ecd/8fa44f8b-3eb6-48ce-9496-c91c002b8eb4/scratchpad/m4/423/";
+    const { schedule, runs } = JSON.parse(readFileSync(`${dir}fidelity-sim.json`, "utf8")) as {
+      schedule: { t: number; name: string }[];
+      runs: { seed: number; startCities: SimCity[]; made: SimAttempt[]; endCities: SimCity[]; endSeconds: number }[];
+    };
+    const WALKS = 1000;
+    const rows: string[] = [];
+    const zs: Record<string, number[]> = {};
+    let worst = 0;
+    for (const run of runs) {
+      const ref = factorOf((run.startCities[0] as SimCity).population, (run.startCities[0] as SimCity).chaos);
+      // Each attempt's competence part: the simulator's chance over its city's factor then (the person, its level and
+      // the stamina's penalty in it).
+      const list = run.made.map((a) => ({
+        at: a.atSeconds,
+        name: a.name,
+        c: (a.chance * ref) / factorOf(a.population, a.chaos),
+      }));
+      const byName = new Map<string, number[]>();
+      for (const each of list) byName.set(each.name, [...(byName.get(each.name) ?? []), each.c]);
+      const spread = [...byName].map(([name, cs]) => `${name} ${(Math.max(...cs) / Math.min(...cs)).toFixed(4)}`);
+      // Walks on seeds 9500001 + 7919·walk (+ 104729 its attempts'), apart from the simulator's.
+      const walked = walkAttempts(run.startCities, list, ref, run.endSeconds, WALKS, 9500001 + 1000003 * run.seed);
+      const figures: string[] = [];
+      for (const [i, city] of run.endCities.entries()) {
+        const w = walked.ends[i] as (typeof walked.ends)[number];
+        for (const key of ["population", "communities", "chaos"] as const) {
+          const z = w[key].sd > 0 ? (city[key] - w[key].mean) / w[key].sd : city[key] === w[key].mean ? 0 : Number.POSITIVE_INFINITY;
+          worst = Math.max(worst, Math.abs(z));
+          const label = `${city.name} ${key}`;
+          zs[label] = [...(zs[label] ?? []), z];
+          if (Math.abs(z) > 2.5) figures.push(`${label} z ${z.toFixed(2)}`);
+        }
+      }
+      const won = run.made.filter((a) => a.success).length;
+      const zWon = (won - walked.successes.mean) / walked.successes.sd;
+      worst = Math.max(worst, Math.abs(zWon));
+      rows.push(
+        `seed ${run.seed}: ${run.made.length} attempts; successes ${won} against the walks' ${walked.successes.mean.toFixed(2)} ` +
+          `(sd ${walked.successes.sd.toFixed(2)}, z ${zWon.toFixed(2)}); the competence's spread over attempts (max/min) ` +
+          `${spread.join(", ")}; figures past 2.5 sd: ${figures.join(", ") || "none"}`,
+      );
+    }
+    // Over the seeds: each figure's mean z, against 4/√seeds.
+    const meanZ = Object.entries(zs).map(([label, xs]) => ({ label, z: xs.reduce((a, b) => a + b, 0) / xs.length }));
+    const bound = 4 / Math.sqrt(runs.length);
+    const off = meanZ.filter((each) => Math.abs(each.z) > bound);
+    // The route's even spread against the simulator's own times (seed 1's run): the walks of each.
+    const run = runs[0] as (typeof runs)[number];
+    const ref = factorOf((run.startCities[0] as SimCity).population, (run.startCities[0] as SimCity).chaos);
+    const cOf = new Map<string, number>();
+    for (const a of run.made) if (!cOf.has(a.name)) cOf.set(a.name, (a.chance * ref) / factorOf(a.population, a.chaos));
+    const simTimes = walkAttempts(
+      run.startCities,
+      run.made.map((a) => ({ at: a.atSeconds, name: a.name, c: cOf.get(a.name) as number })),
+      ref,
+      run.endSeconds,
+      WALKS,
+      9600001,
+    );
+    const evenTimes = walkAttempts(
+      run.startCities,
+      schedule.map((s) => ({ at: s.t, name: s.name, c: cOf.get(s.name) as number })),
+      ref,
+      run.endSeconds,
+      WALKS,
+      9600001,
+    );
+    const shift = run.made.reduce((sum, a, k) => sum + a.atSeconds - (schedule[k]?.t ?? a.atSeconds), 0) / run.made.length;
+    console.log(
+      `R423 fidelity, ${runs.length} simulator seeds, ${WALKS} walks each:\n  ${rows.join("\n  ")}\n  the worst |z| ${worst.toFixed(2)} ` +
+        `(the bar 4); over the seeds each figure's mean z within ${bound.toFixed(2)}: ${off.length === 0 ? "all" : `not ${off.map((o) => `${o.label} ${o.z.toFixed(2)}`).join(", ")}`}` +
+        `\n  the even spread against the simulator's times (seed 1, the attempts ${shift.toFixed(0)} s later on average there): the mean chance drawn ` +
+        `${evenTimes.drawn.mean.toFixed(4)} ± ${evenTimes.drawn.error.toFixed(4)} against ${simTimes.drawn.mean.toFixed(4)} ± ${simTimes.drawn.error.toFixed(4)}; ` +
+        `the most drained city's population ${run.startCities
+          .map((c, i) => `${c.name} ${(((evenTimes.ends[i]?.population.mean ?? 0) - (simTimes.ends[i]?.population.mean ?? 0)) / 1e6).toFixed(1)}m`)
+          .join(", ")} (even − the simulator's times)`,
+    );
+    expect(worst).toBeGreaterThan(0);
+  }, 600_000);
+});
