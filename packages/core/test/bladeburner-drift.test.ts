@@ -942,6 +942,72 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
     expect(unshared).toBeGreaterThan(0);
   });
 
+  test("#421's ruling 3: the attempt under way priced at its time left; a near tie kept mid-attempt", () => {
+    // Check 3's reading: the best plan and the next-best of another action, their priced times apart by less than the
+    // second's attempt. Under way with its seconds done, the second's first attempt costs only its time left, so its
+    // time from the reading is its walk's less those seconds, to the bit, and the rule keeps it; none done, as before.
+    // A near tie made (bn6-skills' first reading had three within 0.04 h): the second action's chance raised until its
+    // plan is behind the best by half its attempt (bisected), its plans otherwise the rule's.
+    const drift = { cities: SIX, city: "New Tokyo" };
+    const target = { rank: 150, target: 2500 };
+    const base = readAt(who);
+    const first = bladeburnerPlansToTarget({ ...base, target, drift });
+    const leader = first[0] as (typeof first)[number];
+    const second = first.find((plan) => plan.work !== null && plan.work.name !== leader.work?.name);
+    if (second?.work == null) throw new Error("no second action");
+    const name = second.work.name;
+    const inputAt = (factor: number) => ({
+      ...base,
+      readings: base.readings.map((read) =>
+        read.name === name
+          ? { ...read, chance: read.chance.map((each) => Math.min(1, each * factor)) as [number, number] }
+          : read,
+      ),
+    });
+    const gapAt = (factor: number) => {
+      const plans = bladeburnerPlansToTarget({ ...inputAt(factor), target, drift });
+      const mine = plans.find((plan) => plan.work?.name === name && plan.work.level === 1) as (typeof plans)[number];
+      const others = plans.find((plan) => plan.work?.name !== name) as (typeof plans)[number];
+      return { plans, mine, gap: (mine.toTarget?.seconds as number) - (others.toTarget?.seconds as number) };
+    };
+    let low = 1;
+    let high = 4;
+    for (let i = 0; i < 50; i++) {
+      const middle = (low + high) / 2;
+      const { mine, gap } = gapAt(middle);
+      if (gap > (mine.work?.seconds as number) / 2) low = middle;
+      else high = middle;
+    }
+    const { plans, mine: rival } = gapAt(low);
+    const input = inputAt(low);
+    if (rival.work === null) throw new Error("no rival plan");
+    const best = plans[0] as (typeof plans)[number];
+    expect(best.work?.name).not.toBe(name);
+    const gap = (rival.toTarget?.seconds as number) - (best.toTarget?.seconds as number);
+    const done = Math.min(rival.work.seconds, gap + (rival.work.seconds - gap) / 2);
+    const underWay = { name: rival.work.name, level: 1, secondsDone: done };
+    const kept = bladeburnerPlansToTarget({ ...input, target, drift, underWay });
+    const same = (plan: (typeof plans)[number]) =>
+      plan.work?.name === rival.work?.name && plan.work?.level === 1 && plan.rest.name === rival.rest.name;
+    const keptRival = kept.find(same) as (typeof kept)[number];
+    console.log(
+      `#421's ruling 3: ${best.work?.name} ${((best.toTarget?.seconds as number) / 60).toFixed(2)} min, ` +
+        `${rival.work.name} ${((rival.toTarget?.seconds as number) / 60).toFixed(2)} min (${gap.toFixed(1)} s more, ` +
+        `its attempt ${rival.work.seconds} s); ${done.toFixed(1)} s of it done: ${((keptRival.toTarget?.seconds as number) / 60).toFixed(2)} min`,
+    );
+    expect(keptRival.toTarget?.seconds).toBe((rival.toTarget?.seconds as number) - done);
+    expect(chooseBladeburnerAction({ ...input, target, drift, underWay }).work?.name).toBe(rival.work.name);
+    expect(chooseBladeburnerAction({ ...input, target, drift }).work?.name).toBe(best.work?.name);
+    // Another action's plans as before (theirs start again at 0), and none done the same as none under way.
+    const keptBest = kept.find(
+      (plan) => plan.work?.name === best.work?.name && plan.work?.level === best.work?.level && plan.rest.name === best.rest.name,
+    );
+    expect(keptBest?.toTarget?.seconds).toBe(best.toTarget?.seconds);
+    expect(
+      chooseBladeburnerAction({ ...input, target, drift, underWay: { ...underWay, secondsDone: 0 } }).work?.name,
+    ).toBe(best.work?.name);
+  });
+
   test("#421's ruling 1: the chain's next-best regrown over the first count's stretch, by hand", () => {
     // Check 3's reading: Raid first, then Bounty Hunter's count, then the tail. Bounty Hunter's count where its stretch
     // starts is its 20 read plus its regrowth over Raid's attempts × cycle seconds (`Bladeburner.ts:1386-1393`).

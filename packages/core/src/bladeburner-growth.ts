@@ -248,7 +248,8 @@ export function bladeburnerGrownInput(
     return { ...read, level, maxLevel: level, chance: [chance, chance] };
   });
   const maxStamina = maxStaminaAtSkills(input.person, input.maxStamina, readMults, mults, person);
-  const { forecast: _forecast, drift: _drift, ...rest } = input;
+  // The attempt under way is the reading's (#421's ruling 3), not a state's along the route.
+  const { forecast: _forecast, drift: _drift, underWay: _underWay, ...rest } = input;
   // The drift from the city worked, its reference the state's own (the chances above are there now).
   const drift =
     state.drift === undefined || city === null

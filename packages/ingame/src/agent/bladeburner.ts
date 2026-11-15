@@ -80,6 +80,8 @@ export function createBladeburnerActivity(
               cities: cities.cities,
               // The round over the six (#420): null where it failed (its problems say why).
               ...(cities.round === undefined ? {} : { round: cities.round }),
+              // The action under way's progress (#421), read just before the reading worker acted.
+              ...(cities.progress === undefined ? {} : { progress: cities.progress }),
             };
       schedule.dueAfter(BLADEBURNER_ROUNDS_BETWEEN);
       const { rank, problems } = reading;

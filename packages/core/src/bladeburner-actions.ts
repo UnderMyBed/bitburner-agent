@@ -1158,6 +1158,11 @@ interface PlanCandidate {
   /** Its action's count read and its mean regrowth a second (0 resting alone): a next-best's count regrown (#421). */
   count: number;
   growth: number;
+  /**
+   * The seconds its first attempt saves on its own time (#421's ruling 3): the action under way's, its seconds less
+   * the started attempt's time left; 0 for any other.
+   */
+  firstDiscount: number;
 }
 
 /**
@@ -1191,6 +1196,7 @@ function planCandidates({
   forecast,
   drift,
   hospital,
+  underWay,
 }: {
   readings: readonly BladeburnerActionReading[];
   person: BladeburnerPerson;
@@ -1232,6 +1238,13 @@ function planCandidates({
   };
   /** The max HP and the money read (#418): each plan's hospital money a second. None: not read (null). */
   hospital?: { hpMax: number; money: number };
+  /**
+   * The contract or operation under way (#421's ruling 3): its name, the level read and its seconds done. Its started
+   * attempt's time is fixed (`Bladeburner.ts:186-188`) and a level set keeps it (`NetscriptFunctions/Bladeburner.ts:
+   * 218-227`), so each plan of that action's first attempt is the time left of it, the level read's seconds less those
+   * done; another action's starts again at 0 (`Bladeburner.ts:187`). None: nothing under way, or not read.
+   */
+  underWay?: { name: string; level: number; secondsDone: number };
 }): { candidates: PlanCandidate[]; supply: BladeburnerRankSource[] } {
   const readMults = bladeburnerSkillMultsOf(skills.read ?? {});
   const mults = skills.planned === undefined ? readMults : bladeburnerSkillMultsOf(skills.planned);
@@ -1264,7 +1277,7 @@ function planCandidates({
     regain,
   };
   // Every plan weighed, in the game's order (resting alone first): its step to a target with it (#386).
-  const candidates: PlanCandidate[] = [{ plan: alone, step: null, name: null, count: 0, growth: 0 }];
+  const candidates: PlanCandidate[] = [{ plan: alone, step: null, name: null, count: 0, growth: 0, firstDiscount: 0 }];
   // Each action's long-run supply (#392's decision, #395's review): every way to work it, whatever its count now (its
   // regrowth is the action's).
   const supply: BladeburnerRankSource[] = [];
@@ -1488,6 +1501,13 @@ function planCandidates({
       return { count: inCount, countSeconds: inCount * cycle, tail };
     };
     const stepPrice = driftStart !== null && horizon > 0 ? priceOf(chainOf) : tailPrice;
+    // The attempt under way (#421's ruling 3): its time left, the level read's seconds less those done (a level set
+    // keeps it), where this is the action under way.
+    const started =
+      underWay !== undefined && underWay.name === action.name
+        ? ways.find((each) => each.level === underWay.level)
+        : undefined;
+    const timeLeft = started === undefined ? null : Math.max(0, started.seconds - (underWay?.secondsDone ?? 0));
     for (const way of ways) {
       const { level, seconds, gain, loss, cost } = way;
       if (read.count < 1 + (BLADEBURNER_READING_SECONDS * speed) / seconds) continue;
@@ -1526,7 +1546,14 @@ function planCandidates({
           rankPerSecond: duty * rate + (1 - duty) * rest.rankPerSecond,
           regain,
         };
-        candidates.push({ plan, step, name: action.name, count: read.count, growth });
+        candidates.push({
+          plan,
+          step,
+          name: action.name,
+          count: read.count,
+          growth,
+          firstDiscount: timeLeft === null ? 0 : seconds - timeLeft,
+        });
       }
     }
   }
@@ -1593,12 +1620,17 @@ function fastestToTarget(
   const leastOf = (candidate: PlanCandidate, bounded: boolean) => {
     const { plan, step, name } = candidate;
     if (step === null) return aloneSeconds(plan);
+    // The choice's (from the reading): less the seconds its first attempt saves (#421's ruling 3: the action under
+    // way's time left), a bound still; the next-best's search is from after the plan's own count, none under way.
+    const discount = bounded ? candidate.firstDiscount : 0;
     const counted = (step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY;
-    if (!counted) return bladeburnerSecondsToRankAtLeast(step, rank, target);
+    if (!counted) return bladeburnerSecondsToRankAtLeast(step, rank, target) - discount;
     // The next-best's search: its own count, then the tail. The choice's: the plan's count, then its next-best's.
-    if (!bounded || name === null) return leastThrough([withCount(step)]);
+    if (!bounded || name === null) return leastThrough([withCount(step)]) - discount;
     const next = regrownAfter(step, name);
-    return next === undefined ? leastThrough([withCount(step)]) : leastThrough([step, ...sequenceOf(next)]);
+    return (
+      (next === undefined ? leastThrough([withCount(step)]) : leastThrough([step, ...sequenceOf(next)])) - discount
+    );
   };
   // The best among `pool` by `secondsOf`, Wald's bound (`leastOf`) ruling out the rest when pruned.
   const search = (
@@ -1676,12 +1708,17 @@ function fastestToTarget(
     const candidate = nextPlans.get(name);
     return next === undefined || candidate === undefined ? next : regrownNext(next, candidate, step);
   };
-  const secondsOf = ({ plan, step, name }: PlanCandidate) => {
+  // A plan's expected time from the reading (#421's ruling 3): its walk's, less the seconds its first attempt saves
+  // (the action under way's time left: the first attempt always runs, its draw the same, so exactly that less).
+  const secondsOf = ({ plan, step, name, firstDiscount }: PlanCandidate) => {
     if (step === null) return aloneSeconds(plan);
     const bounded = (step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY && name !== null;
-    if (!bounded) return bladeburnerSecondsToRank(unbounded(step), rank, target);
+    if (!bounded) return bladeburnerSecondsToRank(unbounded(step), rank, target) - firstDiscount;
     const next = regrownAfter(step, name);
-    return bladeburnerSecondsToRank({ ...step, ...(next === undefined ? { tailRate } : { next }) }, rank, target);
+    return (
+      bladeburnerSecondsToRank({ ...step, ...(next === undefined ? { tailRate } : { next }) }, rank, target) -
+      firstDiscount
+    );
   };
   // The plan the chain follows a plan's count with (#421's term 2: check 3's walks follow the rule's own chain).
   const nextOf = ({ step, name }: PlanCandidate): BladeburnerChainNext | undefined => {
