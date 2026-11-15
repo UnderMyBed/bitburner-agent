@@ -1000,7 +1000,10 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
     expect(chooseBladeburnerAction({ ...input, target, drift }).work?.name).toBe(best.work?.name);
     // Another action's plans as before (theirs start again at 0), and none done the same as none under way.
     const keptBest = kept.find(
-      (plan) => plan.work?.name === best.work?.name && plan.work?.level === best.work?.level && plan.rest.name === best.rest.name,
+      (plan) =>
+        plan.work?.name === best.work?.name &&
+        plan.work?.level === best.work?.level &&
+        plan.rest.name === best.rest.name,
     );
     expect(keptBest?.toTarget?.seconds).toBe(best.toTarget?.seconds);
     expect(

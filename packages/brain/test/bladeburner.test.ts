@@ -26,8 +26,8 @@ import {
   BLADEBURNER_TRAINING_HELD_EVENT_KIND,
   BladeburnerRule,
   bladeburnerSnapshotOf,
-  type GymWork,
   bladeburnerUnderWayOf,
+  type GymWork,
   JOIN_BLADEBURNER_INTENT,
   travelIntent,
 } from "../src/bladeburner.ts";
@@ -799,7 +799,9 @@ describe("the attempt under way (#421's ruling 3): its progress from the reading
     });
     // Another started by the worker since (the progress was the old one's), idle, or none read (an older Agent).
     const other = { type: "Contracts", name: "Bounty Hunter" };
-    expect(bladeburnerUnderWayOf(actionsOf({ current: other, progress: { ...TRACKING, secondsDone: 12.5 } }))).toBeNull();
+    expect(
+      bladeburnerUnderWayOf(actionsOf({ current: other, progress: { ...TRACKING, secondsDone: 12.5 } })),
+    ).toBeNull();
     expect(bladeburnerUnderWayOf(actionsOf({ progress: null }))).toBeNull();
     expect(bladeburnerUnderWayOf(actionsOf({}))).toBeNull();
     // A general action under way: not a contract's or an operation's.

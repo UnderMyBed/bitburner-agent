@@ -12,6 +12,7 @@
 // that forecast (section 8's own check); the whole report passing.
 import {
   BLADEBURNER_CONTRACTS,
+  BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_READING_SECONDS,
   bladeburnerPersonOf,
   bladeburnerPlansToTarget,
@@ -21,7 +22,12 @@ import {
   skillExpFor,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { bladeburnerMeasuredCitiesOf, bladeburnerRuleInputOf, bladeburnerSnapshotOf } from "../src/bladeburner.ts";
+import {
+  bladeburnerMeasuredCitiesOf,
+  bladeburnerRuleInputOf,
+  bladeburnerSnapshotOf,
+  bladeburnerUnderWayOf,
+} from "../src/bladeburner.ts";
 import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-actions-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -211,11 +217,53 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
     };
   };
   const reads = mediums.filter((each) => bladeburnerSnapshotOf(each.data).reading.kind === "read");
+  {
+    const raw = reads.map(
+      (each) => (each.data as { bladeburner?: { progress?: unknown; current?: unknown } }).bladeburner,
+    );
+    const withProgress = raw.filter((each) => each?.progress !== undefined).length;
+    const actionsOf = reads.map((each) => (bladeburnerSnapshotOf(each.data).reading as { actions?: unknown }).actions);
+    const underWays = actionsOf.map((each) =>
+      each == null ? null : bladeburnerUnderWayOf(each as Parameters<typeof bladeburnerUnderWayOf>[0]),
+    );
+    // #421's ruling 3: the progress read at nearly every reading, and each attempt the rule cut mid-way priced so: at the
+    // reading before the cut, its plan's time to the target (its first attempt at its time left) against the plan the
+    // rule went to, which must be the less, by the rule's own figures (core's `bladeburnerPlansToTarget` on its input).
+    expect(withProgress).toBeGreaterThan(reads.length / 2);
+    expect(underWays.some((each) => each !== null)).toBe(true);
+    const cuts: { gap: number; done: number }[] = [];
+    for (let i = 0; i + 1 < reads.length; i++) {
+      const from = raw[i]?.current as { name?: string } | null | undefined;
+      const to = raw[i + 1]?.current as { name?: string } | null | undefined;
+      const done = (raw[i + 1]?.progress as { secondsDone?: number } | null | undefined)?.secondsDone ?? 0;
+      const levelled = (name?: string) => BLADEBURNER_LEVELLED_ACTIONS.some((each) => each.name === name);
+      if (!levelled(from?.name) || !levelled(to?.name) || from?.name === to?.name || !(done > 0)) continue;
+      const data = reads[i]?.data as MediumSnapshotData;
+      const read = bladeburnerSnapshotOf(data).reading;
+      const person = bladeburnerPersonOf(data.player);
+      if (read.kind !== "read" || read.actions === null || person === null) throw new Error("no reading before a cut");
+      const rule = bladeburnerRuleInputOf(read.actions, person, bladeburnerRankMultiplierOf(6) as number, data.player);
+      const plans = bladeburnerPlansToTarget({ ...rule.input, target: { rank: read.rank ?? 0, target: 2500 } });
+      const timeOf = (name?: string) => plans.find((plan) => plan.work?.name === name)?.toTarget?.seconds as number;
+      cuts.push({ gap: timeOf(from?.name) - timeOf(to?.name), done });
+    }
+    const least = cuts.reduce((a, b) => (b.gap < a.gap ? b : a), { gap: Number.POSITIVE_INFINITY, done: 0 });
+    console.log(
+      `the attempt under way (#421's ruling 3): ${withProgress} of ${reads.length} readings with its progress; ` +
+        `${cuts.length} attempts cut mid-way, the plan cut to ahead of continuing (at its time left) by ` +
+        `${least.gap.toFixed(1)} s at least (that attempt ${least.done} s done)`,
+    );
+    for (const cut of cuts) expect(cut.gap).toBeGreaterThan(0);
+  }
   const sent = reads.filter(
-    (each) => (bladeburnerSnapshotOf(each.data).reading as { actions?: { current?: { name?: string } } }).actions
-      ?.current?.name === "Incite Violence",
+    (each) =>
+      (bladeburnerSnapshotOf(each.data).reading as { actions?: { current?: { name?: string } } }).actions?.current
+        ?.name === "Incite Violence",
   );
-  const measures = reads.map((each) => ({ atMs: each.receivedAtMs, ...inciteMeasureAt(each.data as MediumSnapshotData) }));
+  const measures = reads.map((each) => ({
+    atMs: each.receivedAtMs,
+    ...inciteMeasureAt(each.data as MediumSnapshotData),
+  }));
   const lowest = measures.reduce((a, b) => (b.raidCount < a.raidCount ? b : a));
   console.log(
     `Incite Violence (#421's ruling 3): ${sent.length} readings with it under way; at the reading with Raid's count ` +
