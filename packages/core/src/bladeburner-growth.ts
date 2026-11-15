@@ -302,8 +302,10 @@ export function bladeburnerPricedInput<T extends Omit<BladeburnerActionInput, "t
 /**
  * The chunks a step's drift is followed in at most (#418's review, for the cost): a step is 5% of the rank
  * (`BLADEBURNER_GROWTH_FRACTION`), its pricing over the step ahead and the cities moved by it each a path, against the
- * rule's `BLADEBURNER_DRIFT_CHUNKS` over the whole horizon. Labelled: B4's moves a sixteenth of a step late at most
- * (first order in it; the step's state carried on, so not summed over the route).
+ * rule's `BLADEBURNER_DRIFT_CHUNKS` over the whole horizon; a city worked throughout converges in its chunks (core's
+ * test). Raid with B4's moves is followed an attempt at a time here too (`BLADEBURNER_DRIFT_EXACT_RAID`, #418's ruling
+ * 4: its chunks don't converge, B4's pick between near-tied homes flipping with the step; that flipping is #420), so
+ * the estimate's Raid is the rule's.
  */
 export const BLADEBURNER_GROWTH_DRIFT_CHUNKS = 16;
 

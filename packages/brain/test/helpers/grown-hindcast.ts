@@ -71,7 +71,7 @@ export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
   "B3's hour at rank 150": {
     ratio: 2.61,
     within: false,
-    expected: 1.75,
+    expected: 1.76,
     expectedWithin: true,
     why:
       "realised: 53 attempts' rank 120.6 against 76.4 expected (rank 150 to 275), Raid's successes (55 each) over " +

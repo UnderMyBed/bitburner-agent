@@ -603,21 +603,25 @@ export function bladeburnerDriftPath(
     charisma,
     moves,
     chunks: given,
+    exactRaid,
   }: {
     charisma: number;
     moves: boolean;
     /**
-     * The chunks at most: absent, `BLADEBURNER_DRIFT_CHUNKS`, or an attempt at a time for Raid with the moves
-     * (`BLADEBURNER_DRIFT_EXACT_RAID`); the grown estimate's steps fewer, its own.
+     * The chunks at most: absent, `BLADEBURNER_DRIFT_CHUNKS`; the grown estimate's steps fewer, its own. Raid with
+     * the moves an attempt at a time whatever is given (`BLADEBURNER_DRIFT_EXACT_RAID`).
      */
     chunks?: number;
+    /** Raid with the moves an attempt at a time: `BLADEBURNER_DRIFT_EXACT_RAID` absent (false: the chunks, the tests'). */
+    exactRaid?: boolean;
   },
 ): BladeburnerDriftResult {
   const cities = start.cities.map(copyCity);
   let worked = start.worked;
   const most = Math.max(0, ...parts.map((part) => part.attempts));
-  const exact = BLADEBURNER_DRIFT_EXACT_RAID && moves && parts.some((part) => part.action.name === "Raid");
-  const mostChunks = given ?? (exact ? Number.POSITIVE_INFINITY : BLADEBURNER_DRIFT_CHUNKS);
+  const exact =
+    (exactRaid ?? BLADEBURNER_DRIFT_EXACT_RAID) && moves && parts.some((part) => part.action.name === "Raid");
+  const mostChunks = exact ? Number.POSITIVE_INFINITY : (given ?? BLADEBURNER_DRIFT_CHUNKS);
   const chunks = Math.max(1, Math.min(mostChunks, Math.ceil(most)));
   const dt = Math.max(0, seconds) / chunks;
   const successes = parts.map(() => 0);

@@ -13,10 +13,13 @@
 import {
   BLADEBURNER_CONTRACTS,
   BLADEBURNER_READING_SECONDS,
+  bladeburnerPersonOf,
+  bladeburnerRankMultiplierOf,
   type MediumSnapshotData,
   skillExpFor,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
+import { bladeburnerRuleInputOf, bladeburnerSnapshotOf } from "../src/bladeburner.ts";
 import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-actions-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -72,6 +75,62 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   const charisma =
     (fresh.medium() as { player?: { skills?: { charisma?: number } } } | null)?.player?.skills?.charisma ?? 1;
   await fresh.game.run(HOUR);
+  // The hour's consistency (#418's rulings 3 and 5), action by action, the forecast counted by the attempts made, first
+  // (so a judged chance off fails it before the figures it moves): each contract's and operation's attempt in the
+  // simulator's log at the chance section 8 judges at the reading before it (the brain's own `bladeburnerRuleInputOf`:
+  // the true population's, pop/popEst recovered from the next Black Op's range; where it isn't, the low end read),
+  // p × gain − (1 − p) × loss, against the same attempts at the chance the game drew (p × gain − (1 − p) × the floored
+  // loss, `attemptsSummary`). Its error from the inputs: the chance's own movement between the reading and the draw, at
+  // most an attempt's (each attempt's gain and loss times its chance's change since its action's previous one), and,
+  // where pop/popEst isn't recovered, the population's spread (gain and loss times the game's range, high less low).
+  // Both sides are expectations: the successes' luck is in neither; and counted by the attempts, the cut attempts at the
+  // switches (section 8's own forecast counts the time) are out.
+  const judgedAt = fresh.data.store
+    .snapshots({ environment: "E1" })
+    .filter((each) => each.tier === "medium")
+    .flatMap((each) => {
+      const data = each.data as MediumSnapshotData;
+      const read = bladeburnerSnapshotOf(data).reading;
+      const person = bladeburnerPersonOf(data.player);
+      const rankMultiplier = bladeburnerRankMultiplierOf(6);
+      if (read.kind !== "read" || read.actions === null || person === null || rankMultiplier === null) return [];
+      const rule = bladeburnerRuleInputOf(read.actions, person, rankMultiplier, data.player);
+      const judged = rule.ratio === null ? read.actions.actions : rule.input.readings;
+      return [{ atMs: each.receivedAtMs, judged, recovered: rule.ratio !== null }];
+    })
+    .sort((a, b) => a.atMs - b.atMs);
+  const readingBefore = (atMs: number) => judgedAt.filter((each) => each.atMs <= atMs).at(-1);
+  const levelled = (await attemptsIn(fresh.simulation, 0, fresh.game.clock.now())).filter(
+    (attempt) => attempt.type === "Contracts" || attempt.type === "Operations",
+  );
+  const rows: string[] = [];
+  for (const name of new Set(levelled.map((attempt) => attempt.name))) {
+    const mine = levelled.filter((attempt) => attempt.name === name);
+    let forecastOf = 0;
+    let weight = 0;
+    let moved = 0;
+    let spread = 0;
+    for (const [k, attempt] of mine.entries()) {
+      const reading = readingBefore(attempt.atMs);
+      const judged = reading?.judged.find((read) => read.name === attempt.name)?.chance[0];
+      if (reading === undefined || judged === undefined) throw new Error(`no reading before ${attempt.name}'s attempt`);
+      forecastOf += judged * attempt.gain - (1 - judged) * attempt.loss;
+      weight += judged * (attempt.gain + attempt.loss);
+      const previous = mine[k - 1];
+      if (previous !== undefined) moved += (attempt.gain + attempt.loss) * Math.abs(attempt.chance - previous.chance);
+      if (!reading.recovered) spread += (attempt.gain + attempt.loss) * (attempt.range[1] - attempt.range[0]);
+    }
+    const expected = attemptsSummary(mine, null).expected;
+    const bar = moved + spread;
+    rows.push(
+      `${name}: forecast ${forecastOf.toFixed(2)} by its ${mine.length} attempts against ${expected.toFixed(2)} ` +
+        `expected (its error ${bar.toFixed(2)}: the chance's movement ${moved.toFixed(2)}, the range's ` +
+        `${spread.toFixed(2)}; the least bias on its chance it catches ${((100 * bar) / weight).toFixed(1)}%)`,
+    );
+    expect(Math.abs(forecastOf - expected), name).toBeLessThanOrEqual(bar);
+  }
+  console.log(`the hour's consistency, action by action:\n  ${rows.join("\n  ")}`);
+  expect(rows.length).toBeGreaterThan(0);
   // #408's hindcast: the grown estimate's time to the rank the hour reached, from the reading with the points.
   const hindcast = await grownHindcastIn(
     fresh,
@@ -173,40 +232,6 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
       `${atRankASecond.toFixed(2)} against the forecast of the actions run ${forecast}; at the last reading, the skills' ` +
       `part ${skillsPart.toFixed(2)} and the target's and the drift's ${driftPart.toFixed(2)} over ${gameMinutes} min`,
   );
-  // The hour's consistency (#418's ruling 3), action by action: each contract's and operation's forecast (section 8's
-  // own, at the chance judged at each reading) against its attempts' expected rank given the attempts made (the
-  // simulator's log, each at the chance the game drew against), within that action's expectation error, from the
-  // inputs: its cuts (section 8's: an attempt's mean at each switch and stretch's end, the forecast counting the time,
-  // not the attempts), the chance's error from the rule's own population spread (where pop/popEst is recovered from the
-  // next Black Op's range, as at every reading here, the chance judged is the true population's, exact: 0; where it
-  // isn't, its low end: each attempt's gain and loss times the game's range there, high less low) and one attempt's
-  // (gain + loss) times its mean chance (the attempts counted from the time: at most one off a stretch). Both sides are
-  // expectations: the successes' luck is in neither.
-  const recovered = fresh.controller().bladeburnerView().actions?.ratio != null;
-  expect(recovered).toBe(true);
-  const rows: string[] = [];
-  for (const each of byAction) {
-    const mine = attempts.filter((attempt) => attempt.name === each.name);
-    if (mine.length === 0) continue;
-    const [, forecastOf = 0, , , cuts = 0] = each.figures;
-    const expected = attemptsSummary(mine, null).expected;
-    const spread = recovered
-      ? 0
-      : mine.reduce(
-          (total, attempt) => total + (attempt.gain + attempt.loss) * (attempt.range[1] - attempt.range[0]),
-          0,
-        );
-    const mean = mine.reduce((total, attempt) => total + attempt.chance, 0) / mine.length;
-    const one = Math.max(...mine.map((attempt) => attempt.gain + attempt.loss)) * mean;
-    const bar = cuts + spread + one;
-    rows.push(
-      `${each.name}: forecast ${forecastOf.toFixed(2)} against ${expected.toFixed(2)} expected given its ` +
-        `${mine.length} attempts (its error ${bar.toFixed(2)}: cuts ${cuts.toFixed(2)}, the range's ${spread.toFixed(2)}, an attempt's ${one.toFixed(2)})`,
-    );
-    expect(Math.abs(forecastOf - expected), each.name).toBeLessThanOrEqual(bar);
-  }
-  console.log(`the hour's consistency, action by action:\n  ${rows.join("\n  ")}`);
-  expect(rows.length).toBeGreaterThan(0);
   expect(section).toContain("  skill points unspent with a level to buy, past 52 s:\n    none");
   expect(failures).toEqual([]);
   // #418's ruling 5: 1.5 × the worst CI time seen, 113 s (PR #419's run 43681970864).

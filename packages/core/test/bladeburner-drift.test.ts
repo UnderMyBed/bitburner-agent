@@ -509,7 +509,8 @@ describe("the path's chunks (#418): against the same path an attempt at a time",
           `time; Diplomacy ${chunked.diplomacySeconds.toFixed(0)} s against ${diplomacy.toFixed(0)} s`,
       );
       // The chance within 1%, Diplomacy's time an attempt within 1% of the cycle (in one city, the chunks alone: Raid's
-      // 23 s in 228,000). Moved Raid is followed an attempt at a time (`BLADEBURNER_DRIFT_EXACT_RAID`, the next test).
+      // 23 s in 228,000). Moved Raid is followed an attempt at a time (`BLADEBURNER_DRIFT_EXACT_RAID`, the next test), so
+      // its case here is a self-consistency check: the path in one call against the same path an attempt a call.
       expect(close(chunked.chances[0] as number, exact)).toBeLessThan(0.01);
       expect(Math.abs(chunked.diplomacySeconds - diplomacy) / attempts).toBeLessThan(0.01 * cycle);
     },
@@ -532,7 +533,7 @@ describe("the path's chunks (#418): against the same path an attempt at a time",
           reference,
           [{ action: action("Raid"), chance: 0.06, attempts: attempts / pieces }],
           (attempts * cycle) / pieces,
-          { charisma: 50, moves, chunks: 1 },
+          { charisma: 50, moves, chunks: 1, exactRaid: false },
         );
         const name = (state.cities[state.worked] as BladeburnerDriftCity).name;
         worked.set(name, (worked.get(name) ?? 0) + 1 / pieces);
