@@ -2444,8 +2444,8 @@ export function destroyBlackOpsOf(route: BlackOpsRouteView | null): DestroyBlack
     // The planner's (#408): with the competence's growth where read, else B6's at the competence now.
     ms: (route.grown ?? route.estimate).seconds * 1000,
     grown: route.grown !== null,
-    // #423: the replays' standard error with the grown figure.
-    ...(route.grown?.replays == null ? {} : { errorMs: (route.grown.secondsError ?? 0) * 1000 }),
+    // #423: the replays' standard error with the grown figure, where the gate used them (none where it declined).
+    ...(route.grown?.replays?.used === true ? { errorMs: (route.grown.secondsError ?? 0) * 1000 } : {}),
     redPillMs: route.redPillSeconds === null ? null : route.redPillSeconds * 1000,
     choice: route.choice,
   };

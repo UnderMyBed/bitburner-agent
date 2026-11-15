@@ -725,7 +725,8 @@ describe("the grown estimate's step (#418): the rule's pricing at the same input
     const end = drifted.drift as NonNullable<typeof drifted.drift>;
     console.log(
       `the route: ${(flat.seconds / 3600).toFixed(1)} h as read, ${(drifted.seconds / 3600).toFixed(1)} h with the ` +
-        `drift; at its end the city worked ${end.worked}, its population ×${end.populationRatio.toFixed(3)} the one ` +
+        `drift (${drifted.replays?.used ? "its replays'" : `the mean path's, its replays declined: ${drifted.replays?.declined}`}; ` +
+        `the mean path ${((drifted.meanPathSeconds ?? 0) / 3600).toFixed(1)} h); at its end the city worked ${end.worked}, its population ×${end.populationRatio.toFixed(3)} the one ` +
         `read; the chaos ${end.cities.map((city) => `${city.name} ${city.chaos.toFixed(1)}`).join(", ")}`,
     );
     expect(Number.isFinite(drifted.seconds)).toBe(true);

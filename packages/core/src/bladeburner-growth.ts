@@ -125,6 +125,7 @@ import {
   type BladeburnerRouteTimeline,
   bladeburnerReplayDeclined,
   bladeburnerReplayRoute,
+  bladeburnerReplaySeedOf,
 } from "./bladeburner-replays.ts";
 import { type BladeburnerSkillLevels, bladeburnerSkillMultsOf } from "./bladeburner-skills.ts";
 
@@ -397,14 +398,19 @@ export interface BlackOpsGrownTime {
     replaysWithFallback: number;
     /** Each replay's least step rate over its mean path's (#423's ruling 8). */
     leastRatios: number[];
+    /** The Black Ops whose rebuilds took the mean path's rate in every replay (#423's ruling 11: never measured). */
+    meanPathRebuilds: number;
     /** The gate's verdict (#423's ruling 7, `bladeburnerReplayDeclined`): used, or declined and why (the mean path's). */
     used: boolean;
     declined: string | null;
   } | null;
 }
 
-/** The replays' seed series where no refresh gives one (core's tests, the hindcasts' replays of a reading). */
-export const BLADEBURNER_REPLAY_DEFAULT_SEED = 4230001;
+/**
+ * The replays' seed series where no refresh gives one (core's tests, the hindcasts' replays of a reading): the first of
+ * the 10 series the gate was measured on (#423's ruling 11, the refresh at 2026-01-01 00:00 UTC).
+ */
+export const BLADEBURNER_REPLAY_DEFAULT_SEED = bladeburnerReplaySeedOf(Date.UTC(2026, 0, 1));
 
 /**
  * The Black Ops' route with the competence's growth (#408, see above): from `at`'s rank and next Black Op, the reading
@@ -439,6 +445,7 @@ export function blackOpsRouteGrownEstimate(
     replays = BLADEBURNER_ROUTE_REPLAYS,
     replaySeed = BLADEBURNER_REPLAY_DEFAULT_SEED,
     replayLeastRatio,
+    replayMostRatio,
   }: {
     combat: CombatPerson;
     points?: number;
@@ -455,6 +462,8 @@ export function blackOpsRouteGrownEstimate(
     replaySeed?: number;
     /** The least step rate ratio measured (`BLADEBURNER_REPLAY_LEAST_RATIO` absent; 0, the rule before #423's ruling 8). */
     replayLeastRatio?: number;
+    /** The most climb step rate ratio measured (`BLADEBURNER_REPLAY_MOST_RATIO` absent; Infinity, none). */
+    replayMostRatio?: number;
   },
 ): BlackOpsGrownTime {
   // #411: each contract's and operation's chance at the true population, recovered from the next one's range read.
@@ -712,6 +721,7 @@ export function blackOpsRouteGrownEstimate(
       replays,
       seed: replaySeed,
       ...(replayLeastRatio === undefined ? {} : { leastRatio: replayLeastRatio }),
+      ...(replayMostRatio === undefined ? {} : { mostRatio: replayMostRatio }),
     });
     declined = bladeburnerReplayDeclined(replayed);
   }
@@ -753,6 +763,7 @@ export function blackOpsRouteGrownEstimate(
             fallbackSteps: replayed.fallbackSteps,
             replaysWithFallback: replayed.replaysWithFallback,
             leastRatios: replayed.leastRatios,
+            meanPathRebuilds: replayed.meanPathRebuilds,
             used: declined === null,
             declined,
           },

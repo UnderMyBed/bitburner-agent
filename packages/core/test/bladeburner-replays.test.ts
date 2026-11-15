@@ -5,7 +5,12 @@
 // the full simulator over a route's opening hour is the brain's bladeburner-drift-parity.test.ts.
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { BLADEBURNER_LEVELLED_ACTIONS, type BladeburnerLevelledAction } from "../src/bladeburner-actions.ts";
+import {
+  actionRankGain,
+  actionRankLoss,
+  BLADEBURNER_LEVELLED_ACTIONS,
+  type BladeburnerLevelledAction,
+} from "../src/bladeburner-actions.ts";
 import {
   BLADEBURNER_EVENT_SECONDS,
   type BladeburnerDriftCity,
@@ -17,6 +22,7 @@ import {
   BLADEBURNER_REPLAY_LEAST_RATIO,
   BLADEBURNER_REPLAY_MOST_ERROR,
   BLADEBURNER_REPLAY_MOST_FALLBACK,
+  BLADEBURNER_REPLAY_MOST_RATIO,
   BLADEBURNER_ROUTE_REPLAYS,
   bladeburnerAttemptDraw,
   bladeburnerEventDraw,
@@ -218,9 +224,14 @@ describe("the gate (#423's ruling 7) and the 200 replays' derivation", () => {
   });
 });
 
-describe("the least step ratio (#423's ruling 10): a step under it a fallback, at the mean path's rate", () => {
-  test("a replay's step just under the bound counts; just over it doesn't; the bound the least ratio measured", () => {
-    expect(BLADEBURNER_REPLAY_LEAST_RATIO).toBe(0.0834);
+describe("the ratios measured (#423's rulings 10 and 11): a climb step outside them a fallback, at the mean path's rate", () => {
+  // The least and the most ratio of the 3,701 engine comparisons (the research's r9-sorted.txt), exact.
+  test("the bounds the least and the most ratio measured", () => {
+    expect(BLADEBURNER_REPLAY_LEAST_RATIO).toBe(0.08342624096023106);
+    expect(BLADEBURNER_REPLAY_MOST_RATIO).toBe(6.600987476314665);
+  });
+
+  test("a replay's step just under the least counts; just over it doesn't", () => {
     const start: BladeburnerDriftState = { cities: SIX.map((city) => ({ ...city })), worked: 0, ceiling: 50 };
     const rate = 0.05;
     const dt = 3600;
@@ -251,5 +262,119 @@ describe("the least step ratio (#423's ruling 10): a step under it a fallback, a
     expect(over.times[0]).toBeCloseTo(free.times[0] as number, 9);
     expect(under.fallbackSteps).toBeGreaterThan(over.fallbackSteps);
     expect(under.replaysWithFallback).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("the most ratio, Raid with no community, the Black Ops' rebuilds (#423's ruling 11)", () => {
+  const start: BladeburnerDriftState = { cities: SIX.map((city) => ({ ...city })), worked: 0, ceiling: 50 };
+  const reference = SIX[0] as BladeburnerDriftCity;
+  const rate = 0.05;
+  const dt = 3600;
+  const raid = { action: action("Raid"), level: 1, chance: 0.3, perSecond: 0.004 };
+  const climb = (state: BladeburnerDriftState) => ({
+    kind: "climb" as const,
+    seconds: 0,
+    dt,
+    by: rate * dt,
+    rate,
+    parts: [raid],
+    state,
+  });
+
+  test("a replay's climb step just over the most ratio counts; just under it doesn't", () => {
+    const timeline = { start, reference, rankMultiplier: 1, segments: [climb(start)] };
+    const free = bladeburnerReplayRoute(timeline, {
+      replays: 20,
+      seed: 4233,
+      leastRatio: 0,
+      mostRatio: Number.POSITIVE_INFINITY,
+    });
+    // One step a replay: its least ratio is its ratio.
+    const ratio = free.leastRatios[0] as number;
+    const at = (mostRatio: number) =>
+      bladeburnerReplayRoute(timeline, { replays: 20, seed: 4233, leastRatio: 0, mostRatio });
+    const under = at(ratio * (1 - 1e-9));
+    const over = at(ratio * (1 + 1e-9));
+    expect(under.times[0]).toBeCloseTo(dt, 6);
+    expect(over.times[0]).toBeCloseTo(free.times[0] as number, 9);
+    expect(under.fallbackSteps).toBeGreaterThan(over.fallbackSteps);
+  });
+
+  test("Raid with no community in any city: no attempt, none of its effects; re-priced as gaining and losing nothing", () => {
+    // The game's availability: no Synthoid communities in the current city, the Raid an error.
+    expect(gameSource("Bladeburner/data/Operations.ts")).toContain(
+      'if (bladeburner.getCurrentCity().comms < 1) return { error: "No Synthoid communities in current city" };',
+    );
+    const none: BladeburnerDriftState = {
+      cities: SIX.map((city) => ({ ...city, communities: 0 })),
+      worked: 0,
+      ceiling: 50,
+    };
+    // All before the first event (U(240..600) s; an event can found a community).
+    const raids = Array.from({ length: 50 }, (_, k) => ({
+      at: 1 + 4 * k,
+      action: raid.action,
+      competence: 0.3,
+      state: none,
+    }));
+    const raided = bladeburnerReplayAttempts(none, reference, raids, { seed: 5, end: 230 });
+    const idle = bladeburnerReplayAttempts(none, reference, [], { seed: 5, end: 230 });
+    expect([...raided.skipped]).toEqual(raids.map(() => 1));
+    expect(raided.successes).toBe(0);
+    // The decay alone (passed in pieces, so to rounding).
+    for (const [i, city] of raided.cities.entries()) {
+      const alone = idle.cities[i] as BladeburnerDriftCity;
+      expect({ ...city, chaos: 0 }).toEqual({ ...alone, chaos: 0 });
+      expect(city.chaos).toBeCloseTo(alone.chaos, 9);
+    }
+    // With communities the Raids are made, and move their cities.
+    const made = bladeburnerReplayAttempts(start, reference, raids, { seed: 5, end: 230 });
+    expect([...made.skipped].every((x) => x === 0)).toBe(true);
+    expect(made.cities).not.toEqual(bladeburnerReplayAttempts(start, reference, [], { seed: 5, end: 230 }).cities);
+    // The re-pricing: each skipped attempt at the chance where p·gain = (1 − p)·loss, its expected rank 0.
+    const gain = actionRankGain(raid.action, raid.level, 1);
+    const loss = actionRankLoss(raid.action, raid.level);
+    // A climb of 200 s (before the first event), 10 Raids, at a rate its re-pricing keeps over 0.
+    const part = { ...raid, perSecond: 0.05 };
+    const climbRate = 2 * part.perSecond * (gain + loss);
+    const expected = climbRate + part.perSecond * (loss / (gain + loss) - part.chance) * (gain + loss);
+    const short = { ...climb(none), dt: 200, by: climbRate * 200, rate: climbRate, parts: [part] };
+    const timeline = { start: none, reference, rankMultiplier: 1, segments: [short] };
+    const replayed = bladeburnerReplayRoute(timeline, {
+      replays: 3,
+      seed: 4233,
+      leastRatio: 0,
+      mostRatio: Number.POSITIVE_INFINITY,
+    });
+    expect(replayed.fallbackSteps).toBe(0);
+    for (const time of replayed.times) expect(time).toBeCloseTo((climbRate * 200) / expected, 6);
+  });
+
+  test("a Black Op's rebuilds at the mean path's rate in every replay, labelled; their attempts still move the cities", () => {
+    const blackOp = {
+      kind: "blackOp" as const,
+      seconds: dt,
+      span: 1234,
+      works: [{ dt: 600, rate, parts: [raid], state: start }],
+    };
+    const after = { ...climb(start), seconds: dt + 1234 };
+    const timeline = { start, reference, rankMultiplier: 1, segments: [climb(start), blackOp, after] };
+    const replayed = bladeburnerReplayRoute(timeline, { replays: 20, seed: 4233 });
+    expect(replayed.meanPathRebuilds).toBe(1);
+    expect(replayed.segmentSeconds[1]).toBe(1234);
+    // Against the same route with a fixed span in its place: the climb before it the same; the climb after it moved,
+    // the rebuilds' Raids having moved the cities and taken draws.
+    const without = bladeburnerReplayRoute(
+      {
+        start,
+        reference,
+        rankMultiplier: 1,
+        segments: [climb(start), { kind: "fixed", seconds: dt, span: 1234 }, after],
+      },
+      { replays: 20, seed: 4233 },
+    );
+    expect(without.meanPathRebuilds).toBe(0);
+    expect(replayed.segmentSeconds[0]).toBe(without.segmentSeconds[0]);
+    expect(replayed.segmentSeconds[2]).not.toBe(without.segmentSeconds[2]);
   });
 });

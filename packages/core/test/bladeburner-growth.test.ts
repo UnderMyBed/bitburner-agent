@@ -58,6 +58,7 @@ import {
 } from "../src/bladeburner-installs.ts";
 import {
   BLADEBURNER_REPLAY_LEAST_RATIO,
+  BLADEBURNER_REPLAY_MOST_RATIO,
   BLADEBURNER_ROUTE_REPLAYS,
   bladeburnerReplayDeclined,
   bladeburnerReplayRoute,
@@ -1078,11 +1079,12 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
     const first = solved.get("6 100") ?? caseOf(6, 100);
     caseOf(7, 300);
     expect(caseOf(6, 100)).toEqual(first);
-    // Since #423 (its rulings 7 and 10): both sides' replays pass the gate (on all 10 seed series, below), so their figures,
-    // first-order: 98.8 h as is and 68.9 h installing (the mean path's 155.5 h and 113.6 h), on the default seed series, a
-    // solve's own; each within 3 of its replays' standard errors (1.5 h and 0.7 h), not to the digit (the machines' `**`).
-    expect(Math.abs(first.keep / HOUR - 98.8)).toBeLessThanOrEqual(3 * 1.5);
-    expect(Math.abs((first.install as number) / HOUR - 68.9)).toBeLessThanOrEqual(3 * 0.7);
+    // Since #423 (its rulings 7, 10 and 11): both sides' replays pass the gate (on all 10 seed series, below), so their
+    // figures, first-order: 118.5 h as is and 76.8 h installing (the mean path's 155.5 h and 113.6 h), on the default seed
+    // series (the first of the 10, ruling 11), a solve's own; each within 3 of its replays' standard errors (1.25 h and
+    // 0.63 h), not to the digit (the machines' `**`).
+    expect(Math.abs(first.keep / HOUR - 118.5)).toBeLessThanOrEqual(3 * 1.25);
+    expect(Math.abs((first.install as number) / HOUR - 76.8)).toBeLessThanOrEqual(3 * 0.63);
     // #423: 12.4 s here with the replays (6.5 s on 61e0b1f); × 3.743 (#418's ruling 6), 46 s: twice that.
   }, 93_000);
 });
@@ -1168,8 +1170,9 @@ describe("the playability under the route's replays (#423): the gate's figures, 
         `${(unpaired / 60).toFixed(1)} min): ${timing.choice}`,
     );
     expect(timing.choice).toBe("install");
-    // Re-stated (#423's rulings 7 and 10): 68.9 h at best, first-order, still past the bar (×1.27); within 3 of its error.
-    expect(Math.abs((timing.installNowSeconds as number) - 68.9 * HOUR)).toBeLessThanOrEqual(
+    // Re-stated (#423's rulings 7, 10 and 11): 76.8 h at best, first-order, still past the bar (×1.42); within 3 of its
+    // error.
+    expect(Math.abs((timing.installNowSeconds as number) - 76.8 * HOUR)).toBeLessThanOrEqual(
       3 * (after.secondsError ?? 0),
     );
     expect(timing.installNowSeconds as number).toBeGreaterThan(BAR_SECONDS);
@@ -1199,7 +1202,7 @@ describe("the playability under the route's replays (#423): the gate's figures, 
         `${(timing.keepSeconds / HOUR).toFixed(1)} h: ${timing.choice}`,
     );
     // Re-stated (#423's ruling 10): the shop's route's replays are unstable across seed series (9 of 10 pass, below), so
-    // its figure is the mean path's, 182.6 h at best (its first-order 116 h unmeasured until #426), past the bar.
+    // its figure is the mean path's, 182.6 h at best (its first-order 125 h unmeasured until #426), past the bar.
     expect((timing.rebuildSeconds + (after.meanPathSeconds as number)) / HOUR).toBeCloseTo(182.6, 1);
     expect(timing.rebuildSeconds + (after.meanPathSeconds as number)).toBeGreaterThan(BAR_SECONDS);
   }, 120_000);
@@ -1207,7 +1210,7 @@ describe("the playability under the route's replays (#423): the gate's figures, 
   test("the gate on 10 seed series (#423's rulings 8 and 10): BN6's best and keep pass on all, BN7's keep on none", () => {
     // Each route's mean path once, its timeline replayed on the seed series of a refresh at the suites' epoch and the 9
     // after it. Asserted only where the verdict holds on all 10 (here and on CI): BN6's two pass, BN7's keep declines.
-    // BN7's best splits (9 of 10 at ruling 10), so it is said, not asserted: "unstable across seed series".
+    // BN7's best splits (9 of 10 at rulings 10 and 11), so it is said, not asserted: "unstable across seed series".
     const rows: string[] = [];
     const passes = new Map<string, number>();
     for (const bitNode of [6, 7]) {
@@ -1227,7 +1230,7 @@ describe("the playability under the route's replays (#423): the gate's figures, 
           if (declined === null) used++;
           verdicts.push(
             declined === null
-              ? `${(r.seconds / HOUR).toFixed(1)}±${(r.error / HOUR).toFixed(1)}`
+              ? `${(r.seconds / HOUR).toFixed(1)}±${(r.error / HOUR).toFixed(1)} (${r.replaysWithFallback} at the fallback)`
               : `declined (${r.replaysWithFallback} at the fallback, ${((100 * r.error) / r.seconds).toFixed(1)}%)`,
           );
         }
@@ -1236,7 +1239,7 @@ describe("the playability under the route's replays (#423): the gate's figures, 
       }
     }
     console.log(
-      `the gate on 10 seed series (the least step ratio ×${BLADEBURNER_REPLAY_LEAST_RATIO}):\n${rows.join("\n")}`,
+      `the gate on 10 seed series (a climb step's ratio within ×${BLADEBURNER_REPLAY_LEAST_RATIO} to ×${BLADEBURNER_REPLAY_MOST_RATIO}):\n${rows.join("\n")}`,
     );
     expect(passes.get("6 keep")).toBe(10);
     expect(passes.get("6 best")).toBe(10);

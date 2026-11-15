@@ -15,10 +15,14 @@
  *   to its ceiling (`:737-745`, `:1187-1189`; its time the route's), each replay its own cities, so its own drain.
  * - **The re-pricing, first-order (labelled):** the route's actions, levels, attempts a second, installs, Diplomacy's
  *   time and clock are the mean path's; each step's rate at the replay's mean chance for each of its parts, rate' = rate
- *   + Σ x·(p̄ − p)·(gain + loss) (`attemptRankMoments`' mean is p·gain − (1 − p)·loss), its time its rank over rate'; a
- *   Black Op's span its rebuilds' share at their rate over the re-priced one. A route re-planned under the draws could do
- *   better still (#426). A step whose re-priced rate is 0 or under (the attempts held while the chance falls) takes the
- *   mean path's rate there, counted (`fallbackSteps`).
+ *   + Σ x·(p̄ − p)·(gain + loss) (`attemptRankMoments`' mean is p·gain − (1 − p)·loss), its time its rank over rate'.
+ *   A route re-planned under the draws could do better still (#426). A climb step whose re-priced rate is 0 or under, or
+ *   whose ratio to the mean path's is outside the range measured (`BLADEBURNER_REPLAY_LEAST_RATIO` to `…_MOST_RATIO`),
+ *   takes the mean path's rate there, counted (`fallbackSteps`). A Black Op's rebuild steps were never measured (the
+ *   instrument sampled climb steps), so every replay prices them at the mean path's rate (#423's ruling 11, labelled):
+ *   their attempts still move the replay's cities, but their span is the mean path's, about 0.56 h of BN6's best case.
+ * - **Raid with no community** in the city B4 picks (none in any city) is unavailable (`data/Operations.ts:147-150`):
+ *   no attempt, none of its effects; re-priced as an attempt that gains and loses nothing.
  */
 import { actionRankGain, actionRankLoss, type BladeburnerLevelledAction } from "./bladeburner-actions.ts";
 import {
@@ -76,15 +80,19 @@ export const BLADEBURNER_REPLAY_MOST_FALLBACK = 0.01;
 export const BLADEBURNER_REPLAY_MOST_ERROR = 0.039;
 
 /**
- * The least re-priced step rate, over the mean path's for that step, the first-order re-pricing is measured at (#423's
- * rulings 8 to 10, #389: no unmeasured extrapolation): 3,701 replay-steps of BN6's and BN7's best cases (the first
- * seed series), each the engine run for 60 attempts from the replay's drawn state against 1,000 of core's replays of
- * those attempts, the relative bias (engine − first-order) / first-order by ratio (docs/architecture.md's table):
- * within 1.5% from ×0.7 up, pessimistic below it (+22% ± 5.9% under ×0.5 in BN7: the engine's chooser leaves a
- * collapsed city), never optimistic past 3 standard errors. Its least ratio, BN7's ×0.0834, the bound: a replay with a
- * step under it (unmeasured), or at a rate of 0 or under, counts as a fallback (its rate the mean path's there).
+ * The range of a climb step's re-priced rate, over its mean path's, the replays were measured at (#423's rulings 8 to
+ * 11, #389: no unmeasured extrapolation). The instrument (research, not in CI): 3,701 climb replay-steps of BN6's and
+ * BN7's best cases (the first seed series), at each the engine set to the replay's drawn state and run for the step's
+ * first 60 attempts, against 1,000 of core's replays of those same attempts, core's chooser on both sides. So it
+ * measures the replays' draws of a step's attempts against the engine's, by the first-order rate both give; it doesn't
+ * test the held mix. The relative bias (engine − first-order) / first-order by ratio (docs/architecture.md's table):
+ * within 1.5% from ×0.7 up; under it the replays' figure is pessimistic, +22% ± 5.9% under ×0.5 in BN7, its cause not
+ * identified; never optimistic past 3 standard errors. The least and the most ratio measured, BN7's ×0.08342624096 and
+ * ×6.600987476 (the research's r9-sorted.txt): a replay with a climb step outside them (unmeasured), or at a rate of 0
+ * or under, counts as a fallback (its rate the mean path's there).
  */
-export const BLADEBURNER_REPLAY_LEAST_RATIO = 0.0834;
+export const BLADEBURNER_REPLAY_LEAST_RATIO = 0.08342624096023106;
+export const BLADEBURNER_REPLAY_MOST_RATIO = 6.600987476314665;
 
 /** The gate's verdict on replays (see above): null, used; else why the mean path's figure is used instead. */
 export function bladeburnerReplayDeclined(
@@ -275,11 +283,16 @@ export interface BladeburnerRouteReplays {
   segmentSeconds: number[];
   replays: number;
   seed: number;
-  /** Steps whose re-priced rate fell to 0 or under (the mean path's rate there), and the replays with any. */
+  /**
+   * Climb steps whose re-priced rate fell to 0 or under, or outside the ratios measured (`leastRatio`–`mostRatio` of the
+   * mean path's), each at the mean path's rate there; and the replays with any.
+   */
   fallbackSteps: number;
   replaysWithFallback: number;
-  /** Each replay's least ratio of a step's re-priced rate to its mean path's (before any fallback). */
+  /** Each replay's least ratio of a climb step's re-priced rate to its mean path's (before any fallback). */
   leastRatios: number[];
+  /** The Black Ops whose rebuilds took the mean path's rate in every replay (#423's ruling 11: never measured). */
+  meanPathRebuilds: number;
 }
 
 /** An attempt of a replay: its time, action, its chance's competence at the reference, and the mean path's cities. */
@@ -307,6 +320,8 @@ export function bladeburnerReplayAttempts(
   chances: Float64Array;
   /** Each attempt's city factor over the reference's (its chance at a competence of 1, uncapped): #423's checks. */
   factors: Float64Array;
+  /** Each attempt not made: Raid with no community in the city picked (`data/Operations.ts:147-150`), 1. */
+  skipped: Uint8Array;
   successes: number;
   cities: BladeburnerDriftCity[];
   worked: number;
@@ -335,6 +350,7 @@ export function bladeburnerReplayAttempts(
   };
   const chances = new Float64Array(attempts.length);
   const factors = new Float64Array(attempts.length);
+  const skipped = new Uint8Array(attempts.length);
   let successes = 0;
   for (const [k, attempt] of attempts.entries()) {
     pass(attempt.at);
@@ -345,6 +361,11 @@ export function bladeburnerReplayAttempts(
     // B4's pick by the true figures, then Diplomacy taking it to its ceiling.
     worked = bladeburnerMostFactorCity(seen, worked, attempt.action.name === "Raid", state.ceiling);
     const city = cities[worked] as BladeburnerDriftCity;
+    // Raid unavailable with no community there (`data/Operations.ts:147-150`): no attempt, none of its effects.
+    if (attempt.action.name === "Raid" && !(city.communities >= 1)) {
+      skipped[k] = 1;
+      continue;
+    }
     city.chaos = Math.min(city.chaos, state.ceiling);
     const at = seen === cities ? city : (seen[worked] as BladeburnerDriftCity);
     const p = driftedChance({ action: attempt.action, chance: attempt.competence }, reference, at, state.ceiling);
@@ -355,7 +376,7 @@ export function bladeburnerReplayAttempts(
     bladeburnerAttemptDraw(cities, worked, attempt.action, success, random);
   }
   if (end !== undefined) pass(end);
-  return { chances, factors, successes, cities, worked };
+  return { chances, factors, skipped, successes, cities, worked };
 }
 
 /**
@@ -370,13 +391,14 @@ export function bladeburnerReplayRoute(
     replays = BLADEBURNER_ROUTE_REPLAYS,
     seed,
     meanChaos = false,
-    // The least step ratio measured (#423's ruling 10): a step under it counts as a fallback.
+    // The range of a climb step's ratio measured (#423's rulings 10 and 11): a step outside it counts as a fallback.
     leastRatio = BLADEBURNER_REPLAY_LEAST_RATIO,
-  }: { replays?: number; seed: number; meanChaos?: boolean; leastRatio?: number },
+    mostRatio = BLADEBURNER_REPLAY_MOST_RATIO,
+  }: { replays?: number; seed: number; meanChaos?: boolean; leastRatio?: number; mostRatio?: number },
 ): BladeburnerRouteReplays {
   const { reference, segments } = timeline;
   // Each part's key, its gain + loss, and the attempts in time order (shared by every replay).
-  const parts: { part: BladeburnerRoutePart; plus: number }[] = [];
+  const parts: { part: BladeburnerRoutePart; plus: number; loss: number }[] = [];
   const at: number[] = [];
   const keys: number[] = [];
   const competence: number[] = [];
@@ -398,6 +420,7 @@ export function bladeburnerReplayRoute(
         part,
         plus:
           actionRankGain(part.action, part.level, timeline.rankMultiplier) + actionRankLoss(part.action, part.level),
+        loss: actionRankLoss(part.action, part.level),
       }) - 1;
     const n = Math.round(part.perSecond * dt);
     const c = competenceOf(part, state);
@@ -436,13 +459,16 @@ export function bladeburnerReplayRoute(
   for (let replay = 0; replay < replays; replay++) {
     sums.fill(0);
     counts.fill(0);
-    const { chances } = bladeburnerReplayAttempts(timeline.start, reference, attempts, {
+    const { chances, skipped } = bladeburnerReplayAttempts(timeline.start, reference, attempts, {
       seed: seed + 7919 * replay,
       meanChaos,
     });
     for (const [k, i] of order.entries()) {
       const key = keys[i] as number;
-      sums[key] = (sums[key] as number) + (chances[k] as number);
+      // An attempt not made (Raid with no community) gains and loses nothing: at the chance where p·gain = (1 − p)·loss.
+      const { plus, loss } = parts[key] as { plus: number; loss: number };
+      const p = skipped[k] === 1 ? (plus > 0 ? loss / plus : 0) : (chances[k] as number);
+      sums[key] = (sums[key] as number) + p;
       counts[key] = (counts[key] as number) + 1;
     }
     // The re-pricing at the replay's chances.
@@ -462,7 +488,7 @@ export function bladeburnerReplayRoute(
         key++;
       }
       if (rate > 0) least = Math.min(least, next / rate);
-      if (next > 0 && next >= leastRatio * rate) return next;
+      if (next > 0 && next >= leastRatio * rate && next <= mostRatio * rate) return next;
       fell++;
       return rate;
     };
@@ -470,8 +496,9 @@ export function bladeburnerReplayRoute(
       let seconds: number;
       if (segment.kind === "climb") seconds = segment.by / repriced(segment.rate, segment.parts);
       else if (segment.kind === "blackOp") {
+        // Its rebuilds never measured (the instrument sampled climb steps, #423's ruling 11): the mean path's span.
         seconds = segment.span;
-        for (const work of segment.works) seconds += work.dt * (work.rate / repriced(work.rate, work.parts) - 1);
+        for (const work of segment.works) key += work.parts.length;
       } else seconds = segment.span;
       segmentSums[s] = (segmentSums[s] as number) + seconds;
       total += seconds;
@@ -493,5 +520,6 @@ export function bladeburnerReplayRoute(
     fallbackSteps,
     replaysWithFallback,
     leastRatios,
+    meanPathRebuilds: segments.filter((segment) => segment.kind === "blackOp" && segment.works.length > 0).length,
   };
 }
