@@ -292,7 +292,8 @@ export const EARNING_SOURCES = ["hacking", "work", "crime", "hacknet", "codingco
 
 /**
  * The hospital's money source (#418's review, ruling 3: priced wherever money buys augmentations): Bladeburner's
- * failures' bills (`Bladeburner.ts:983-990`, `loseMoney(cost, "hospitalization")`, a loss, so under 0), taken off the
+ * failures' bills (a failure's damage at 0 HP, `Bladeburner.ts:983-990`, hospitalises: `PlayerObjectGeneralMethods.ts:
+ * 281-283`, `loseMoney(cost, "hospitalization")`, a loss, so under 0), taken off the
  * income A6 buys from, as they come out of the money its purchases need. Absent: none.
  */
 export const HOSPITAL_SOURCE = "hospitalization";
@@ -441,8 +442,9 @@ export interface BlackOpsInstallView {
   marginMs?: number | null;
   /**
    * The hospital's money a game second on each side (#418, core's `moneyLostPerSecond`): keeping at the money read,
-   * installing now from the $1,000 it leaves; null, not read. Shown, not traded: neither side buys anything with it
-   * before the destroy. Absent in events before #418.
+   * installing now from the $1,000 it leaves; null, not read. Shown, not traded against the time (the planner's,
+   * #359); priced where money buys augmentations, A6's income net of it (`earnedOf`). Keeping's side never installs in
+   * B7's model: optimistic for keeping, as a later install buys less. Absent in events before #418.
    */
   moneyLostPerSecond?: { keep: number | null; installNow: number | null };
 }

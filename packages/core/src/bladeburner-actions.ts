@@ -942,6 +942,10 @@ function fluidSeconds(input: BladeburnerActionInput, { rank, target }: { rank: n
   };
   // The least of every plan's chain (the mean leaves out the floor, from rank 0 a failure loses nothing, so the
   // fastest by it is not always the fastest by the chain), by their means first, those Wald's bound rules out skipped.
+  // Labelled (#418's round-2 review): a plan whose mean is infinite (its mean rise 0 or under, with no tail to follow)
+  // is left unchained, though the floor can make its chain finite (failures at 0 lose nothing): the horizon then the
+  // others' least, longer where that plan alone would be the fastest (the drift priced over more: Raid's chances the
+  // lower for it, the population-neutral actions' the higher).
   let least = Number.POSITIVE_INFINITY;
   const order = means
     .map((mean, i) => ({ mean, i }))

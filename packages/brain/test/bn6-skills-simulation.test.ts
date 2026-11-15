@@ -150,11 +150,9 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
       `against ${sum(1).toFixed(2)} forecast (σ ${Math.sqrt(steadyVariance).toFixed(2)}), their bound ${steadyBound.toFixed(2)}`,
   );
   // #417's review: the steady line printed, not asserted (the rule works Raid most of the hour since #415, so the steady
-  // part is Field Analysis's alone). Asserted instead (#418's ruling 2): the hour's forecast of the actions run against
-  // every attempt's expected rank given the attempts made (the simulator's log, Raid included: p × gain − (1 − p) × the
-  // floored loss, `attemptsSummary`) and Field Analysis's rank as made (no draw in it), within the forecast's own error
-  // (its σ, the successes' spread about it; tighter than its bound at section 8's α): the luck of the successes out, what
-  // is left is the forecast's chances against the game's own at each attempt.
+  // part is Field Analysis's alone). The whole's forecast of the actions run against every attempt's expected rank given
+  // the attempts made (the simulator's log, Raid included: p × gain − (1 − p) × the floored loss, `attemptsSummary`) and
+  // Field Analysis's rank as made (no draw in it), printed; asserted action by action below.
   const attempts = await attemptsIn(fresh.simulation, 0, fresh.game.clock.now());
   const fieldAnalysis = steady.find((each) => each.name === "Field Analysis")?.figures[0] ?? 0;
   const all = attemptsSummary(attempts, null);
@@ -175,7 +173,40 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
       `${atRankASecond.toFixed(2)} against the forecast of the actions run ${forecast}; at the last reading, the skills' ` +
       `part ${skillsPart.toFixed(2)} and the target's and the drift's ${driftPart.toFixed(2)} over ${gameMinutes} min`,
   );
-  expect(Math.abs(expectedAll - forecast)).toBeLessThanOrEqual(sigma);
+  // The hour's consistency (#418's ruling 3), action by action: each contract's and operation's forecast (section 8's
+  // own, at the chance judged at each reading) against its attempts' expected rank given the attempts made (the
+  // simulator's log, each at the chance the game drew against), within that action's expectation error, from the
+  // inputs: its cuts (section 8's: an attempt's mean at each switch and stretch's end, the forecast counting the time,
+  // not the attempts), the chance's error from the rule's own population spread (where pop/popEst is recovered from the
+  // next Black Op's range, as at every reading here, the chance judged is the true population's, exact: 0; where it
+  // isn't, its low end: each attempt's gain and loss times the game's range there, high less low) and one attempt's
+  // (gain + loss) times its mean chance (the attempts counted from the time: at most one off a stretch). Both sides are
+  // expectations: the successes' luck is in neither.
+  const recovered = fresh.controller().bladeburnerView().actions?.ratio != null;
+  expect(recovered).toBe(true);
+  const rows: string[] = [];
+  for (const each of byAction) {
+    const mine = attempts.filter((attempt) => attempt.name === each.name);
+    if (mine.length === 0) continue;
+    const [, forecastOf = 0, , , cuts = 0] = each.figures;
+    const expected = attemptsSummary(mine, null).expected;
+    const spread = recovered
+      ? 0
+      : mine.reduce(
+          (total, attempt) => total + (attempt.gain + attempt.loss) * (attempt.range[1] - attempt.range[0]),
+          0,
+        );
+    const mean = mine.reduce((total, attempt) => total + attempt.chance, 0) / mine.length;
+    const one = Math.max(...mine.map((attempt) => attempt.gain + attempt.loss)) * mean;
+    const bar = cuts + spread + one;
+    rows.push(
+      `${each.name}: forecast ${forecastOf.toFixed(2)} against ${expected.toFixed(2)} expected given its ` +
+        `${mine.length} attempts (its error ${bar.toFixed(2)}: cuts ${cuts.toFixed(2)}, the range's ${spread.toFixed(2)}, an attempt's ${one.toFixed(2)})`,
+    );
+    expect(Math.abs(forecastOf - expected), each.name).toBeLessThanOrEqual(bar);
+  }
+  console.log(`the hour's consistency, action by action:\n  ${rows.join("\n  ")}`);
+  expect(rows.length).toBeGreaterThan(0);
   expect(section).toContain("  skill points unspent with a level to buy, past 52 s:\n    none");
   expect(failures).toEqual([]);
 }, 240_000);

@@ -989,7 +989,12 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
   const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
   /** A BN6.1 start's six cities as the tests' one (`CITY`: 1e9, 50 communities, no chaos), the division in Sector-12. */
   const SIX = ["Aevum", "Chongqing", "Sector-12", "New Tokyo", "Ishima", "Volhaven"].map((name) => ({ name, ...CITY }));
-  const CASES = [6, 7].flatMap((bitNode) => [100, 300].map((combat) => ({ bitNode, combat })));
+  // BN6 at combat 100 in CI (#418's round-2 review, for the cost); the other three behind the env knob
+  // (`BLADEBURNER_DRIFT_PLAYABILITY_FULL=1`), each about 4 to 5 s here.
+  const FULL = process.env.BLADEBURNER_DRIFT_PLAYABILITY_FULL === "1";
+  const CASES = [6, 7]
+    .flatMap((bitNode) => [100, 300].map((combat) => ({ bitNode, combat })))
+    .filter(({ bitNode, combat }) => FULL || (bitNode === 6 && combat === 100));
   test.each(CASES)("BN$bitNode, combat $combat, read at the truth: as is and with the shop", ({ bitNode, combat }) => {
     const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
     const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;

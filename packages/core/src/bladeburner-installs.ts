@@ -55,7 +55,8 @@
  * - the rank the actions gain during the rebuild (Training gains none, `Bladeburner.ts:1094-1105`), cautious;
  * - the Bladeburners faction's reputation lost to favour, which only the next purchases need, not the route;
  * - the money the install resets, and the hospital's (#418: shown on each side, `moneyLostPerSecond`): the route's time
- *   doesn't read them, both sides running to the destroy with no install after (no money buys anything on either);
+ *   doesn't read them. The hospital's is priced where money buys augmentations (A6's income net of it, the brain's
+ *   `earnedOf`); keeping's side never installs in this model, optimistic for keeping, as a later install buys less;
  * - the gym, the planner's choice of the player's one focus (#359), later.
  */
 import { AUGMENTATIONS } from "./augmentation-data.ts";

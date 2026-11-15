@@ -574,7 +574,10 @@ export interface BladeburnerDriftResult {
  * city worked, each moving it by its mean effects at its chance there (`bladeburnerAttemptDrift`), the decay and the
  * random events' mean (`bladeburnerEventDrift`) over the time, and Diplomacy holding the worked city's chaos at the
  * ceiling (its time returned, not taken from `seconds`). `moves`: the brain's city chosen again as the path goes (B4's,
- * the most chance factor), else the city worked throughout. In attempts one at a time to `BLADEBURNER_DRIFT_CHUNKS`,
+ * the most chance factor), else the city worked throughout. Labelled (#418's round-2 review): the path's B4 moves by the
+ * true population, which the events grow, the game's by the estimates, which they don't (`City.ts:35-87`), so the path
+ * finds the grown city at once: optimistic, against walks of the game's draws picking by the estimates from 150 to
+ * Typhoon's 2,500, by 3.1% (Bounty Hunter first) and 4.3% (Raid first), the plans' order the same. In attempts one at a time to `BLADEBURNER_DRIFT_CHUNKS`,
  * past it in that many chunks, each chunk's attempts at the chance before each, as if linear over the chunk (the
  * success-moved effects, Raid's and the kills', at the chance at the chunk's start).
  */
