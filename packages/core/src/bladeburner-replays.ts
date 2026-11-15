@@ -20,11 +20,7 @@
  *   better still (#426). A step whose re-priced rate is 0 or under (the attempts held while the chance falls) takes the
  *   mean path's rate there, counted (`fallbackSteps`).
  */
-import {
-  actionRankGain,
-  actionRankLoss,
-  type BladeburnerLevelledAction,
-} from "./bladeburner-actions.ts";
+import { actionRankGain, actionRankLoss, type BladeburnerLevelledAction } from "./bladeburner-actions.ts";
 import {
   type BladeburnerDriftCity,
   type BladeburnerDriftState,
@@ -352,7 +348,11 @@ export function bladeburnerReplayAttempts(
  */
 export function bladeburnerReplayRoute(
   timeline: BladeburnerRouteTimeline,
-  { replays = BLADEBURNER_ROUTE_REPLAYS, seed, meanChaos = false }: { replays?: number; seed: number; meanChaos?: boolean },
+  {
+    replays = BLADEBURNER_ROUTE_REPLAYS,
+    seed,
+    meanChaos = false,
+  }: { replays?: number; seed: number; meanChaos?: boolean },
 ): BladeburnerRouteReplays {
   const { reference, segments } = timeline;
   // Each part's key, its gain + loss, and the attempts in time order (shared by every replay).
@@ -373,7 +373,12 @@ export function bladeburnerReplayRoute(
     return factor > 0 ? part.chance / factor : 0;
   };
   const schedule = (part: BladeburnerRoutePart, state: BladeburnerDriftState, from: number, dt: number) => {
-    const key = parts.push({ part, plus: actionRankGain(part.action, part.level, timeline.rankMultiplier) + actionRankLoss(part.action, part.level) }) - 1;
+    const key =
+      parts.push({
+        part,
+        plus:
+          actionRankGain(part.action, part.level, timeline.rankMultiplier) + actionRankLoss(part.action, part.level),
+      }) - 1;
     const n = Math.round(part.perSecond * dt);
     const c = competenceOf(part, state);
     for (let j = 0; j < n; j++) {
@@ -384,7 +389,8 @@ export function bladeburnerReplayRoute(
     }
   };
   for (const segment of segments) {
-    if (segment.kind === "climb") for (const part of segment.parts) schedule(part, segment.state, segment.seconds, segment.dt);
+    if (segment.kind === "climb")
+      for (const part of segment.parts) schedule(part, segment.state, segment.seconds, segment.dt);
     else if (segment.kind === "blackOp") {
       let from = segment.seconds;
       for (const work of segment.works) {

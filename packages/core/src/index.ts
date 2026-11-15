@@ -442,6 +442,21 @@ export {
   successesOfMaxLevel,
 } from "./bladeburner-growth.ts";
 export {
+  type BlackOpsGrowthAt,
+  type BlackOpsInstallTiming,
+  type BlackOpsRouteAt,
+  type BladeburnerInstallGain,
+  type BladeburnerRebuild,
+  blackOpsInstallTiming,
+  bladeburnerAugmentationValues,
+  bladeburnerComparedFigures,
+  bladeburnerInstallGain,
+  bladeburnerPersonAfterInstall,
+  bladeburnerRebuildSeconds,
+  NO_INSTALL_GAIN,
+  trainingExpPerSecond,
+} from "./bladeburner-installs.ts";
+export {
   BLADEBURNER_REPLAY_MOST_ERROR,
   BLADEBURNER_REPLAY_MOST_FALLBACK,
   BLADEBURNER_ROUTE_REPLAYS,
@@ -459,21 +474,6 @@ export {
   bladeburnerReplaySeedOf,
   bladeburnerSeeded,
 } from "./bladeburner-replays.ts";
-export {
-  type BlackOpsGrowthAt,
-  type BlackOpsInstallTiming,
-  type BlackOpsRouteAt,
-  type BladeburnerInstallGain,
-  type BladeburnerRebuild,
-  blackOpsInstallTiming,
-  bladeburnerComparedFigures,
-  bladeburnerAugmentationValues,
-  bladeburnerInstallGain,
-  bladeburnerPersonAfterInstall,
-  bladeburnerRebuildSeconds,
-  NO_INSTALL_GAIN,
-  trainingExpPerSecond,
-} from "./bladeburner-installs.ts";
 export {
   type BlackOpsRouteOp,
   type BlackOpsRouteStep,

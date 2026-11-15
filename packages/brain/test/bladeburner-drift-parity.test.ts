@@ -21,10 +21,10 @@ import {
   type BladeburnerDriftCity,
   type BladeburnerLevelledAction,
   bladeburnerAttemptDrift,
-  bladeburnerMostFactorCity,
-  bladeburnerReplayAttempts,
   bladeburnerEventDrift,
+  bladeburnerMostFactorCity,
   bladeburnerPersonOf,
+  bladeburnerReplayAttempts,
   driftedChance,
   skillExpFor,
   staminaPenalty,
@@ -373,11 +373,20 @@ ns.bladeburner.startAction(${JSON.stringify(type)}, ${JSON.stringify(name)});`,
     // Each attempt's competence: the engine's chance over its city's factor then (core's formula at a tiny chance).
     const replayed = made.map((attempt) => {
       const each = action(attempt.name);
-      const city = { name: attempt.city, population: attempt.population, communities: attempt.communities, chaos: attempt.chaos };
+      const city = {
+        name: attempt.city,
+        population: attempt.population,
+        communities: attempt.communities,
+        chaos: attempt.chaos,
+      };
       const factor = driftedChance({ action: each, chance: 1e-6 }, reference, city, 50) / 1e-6;
       return { at: attempt.at, action: each, competence: attempt.chance / factor, state: begin };
     });
-    const figures = after.map(() => ({ population: [] as number[], communities: [] as number[], chaos: [] as number[] }));
+    const figures = after.map(() => ({
+      population: [] as number[],
+      communities: [] as number[],
+      chaos: [] as number[],
+    }));
     const successes: number[] = [];
     for (let r = 0; r < ROUTE_REPLAYS; r++) {
       // The replays' seeds apart from the engine's: 9500001 + 1000003·seed + 7919·replay.
@@ -405,7 +414,9 @@ ns.bladeburner.startAction(${JSON.stringify(type)}, ${JSON.stringify(name)});`,
       // The six's riots in an hour (about 1.7, a Poisson's) too few for a bar in sd at one seed: theirs over the seeds.
       if (!label.startsWith("the six's")) worst = Math.max(worst, Math.abs(z));
       if (Math.abs(z) > 2.5) {
-        far.push(`${label} z ${z.toFixed(2)} (${value.toPrecision(4)} against ${mean.toPrecision(4)} ± ${sd.toPrecision(3)})`);
+        far.push(
+          `${label} z ${z.toFixed(2)} (${value.toPrecision(4)} against ${mean.toPrecision(4)} ± ${sd.toPrecision(3)})`,
+        );
       }
     };
     // Each city's population (the drain's and the events'), and as #418's check does, the six's communities and chaos
@@ -415,8 +426,16 @@ ns.bladeburner.startAction(${JSON.stringify(type)}, ${JSON.stringify(name)});`,
     for (const [i, city] of after.entries()) {
       zOf(`${city.name}'s population`, city.population, (figures[i] as (typeof figures)[number]).population);
     }
-    zOf("the six's communities", after.reduce((sum, city) => sum + city.communities, 0), total((out) => out.communities));
-    zOf("the six's chaos", after.reduce((sum, city) => sum + city.chaos, 0), total((out) => out.chaos));
+    zOf(
+      "the six's communities",
+      after.reduce((sum, city) => sum + city.communities, 0),
+      total((out) => out.communities),
+    );
+    zOf(
+      "the six's chaos",
+      after.reduce((sum, city) => sum + city.chaos, 0),
+      total((out) => out.chaos),
+    );
     zOf("the successes", made.filter((a) => a.success).length, successes);
     rows.push(`seed ${seed}: ${made.length} attempts; past 2.5 sd: ${far.join(", ") || "none"}`);
   }

@@ -146,7 +146,9 @@ describe("the replays' draws (#423): the game's own", () => {
       // ±1 counts, a kill's, about 10⁻⁹ of a city at 1e9, left out there: within the draws' rounding here).
       const expectedPopulation = mean.populationScale * (1 - mean.migrated);
       expect(Math.abs(popMean - expectedPopulation), name).toBeLessThanOrEqual(4 * popError + 2e-9);
-      expect(Math.abs(chaosMean - (40 * mean.chaosScale + mean.chaosAdd)), name).toBeLessThanOrEqual(4 * chaosError + 1e-9);
+      expect(Math.abs(chaosMean - (40 * mean.chaosScale + mean.chaosAdd)), name).toBeLessThanOrEqual(
+        4 * chaosError + 1e-9,
+      );
     }
   });
 });

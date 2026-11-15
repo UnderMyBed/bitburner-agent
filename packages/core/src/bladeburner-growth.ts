@@ -710,7 +710,10 @@ export function blackOpsRouteGrownEstimate(
     const each = replayed.segmentSeconds;
     const cumulative: number[] = [];
     let sum = 0;
-    for (const x of each) cumulative.push((sum += x));
+    for (const x of each) {
+      sum += x;
+      cumulative.push(sum);
+    }
     for (const [i, point] of path.entries()) {
       const s = pointSegment[i] ?? -1;
       if (s >= 0) point.seconds = cumulative[s] as number;

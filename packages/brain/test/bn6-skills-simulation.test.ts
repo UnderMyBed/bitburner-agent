@@ -17,10 +17,10 @@ import {
   bladeburnerPersonOf,
   bladeburnerPlansToTarget,
   bladeburnerRankMultiplierOf,
+  bladeburnerReplaySeedOf,
   chooseBladeburnerCity,
   type MediumSnapshotData,
   skillExpFor,
-  bladeburnerReplaySeedOf,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
 import {
