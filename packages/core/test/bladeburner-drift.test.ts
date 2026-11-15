@@ -1502,7 +1502,7 @@ function walkPlan(
 }
 
 describe("the rule's order under walks of the game's draws (#418's ruling 2, check 3): its plan against rank a second's", () => {
-  test("150 to 2,500 from the six cities read: the walks order the two plans' expected times as the rule does", () => {
+  test("150 to 2,500 from the six cities read: the walks order the two plans as the rule does, or tie them", () => {
     const combat = combatOf(100);
     const who = personOf(combat);
     const input = readAt(who);
@@ -1629,7 +1629,80 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
     console.log(`the terms (#420): ${termsOf(chosen, ruled)}; ${termsOf(rival as (typeof plans)[number], raided)}`);
     // The rule's order: its plan the faster.
     expect((rival?.toTarget?.seconds as number) > (chosen.toTarget?.seconds as number)).toBe(true);
-    // The walks' the same, beyond 3 standard errors of the gap.
-    expect(gap).toBeGreaterThan(3 * error);
+    // The walks' the same beyond 3 standard errors of the gap, or a tie at the model's resolution (#421's ruling 2).
+    const verdict = checkThreeVerdict({
+      gap,
+      error,
+      chosenBias: (chosen.toTarget?.seconds as number) - ruled.mean,
+      rivalBias: (rival?.toTarget?.seconds as number) - raided.mean,
+    });
+    console.log(
+      `check 3 (#421's ruling 2): ${verdict.kind}; the walks' gap ${minutes(gap)} min (3× its error ` +
+        `${minutes(3 * error)}); the chain's error of the difference ${minutes(verdict.resolution)} min (the priced ` +
+        `less walked ${minutes(verdict.chosenBias)} and ${minutes(verdict.rivalBias)}); the rule's loss ` +
+        `${minutes(verdict.loss)} min`,
+    );
+    expect(verdict.pass, verdict.kind).toBe(true);
+  });
+});
+
+/**
+ * Check 3's verdict (#421's ruling 2: at the model's resolution). The chain's error of the plans' difference is
+ * |(priced − walked) of the rule's plan − (priced − walked) of the rival| + 3 × the walks' error of the gap (`error`):
+ * the chain's own miss of their difference, measured, and the walks' resolution. It passes where the walks order the
+ * plans as the rule does beyond 3 errors (`gap`: the rival's walked time less the rule's plan's, walk by walk), or
+ * where the rule's loss (the walks' gap the other way, max(0, −gap)) is at most that error: a tie at the model's
+ * resolution, the rule's free choice (#406). A loss past it fails.
+ */
+function checkThreeVerdict({
+  gap,
+  error,
+  chosenBias,
+  rivalBias,
+}: {
+  gap: number;
+  error: number;
+  chosenBias: number;
+  rivalBias: number;
+}): {
+  pass: boolean;
+  kind: string;
+  resolution: number;
+  loss: number;
+  chosenBias: number;
+  rivalBias: number;
+} {
+  const resolution = Math.abs(chosenBias - rivalBias) + 3 * error;
+  const loss = Math.max(0, -gap);
+  if (gap > 3 * error) return { pass: true, kind: "ordered", resolution, loss, chosenBias, rivalBias };
+  const pass = loss <= resolution;
+  return {
+    pass,
+    kind: pass ? "a tie at the model's resolution" : "the rule's loss past the model's resolution",
+    resolution,
+    loss,
+    chosenBias,
+    rivalBias,
+  };
+}
+
+describe("check 3's verdict (#421's ruling 2): by hand", () => {
+  test("ordered beyond 3 errors; a tie within the chain's error of the difference; a loss past it fails", () => {
+    // Ordered: the walks' gap past 3 errors, the rule's way.
+    expect(checkThreeVerdict({ gap: 300, error: 10, chosenBias: 600, rivalBias: 700 })).toMatchObject({
+      pass: true,
+      kind: "ordered",
+    });
+    // check 3's figures: 50.7 ± 6.0 min the other way, the biases 660.0 and 712.7 min: 70.7 min, a tie.
+    const tie = checkThreeVerdict({ gap: -50.7, error: 6, chosenBias: 660, rivalBias: 712.7 });
+    expect(tie.resolution).toBeCloseTo(70.7, 9);
+    expect(tie).toMatchObject({ pass: true, loss: 50.7 });
+    // The same loss with the biases alike: past 3 errors (18), it fails.
+    expect(checkThreeVerdict({ gap: -50.7, error: 6, chosenBias: 660, rivalBias: 660 }).pass).toBe(false);
+    // The rule's way but within its error: no loss, a tie.
+    expect(checkThreeVerdict({ gap: 10, error: 6, chosenBias: 660, rivalBias: 660 })).toMatchObject({
+      pass: true,
+      loss: 0,
+    });
   });
 });

@@ -14,6 +14,7 @@ import {
   BLADEBURNER_CONTRACTS,
   BLADEBURNER_READING_SECONDS,
   bladeburnerPersonOf,
+  bladeburnerPlansToTarget,
   bladeburnerRankMultiplierOf,
   chooseBladeburnerCity,
   type MediumSnapshotData,
@@ -61,6 +62,27 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   const plan = fresh.controller().bladeburnerView().skills;
   if (plan == null) throw new Error("no skills' plan");
   console.log(fresh.controller().bladeburnerView().line);
+  // #421's ruling 2, item 4: the rule's priced time to Typhoon's 2,500 at this first reading, each action's best plan
+  // (core's `bladeburnerPlansToTarget` on the brain's own input, in the city read), printed: the objective's figures.
+  {
+    const data = fresh.medium() as MediumSnapshotData;
+    const read = bladeburnerSnapshotOf(data).reading;
+    const person = bladeburnerPersonOf(data.player);
+    if (read.kind !== "read" || read.actions === null || person === null) throw new Error("no first reading");
+    const rule = bladeburnerRuleInputOf(read.actions, person, bladeburnerRankMultiplierOf(6) as number, data.player);
+    const plans = bladeburnerPlansToTarget({ ...rule.input, target: { rank: RANK, target: 2500 } });
+    const best = new Map<string, (typeof plans)[number]>();
+    for (const each of plans) {
+      const name = each.work === null ? "resting alone" : `${each.work.name} ${each.work.level}`;
+      if (!best.has(name)) best.set(name, each);
+    }
+    console.log(
+      `the first reading's plans to rank 2500 (#421's ruling 2), each action's best: ` +
+        [...best.entries()]
+          .map(([name, each]) => `${name} with ${each.rest.name} ${((each.toTarget?.seconds ?? 0) / 3600).toFixed(2)} h`)
+          .join("; "),
+    );
+  }
   expect(plan.buys.length).toBeGreaterThan(0);
   expect(plan.spent).toBeGreaterThan(RANK / 3 - 5);
   // Spent by the next reading.
