@@ -667,7 +667,7 @@ export function bladeburnerDriftPath(
     const half = cities.map((_, i) => (i === worked ? dt / 2 : 0));
     if (dt > 0) applyEvents(cities, half, { index: worked, ceiling: start.ceiling });
     // B4's order: the city first (the most chance factor, its chaos as it is), then Diplomacy there, to its ceiling.
-    if (moves) worked = mostFactor(cities, worked, raidAlone, start.ceiling);
+    if (moves) worked = bladeburnerMostFactorCity(cities, worked, raidAlone, start.ceiling);
     const here = cities[worked] as BladeburnerDriftCity;
     if (here.chaos > 0 && keep > 0 && keep < 1) {
       const mix = mixOf(here);
@@ -777,7 +777,12 @@ function applyAttempts(
  * so the path doesn't hang on its chunks; the current one on a tie. With `raid`, of those with communities (B4's "the
  * most with Raid there"), the current one where none has.
  */
-function mostFactor(cities: readonly BladeburnerDriftCity[], current: number, raid: boolean, ceiling: number): number {
+export function bladeburnerMostFactorCity(
+  cities: readonly BladeburnerDriftCity[],
+  current: number,
+  raid: boolean,
+  ceiling: number,
+): number {
   const worked = cities[current] as BladeburnerDriftCity;
   const kept =
     raid && !(communitiesFactor(worked) > 0)

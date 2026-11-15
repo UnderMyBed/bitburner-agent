@@ -413,6 +413,7 @@ export {
   bladeburnerDriftPath,
   bladeburnerDriftStart,
   bladeburnerEventDrift,
+  bladeburnerMostFactorCity,
   cityChanceFactor,
   driftedChance,
   HOSPITAL_COST_PER_HP,
@@ -428,6 +429,7 @@ export {
   BLADEBURNER_GROWTH_FRACTION,
   BLADEBURNER_GROWTH_LEAST_STEP,
   BLADEBURNER_GROWTH_REACH,
+  BLADEBURNER_REPLAY_DEFAULT_SEED,
   type BlackOpsGrownStep,
   type BlackOpsGrownTime,
   type BladeburnerGrowthChannels,
@@ -439,6 +441,19 @@ export {
   maxLevelOfSuccesses,
   successesOfMaxLevel,
 } from "./bladeburner-growth.ts";
+export {
+  BLADEBURNER_ROUTE_REPLAYS,
+  type BladeburnerRoutePart,
+  type BladeburnerRouteReplays,
+  type BladeburnerRouteSegment,
+  type BladeburnerRouteTimeline,
+  bladeburnerAttemptDraw,
+  bladeburnerEventDraw,
+  bladeburnerEventIntervalDraw,
+  bladeburnerReplayRoute,
+  bladeburnerReplaySeedOf,
+  bladeburnerSeeded,
+} from "./bladeburner-replays.ts";
 export {
   type BlackOpsGrowthAt,
   type BlackOpsInstallTiming,

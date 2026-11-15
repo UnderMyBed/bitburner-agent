@@ -132,6 +132,7 @@ import {
   bestWorkRate,
   bitNodeHackingMultipliers,
   blackOpsInstallTiming,
+  bladeburnerReplaySeedOf,
   bladeburnerInstallGain,
   type CountableToCome,
   type CountableWithinReach,
@@ -4585,6 +4586,8 @@ export class AugmentationRule {
     }
     const timing = blackOpsInstallTiming({
       ...route,
+      // #423: both sides' replays on one seed series from this solve's game time.
+      growth: { ...route.growth, replaySeed: bladeburnerReplaySeedOf(nowMs) },
       gain: bladeburnerInstallGain(levels, augmentations),
       installable: true,
     });

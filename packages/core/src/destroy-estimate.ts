@@ -170,6 +170,11 @@ export interface DestroyBlackOpsInputs {
    */
   ms: number;
   grown?: boolean;
+  /**
+   * #423: the grown figure's standard error over its route's replays under the game's draws, ms (`ms` their mean,
+   * first-order); absent without replays (B6's figure, no cities read, or figures before #423).
+   */
+  errorMs?: number;
   /** The Red Pill's hacking level by the formulas (`redPillLevelSeconds`), ms, at least; Infinity never; null unmeasured. */
   redPillMs: number | null;
   /** The planner's choice between them (`chooseWinRoute`). */

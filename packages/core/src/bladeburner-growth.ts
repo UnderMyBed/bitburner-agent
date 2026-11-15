@@ -118,6 +118,13 @@ import {
   driftedChance,
   hospitalCostPerFailure,
 } from "./bladeburner-drift.ts";
+import {
+  BLADEBURNER_ROUTE_REPLAYS,
+  type BladeburnerRoutePart,
+  type BladeburnerRouteReplays,
+  type BladeburnerRouteTimeline,
+  bladeburnerReplayRoute,
+} from "./bladeburner-replays.ts";
 import { type BladeburnerSkillLevels, bladeburnerSkillMultsOf } from "./bladeburner-skills.ts";
 
 /**
@@ -370,7 +377,25 @@ export interface BlackOpsGrownTime {
   moneyLostPerSecond?: number | null;
   /** The cities at the route's end (#418): the drift's mean path, the city worked, its population over the one read. */
   drift?: { cities: BladeburnerDriftCity[]; worked: string; populationRatio: number } | null;
+  /**
+   * #423: with the cities read, `seconds` (and `path`, each step's terms) is the route's re-priced mean over its replays
+   * under the game's draws (./bladeburner-replays.ts, first-order: the mean path's route, levels, installs and clock);
+   * `meanPathSeconds` the mean path's alone, `secondsError` the replays' standard error (0 without them), and the
+   * replays' count, seed series, times and fallbacks (null without). Absent in figures before #423.
+   */
+  meanPathSeconds?: number;
+  secondsError?: number;
+  replays?: {
+    count: number;
+    seed: number;
+    times: number[];
+    fallbackSteps: number;
+    replaysWithFallback: number;
+  } | null;
 }
+
+/** The replays' seed series where no refresh gives one (core's tests, the hindcasts' replays of a reading). */
+export const BLADEBURNER_REPLAY_DEFAULT_SEED = 4230001;
 
 /**
  * The Black Ops' route with the competence's growth (#408, see above): from `at`'s rank and next Black Op, the reading
@@ -402,6 +427,8 @@ export function blackOpsRouteGrownEstimate(
     fraction = BLADEBURNER_GROWTH_FRACTION,
     grow = ALL_GROWTH,
     leastStep = BLADEBURNER_GROWTH_LEAST_STEP,
+    replays = BLADEBURNER_ROUTE_REPLAYS,
+    replaySeed = BLADEBURNER_REPLAY_DEFAULT_SEED,
   }: {
     combat: CombatPerson;
     points?: number;
@@ -409,6 +436,13 @@ export function blackOpsRouteGrownEstimate(
     fraction?: number;
     grow?: Readonly<BladeburnerGrowthChannels>;
     leastStep?: number;
+    /**
+     * The route's replays under the game's draws (#423, ./bladeburner-replays.ts), with the cities read (none without):
+     * `BLADEBURNER_ROUTE_REPLAYS`; 0, the mean path alone (#406's step error, B7's eighth of the step).
+     */
+    replays?: number;
+    /** Their seed series: the brain's from the refresh's game time (`bladeburnerReplaySeedOf`). */
+    replaySeed?: number;
   },
 ): BlackOpsGrownTime {
   // #411: each contract's and operation's chance at the true population, recovered from the next one's range read.
@@ -418,6 +452,26 @@ export function blackOpsRouteGrownEstimate(
   let seconds = 0;
   let solves = 0;
   const path: { rank: number; seconds: number }[] = [{ rank, seconds: 0 }];
+  // #423: the route's timeline for its replays (with the cities read): its segments, each path point's segment (−1: a
+  // point B5's stock clipped, kept), and each Black Op's climb and attempts segments.
+  const timeline: BladeburnerRouteTimeline | null =
+    state.drift === undefined
+      ? null
+      : {
+          start: state.drift.state,
+          reference: state.drift.reference,
+          rankMultiplier: input.rankMultiplier,
+          segments: [],
+        };
+  const pointSegment: number[] = [-1];
+  const opSegments: { climb: number[]; attempts: number }[] = [];
+  const partsOf = (mix: ReturnType<typeof bladeburnerTailMix>): BladeburnerRoutePart[] =>
+    mix.work.map((part) => ({
+      action: bladeburnerLevelledAction(part.type, part.name) as BladeburnerLevelledAction,
+      level: part.level,
+      chance: part.chance,
+      perSecond: part.attemptsPerSecond,
+    }));
   // The tail at a state: its grown input and the mix there, each chance priced over `horizon` s ahead (#418), in
   // `BLADEBURNER_GROWTH_DRIFT_CHUNKS` chunks.
   const tailAt = (at: BladeburnerGrowthState, horizon = 0) => {
@@ -500,6 +554,9 @@ export function blackOpsRouteGrownEstimate(
   for (const [index, op] of left.entries()) {
     // The climb to its rank, step by step.
     const startSeconds = seconds;
+    const segmentsBefore = timeline?.segments.length ?? 0;
+    const pointsBefore = path.length;
+    const segmentsOf: { climb: number[]; attempts: number } = { climb: [], attempts: -1 };
     while (state.rank < op.rank && Number.isFinite(seconds)) {
       const by = Math.min(op.rank - state.rank, Math.max(leastStep, fraction * state.rank));
       const { mix } = tailAt(state, state.drift !== undefined && lastRate > 0 ? by / lastRate : 0);
@@ -509,15 +566,35 @@ export function blackOpsRouteGrownEstimate(
       }
       lastRate = mix.rate;
       const dt = by / mix.rate;
+      if (timeline !== null && state.drift !== undefined) {
+        segmentsOf.climb.push(
+          timeline.segments.push({
+            kind: "climb",
+            seconds,
+            dt,
+            by,
+            rate: mix.rate,
+            parts: partsOf(mix),
+            state: state.drift.state,
+          }) - 1,
+        );
+      }
       seconds += dt;
       state = rise(work(state, mix, dt), by);
       path.push({ rank: state.rank, seconds });
+      pointSegment.push(timeline === null ? -1 : timeline.segments.length - 1);
     }
     let toRankSeconds = seconds - startSeconds;
     if (index === 0 && firstToRankSeconds !== null && firstToRankSeconds < toRankSeconds) {
       seconds = startSeconds + firstToRankSeconds;
       toRankSeconds = firstToRankSeconds;
       for (const point of path) point.seconds = Math.min(point.seconds, seconds);
+      // #423: B5's stock, not a grown route: its stretch a fixed time in the replays, its points kept as clipped.
+      if (timeline !== null) {
+        timeline.segments.splice(segmentsBefore);
+        segmentsOf.climb = [timeline.segments.push({ kind: "fixed", seconds: startSeconds, span: toRankSeconds }) - 1];
+        for (let i = pointsBefore; i < pointSegment.length; i++) pointSegment[i] = -1;
+      }
     }
     if (!Number.isFinite(seconds)) break;
     // Its attempts: the n-th made with the chance all before it failed, at the state their rebuilds left (each a
@@ -539,6 +616,9 @@ export function blackOpsRouteGrownEstimate(
     const firstAttempt = attemptAt(state);
     let current = firstAttempt;
     let at = state;
+    // #423: each expected rebuild's mix, the cities it was solved at, for the replays.
+    let solvedAt = state;
+    const works: { dt: number; rate: number; parts: BladeburnerRoutePart[]; state: BladeburnerDriftState }[] = [];
     const along: BladeburnerGrowthState[] = [state];
     let reach = 1;
     let failures = 0;
@@ -561,11 +641,15 @@ export function blackOpsRouteGrownEstimate(
       reach *= 1 - chance;
       if (!(reach > 0)) break;
       failures += reach;
+      if (timeline !== null && solvedAt.drift !== undefined) {
+        works.push({ dt: rebuild, rate: current.mix.rate, parts: partsOf(current.mix), state: solvedAt.drift.state });
+      }
       at = work(at, current.mix, rebuild);
       along.push(at);
       // Solved again each of the first 8, then at each quarter more made (the state moves slowly by then).
       if (made + 1 >= solveAt) {
         current = attemptAt(at);
+        solvedAt = at;
         solveAt = made + 1 < 8 ? made + 2 : Math.ceil((made + 1) * 1.25);
       }
     }
@@ -586,17 +670,64 @@ export function blackOpsRouteGrownEstimate(
       levels: { ...state.levels },
       maxLevels: Object.fromEntries(firstAttempt.grown.readings.map((read) => [read.name, read.maxLevel])),
     });
+    // #423: its attempts' stretch, the expected failures' rebuilds back to back from its start (the state the route
+    // takes on is the round(failures)-th's, below).
+    if (timeline !== null) {
+      segmentsOf.attempts =
+        timeline.segments.push({
+          kind: "blackOp",
+          seconds,
+          span: attemptsSeconds,
+          works: works.slice(0, Math.min(works.length, Math.round(failures))),
+        }) - 1;
+    }
+    opSegments.push(segmentsOf);
     seconds += attemptsSeconds;
     if (!Number.isFinite(seconds)) break;
     // The state its expected failures' rebuilds leave (the path's, at their mean), then a success's mean from its rank.
     state = along[Math.min(along.length - 1, Math.round(failures))] as BladeburnerGrowthState;
     state = rise(state, gain);
     path.push({ rank: state.rank, seconds });
+    pointSegment.push(timeline === null ? -1 : segmentsOf.attempts);
+  }
+  // #423: the route replayed under the game's draws (./bladeburner-replays.ts) and re-priced, first-order: the figure,
+  // the path's points and each Black Op's terms their means over the replays; the mean path's kept beside.
+  const meanPathSeconds = seconds;
+  let replayed: BladeburnerRouteReplays | null = null;
+  if (timeline !== null && replays > 0 && Number.isFinite(seconds) && steps.length > 0) {
+    replayed = bladeburnerReplayRoute(timeline, { replays, seed: replaySeed });
+    const each = replayed.segmentSeconds;
+    const cumulative: number[] = [];
+    let sum = 0;
+    for (const x of each) cumulative.push((sum += x));
+    for (const [i, point] of path.entries()) {
+      const s = pointSegment[i] ?? -1;
+      if (s >= 0) point.seconds = cumulative[s] as number;
+    }
+    for (const [k, step] of steps.entries()) {
+      const own = opSegments[k];
+      if (own === undefined) continue;
+      step.toRankSeconds = own.climb.reduce((total, s) => total + (each[s] as number), 0);
+      if (own.attempts >= 0) step.attemptsSeconds = each[own.attempts] as number;
+    }
+    seconds = replayed.seconds;
   }
   const end = state.drift === undefined ? null : state.drift.state.cities[state.drift.state.worked];
   return {
     steps,
     seconds,
+    meanPathSeconds,
+    secondsError: replayed?.error ?? 0,
+    replays:
+      replayed === null
+        ? null
+        : {
+            count: replayed.replays,
+            seed: replayed.seed,
+            times: replayed.times,
+            fallbackSteps: replayed.fallbackSteps,
+            replaysWithFallback: replayed.replaysWithFallback,
+          },
     rate: rateNow,
     path,
     solves,
