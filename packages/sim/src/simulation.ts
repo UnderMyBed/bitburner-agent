@@ -263,6 +263,8 @@ export class Simulation {
       this.rpc.call("diagnostics.giveInstalledAugmentation", { augmentation }),
     /** Gives the player hacking experience, through the game's own gain. A harness edit, for test scenarios (#162). */
     gainHackingExp: (exp: number) => this.rpc.call("diagnostics.gainHackingExp", { exp }),
+    /** Applies the installed augmentations' multipliers, as a load does. A harness edit, for test scenarios (#413). */
+    applyInstalledAugmentations: () => this.rpc.call("diagnostics.applyInstalledAugmentations", {}),
     /** Sets a gang member's experience and ascension points, its levels from them. A harness edit, for tests (#330). */
     setGangMemberFigures: (name: string, figures: Record<string, number>) =>
       this.rpc.call("diagnostics.setGangMemberFigures", { name, figures }),

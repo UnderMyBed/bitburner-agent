@@ -39,6 +39,7 @@ const EXP_OFFSET = 534.6;
 /**
  * The level's path from now (#401): the experience and the level now, the level multiplier m, and κ, the experience a
  * second per (level + 50); κ 0 is a flat level. `delaySeconds`: flat that long first, then rising (none absent).
+ * `rampSeconds` (#413), in its place: the rate rising from none to κ over that long, the level rising with it.
  */
 export interface LevelRise {
   exp: number;
@@ -46,6 +47,7 @@ export interface LevelRise {
   levelMult: number;
   kappa: number;
   delaySeconds?: number;
+  rampSeconds?: number;
 }
 
 /** Whether the path rises at all: κ and m above 0 (a multiplier of 0 holds the level, `skill.ts:10-12`). */
@@ -77,15 +79,16 @@ export function levelRiseOf({
  * The level's path in the cycle after an install (#401): from no experience, at level 1 (`calculateSkill`'s least,
  * `skill.ts:14`), m times the install's `hacking`, κ times its `hacking_exp` and `hacking_speed` (`gain`, core's
  * `levellingInstallMultipliers`). `rise` is this cycle's, with the rate measured now: what the next cycle starts from,
- * on the RAM this one has, after `deadSeconds` flat (the module's comment).
+ * on the RAM this one has, after `deadSeconds` flat (the module's comment); with `ramp` (#413), the rate rising over
+ * them instead (`rampSeconds`).
  */
-export function laterCycleRise(rise: LevelRise, gain: LevellingMultipliers, deadSeconds = 0): LevelRise {
+export function laterCycleRise(rise: LevelRise, gain: LevellingMultipliers, deadSeconds = 0, ramp = false): LevelRise {
   return {
     exp: 0,
     level: 1,
     levelMult: rise.levelMult * gain.hacking,
     kappa: rise.kappa * gain.hackingExp * gain.hackingSpeed,
-    ...(deadSeconds > 0 ? { delaySeconds: deadSeconds } : {}),
+    ...(deadSeconds > 0 ? (ramp ? { rampSeconds: deadSeconds } : { delaySeconds: deadSeconds }) : {}),
   };
 }
 
@@ -174,6 +177,11 @@ const MOST_STEPS = 200_000;
  * dt = e^u du / (κ·(L + 50)), integrated by the trapezoid rule across each step (e^u grows by e^(1/(32m)) a step: 3% at
  * m 1). The level is the level now plus the formula's rise, 32m·Δu, so the path starts at the snapshot's floored level.
  * Exported for #389's later cycles, which tabulate a path once and walk it many times (core's install-timing.ts).
+ * A ramp (`rampSeconds` R, #413's review): #405's dead time is the time until the *rate* reaches κ, the level rising
+ * meanwhile at the ramp's lower rate, taken as linear from none to κ over R: assumed, not the measured shape (BN4.3's
+ * c13 ran about 720 per level + 50, then 270, then rising), the simplest that keeps the level rising in it. The experience is then the full rate's at
+ * the effective time τ = t²/(2R) for t ≤ R, t − R/2 after (de/dt = (t/R)·κ·(L + 50), so de/dτ = κ·(L + 50)): each step's
+ * time maps back as t = √(2Rτ), or τ + R/2 past R/2. In the ramp, as after it, never a flat level.
  */
 export function* steps(rise: LevelRise): Generator<{ toSeconds: number; toLevel: number }> {
   const m = rise.levelMult;
@@ -181,6 +189,9 @@ export function* steps(rise: LevelRise): Generator<{ toSeconds: number; toLevel:
   // The dead time first: one flat step.
   const delay = Math.max(0, rise.delaySeconds ?? 0);
   if (delay > 0) yield { toSeconds: delay, toLevel: rise.level };
+  const ramp = Math.max(0, rise.rampSeconds ?? 0);
+  const real = (effective: number) =>
+    ramp > 0 ? (effective <= ramp / 2 ? Math.sqrt(2 * ramp * effective) : effective + ramp / 2) : effective;
   const du = 1 / (32 * m);
   let u = Math.log(rise.exp + EXP_OFFSET);
   let level = rise.level;
@@ -194,6 +205,6 @@ export function* steps(rise: LevelRise): Generator<{ toSeconds: number; toLevel:
     u += du;
     level = nextLevel;
     weight = nextWeight;
-    yield { toSeconds: seconds, toLevel: level };
+    yield { toSeconds: real(seconds), toLevel: level };
   }
 }
