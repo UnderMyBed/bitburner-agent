@@ -2203,3 +2203,333 @@ describe("#423 ruling 4, item 3: the walk against the simulator", () => {
     expect(worst).toBeGreaterThan(0);
   }, 600_000);
 });
+
+// ---- #423 ruling 5: a chaos-only run of the route (each walk its own cities' chaos; the population the mean path's) ----
+
+/** P(some communities) at a city of the mean path (`communitiesFactor`'s, its distribution where carried). */
+function someCommunities(city: BladeburnerDriftCity): number {
+  const mix = city.communitiesMix;
+  if (mix === undefined) return city.communities > 0 ? 1 : 0;
+  return mix.low > 0 ? 1 : 1 - (mix.probs[0] ?? 0);
+}
+
+/**
+ * A route walked `walks` times, `kind` "full" (the walks above: every city figure drawn, each walk's own drain) or
+ * "chaos" (each walk carries only its six's chaos; the population and the communities the route's mean path's at each
+ * step, its drain the mean path's). The chaos's moves, the game's (`vendor/bitburner-src/src/Bladeburner/`):
+ * - riots, 20% of the events, (chaos + 1) × (1 + U(5..20)/100) in the event's city (`Bladeburner.ts:681-683`), an
+ *   event each U(240..600) s (`:1403-1409`) in a city drawn of the six (`randomEvent`, `:601-611`);
+ * - the decay, −0.0001 a second, at least 0 (`:1395-1401`);
+ * - the attempts' own: Sting +0.1 (`:830`), Raid ×(1 + U(1..5)/100) (`:846`), Stealth Retirement ×(1 + U(−3..−1)/100)
+ *   (`:855`), Assassination ×(1 + U(−5..5)/100) (`:861`), Bounty Hunter +0.02 and Retirement +0.04 on a success
+ *   (`:882`, `:886`), each `City.ts:31-33`/`:89-91`, at least 0;
+ * - Diplomacy as B4 spends it, the city worked back to 50 after an attempt over it (its cut `:737-745`, applied at
+ *   `:1187-1189`; its time the route's, held).
+ * B4 picks per walk by the true figures (the population^0.7 over the chaos's factor; Raid's where there are
+ * communities). Each step re-priced as `repriceRoute`; and at `probes`, each action's chance at B4's pick (`probeAt`'s
+ * step's competence), a walk's mean over each probe set.
+ */
+function routeWalk(
+  route: PricedRoute,
+  kind: "full" | "chaos",
+  walks: number,
+  seed: number,
+  probeSets: { step: Extract<PricedStep, { kind: "climb" }>; times: number[] }[] = [],
+) {
+  type Climb = Extract<PricedStep, { kind: "climb" }>;
+  const climbs = route.steps.filter((s) => s.kind === "climb") as Climb[];
+  const first = climbs[0] as Climb;
+  const ref = cityChanceFactor(first.reference);
+  const readCities = first.state.cities;
+  const competence = (step: Climb, name: string, chance: number) => {
+    const factor = driftedChance(
+      { action: action(name), chance: 1e-6 },
+      first.reference,
+      step.state.cities[step.state.worked] as BladeburnerDriftCity,
+      step.state.ceiling,
+    );
+    return factor > 0 ? (chance * 1e-6) / factor : chance;
+  };
+  const keys: { part: PricedPart }[] = [];
+  type Item = { t: number; key: number; c: number; mean: Climb } | { t: number; probe: number; k: number };
+  const items: Item[] = [];
+  let climbAt = first;
+  for (const step of route.steps) {
+    if (step.kind === "climb") {
+      climbAt = step;
+      for (const part of step.parts) {
+        const key = keys.push({ part }) - 1;
+        const n = Math.round(part.perSecond * step.dt);
+        const c = competence(step, part.name, part.chance);
+        for (let j = 0; j < n; j++) items.push({ t: step.seconds + ((j + 0.5) * step.dt) / n, key, c, mean: step });
+      }
+    } else {
+      let t = step.seconds;
+      for (const work of step.works) {
+        for (const part of work.parts) {
+          const key = keys.push({ part }) - 1;
+          const n = Math.round(part.perSecond * work.dt);
+          const c = competence(climbAt, part.name, part.chance);
+          for (let j = 0; j < n; j++) items.push({ t: t + ((j + 0.5) * work.dt) / n, key, c, mean: climbAt });
+        }
+        t += work.dt;
+      }
+    }
+  }
+  for (const [k, set] of probeSets.entries()) for (const t of set.times) items.push({ t, probe: k, k });
+  // At equal times the probes after the attempts.
+  items.sort((a, b) => a.t - b.t || ("probe" in a ? 1 : 0) - ("probe" in b ? 1 : 0));
+  const names = route.readings.map((r) => r.name);
+  const probeC = probeSets.map((set) =>
+    names.map((name) => {
+      const part = set.step.parts.find((p) => p.name === name);
+      const read = (route.readings.find((r) => r.name === name) as { chance: [number, number] }).chance[0];
+      return part === undefined || part.chance >= 1 ? read : competence(set.step, name, part.chance);
+    }),
+  );
+  const probed = probeSets.map(() => names.map(() => [] as number[]));
+  const gainOf = keys.map(({ part }) => {
+    const each = action(part.name);
+    return actionRankGain(each, part.level, route.rankMultiplier) + actionRankLoss(each, part.level);
+  });
+  const times: number[] = [];
+  const sums = new Float64Array(keys.length);
+  const counts = new Float64Array(keys.length);
+  const started = performance.now();
+  for (let walk = 0; walk < walks; walk++) {
+    sums.fill(0);
+    counts.fill(0);
+    const events = seeded(seed + 7919 * walk);
+    const random = seeded(seed + 7919 * walk + 104729);
+    const pops = readCities.map((city) => city.population);
+    const comms = readCities.map((city) => city.communities);
+    const chaos = readCities.map((city) => city.chaos);
+    let decayed = 0;
+    let next = intIn(events, 240, 600);
+    const probeSums = probeSets.map(() => names.map(() => 0));
+    let meanStep: Climb = first;
+    // B4's pick at the walk's figures (the chaos-only run: the population and communities the mean path's).
+    const pickNow = (raid: boolean) => {
+      let city = -1;
+      let best = -1;
+      for (let i = 0; i < 6; i++) {
+        const meanCity = meanStep.state.cities[i] as BladeburnerDriftCity;
+        const some = kind === "full" ? ((comms[i] as number) > 0 ? 1 : 0) : someCommunities(meanCity);
+        if (raid && !(some > 0)) continue;
+        const pop = kind === "full" ? (pops[i] as number) : meanCity.population;
+        const f = factorOf(pop, chaos[i] as number) * (raid ? some : 1);
+        if (f > best) {
+          best = f;
+          city = i;
+        }
+      }
+      return { city, best };
+    };
+    for (const item of items) {
+      while (next <= item.t) {
+        for (const i of chaos.keys()) chaos[i] = Math.max(0, (chaos[i] as number) - 0.0001 * (next - decayed));
+        decayed = next;
+        if (kind === "full") eventsOn(pops, comms, chaos, events);
+        else {
+          // Only the riots move the chaos (the other kinds the population, the mean path's here).
+          const kindOf = events();
+          const s = Math.floor(events() * 6);
+          if (kindOf > 0.5 && kindOf <= 0.7) chaos[s] = ((chaos[s] as number) + 1) * (1 + intIn(events, 5, 20) / 100);
+        }
+        next += intIn(events, 240, 600);
+      }
+      for (const i of chaos.keys()) chaos[i] = Math.max(0, (chaos[i] as number) - 0.0001 * (item.t - decayed));
+      decayed = item.t;
+      if ("probe" in item) {
+        const sum = probeSums[item.probe] as number[];
+        for (const [j, name] of names.entries()) {
+          const { city, best } = pickNow(name === "Raid");
+          const c = (probeC[item.probe] as number[])[j] as number;
+          sum[j] = (sum[j] as number) + (city < 0 ? 0 : Math.min(1, (c * best) / ref)) / (probeSets[item.probe] as { times: number[] }).times.length;
+        }
+        continue;
+      }
+      meanStep = item.mean;
+      const name = (keys[item.key] as { part: PricedPart }).part.name;
+      const { city, best } = pickNow(name === "Raid");
+      const p = city < 0 ? 0 : Math.min(1, (item.c * best) / ref);
+      sums[item.key] = (sums[item.key] as number) + p;
+      counts[item.key] = (counts[item.key] as number) + 1;
+      if (city < 0) continue;
+      const success = random() < p;
+      if (kind === "full") attemptOn(name, success, city, pops, comms, chaos, random);
+      else {
+        const x = chaos[city] as number;
+        switch (name) {
+          case "Raid":
+            chaos[city] = x * (1 + intIn(random, 1, 5) / 100);
+            break;
+          case "Sting Operation":
+            chaos[city] = x + 0.1;
+            break;
+          case "Stealth Retirement Operation":
+            chaos[city] = x * (1 + intIn(random, -3, -1) / 100);
+            break;
+          case "Assassination":
+            chaos[city] = Math.max(0, x * (1 + intIn(random, -5, 5) / 100));
+            break;
+          case "Bounty Hunter":
+            if (success) chaos[city] = x + 0.02;
+            break;
+          case "Retirement":
+            if (success) chaos[city] = x + 0.04;
+            break;
+        }
+        if ((chaos[city] as number) > 50) chaos[city] = 50;
+      }
+    }
+    for (const [k, sum] of probeSums.entries()) for (const [j, x] of sum.entries()) (probed[k] as number[][])[j]?.push(x);
+    let total = 0;
+    let k = 0;
+    const drawnOf = (key: number) =>
+      (counts[key] as number) > 0 ? (sums[key] as number) / (counts[key] as number) : (keys[key] as { part: PricedPart }).part.chance;
+    const delta = (key: number) =>
+      (keys[key] as { part: PricedPart }).part.perSecond * (drawnOf(key) - (keys[key] as { part: PricedPart }).part.chance) * (gainOf[key] as number);
+    for (const step of route.steps) {
+      if (step.kind === "climb") {
+        let rate = step.rate;
+        for (const _ of step.parts) rate += delta(k++);
+        total += rate > 0 ? step.by / rate : Number.POSITIVE_INFINITY;
+      } else {
+        let span = step.span;
+        for (const work of step.works) {
+          let rate = work.rate;
+          for (const _ of work.parts) rate += delta(k++);
+          span += rate > 0 ? work.dt * (work.rate / rate - 1) : Number.POSITIVE_INFINITY;
+        }
+        total += span;
+      }
+    }
+    times.push(total);
+  }
+  const ms = performance.now() - started;
+  const finite = times.filter((x) => Number.isFinite(x));
+  return {
+    ms,
+    never: times.length - finite.length,
+    time: finite.length > 1 ? meanOf(finite) : { mean: Number.POSITIVE_INFINITY, error: 0 },
+    probed: probed.map((rows) => rows.map((xs) => meanOf(xs))),
+    names,
+  };
+}
+
+describe("#423 ruling 5: a chaos-only run of the route", () => {
+  test("its error against the full walks at 9.9, 40.2 and 97.0 h; its playability; its cost", async () => {
+    const { readFileSync } = await import("node:fs");
+    const dir = "C:/Users/Matt/AppData/Local/Temp/claude/f9d10e1727648ecd/8fa44f8b-3eb6-48ce-9496-c91c002b8eb4/scratchpad/m4/423/";
+    const load = (file: string) =>
+      JSON.parse(readFileSync(dir + file, "utf8")) as { timing?: { rebuildSeconds: number }; after: PricedRoute };
+    // (1) bn6-skills' route at its three states: the full walks (seeds 5100001…) against the chaos-only (5200001…).
+    const skills = load("route-bn6-skills.json").after;
+    type Climb = Extract<PricedStep, { kind: "climb" }>;
+    const climbs = skills.steps.filter((s) => s.kind === "climb") as Climb[];
+    const pickAt = (hours: number) =>
+      climbs.reduce((best, each) =>
+        Math.abs(each.seconds / 3600 - hours) < Math.abs(best.seconds / 3600 - hours) ? each : best,
+      );
+    const probeSets = [9.9, 40.2, 97.0].map((hours) => {
+      const step = pickAt(hours);
+      return { step, times: Array.from({ length: 16 }, (_, j) => step.seconds + ((j + 0.5) * step.dt) / 16) };
+    });
+    const full = routeWalk(skills, "full", 500, 5100001, probeSets);
+    const only = routeWalk(skills, "chaos", 500, 5200001, probeSets);
+    for (const [k, set] of probeSets.entries()) {
+      const rows = full.names.map((name, j) => {
+        const a = (full.probed[k] as { mean: number; error: number }[])[j] as { mean: number; error: number };
+        const b = (only.probed[k] as { mean: number; error: number }[])[j] as { mean: number; error: number };
+        const bar = 3 * Math.sqrt(a.error ** 2 + b.error ** 2);
+        return (
+          `${name}: full ${a.mean.toFixed(4)} ± ${a.error.toFixed(4)}, chaos-only ${b.mean.toFixed(4)} ± ${b.error.toFixed(4)}: ` +
+          `|Δ| ${Math.abs(a.mean - b.mean).toFixed(4)} ${Math.abs(a.mean - b.mean) <= bar ? "≤" : ">"} ${bar.toFixed(4)}`
+        );
+      });
+      console.log(`R423 chaos-only at ${(set.step.seconds / 3600).toFixed(1)} h (500 walks each):\n  ${rows.join("\n  ")}`);
+    }
+    // (2) The playability: each route's chaos-only re-pricing (seeds 9200001…), against the full walks' (9100001…).
+    for (const [label, file, fullFigure] of [
+      ["BN6, combat 100, the shop", "route-bn6-c100.json", "68.6 ± 0.5"],
+      ["BN7, combat 100, the shop", "route-bn7-c100.json", "116.8 ± 2.9"],
+      ["bn6-skills' route", "route-bn6-skills.json", "91.7 ± 1.2"],
+    ] as const) {
+      const saved = load(file);
+      const rebuild = saved.timing?.rebuildSeconds ?? 0;
+      const rows: string[] = [];
+      for (const walks of [200, 500]) {
+        const r = routeWalk(saved.after, "chaos", walks, 9200001);
+        rows.push(
+          `${walks} walks: ${((rebuild + r.time.mean) / 3600).toFixed(1)} ± ${(r.time.error / 3600).toFixed(1)} h` +
+            `${r.never > 0 ? ` (${r.never} never)` : ""}, ${r.ms.toFixed(0)} ms`,
+        );
+      }
+      const fullCost = routeWalk(saved.after, "full", 200, 9300001);
+      console.log(
+        `R423 chaos-only playability, ${label}: the mean path ${((rebuild + saved.after.seconds) / 3600).toFixed(1)} h, ` +
+          `the full walks ${fullFigure} h; chaos-only ${rows.join("; ")} (the full walk at 200: ${fullCost.ms.toFixed(0)} ms)`,
+      );
+    }
+  }, 600_000);
+});
+
+// ---- #423 ruling 5, item 3: the cadence (today's grown estimate solved fresh at every reading) ----
+
+describe("#423 ruling 5, item 3: how far the grown estimate moves between readings", () => {
+  test("bn6-skills and bn7-actions: its movement by the lag, against a costly run's sampling error", async () => {
+    const { readFileSync } = await import("node:fs");
+    const dir = "C:/Users/Matt/AppData/Local/Temp/claude/f9d10e1727648ecd/8fa44f8b-3eb6-48ce-9496-c91c002b8eb4/scratchpad/m4/423/";
+    // The costly runs' own sampling errors at 500 walks (ruling 4's and 5's runs), relative to their figure.
+    const errors = [
+      { label: "full walks, bn6-skills' route (1.2 / 91.7 h)", share: 1.2 / 91.7 },
+      { label: "full walks, BN6's (0.5 / 68.6 h)", share: 0.5 / 68.6 },
+      { label: "full walks, BN7's (2.9 / 116.8 h)", share: 2.9 / 116.8 },
+      { label: "chaos-only, bn6-skills' route (0.1 / 77.1 h)", share: 0.1 / 77.1 },
+    ];
+    for (const file of ["cadence-bn6.json", "cadence-bn7.json"]) {
+      const rows = (
+        JSON.parse(readFileSync(dir + file, "utf8")) as { nowMs: number; seconds: number | null; ms: number }[]
+      ).filter((r) => r.seconds !== null && Number.isFinite(r.seconds));
+      rows.sort((a, b) => a.nowMs - b.nowMs);
+      const gaps = rows.slice(1).map((r, i) => (r.nowMs - (rows[i] as { nowMs: number }).nowMs) / 1000);
+      const gap = gaps.reduce((a, b) => a + b, 0) / Math.max(1, gaps.length);
+      // By lag (in readings): the largest and the root-mean-square relative move, raw and aged by the time between.
+      const lags = [1, 2, 3, 6, 12, 30, 60, 120, 180];
+      const moves = lags
+        .filter((lag) => lag < rows.length)
+        .map((lag) => {
+          const raw: number[] = [];
+          const aged: number[] = [];
+          for (let i = 0; i + lag < rows.length; i++) {
+            const a = rows[i] as { nowMs: number; seconds: number };
+            const b = rows[i + lag] as { nowMs: number; seconds: number };
+            raw.push(Math.abs(b.seconds - a.seconds) / b.seconds);
+            aged.push(Math.abs(b.seconds - (a.seconds - (b.nowMs - a.nowMs) / 1000)) / b.seconds);
+          }
+          const rms = (xs: number[]) => Math.sqrt(xs.reduce((s, x) => s + x * x, 0) / xs.length);
+          return { lag, seconds: lag * gap, rawMax: Math.max(...raw), rawRms: rms(raw), agedMax: Math.max(...aged), agedRms: rms(aged) };
+        });
+      const longest = (share: number, key: "agedMax" | "agedRms") =>
+        moves.filter((m) => m[key] <= share).reduce((best, m) => Math.max(best, m.seconds), 0);
+      const figures = rows.map((r) => r.seconds / 3600);
+      console.log(
+        `R423 cadence, ${file}: ${rows.length} readings ${gap.toFixed(1)} s apart on average, the figure ` +
+          `${Math.min(...figures).toFixed(1)}–${Math.max(...figures).toFixed(1)} h, a fresh solve ` +
+          `${(rows.reduce((s, r) => s + r.ms, 0) / rows.length).toFixed(0)} ms on average\n  ` +
+          moves
+            .map(
+              (m) =>
+                `lag ${m.lag} (${(m.seconds / 60).toFixed(1)} min): raw max ${(100 * m.rawMax).toFixed(2)}%, rms ` +
+                `${(100 * m.rawRms).toFixed(2)}%; aged max ${(100 * m.agedMax).toFixed(2)}%, rms ${(100 * m.agedRms).toFixed(2)}%`,
+            )
+            .join("\n  ") +
+          `\n  the longest lag measured within each error (aged; its max, its rms): ` +
+          errors
+            .map((e) => `${e.label} ±${(100 * e.share).toFixed(2)}%: ${(longest(e.share, "agedMax") / 60).toFixed(1)} / ${(longest(e.share, "agedRms") / 60).toFixed(1)} min`)
+            .join("; "),
+      );
+    }
+  }, 120_000);
+});
