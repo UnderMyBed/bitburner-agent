@@ -329,28 +329,25 @@ export interface BladeburnerReplayAttempt {
   state: BladeburnerDriftState;
 }
 
+/** One replay, stepped (#426's research): the time passed to `t`, then each attempt as it comes; its own six. */
+export interface BladeburnerReplayStepper {
+  /** The events, each at its own time, and the decay to `t` (`:1395-1401`). */
+  pass(t: number): void;
+  /** An attempt at its time: its chance drawn and its effects, or not made (Raid with no community). */
+  attempt(attempt: BladeburnerReplayAttempt): { chance: number; factor: number; skipped: boolean; success: boolean };
+  readonly cities: BladeburnerDriftCity[];
+  readonly worked: number;
+}
+
 /**
- * One replay of `attempts` (in time order) from `start`'s cities to `end` (the last attempt's time absent): the events
- * from seed `seed`, the attempts' draws from `seed` + 104729; B4's pick by the true figures (core's
- * `bladeburnerMostFactorCity`), Diplomacy taking it to its ceiling (its time the route's), the chance by core's
- * `driftedChance` there, the attempt's effects. Each attempt's chance drawn, the successes and the cities at the end.
- * `meanChaos` (a probe's): B4 and the chance read each city's chaos as the mean path carries it.
+ * A replay to step through (#426's research; `bladeburnerReplayAttempts` is it over a list): the events from seed
+ * `seed`, the attempts' draws from `seed` + 104729, from `start`'s cities.
  */
-export function bladeburnerReplayAttempts(
+export function bladeburnerReplayStepper(
   start: BladeburnerDriftState,
   reference: BladeburnerDriftCity,
-  attempts: readonly BladeburnerReplayAttempt[],
-  { seed, end, meanChaos = false }: { seed: number; end?: number; meanChaos?: boolean },
-): {
-  chances: Float64Array;
-  /** Each attempt's city factor over the reference's (its chance at a competence of 1, uncapped): #423's checks. */
-  factors: Float64Array;
-  /** Each attempt not made: Raid with no community in the city picked (`data/Operations.ts:147-150`), 1. */
-  skipped: Uint8Array;
-  successes: number;
-  cities: BladeburnerDriftCity[];
-  worked: number;
-} {
+  { seed, meanChaos = false }: { seed: number; meanChaos?: boolean },
+): BladeburnerReplayStepper {
   const events = bladeburnerSeeded(seed);
   const random = bladeburnerSeeded(seed + 104729);
   const cities: BladeburnerDriftCity[] = start.cities.map((city) => ({
@@ -373,35 +370,76 @@ export function bladeburnerReplayAttempts(
     for (const city of cities) city.chaos = Math.max(0, city.chaos - 0.0001 * (t - decayed));
     decayed = t;
   };
+  const attempt = (each: BladeburnerReplayAttempt) => {
+    pass(each.at);
+    const { state } = each;
+    const seen = meanChaos
+      ? cities.map((city, i) => ({ ...city, chaos: (state.cities[i] as BladeburnerDriftCity).chaos }))
+      : cities;
+    // B4's pick by the true figures, then Diplomacy taking it to its ceiling.
+    worked = bladeburnerMostFactorCity(seen, worked, each.action.name === "Raid", state.ceiling);
+    const city = cities[worked] as BladeburnerDriftCity;
+    // Raid unavailable with no community there (`data/Operations.ts:147-150`): no attempt, none of its effects.
+    if (each.action.name === "Raid" && !bladeburnerRaidHasCommunity(city.communities)) {
+      return { chance: 0, factor: 0, skipped: true, success: false };
+    }
+    city.chaos = Math.min(city.chaos, state.ceiling);
+    const at = seen === cities ? city : (seen[worked] as BladeburnerDriftCity);
+    const chance = driftedChance({ action: each.action, chance: each.competence }, reference, at, state.ceiling);
+    const factor = driftedChance({ action: each.action, chance: 1e-6 }, reference, at, state.ceiling) / 1e-6;
+    const success = random() < chance;
+    bladeburnerAttemptDraw(cities, worked, each.action, success, random);
+    return { chance, factor, skipped: false, success };
+  };
+  return {
+    pass,
+    attempt,
+    cities,
+    get worked() {
+      return worked;
+    },
+  };
+}
+
+/**
+ * One replay of `attempts` (in time order) from `start`'s cities to `end` (the last attempt's time absent): the events
+ * from seed `seed`, the attempts' draws from `seed` + 104729; B4's pick by the true figures (core's
+ * `bladeburnerMostFactorCity`), Diplomacy taking it to its ceiling (its time the route's), the chance by core's
+ * `driftedChance` there, the attempt's effects. Each attempt's chance drawn, the successes and the cities at the end.
+ * `meanChaos` (a probe's): B4 and the chance read each city's chaos as the mean path carries it.
+ */
+export function bladeburnerReplayAttempts(
+  start: BladeburnerDriftState,
+  reference: BladeburnerDriftCity,
+  attempts: readonly BladeburnerReplayAttempt[],
+  { seed, end, meanChaos = false }: { seed: number; end?: number; meanChaos?: boolean },
+): {
+  chances: Float64Array;
+  /** Each attempt's city factor over the reference's (its chance at a competence of 1, uncapped): #423's checks. */
+  factors: Float64Array;
+  /** Each attempt not made: Raid with no community in the city picked (`data/Operations.ts:147-150`), 1. */
+  skipped: Uint8Array;
+  successes: number;
+  cities: BladeburnerDriftCity[];
+  worked: number;
+} {
+  const replay = bladeburnerReplayStepper(start, reference, { seed, meanChaos });
   const chances = new Float64Array(attempts.length);
   const factors = new Float64Array(attempts.length);
   const skipped = new Uint8Array(attempts.length);
   let successes = 0;
   for (const [k, attempt] of attempts.entries()) {
-    pass(attempt.at);
-    const { state } = attempt;
-    const seen = meanChaos
-      ? cities.map((city, i) => ({ ...city, chaos: (state.cities[i] as BladeburnerDriftCity).chaos }))
-      : cities;
-    // B4's pick by the true figures, then Diplomacy taking it to its ceiling.
-    worked = bladeburnerMostFactorCity(seen, worked, attempt.action.name === "Raid", state.ceiling);
-    const city = cities[worked] as BladeburnerDriftCity;
-    // Raid unavailable with no community there (`data/Operations.ts:147-150`): no attempt, none of its effects.
-    if (attempt.action.name === "Raid" && !bladeburnerRaidHasCommunity(city.communities)) {
+    const drawn = replay.attempt(attempt);
+    if (drawn.skipped) {
       skipped[k] = 1;
       continue;
     }
-    city.chaos = Math.min(city.chaos, state.ceiling);
-    const at = seen === cities ? city : (seen[worked] as BladeburnerDriftCity);
-    const p = driftedChance({ action: attempt.action, chance: attempt.competence }, reference, at, state.ceiling);
-    chances[k] = p;
-    factors[k] = driftedChance({ action: attempt.action, chance: 1e-6 }, reference, at, state.ceiling) / 1e-6;
-    const success = random() < p;
-    if (success) successes++;
-    bladeburnerAttemptDraw(cities, worked, attempt.action, success, random);
+    chances[k] = drawn.chance;
+    factors[k] = drawn.factor;
+    if (drawn.success) successes++;
   }
-  if (end !== undefined) pass(end);
-  return { chances, factors, skipped, successes, cities, worked };
+  if (end !== undefined) replay.pass(end);
+  return { chances, factors, skipped, successes, cities: replay.cities, worked: replay.worked };
 }
 
 /**

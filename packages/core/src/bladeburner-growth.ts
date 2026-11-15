@@ -486,6 +486,9 @@ export function blackOpsRouteGrownEstimate(
         };
   const pointSegment: number[] = [-1];
   const opSegments: { climb: number[]; attempts: number }[] = [];
+  // #426's research: the mean path's state and horizon at each climb segment, each rebuild's state (no behaviour).
+  const climbStates = new Map<number, { at: BladeburnerGrowthState; horizon: number }>();
+  const workStates = new Map<number, BladeburnerGrowthState[]>();
   const partsOf = (mix: ReturnType<typeof bladeburnerTailMix>): BladeburnerRoutePart[] =>
     mix.work.map((part) => ({
       action: bladeburnerLevelledAction(part.type, part.name) as BladeburnerLevelledAction,
@@ -580,7 +583,8 @@ export function blackOpsRouteGrownEstimate(
     const segmentsOf: { climb: number[]; attempts: number } = { climb: [], attempts: -1 };
     while (state.rank < op.rank && Number.isFinite(seconds)) {
       const by = Math.min(op.rank - state.rank, Math.max(leastStep, fraction * state.rank));
-      const { mix } = tailAt(state, state.drift !== undefined && lastRate > 0 ? by / lastRate : 0);
+      const horizon = state.drift !== undefined && lastRate > 0 ? by / lastRate : 0;
+      const { mix } = tailAt(state, horizon);
       if (!(mix.rate > 0)) {
         seconds = Number.POSITIVE_INFINITY;
         break;
@@ -599,6 +603,7 @@ export function blackOpsRouteGrownEstimate(
             state: state.drift.state,
           }) - 1,
         );
+        climbStates.set(timeline.segments.length - 1, { at: state, horizon });
       }
       seconds += dt;
       state = rise(work(state, mix, dt), by);
@@ -640,6 +645,7 @@ export function blackOpsRouteGrownEstimate(
     // #423: each expected rebuild's mix, the cities it was solved at, for the replays.
     let solvedAt = state;
     const works: { dt: number; rate: number; parts: BladeburnerRoutePart[]; state: BladeburnerDriftState }[] = [];
+    const worksAt: BladeburnerGrowthState[] = [];
     const along: BladeburnerGrowthState[] = [state];
     let reach = 1;
     let failures = 0;
@@ -664,6 +670,7 @@ export function blackOpsRouteGrownEstimate(
       failures += reach;
       if (timeline !== null && solvedAt.drift !== undefined) {
         works.push({ dt: rebuild, rate: current.mix.rate, parts: partsOf(current.mix), state: solvedAt.drift.state });
+        worksAt.push(solvedAt);
       }
       at = work(at, current.mix, rebuild);
       along.push(at);
@@ -701,6 +708,7 @@ export function blackOpsRouteGrownEstimate(
           span: attemptsSeconds,
           works: works.slice(0, Math.min(works.length, Math.round(failures))),
         }) - 1;
+      workStates.set(segmentsOf.attempts, worksAt.slice(0, Math.min(worksAt.length, Math.round(failures))));
     }
     opSegments.push(segmentsOf);
     seconds += attemptsSeconds;
@@ -784,7 +792,34 @@ export function blackOpsRouteGrownEstimate(
   };
   // The timeline its replays ran, for #423's checks (kept beside the result, out of what it serializes).
   if (timeline !== null) ROUTE_TIMELINES.set(result, timeline);
+  if (timeline !== null) {
+    ROUTE_RESEARCH.set(result, {
+      solve: (at, horizon) => tailAt(at, horizon).mix,
+      partsOf,
+      climbs: climbStates,
+      works: workStates,
+    });
+  }
   return result;
+}
+
+/**
+ * #426's research (no behaviour): a grown route's own step solver (its `tailAt`: core's `bladeburnerTailMix` at the
+ * grown input there, each chance priced over `horizon` s ahead), and the mean path's state at each climb segment and
+ * each Black Op segment's rebuilds, by the timeline's segment index.
+ */
+export interface BlackOpsRouteResearch {
+  solve(at: BladeburnerGrowthState, horizon: number): ReturnType<typeof bladeburnerTailMix>;
+  partsOf(mix: ReturnType<typeof bladeburnerTailMix>): BladeburnerRoutePart[];
+  climbs: ReadonlyMap<number, { at: BladeburnerGrowthState; horizon: number }>;
+  works: ReadonlyMap<number, readonly BladeburnerGrowthState[]>;
+}
+
+const ROUTE_RESEARCH = new WeakMap<BlackOpsGrownTime, BlackOpsRouteResearch>();
+
+/** A grown result's research record (`BlackOpsRouteResearch`), with the cities read; else null. */
+export function blackOpsRouteResearchOf(result: BlackOpsGrownTime): BlackOpsRouteResearch | null {
+  return ROUTE_RESEARCH.get(result) ?? null;
 }
 
 /** Each grown result's route timeline (#423's checks: the engine against the replays at the states they reach). */
