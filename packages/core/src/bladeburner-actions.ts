@@ -802,8 +802,18 @@ export interface BladeburnerActionPlan {
   rankPerSecond: number;
   /** The stamina regained a second, whatever the action. */
   regain: number;
-  /** Under a current-rank target (#386): the target, and the expected game seconds to it with this plan. */
-  toTarget?: { target: number; seconds: number };
+  /**
+   * Under a current-rank target (#386): the target, and the expected game seconds to it with this plan; `next`, the
+   * plan its chain follows its count with (#392's next-best, `fastestToTarget`), absent where the tail follows it.
+   */
+  toTarget?: { target: number; seconds: number; next?: BladeburnerChainNext };
+}
+
+/** A chain's next-best (#421's term 2, check 3's walks): its action and level (null: resting alone) and its rest. */
+export interface BladeburnerChainNext {
+  name: string | null;
+  level: number | null;
+  rest: BladeburnerRestName;
 }
 
 /**
@@ -1101,6 +1111,42 @@ export function bladeburnerTailMix(input: BladeburnerActionInput): { rate: numbe
 /** `chooseBladeburnerAction`'s input. */
 export type BladeburnerActionInput = Parameters<typeof planCandidates>[0];
 
+/**
+ * The attempts a plan's chain makes in the drift's horizon (#421's term 3): `count` in its count's `countSeconds` (the
+ * chain's step, `bladeburnerAttemptsInCount` at its cycle), then `tail` over the rest of the horizon (its share of the
+ * tail's mix). Its count outlasting the horizon: the horizon's attempts at its cycle, `countSeconds` the horizon.
+ */
+export interface BladeburnerChainAttempts {
+  count: number;
+  countSeconds: number;
+  tail: number;
+}
+
+/** A way to work an action, as read (`planCandidates`): its level's chance, time, rank and stamina, its duty a rest. */
+interface WayRead {
+  level: number;
+  chanceRead: number;
+  seconds: number;
+  gain: number;
+  loss: number;
+  cost: number;
+  dutyOf: (worked: number, rest: BladeburnerRest) => number;
+}
+
+/** Two paths' curves end to end (#421's term 3: the count's, then the tail's), the second's figures from the first's end. */
+function joinedCurve(
+  first: BladeburnerDriftResult["curve"],
+  second: BladeburnerDriftResult["curve"],
+): BladeburnerDriftResult["curve"] {
+  const last = (xs: number[]) => xs[xs.length - 1] ?? 0;
+  const [attempts, successes, diplomacy] = [last(first.attempts), last(first.successes), last(first.diplomacy)];
+  return {
+    attempts: [...first.attempts, ...second.attempts.slice(1).map((x) => attempts + x)],
+    successes: [...first.successes, ...second.successes.slice(1).map((x) => successes + x)],
+    diplomacy: [...first.diplomacy, ...second.diplomacy.slice(1).map((x) => diplomacy + x)],
+  };
+}
+
 /** A plan weighed: its plan, its walk's step (null: resting alone), and its action's name (null: resting alone). */
 interface PlanCandidate {
   plan: BladeburnerActionPlan;
@@ -1204,24 +1250,42 @@ function planCandidates({
   const reference = driftStart?.cities[driftStart.worked];
   /**
    * An action worked alone over the horizon from the reading's cities at its fastest way and rest (#418's review: one
-   * path an action, its ways and rests priced off it, for the cost): `attempts` at `chance`, the brain's city chosen again as they move (B4's,
-   * `moves`), Diplomacy in it. Null with no drift or none.
+   * path an action, its ways and rests priced off it, for the cost): the chain's attempts at `chance` (#421's term 3:
+   * `chain.count` in its count's `chain.countSeconds`, then `chain.tail` over the rest of the horizon), the brain's city
+   * chosen again as they move (B4's, `moves`), Diplomacy in it. Null with no drift or none.
    */
-  const driftCurve = (action: BladeburnerLevelledAction, chance: number, attempts: number) => {
-    if (driftStart === null || reference === undefined || !(attempts > 0) || !(horizon > 0)) return null;
+  const driftCurve = (action: BladeburnerLevelledAction, chance: number, chain: BladeburnerChainAttempts) => {
+    if (driftStart === null || reference === undefined || !(chain.count + chain.tail > 0) || !(horizon > 0)) {
+      return null;
+    }
     // Kept by its figures (#418's ruling 4: the drift once a reading and city, every solve of the reading sharing it).
-    const key = JSON.stringify([driftStart, action.name, chance, attempts, horizon, at.skills.charisma, drift?.chunks]);
+    const key = JSON.stringify([driftStart, action.name, chance, chain, horizon, at.skills.charisma, drift?.chunks]);
     const known = DRIFT_CURVES.get(key);
     if (known !== undefined) return known;
-    const path = bladeburnerDriftPath(driftStart, reference, [{ action, chance, attempts }], horizon, {
+    const options = {
       charisma: at.skills.charisma,
       moves: true,
       ...(drift?.chunks === undefined ? {} : { chunks: drift.chunks }),
-    });
-    const end = path.state.cities[path.state.worked] as BladeburnerDriftCity;
+    };
+    // The count's attempts in its time, then the tail's share over the rest of the horizon (its events with none).
+    const counted = bladeburnerDriftPath(
+      driftStart,
+      reference,
+      [{ action, chance, attempts: chain.count }],
+      chain.countSeconds,
+      options,
+    );
+    const rest = horizon - chain.countSeconds;
+    const path =
+      rest > 0
+        ? bladeburnerDriftPath(counted.state, reference, [{ action, chance, attempts: chain.tail }], rest, options)
+        : null;
+    const curve = path === null ? counted.curve : joinedCurve(counted.curve, path.curve);
+    const state = (path ?? counted).state;
+    const end = state.cities[state.worked] as BladeburnerDriftCity;
     const priced = {
       chance,
-      curve: path.curve,
+      curve,
       chaos: end.chaos,
       populationRatio: reference.population > 0 ? end.population / reference.population : 1,
     };
@@ -1229,72 +1293,38 @@ function planCandidates({
     if (DRIFT_CURVES.size > DRIFT_CURVES_KEPT) DRIFT_CURVES.delete(DRIFT_CURVES.keys().next().value as string);
     return priced;
   };
-  for (const read of readings) {
-    const action = bladeburnerLevelledAction(read.type, read.name);
-    if (action === null) continue;
-    if (city !== undefined && !city.raid && action.name === "Raid") continue;
-    const options: { rise: number; seconds: number; level: number; chance: number; attemptSeconds: number }[] = [];
-    supply.push({ growthPerSecond: countGrowthPerSecond(action), options, type: action.type, name: action.name });
-    const readCompetence = actionSkillCompetence(action, person, readMults);
-    const skillRatio =
-      !scaled || !(readCompetence > 0) ? 1 : (actionSkillCompetence(action, at, mults) / readCompetence) * personRatio;
-    const ratio = skillRatio * (city?.ratio ?? 1);
-    // Each way read: its level's chance, time, rank and stamina.
-    const ways: {
-      level: number;
-      chanceRead: number;
-      seconds: number;
-      gain: number;
-      loss: number;
-      cost: number;
-      dutyOf: (worked: number, rest: BladeburnerRest) => number;
-    }[] = [];
-    for (let level = 1; level <= Math.max(1, read.maxLevel); level++) {
-      const chanceRead = chanceLowAt(action, read, level, penalty, ratio);
-      if (chanceRead === null) continue;
-      const cost = actionStaminaCost(action, level);
-      ways.push({
-        level,
-        chanceRead,
-        seconds: actionSeconds(action, level, at, mults),
-        gain: actionRankGain(action, level, rankMultiplier),
-        loss: actionRankLoss(action, level),
-        cost,
-        dutyOf: (worked, rest) => {
-          const drain = cost / worked - regain;
-          return drain <= 0
-            ? 1
-            : rest.staminaPerSecond > 0
-              ? rest.staminaPerSecond / (drain + rest.staminaPerSecond)
-              : 0;
-        },
-      });
-    }
-    // The drift (#418): one path, at its fastest way's and rest's attempts in the horizon (its count and regrowth at
-    // most; where they bind, every rest's the same).
-    const most = read.count + countGrowthPerSecond(action) * horizon;
-    const attemptsOf = (seconds: number, duty: number) => Math.max(0, Math.min((horizon * duty) / seconds, most));
-    let curve: ReturnType<typeof driftCurve> = null;
-    if (driftStart !== null && horizon > 0) {
-      let fastest: (typeof ways)[number] | null = null;
-      let attempts = 0;
-      for (const rest of worthResting) {
-        for (const way of ways) {
-          const duty = way.dutyOf(way.seconds, rest);
-          const each = duty > 0 ? attemptsOf(way.seconds, duty) : 0;
-          if (each > attempts) {
-            attempts = each;
-            fastest = way;
+  /**
+   * An action's ways priced at the attempts `chainOf` gives them in the horizon (#421's term 3: the tail's ways at the
+   * horizon's, the plan's own step at its chain's), off one path at its fastest way's and rest's attempts.
+   */
+  const pricing =
+    (action: BladeburnerLevelledAction, ways: readonly WayRead[]) =>
+    (chainOf: (worked: number, duty: number) => BladeburnerChainAttempts) => {
+      const attemptsOf = (worked: number, duty: number) => {
+        const chain = chainOf(worked, duty);
+        return chain.count + chain.tail;
+      };
+      let curve: ReturnType<typeof driftCurve> = null;
+      if (driftStart !== null && horizon > 0) {
+        let fastest: BladeburnerChainAttempts | null = null;
+        let attempts = 0;
+        let chanceRead = 0;
+        for (const rest of worthResting) {
+          for (const way of ways) {
+            const chain = chainOf(way.seconds, way.dutyOf(way.seconds, rest));
+            if (chain.count + chain.tail > attempts) {
+              attempts = chain.count + chain.tail;
+              fastest = chain;
+              chanceRead = way.chanceRead;
+            }
           }
         }
+        curve = fastest === null ? null : driftCurve(action, chanceRead, fastest);
       }
-      curve = fastest === null ? null : driftCurve(action, fastest.chanceRead, attempts);
-    }
-    for (const { level, chanceRead, seconds, gain, loss, cost, dutyOf } of ways) {
-      const short = read.count < 1 + (BLADEBURNER_READING_SECONDS * speed) / seconds;
-      for (const rest of worthResting) {
+      return (way: WayRead, rest: BladeburnerRest) => {
+        const { chanceRead, seconds, gain, loss, dutyOf } = way;
         const readDuty = dutyOf(seconds, rest);
-        if (readDuty === 0) continue;
+        if (readDuty === 0) return null;
         // The drift over the horizon (#418), off the action's path: its attempts at its cycle with Diplomacy's seconds
         // in it ((seconds + Diplomacy's) over its duty, no stamina in Diplomacy: `dutyOf`), solved with them; its chance
         // the path's mean over them, times its own over the path's way's. Labelled: an action's ways and rests share its
@@ -1329,10 +1359,7 @@ function planCandidates({
         const diplomacySeconds = priced?.diplomacySeconds ?? 0;
         const worked = seconds + diplomacySeconds;
         const duty = priced === null ? readDuty : dutyOf(worked, rest);
-        const { mean, variance } = attemptRankMoments(chance, gain, loss);
-        const rate = mean / worked;
-        const cycle = duty * rate + (1 - duty) * rest.rankPerSecond;
-        if (duty === 0) continue;
+        if (duty === 0) return null;
         const cycleStep = bladeburnerCycleStep({
           chance,
           gain,
@@ -1341,19 +1368,113 @@ function planCandidates({
           duty,
           restRankPerSecond: rest.rankPerSecond,
         });
+        return { chance, diplomacySeconds, drift: priced?.drift ?? null, worked, duty, cycleStep };
+      };
+    };
+  // Each action's figures for its plans, priced once the tail's mix is known (#421's term 3).
+  const steps: {
+    action: BladeburnerLevelledAction;
+    read: BladeburnerActionReading;
+    ways: WayRead[];
+    most: number;
+    priceOf: ReturnType<typeof pricing>;
+    tailPrice: ReturnType<ReturnType<typeof pricing>>;
+    horizonOf: (worked: number, duty: number) => BladeburnerChainAttempts;
+  }[] = [];
+  for (const read of readings) {
+    const action = bladeburnerLevelledAction(read.type, read.name);
+    if (action === null) continue;
+    if (city !== undefined && !city.raid && action.name === "Raid") continue;
+    const options: { rise: number; seconds: number; level: number; chance: number; attemptSeconds: number }[] = [];
+    supply.push({ growthPerSecond: countGrowthPerSecond(action), options, type: action.type, name: action.name });
+    const readCompetence = actionSkillCompetence(action, person, readMults);
+    const skillRatio =
+      !scaled || !(readCompetence > 0) ? 1 : (actionSkillCompetence(action, at, mults) / readCompetence) * personRatio;
+    const ratio = skillRatio * (city?.ratio ?? 1);
+    // Each way read: its level's chance, time, rank and stamina.
+    const ways: WayRead[] = [];
+    for (let level = 1; level <= Math.max(1, read.maxLevel); level++) {
+      const chanceRead = chanceLowAt(action, read, level, penalty, ratio);
+      if (chanceRead === null) continue;
+      const cost = actionStaminaCost(action, level);
+      ways.push({
+        level,
+        chanceRead,
+        seconds: actionSeconds(action, level, at, mults),
+        gain: actionRankGain(action, level, rankMultiplier),
+        loss: actionRankLoss(action, level),
+        cost,
+        dutyOf: (worked, rest) => {
+          const drain = cost / worked - regain;
+          return drain <= 0
+            ? 1
+            : rest.staminaPerSecond > 0
+              ? rest.staminaPerSecond / (drain + rest.staminaPerSecond)
+              : 0;
+        },
+      });
+    }
+    // The drift (#418): one path an action, at its fastest way's and rest's attempts in the horizon. The tail's ways
+    // (`supply`, #392's linear programme) at the most the tail can make of it: the horizon's attempts at its duty, its
+    // count and regrowth at most (#418's). The plan's own step at the attempts its chain makes (#421's term 3, below).
+    const most = read.count + countGrowthPerSecond(action) * horizon;
+    const horizonOf = (worked: number, duty: number): BladeburnerChainAttempts =>
+      !(duty > 0) || !(worked > 0)
+        ? { count: 0, countSeconds: 0, tail: 0 }
+        : { count: Math.min((horizon * duty) / worked, most), countSeconds: horizon, tail: 0 };
+    const priceOf = pricing(action, ways);
+    const tailPrice = priceOf(horizonOf);
+    for (const way of ways) {
+      for (const rest of worthResting) {
+        const each = tailPrice(way, rest);
+        if (each === null) continue;
         options.push({
-          rise: bladeburnerStepRise(cycleStep),
-          seconds: cycleStep.seconds,
-          level,
-          chance,
-          attemptSeconds: seconds,
+          rise: bladeburnerStepRise(each.cycleStep),
+          seconds: each.cycleStep.seconds,
+          level: way.level,
+          chance: each.chance,
+          attemptSeconds: way.seconds,
         });
-        if (short) continue;
+      }
+    }
+    steps.push({ action, read, ways, most, priceOf, tailPrice, horizonOf });
+  }
+  // #421's term 3: each action's attempts a second in the chain's tail, the sustainable rate's (`fastestToTarget`'s,
+  // over `supply`), from its linear programme's primal (`bladeburnerSustainableMix`, `bladeburnerTailMix`'s).
+  const shares = new Map<string, number>();
+  if (driftStart !== null && horizon > 0) {
+    for (const { source, perSecond } of bladeburnerSustainableMix(supply, alone.rankPerSecond).parts) {
+      const name = supply[source]?.name;
+      if (name !== undefined) shares.set(name, (shares.get(name) ?? 0) + perSecond);
+    }
+  }
+  for (const { action, read, ways, most, priceOf, tailPrice, horizonOf } of steps) {
+    // The plan's own step (#421's term 3): its drift over the attempts its chain makes in the horizon, not the
+    // horizon's at its duty: its count (`bladeburnerAttemptsInCount` at its cycle, as the chain's step), then its share
+    // of the tail over the rest. Labelled: a next-best's count between them counted as the tail's.
+    const growth = countGrowthPerSecond(action);
+    const share = shares.get(action.name) ?? 0;
+    const chainOf = (worked: number, duty: number): BladeburnerChainAttempts => {
+      if (!(duty > 0) || !(worked > 0)) return { count: 0, countSeconds: 0, tail: 0 };
+      const cycle = worked / duty;
+      const inCount = bladeburnerAttemptsInCount(read.count, growth, cycle);
+      // Its count outlasting the horizon (or kept up by its growth): the horizon's attempts, as the tail's ways.
+      if (!(inCount * cycle < horizon)) return horizonOf(worked, duty);
+      const tail = Math.max(0, Math.min(share * (horizon - inCount * cycle), most - inCount));
+      return { count: inCount, countSeconds: inCount * cycle, tail };
+    };
+    const stepPrice = driftStart !== null && horizon > 0 ? priceOf(chainOf) : tailPrice;
+    for (const way of ways) {
+      const { level, seconds, gain, loss, cost } = way;
+      if (read.count < 1 + (BLADEBURNER_READING_SECONDS * speed) / seconds) continue;
+      for (const rest of worthResting) {
+        const priced = stepPrice(way, rest);
+        if (priced === null) continue;
+        const { chance, diplomacySeconds, worked, duty, cycleStep } = priced;
+        const { mean, variance } = attemptRankMoments(chance, gain, loss);
+        const rate = mean / worked;
         // Its count bounds its attempts (#386's amendment): the next-best's after them (`fastestToTarget`).
-        const step = {
-          ...cycleStep,
-          attempts: bladeburnerAttemptsInCount(read.count, countGrowthPerSecond(action), cycleStep.seconds),
-        };
+        const step = { ...cycleStep, attempts: bladeburnerAttemptsInCount(read.count, growth, cycleStep.seconds) };
         const hpLoss = actionHpLoss(action, level);
         const plan: BladeburnerActionPlan = {
           work: {
@@ -1368,7 +1489,7 @@ function planCandidates({
             hpLoss,
             money: actionMoney(action, level),
             rankPerSecond: rate,
-            ...(priced === null ? {} : { drift: priced.drift }),
+            ...(priced.drift === null ? {} : { drift: priced.drift }),
             diplomacySeconds,
             // Its failures a second over the cycle, each its mean bill (#418).
             moneyLostPerSecond:
@@ -1378,7 +1499,7 @@ function planCandidates({
           },
           rest,
           duty,
-          rankPerSecond: cycle,
+          rankPerSecond: duty * rate + (1 - duty) * rest.rankPerSecond,
           regain,
         };
         candidates.push({ plan, step, name: action.name });
@@ -1489,6 +1610,8 @@ function fastestToTarget(
   // The next-best after an action's count (cached by the action spent): its step, with its own count (#392), then
   // resting alone.
   const nextBest = new Map<string, BladeburnerRankStep | undefined>();
+  // Its plan, where there's one (the walks' chain, `nextOf`).
+  const nextPlans = new Map<string, BladeburnerActionPlan>();
   // Each plan's time with its own count then resting alone, solved once for every next-best search it's in.
   const counted = new Map<PlanCandidate, number>();
   const countedSeconds = (candidate: PlanCandidate) => {
@@ -1508,14 +1631,16 @@ function fastestToTarget(
       const step = best === undefined || !Number.isFinite(best.seconds) ? undefined : best.candidate.step;
       // None faster than the tail straight away (#392): the tail follows the plan's own count.
       const tailOnly = tailRate > 0 ? distance / tailRate : Number.POSITIVE_INFINITY;
+      const none = best === undefined || !Number.isFinite(best.seconds) || !(best.seconds < tailOnly);
       nextBest.set(
         name,
-        best === undefined || !Number.isFinite(best.seconds) || !(best.seconds < tailOnly)
+        none
           ? undefined
           : step === null || step === undefined
             ? bladeburnerRestStep(best.candidate.plan.rankPerSecond)
             : withCount(step),
       );
+      if (!none) nextPlans.set(name, best.candidate.plan);
     }
     return nextBest.get(name);
   };
@@ -1526,8 +1651,21 @@ function fastestToTarget(
     const next = nextAfter(name);
     return bladeburnerSecondsToRank({ ...step, ...(next === undefined ? { tailRate } : { next }) }, rank, target);
   };
+  // The plan the chain follows a plan's count with (#421's term 2: check 3's walks follow the rule's own chain).
+  const nextOf = ({ step, name }: PlanCandidate): BladeburnerChainNext | undefined => {
+    if (step === null || name === null || !((step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY)) {
+      return undefined;
+    }
+    if (nextAfter(name) === undefined) return undefined;
+    const plan = nextPlans.get(name);
+    if (plan === undefined) return undefined;
+    return { name: plan.work?.name ?? null, level: plan.work?.level ?? null, rest: plan.rest.name };
+  };
   const solved = search(pool, true, secondsOf, !prune);
-  return solved.map(({ candidate, seconds }) => ({ ...candidate.plan, toTarget: { target, seconds } }));
+  return solved.map(({ candidate, seconds }) => {
+    const next = nextOf(candidate);
+    return { ...candidate.plan, toTarget: { target, seconds, ...(next === undefined ? {} : { next }) } };
+  });
 }
 
 /**

@@ -836,6 +836,70 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
     expect(Math.abs(((work?.drift?.attempts as number) * cycle) / horizonSeconds - 1)).toBeLessThan(0.01);
   });
 
+  test("#421's term 3: each plan's drift over the attempts its chain makes, its count then its share of the tail", () => {
+    // Bounty Hunter alone, 4 h given (B4's way: one solve): its count of 20 spent within the horizon, then its share
+    // of the chain's tail (`bladeburnerTailMix` there, the sustainable rate's primal). No Diplomacy (New Tokyo's 19.8
+    // under 50 throughout).
+    const read = readAt(who);
+    const hunter = { ...read, readings: read.readings.filter((each) => each.name === "Bounty Hunter") };
+    const horizonSeconds = 4 * 3600;
+    const given = { cities: SIX, city: "New Tokyo", horizonSeconds };
+    const plans = bladeburnerPlansToTarget({ ...hunter, target: { rank: 150, target: 2500 }, drift: given });
+    const share = bladeburnerTailMix({ ...hunter, drift: given })
+      .work.filter((part) => part.name === "Bounty Hunter")
+      .reduce((sum, part) => sum + part.attemptsPerSecond, 0);
+    const growth = countGrowthPerSecond(action("Bounty Hunter"));
+    // The tail works it at its whole regrowth here (the linear programme's bound).
+    expect(share).toBeCloseTo(growth, 12);
+    const priced = plans.filter((plan) => plan.work?.drift !== undefined);
+    expect(priced.length).toBeGreaterThan(0);
+    const chainOf = (plan: (typeof plans)[number]) => {
+      const work = plan.work as NonNullable<(typeof plan)["work"]>;
+      expect(work.diplomacySeconds).toBe(0);
+      const cycle = work.seconds / plan.duty;
+      const inCount = bladeburnerAttemptsInCount(20, growth, cycle);
+      return { cycle, inCount, attempts: inCount + share * (horizonSeconds - inCount * cycle) };
+    };
+    for (const plan of priced) {
+      const { cycle, inCount, attempts } = chainOf(plan);
+      const drift = plan.work?.drift as NonNullable<NonNullable<(typeof plan)["work"]>["drift"]>;
+      // The count binds: spent within the horizon, so the chain's attempts, fewer than the horizon's at its duty.
+      expect(inCount * cycle).toBeLessThan(horizonSeconds);
+      expect(drift.attempts).toBeCloseTo(attempts, 9);
+      expect(drift.attempts).toBeLessThan(horizonSeconds / cycle);
+    }
+    // The chance by hand: the path of its fastest way (the most attempts), its count in its time, then its tail.
+    const fastest = priced.reduce((a, b) =>
+      (b.work?.drift?.attempts as number) > (a.work?.drift?.attempts as number) ? b : a,
+    );
+    const work = fastest.work as NonNullable<(typeof fastest)["work"]>;
+    const drift = work.drift as NonNullable<typeof work.drift>;
+    const { cycle, inCount } = chainOf(fastest);
+    const start = bladeburnerDriftStart(SIX, "New Tokyo") as NonNullable<ReturnType<typeof bladeburnerDriftStart>>;
+    const reference = start.cities[start.worked] as BladeburnerDriftCity;
+    const options = { charisma: who.skills.charisma, moves: true };
+    const part = (attempts: number) => [{ action: action("Bounty Hunter"), chance: drift.chanceRead, attempts }];
+    const counted = bladeburnerDriftPath(start, reference, part(inCount), inCount * cycle, options);
+    const tail = bladeburnerDriftPath(
+      counted.state,
+      reference,
+      part(drift.attempts - inCount),
+      horizonSeconds - inCount * cycle,
+      options,
+    );
+    const successes =
+      (counted.chances[0] as number) * inCount + (tail.chances[0] as number) * (drift.attempts - inCount);
+    // Over the whole horizon at its duty instead (#418's): the attempts spread evenly, the population's rise seen sooner.
+    const even = bladeburnerDriftPath(start, reference, part(horizonSeconds / cycle), horizonSeconds, options);
+    console.log(
+      `#421's term 3, Bounty Hunter alone over 4 h: ${inCount} in its count (${((inCount * cycle) / 60).toFixed(1)} min), ` +
+        `then ${(drift.attempts - inCount).toFixed(1)} in the tail at ${(share * 3600).toFixed(2)} an hour; its chance ` +
+        `${work.chance.toFixed(6)} (read ${drift.chanceRead.toFixed(6)}), at the horizon's ${(horizonSeconds / cycle).toFixed(1)} ` +
+        `attempts ${(even.chances[0] as number).toFixed(6)}`,
+    );
+    expect(work.chance).toBeCloseTo(successes / drift.attempts, 9);
+  });
+
   test("each plan's attempts over its horizon at most its count and its regrowth", () => {
     const drift = { cities: SIX, city: "New Tokyo" };
     const plans = bladeburnerPlansToTarget({ ...input, target: { rank: 25, target: 2500 }, drift });
@@ -1137,11 +1201,22 @@ interface WalkedWay {
   loss: number;
 }
 
+/** A walk's policy (#421's term 2): the rule's chain, each way worked until its count runs out, then the tail's mix. */
+interface WalkPolicy {
+  /** The plan's own way, then its next-best's where the chain has one (`toTarget.next`). */
+  chain: readonly WalkedWay[];
+  /** The tail's mix (`bladeburnerTailMix` at the rule's horizon): each way and its attempts a second. */
+  tail: readonly { way: WalkedWay; perSecond: number }[];
+}
+
 /**
- * A plan walked to the target under the game's draws (#418's ruling 2, check 3), from `rank`: each attempt the first
- * way in `order` with a count of 1 or more (its count down 1, success or failure, `Bladeburner.ts:927-976`; each count
- * regrowing at its mean, `:1386-1393`), else Field Analysis's 30 s; an attempt only with its stamina leaving half the max
- * (no penalty, `staminaPenalty`), the regain a second always. Its success at the chance read times the city's factor
+ * A plan walked to the target under the game's draws (#418's ruling 2, check 3), from `rank`, by the rule's own policy
+ * (#421's term 2; until then the first way in a greedy order with a count, which is not the rule's tail): each way of
+ * `policy.chain` worked until its count is under 1, then the tail's mix, each of its ways attempted when its attempts
+ * a second times the tail's time reach its attempts made (the most behind first), else Field Analysis's 30 s (the mix's
+ * rest alone, and each way's stamina rest); each attempt's count down 1, success or failure, `Bladeburner.ts:927-976`;
+ * each count regrowing at its mean, `:1386-1393`. An attempt only with its stamina leaving half the max (no penalty,
+ * `staminaPenalty`), the regain a second always. Its success at the chance read times the city's factor
  * over the city read's (the true population^0.7 over the chaos's factor, `Action.ts:88-103`; Raid 0 with no
  * communities), its rank ±10% (`addOffset`) and the floor at 0 (`:1267-1275`); its effects as
  * `completeOperation`/`completeContract` draw them (`:793-890`: Raid's −1% or −(5–10)/10 % and +1–5% chaos and a
@@ -1154,10 +1229,10 @@ interface WalkedWay {
  * the time); an event each 240–600 s in one of the six as `randomEvent` (`:601-699`) draws it and the decay
  * (`:1395-1401`) over every second. Left out, labelled: the count's regrowth's draw (its mean taken), the skills'
  * estimate multiplier (1), the migration's +100 under 1.5e9 (`:597-598`), the levels and skills (the plan's own level
- * throughout, as the rule prices it), HP and the hospital (no rank).
+ * throughout, as the rule prices it), each way's rest taken as Field Analysis's, HP and the hospital (no rank).
  */
 function walkPlan(
-  order: readonly WalkedWay[],
+  policy: WalkPolicy,
   {
     rank: from,
     target,
@@ -1191,7 +1266,10 @@ function walkPlan(
   );
   const times: number[] = [];
   const attemptsOf: number[] = [];
-  // The plan's own action (`order[0]`), over every walk (#420's ruling 3, item 4: the priced time's terms against
+  const own = (policy.chain[0] as WalkedWay).action.name;
+  // Each action's count by name (a mix may work one action at several ways).
+  const names = [...new Set([...policy.chain, ...policy.tail.map((part) => part.way)].map((way) => way.action.name))];
+  // The plan's own action (`policy.chain[0]`'s), over every walk (#420's ruling 3, item 4: the priced time's terms against
   // the walks'): its attempts, their chances summed, the time worked on them, and Diplomacy's after them.
   const first = { attempts: 0, chance: 0, atMean: 0, seconds: 0, diplomacy: 0, clock: 0 };
   // The walks' time and rank by term (#422's review: each term of the priced time against the walk): the plan's own
@@ -1216,8 +1294,12 @@ function walkPlan(
     const pops = read.map((city) => city.population);
     const comms = read.map((city) => city.communities);
     const chaos = read.map((city) => city.chaos);
-    const counts = order.map(() => 20);
-    const growth = order.map((way) => countGrowthPerSecond(way.action));
+    const counts = new Map(names.map((name) => [name, 20]));
+    const growth = new Map(names.map((name) => [name, countGrowthPerSecond(action(name))]));
+    // Where the walk is in the chain (past its end: the tail, from `tailFrom`), and each tail way's attempts made.
+    let phase = 0;
+    let tailFrom = 0;
+    const made = policy.tail.map(() => 0);
     let stamina = maxStamina;
     let rank = from;
     let clock = 0;
@@ -1283,15 +1365,41 @@ function walkPlan(
       decayTo(t);
       clock = t;
       stamina = Math.min(maxStamina, stamina + regain * dt);
-      for (const i of counts.keys()) counts[i] = (counts[i] as number) + (growth[i] as number) * dt;
+      for (const name of names) counts.set(name, (counts.get(name) as number) + (growth.get(name) as number) * dt);
     };
+    const countOf = (way: WalkedWay) => counts.get(way.action.name) as number;
+    const workable = (way: WalkedWay) =>
+      stamina - way.stamina >= maxStamina / 2 && (way.action.name !== "Raid" || comms.some((c) => c > 0));
     while (rank < target && clock < 1e8) {
-      const way = order.find(
-        (each, i) =>
-          (counts[i] as number) >= 1 &&
-          stamina - each.stamina >= maxStamina / 2 &&
-          (each.action.name !== "Raid" || comms.some((c) => c > 0)),
-      );
+      // The chain: each way until its count is under 1 (Raid's with no communities anywhere, its end too).
+      while (
+        phase < policy.chain.length &&
+        (countOf(policy.chain[phase] as WalkedWay) < 1 ||
+          ((policy.chain[phase] as WalkedWay).action.name === "Raid" && !comms.some((c) => c > 0)))
+      ) {
+        phase++;
+        if (phase === policy.chain.length) tailFrom = clock;
+      }
+      let way: WalkedWay | undefined;
+      let part = -1;
+      if (phase < policy.chain.length) {
+        const each = policy.chain[phase] as WalkedWay;
+        if (workable(each)) way = each;
+      } else {
+        // The tail: the way most behind its share (its attempts a second over the tail's time, less those made).
+        let behind = 0;
+        for (const [k, { way: each, perSecond }] of policy.tail.entries()) {
+          const owed = perSecond * (clock - tailFrom) - (made[k] as number);
+          if (owed >= behind && countOf(each) >= 1 && workable(each) && (part < 0 || owed > behind)) {
+            behind = owed;
+            part = k;
+          }
+        }
+        if (part >= 0) {
+          way = (policy.tail[part] as (typeof policy.tail)[number]).way;
+          made[part] = (made[part] as number) + 1;
+        }
+      }
       if (way === undefined) {
         pass(30);
         rank += restRank * 30;
@@ -1310,13 +1418,13 @@ function walkPlan(
         )
           city = i;
       }
-      const i = order.indexOf(way);
-      counts[i] = (counts[i] as number) - 1;
+      counts.set(way.action.name, countOf(way) - 1);
       stamina -= way.stamina;
       pass(way.seconds);
       attempts++;
       const p = Math.min(1, (way.chanceRead * factorOf(pops[city] as number, chaos[city] as number)) / reference);
-      if (way === order[0]) {
+      const mine = way.action.name === own;
+      if (mine) {
         first.attempts += 1;
         first.chance += p;
         first.seconds += way.seconds;
@@ -1331,7 +1439,7 @@ function walkPlan(
       const success = random() < p;
       const before = rank;
       rank = Math.max(0, rank + (success ? offset(way.gain) : -offset(way.loss)));
-      if (way === order[0]) {
+      if (mine) {
         terms.firstSeconds += way.seconds;
         terms.firstRank += rank - before;
       } else {
@@ -1367,7 +1475,7 @@ function walkPlan(
       if ((chaos[city] as number) > 50) {
         const seconds = (60 * Math.log(50 / (chaos[city] as number))) / Math.log(keep);
         chaos[city] = 50;
-        if (way === order[0]) {
+        if (mine) {
           first.diplomacy += seconds;
           terms.firstDiplomacy += seconds;
         } else terms.otherDiplomacy += seconds;
@@ -1421,19 +1529,25 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
         loss: actionRankLoss(each, work.level),
       };
     };
-    // After the plan's own action, the others as the rule's tail takes them: by their best rate a second (the drift
-    // priced), those over resting alone's, Field Analysis then.
-    const best = new Map<string, (typeof plans)[number]>();
-    for (const plan of plans) {
-      const name = plan.work?.name;
-      if (name === undefined || best.has(name)) continue;
-      if (plan.rankPerSecond > alone.rankPerSecond) best.set(name, plan);
-    }
-    const tail = [...best.values()].sort((a, b) => b.rankPerSecond - a.rankPerSecond);
-    const orderOf = (first: (typeof plans)[number]) => [
-      wayOf(first),
-      ...tail.filter((plan) => plan.work?.name !== first.work?.name).map(wayOf),
-    ];
+    // The rule's own policy (#421's term 2): the plan's count, its next-best's where its chain has one, then the tail's
+    // mix, the linear programme's primal at the rule's horizon (`bladeburnerTailMix`, the chain's sustainable rate's).
+    const horizonSeconds = chosen.work?.drift?.horizonSeconds as number;
+    const mix = bladeburnerTailMix({ ...input, target, drift: { ...drift, horizonSeconds } });
+    const planAt = (name: string, level: number) => {
+      const plan = plans.find((each) => each.work?.name === name && each.work.level === level);
+      if (plan === undefined) throw new Error(`no plan for ${name} ${level}`);
+      return plan;
+    };
+    const tail = mix.work.map((part) => ({
+      way: { ...wayOf(planAt(part.name, part.level)), seconds: part.attemptSeconds },
+      perSecond: part.attemptsPerSecond,
+    }));
+    const policyOf = (first: (typeof plans)[number]): WalkPolicy => {
+      const next = first.toTarget?.next;
+      if (next === undefined) return { chain: [wayOf(first)], tail };
+      if (next.name === null || next.level === null) throw new Error("resting alone next");
+      return { chain: [wayOf(first), wayOf(planAt(next.name, next.level))], tail };
+    };
     const setting = {
       ...target,
       regain: chosen.regain,
@@ -1445,8 +1559,16 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
       walks: PLAN_WALKS,
     };
     const started = performance.now();
-    const ruled = walkPlan(orderOf(chosen), { ...setting, seed: 3861 });
-    const raided = walkPlan(orderOf(rival as (typeof plans)[number]), { ...setting, seed: 3861 });
+    const ruled = walkPlan(policyOf(chosen), { ...setting, seed: 3861 });
+    const raided = walkPlan(policyOf(rival as (typeof plans)[number]), { ...setting, seed: 3861 });
+    console.log(
+      `the policy (#421's term 2): ${chosen.work?.name} first, then ${chosen.toTarget?.next?.name ?? "the tail"}; ` +
+        `${rival?.work?.name} first, then ${rival?.toTarget?.next?.name ?? "the tail"}; the tail's mix at ` +
+        `${(mix.rate * 60).toFixed(3)} rank a minute: ` +
+        mix.work
+          .map((part) => `${part.name} ${part.level} ${(part.attemptsPerSecond * 3600).toFixed(2)} an hour`)
+          .join(", "),
+    );
     const ms = performance.now() - started;
     const minutes = (x: number) => (x / 60).toFixed(1);
     // The gap walk by walk (the same seeds: common random numbers).
@@ -1487,7 +1609,7 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
       const hours = (seconds: number) => (seconds / 3600).toFixed(1);
       console.log(
         `the terms (#422's review), ${work.name} first: priced ${attemptsPriced.toFixed(0)} attempts in the horizon ` +
-          `(${inCount.toFixed(0)} in its count: the chain's step, then the tail), worked ${hours(attemptsPriced * work.seconds)} h, ` +
+          `(the chain's, #421's term 3: ${inCount.toFixed(0)} in its count, then its share of the tail), worked ${hours(attemptsPriced * work.seconds)} h, ` +
           `Diplomacy ${hours(attemptsPriced * work.diplomacySeconds)} h, resting ${hours(attemptsPriced * cycle * (1 - plan.duty))} h ` +
           `at duty ${plan.duty.toFixed(3)}; walked ${walked.first.attempts.toFixed(0)} attempts at ${hours(walked.first.meanClock)} h ` +
           `on average (the horizon's middle ${hours((work.drift?.horizonSeconds ?? 0) / 2)} h), worked ${hours(t.firstSeconds)} h ` +
