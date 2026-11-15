@@ -180,42 +180,14 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   // #418: each city's chaos and true population after the hour against the drift's prediction (core's mean path from
   // the simulator's true figures at the hour's start, each attempt the rule made at its own chance, the decay and the
   // events' mean between; within 4 standard deviations of the draws' spread), and the attempts' own effects alone.
-  // Incite Violence (#420's ruling 3; #421's ruling 3): #420's hour sent it at 00:30:30, Raid's count at its lowest
-  // (0.54, Sector-12) binding, its counts +0.79 for 2.209 rank against 0.200. Since #421 this seed's hour sends none,
-  // and what turns it is the chain's regrown counts (ruling 1): with them left out the hour is #420's to the bit
-  // (Bounty Hunter first, Incite at 00:30:30); with them the first plan is Tracking (a tie at 120.44 h) and Raid's count
-  // is lowest at 18.44 (00:02:40), no count binding, so Incite isn't weighed. Its measure at Raid's lowest count, by the
-  // rule's own figures (core's `chooseBladeburnerCity` on the brain's input, the cities measured by the round),
-  // printed and asserted.
+  // Incite Violence (#420's ruling 3): since #420 the rule sends it in this hour (Raid's count binding in the city it
+  // measures best); why, by its own figures at the reading before the first under way (core's `chooseBladeburnerCity`
+  // on the brain's input there, the cities measured by the round), its measure paying. (#421's ruling 1's regrown
+  // counts turned it, Raid's count never binding; ruling 4 moved them to #424.)
   const mediums = fresh.data.store
     .snapshots({ environment: "E1" })
     .filter((each) => each.tier === "medium")
     .sort((a, b) => a.receivedAtMs - b.receivedAtMs);
-  const inciteMeasureAt = (data: MediumSnapshotData) => {
-    const read = bladeburnerSnapshotOf(data).reading;
-    const person = bladeburnerPersonOf(data.player);
-    if (read.kind !== "read" || read.actions === null || person === null) throw new Error("no reading");
-    const choice = chooseBladeburnerCity(
-      bladeburnerRuleInputOf(read.actions, person, bladeburnerRankMultiplierOf(6) as number, data.player).input,
-      {
-        city: read.actions.city as string,
-        cities: bladeburnerMeasuredCitiesOf(read.actions, person)?.cities ?? [],
-      },
-    );
-    const raid = read.actions.actions.find((each) => each.name === "Raid");
-    const incite = choice?.incite ?? null;
-    return {
-      raidCount: raid?.count ?? Number.POSITIVE_INFINITY,
-      incite,
-      words:
-        `in ${choice?.city}, Raid's count ${(raid?.count ?? 0).toFixed(2)}: ` +
-        (incite === null
-          ? "Incite not weighed (no count binds: the rate with every count unbounded no more than the rate now)"
-          : `${incite.work}'s counts +${incite.countGain.toFixed(2)} for ${incite.gain.toFixed(3)} rank against its ` +
-            `cost ${incite.cost.toFixed(3)} (its 60 s and the chaos it adds), the rate with every count unbounded ` +
-            `${(incite.unbounded * 60).toFixed(3)} rank/min: ${incite.pays ? "pays" : "doesn't pay"}`),
-    };
-  };
   const reads = mediums.filter((each) => bladeburnerSnapshotOf(each.data).reading.kind === "read");
   {
     const raw = reads.map(
@@ -255,25 +227,38 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
     );
     for (const cut of cuts) expect(cut.gap).toBeGreaterThan(0);
   }
-  const sent = reads.filter(
-    (each) =>
-      (bladeburnerSnapshotOf(each.data).reading as { actions?: { current?: { name?: string } } }).actions?.current
-        ?.name === "Incite Violence",
+  const firstIncite = mediums.findIndex((each) => {
+    const read = bladeburnerSnapshotOf(each.data).reading;
+    return read.kind === "read" && read.actions?.current?.name === "Incite Violence";
+  });
+  // Sent on this seed's hour (#422's review: not passing silently where none is).
+  expect(firstIncite).toBeGreaterThan(0);
+  const inciteBefore = mediums[firstIncite - 1]?.data as MediumSnapshotData;
+  const inciteRead = bladeburnerSnapshotOf(inciteBefore).reading;
+  const incitePerson = bladeburnerPersonOf(inciteBefore.player);
+  if (inciteRead.kind !== "read" || inciteRead.actions === null || incitePerson === null) {
+    throw new Error("no reading before Incite");
+  }
+  const inciteChoice = chooseBladeburnerCity(
+    bladeburnerRuleInputOf(
+      inciteRead.actions,
+      incitePerson,
+      bladeburnerRankMultiplierOf(6) as number,
+      inciteBefore.player,
+    ).input,
+    {
+      city: inciteRead.actions.city as string,
+      cities: bladeburnerMeasuredCitiesOf(inciteRead.actions, incitePerson)?.cities ?? [],
+    },
   );
-  const measures = reads.map((each) => ({
-    atMs: each.receivedAtMs,
-    ...inciteMeasureAt(each.data as MediumSnapshotData),
-  }));
-  const lowest = measures.reduce((a, b) => (b.raidCount < a.raidCount ? b : a));
+  const incite = inciteChoice?.incite;
   console.log(
-    `Incite Violence (#421's ruling 3): ${sent.length} readings with it under way; at the reading with Raid's count ` +
-      `lowest, ${new Date(lowest.atMs).toISOString()}, ${lowest.words}`,
+    `Incite Violence sent at the reading before ${new Date(mediums[firstIncite]?.receivedAtMs ?? 0).toISOString()}: ` +
+      `in ${inciteChoice?.city}, ${incite?.work}'s counts +${incite?.countGain.toFixed(2)} for ` +
+      `${incite?.gain.toFixed(3)} rank against its cost ${incite?.cost.toFixed(3)} (its 60 s and the chaos it adds), ` +
+      `the rate with every count unbounded ${((incite?.unbounded ?? 0) * 60).toFixed(3)} rank/min`,
   );
-  // This seed's branch, unconditionally: none sent, and at Raid's lowest count the rule's own figures say it doesn't
-  // pay (or no count binds there, so it isn't weighed). Incite's paying side is core's
-  // (`bladeburner-cities.test.ts`, with the regrowth priced).
-  expect(sent.length).toBe(0);
-  expect(lowest.incite?.pays ?? false).toBe(false);
+  expect(incite?.pays).toBe(true);
   const hourAttempts = await attemptsIn(fresh.simulation, startedAtMs, fresh.game.clock.now());
   const endCities = await fresh.simulation.diagnostics.bladeburnerCities();
   console.log(

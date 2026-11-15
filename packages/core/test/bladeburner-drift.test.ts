@@ -1011,9 +1011,10 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
     ).toBe(best.work?.name);
   });
 
-  test("#421's ruling 1: the chain's next-best regrown over the first count's stretch, by hand", () => {
-    // Check 3's reading: Raid first, then Bounty Hunter's count, then the tail. Bounty Hunter's count where its stretch
-    // starts is its 20 read plus its regrowth over Raid's attempts × cycle seconds (`Bladeburner.ts:1386-1393`).
+  test("the chain by hand: the plan's count, its next-best's (`toTarget.next`) at its count read, then the tail", () => {
+    // Check 3's reading: Raid first, then Bounty Hunter's count, then the tail. Bounty Hunter's count is the 20 read: its
+    // regrowth over Raid's stretch is left out (#421's ruling 4: ruling 1's regrowth moved to #424, its cost three
+    // times the brain's update for a gain inside check 3's resolution).
     const input = readAt(who);
     const target = { rank: 150, target: 2500 };
     const drift = { cities: SIX, city: "New Tokyo" };
@@ -1043,8 +1044,6 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
     const second = stepOf(hunter);
     const horizonSeconds = raid.work?.drift?.horizonSeconds as number;
     const tailRate = bladeburnerTailRate({ ...input, drift: { ...drift, horizonSeconds } });
-    const stretch = first.attempts * first.cycle.seconds;
-    const regrown = bladeburnerAttemptsInCount(20 + second.growth * stretch, second.growth, second.cycle.seconds);
     const secondsWith = (attempts: number) =>
       bladeburnerSecondsToRank(
         { ...first.cycle, attempts: first.attempts, next: { ...second.cycle, attempts, tailRate } },
@@ -1052,13 +1051,10 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
         target.target,
       );
     console.log(
-      `#421's ruling 1: Raid's ${first.attempts} attempts over ${(stretch / 60).toFixed(1)} min, then Bounty Hunter's ` +
-        `${regrown} regrown (${second.attempts} read): ${((raid.toTarget?.seconds as number) / 60).toFixed(1)} min, ` +
-        `${(secondsWith(second.attempts) / 60).toFixed(1)} without the regrowth`,
+      `the chain by hand: Raid's ${first.attempts} attempts, then Bounty Hunter's ${second.attempts}, then the tail: ` +
+        `${((raid.toTarget?.seconds as number) / 60).toFixed(1)} min`,
     );
-    expect(regrown).toBeGreaterThan(second.attempts);
-    expect(Math.abs((raid.toTarget?.seconds as number) / secondsWith(regrown) - 1)).toBeLessThan(1e-12);
-    expect(Math.abs((raid.toTarget?.seconds as number) / secondsWith(second.attempts) - 1)).toBeGreaterThan(1e-6);
+    expect(Math.abs((raid.toTarget?.seconds as number) / secondsWith(second.attempts) - 1)).toBeLessThan(1e-12);
   });
 
   test("each plan's attempts over its horizon at most its count and its regrowth", () => {
@@ -1819,8 +1815,9 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
       );
     };
     console.log(`the terms (#420): ${termsOf(chosen, ruled)}; ${termsOf(rival as (typeof plans)[number], raided)}`);
-    // The rule's order: its plan the faster.
-    expect((rival?.toTarget?.seconds as number) > (chosen.toTarget?.seconds as number)).toBe(true);
+    // The rule's order: its plan the least (#421's ruling 4: here the two tie at 5,470.8 min, the first in the game's
+    // order chosen, #386).
+    expect(rival?.toTarget?.seconds as number).toBeGreaterThanOrEqual(chosen.toTarget?.seconds as number);
     // The walks' the same beyond 3 standard errors of the gap, or a tie at the model's resolution (#421's ruling 2).
     const verdict = checkThreeVerdict({
       gap,
