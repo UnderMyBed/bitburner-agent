@@ -1204,8 +1204,9 @@ describe("the playability under the route's replays (#423): the gate's figures, 
         `install now ${((timing.installNowSeconds as number) / HOUR).toFixed(1)} h against keep ` +
         `${(timing.keepSeconds / HOUR).toFixed(1)} h: ${timing.choice}`,
     );
-    // Re-stated (#423's ruling 10): the shop's route's replays are unstable across seed series (9 of 10 pass, below), so
-    // its figure is the mean path's, 182.6 h at best (its first-order 125 h unmeasured until #426), past the bar.
+    // Re-stated (#423's rulings 10 and 12a): the shop's route's replays decline on Linux CI on all 10 series and pass 9
+    // of 10 on Windows (below), unstable across seed series and machines, so its figure is the mean path's, 182.6 h at
+    // best, past the bar.
     expect((timing.rebuildSeconds + (after.meanPathSeconds as number)) / HOUR).toBeCloseTo(182.6, 1);
     expect(timing.rebuildSeconds + (after.meanPathSeconds as number)).toBeGreaterThan(BAR_SECONDS);
     // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 33.9 s on CI run 43768474882, so 127 s.
@@ -1214,7 +1215,9 @@ describe("the playability under the route's replays (#423): the gate's figures, 
   test("the gate on 10 seed series (#423's rulings 8, 10 and 11): BN6's best and keep pass on all, BN7's keep on none", () => {
     // Each route's mean path once, its timeline replayed on the seed series of a refresh at the suites' epoch and the 9
     // after it. Asserted only where the verdict holds on all 10 (here and on CI): BN6's two pass, BN7's keep declines.
-    // BN7's best splits (9 of 10 at rulings 10 and 11), so it is said, not asserted: "unstable across seed series".
+    // BN7's best declines on Linux CI on all 10 series and passes 9 of 10 on Windows (#423's ruling 12a: one step's
+    // ratio on the most bound, 5e-8 past it on Linux by ruling 9's `**` drift), so it is said, not asserted: "unstable
+    // across seed series and machines".
     const rows: string[] = [];
     const passes = new Map<string, number>();
     for (const bitNode of [6, 7]) {
@@ -1232,20 +1235,10 @@ describe("the playability under the route's replays (#423): the gate's figures, 
           const r = bladeburnerReplayRoute(timeline, { seed });
           const declined = bladeburnerReplayDeclined(r);
           if (declined === null) used++;
-          // Which bound fired (#423's ruling 12): the replays past each, and how far past the most, in its ulps.
-          const most = BLADEBURNER_REPLAY_MOST_RATIO;
-          const ulp = 2 ** (Math.floor(Math.log2(most)) - 52);
-          const above = r.mostRatios.filter((x) => x > most).map((x) => Math.round((x - most) / ulp));
-          const below = r.leastRatios.filter((x) => x < BLADEBURNER_REPLAY_LEAST_RATIO).length;
-          const past =
-            `; ${below} under the least, ${above.length} over the most` +
-            (above.length > 0
-              ? ` by ${Math.min(...above)}–${Math.max(...above)} ulps`
-              : ` (the most ${Math.round((Math.max(...r.mostRatios) - most) / ulp)} ulps from it)`);
           verdicts.push(
             declined === null
-              ? `${(r.seconds / HOUR).toFixed(1)}±${(r.error / HOUR).toFixed(1)} (${r.replaysWithFallback} at the fallback${past})`
-              : `declined (${r.replaysWithFallback} at the fallback, ${((100 * r.error) / r.seconds).toFixed(1)}%${past})`,
+              ? `${(r.seconds / HOUR).toFixed(1)}±${(r.error / HOUR).toFixed(1)} (${r.replaysWithFallback} at the fallback)`
+              : `declined (${r.replaysWithFallback} at the fallback, ${((100 * r.error) / r.seconds).toFixed(1)}%)`,
           );
         }
         passes.set(`${bitNode} ${label}`, used);
