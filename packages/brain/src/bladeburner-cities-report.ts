@@ -102,7 +102,7 @@ export class BladeburnerCitiesFold {
     const choice = chooseBladeburnerCity(
       {
         // As the brain's (#415): each chance at the true population.
-        ...bladeburnerRuleInputOf(reading, person, rankMultiplier).input,
+        ...bladeburnerRuleInputOf(reading, person, rankMultiplier, data.player).input,
         ...(target === null || rank === null ? {} : { target: { rank, target } }),
       },
       { city, cities },

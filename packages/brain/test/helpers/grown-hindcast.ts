@@ -57,28 +57,37 @@ export interface GrownHindcastRow {
  */
 export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
   // Since #415 the rules choose at the true population (Raid at its drawn chance from rank 0): every row re-measured.
+  // Since #418 each chance is priced over the plan's horizon (the cities' drift, Diplomacy's time): every row again.
   "B2's hour from a harness join": {
-    ratio: 2.65,
+    ratio: 2.17,
     within: false,
-    expected: 2.66,
+    expected: 2.73,
     expectedWithin: false,
     why:
-      "both out: 36 Raid attempts from rank 0 (3 successes for 81 of its 84 rank), in jumps of 55 where a failure " +
-      "loses none, so the window's expected rank (84.1) is a lottery's mean and the estimate's first-passage time to " +
-      "it (2.64 h) is long against the fixed window (#411's diagnosis)",
+      "both out: Raid's attempts from rank 0 (7 successes in 45 attempts for 60 of its 62 rank), in jumps of 55 where " +
+      "a failure loses none, so the window's expected rank (77.9) is a lottery's mean and the estimate's first-passage " +
+      "time to it (2.71 h) is long against the fixed window (#411's diagnosis)",
   },
-  "B3's hour at rank 150": { ratio: 0.52, within: true, expected: 1.46, expectedWithin: true },
-  "B4's hour, its chaos edited": { ratio: 0.7, within: true, expected: 0.83, expectedWithin: true },
-  "B5's Typhoon": { ratio: 1.22, within: true, expected: 0.86, expectedWithin: true },
-  "B5's climb to Zero": { ratio: 1.05, within: true, expected: 1.18, expectedWithin: true },
+  "B3's hour at rank 150": {
+    ratio: 2.61,
+    within: false,
+    expected: 1.76,
+    expectedWithin: true,
+    why:
+      "realised: 53 attempts' rank 120.6 against 76.4 expected (rank 150 to 275), Raid's successes (55 each) over " +
+      "their mean: a lottery's draw",
+  },
+  "B4's hour, its chaos edited": { ratio: 0.61, within: true, expected: 0.76, expectedWithin: true },
+  "B5's Typhoon": { ratio: 1.21, within: true, expected: 0.86, expectedWithin: true },
+  "B5's climb to Zero": { ratio: 1.06, within: true, expected: 1.19, expectedWithin: true },
   "B6's Daedalus": { ratio: 0.96, within: true, expected: 0.96, expectedWithin: true },
   // BN7's (#411): the same suites at BN7's multipliers.
   "B2's hour from a harness join, BN7": {
-    ratio: 2.72,
+    ratio: 2.99,
     within: false,
-    expected: 1.78,
+    expected: 1.96,
     expectedWithin: true,
-    why: "realised: two Raid successes in 15 attempts gave 36 of its 45 rank (σ 31, section 8's own line)",
+    why: "realised: 10 successes in 44 attempts gave 41 of its 45 rank against 31 expected (section 8's own line)",
   },
   "B6's Daedalus, BN7": { ratio: 0.95, within: true, expected: 0.95, expectedWithin: true },
 };

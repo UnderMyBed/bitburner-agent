@@ -522,7 +522,10 @@ export function bladeburnerRuleInputOf(
   reading: BladeburnerActionsReading,
   person: BladeburnerPerson,
   rankMultiplier: number,
+  /** The medium snapshot's player (#418): its max HP and money, for each plan's hospital money. Absent: not priced. */
+  player?: unknown,
 ): BladeburnerRuleInput {
+  const hospital = bladeburnerHospitalOf(player);
   const input = {
     readings: reading.actions,
     person,
@@ -531,12 +534,26 @@ export function bladeburnerRuleInputOf(
     rankMultiplier,
     speed: bladeburnerSpeedOf(reading.bonusSeconds),
     skills: { read: reading.skills?.levels ?? {} },
+    // The cities read (#418): each chance priced over the plan's horizon under a target (core's drift).
+    ...(reading.city === null || reading.cities === null || !reading.cities.some((each) => each.name === reading.city)
+      ? {}
+      : { drift: { cities: reading.cities, city: reading.city } }),
+    ...(hospital === null ? {} : { hospital }),
   };
   const read = reading.blackOp;
   const next = read == null ? null : bladeburnerBlackOp(read.name);
   return next === null || read == null
     ? bladeburnerPricedInput(input, { next: null, chanceRead: null })
     : bladeburnerPricedInput(input, { next, chanceRead: read.chance });
+}
+
+/** The max HP and the money of the medium snapshot's player (#418), or null where either isn't a figure. */
+export function bladeburnerHospitalOf(player: unknown): { hpMax: number; money: number } | null {
+  const { hp, money } = (typeof player === "object" && player !== null ? player : {}) as {
+    hp?: { max?: unknown };
+    money?: unknown;
+  };
+  return isNumber(hp?.max) && isNumber(money) ? { hpMax: hp.max, money } : null;
 }
 
 /** The chance the rule chose at (#415), in words: "at the true population (pop/popEst 1.420)", or the fallback's. */
@@ -628,13 +645,41 @@ export function describeActionPlan(
     );
   }
   const working =
-    `${work.name} level ${work.level} (${(work.chance * 100).toFixed(1)}% ${describeRuleChance(ratio)}, ` +
-    `${perMinute(work.rankPerSecond)} worked)`;
+    `${work.name} level ${work.level} (${(work.chance * 100).toFixed(1)}% ${describeRuleChance(ratio)}` +
+    `${describeWorkDrift(work)}, ${perMinute(work.rankPerSecond)} worked)`;
   return (
     `${resting ? `resting with ${plan.rest.name} for ${working}` : `${working}, resting with ${plan.rest.name}`}; ` +
     `${staminaText}; worked ${(plan.duty * 100).toFixed(0)}% of a cycle, ${perMinute(plan.rankPerSecond)} over it` +
+    describeHospital(work.moneyLostPerSecond) +
     toTarget
   );
+}
+
+/**
+ * The drift a plan's chance is priced over (#418), in words: ", its mean over the 41 min horizon (5.1% read; 31
+ * attempts: New Tokyo's chaos to 41.80, its population ×0.861; Diplomacy 0 s an attempt)"; "" where it isn't priced.
+ */
+export function describeWorkDrift(work: NonNullable<BladeburnerActionPlan["work"]>): string {
+  const drift = work.drift;
+  if (drift === undefined) return "";
+  return (
+    `, its mean over the ${formatDuration(drift.horizonSeconds * 1000)} horizon (#418: ` +
+    `${(drift.chanceRead * 100).toFixed(1)}% read; ${drift.attempts.toFixed(0)} attempts: the chaos to ` +
+    `${drift.chaos.toFixed(2)}, the population ×${drift.populationRatio.toFixed(3)}; Diplomacy ` +
+    `${work.diplomacySeconds.toFixed(0)} s an attempt)`
+  );
+}
+
+/** Dollars, whole (the run report's style; not augmentation-report.ts's, which would import this module back). */
+const formatMoney = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
+
+/**
+ * The hospital's money a second (#418), in words: "; the hospital about $249 a second (the planner's trade, #418)";
+ * "" unread.
+ */
+export function describeHospital(moneyLostPerSecond: number | null): string {
+  if (moneyLostPerSecond === null) return "";
+  return `; the hospital about ${formatMoney(moneyLostPerSecond)} a second (the planner's trade, #418)`;
 }
 
 /** "rank 25 in about 41 min expected, the least of the plans (#386)": a plan's expected time to its target. */
@@ -1124,7 +1169,7 @@ export class BladeburnerRule {
     const { stamina, maxStamina } = reading;
     this.#resting = bladeburnerResting({ stamina, maxStamina, wasResting: this.#resting });
     // At the chances the game draws against (#415): the true population, recovered from the next Black Op's range.
-    const { input: base, ratio } = bladeburnerRuleInputOf(reading, person, rankMultiplier);
+    const { input: base, ratio } = bladeburnerRuleInputOf(reading, person, rankMultiplier, mediumData.player);
     const forecast = { ...base, ...(target === null || rank === null ? {} : { target: { rank, target } }) };
     const cities =
       readCity === null || reading.cities === null
@@ -1137,7 +1182,20 @@ export class BladeburnerRule {
     const input: BladeburnerActionInput =
       cities === null || here === undefined || there === undefined
         ? forecast
-        : { ...forecast, city: { ratio: cityCompetenceRatio(here, there) ?? 0, raid: there.communities > 0 } };
+        : {
+            ...forecast,
+            city: { ratio: cityCompetenceRatio(here, there) ?? 0, raid: there.communities > 0 },
+            // The drift from the city chosen (#418), as core's `chooseBladeburnerCity` prices it there: at its horizon.
+            ...(forecast.drift === undefined
+              ? {}
+              : {
+                  drift: {
+                    ...forecast.drift,
+                    city: there.name,
+                    ...(cities.horizonSeconds === undefined ? {} : { horizonSeconds: cities.horizonSeconds }),
+                  },
+                }),
+          };
     const resting = this.#resting || plan.work === null;
     const chaosAction = kept ?? cities?.chaosAction ?? null;
     // The next Black Op (#392): one under way kept to its end; else run where core's check says so, the stamina not

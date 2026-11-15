@@ -594,6 +594,14 @@ export function describeBlackOpsRoute(view: BlackOpsRouteView | null): string[] 
         (grown.populationRatio === null
           ? "the chances over the estimate's spread: the population not recovered, the fallback), "
           : `the chances at the true population: recovered, pop/popEst ${grown.populationRatio.toFixed(3)}), `) +
+        // #418: the cities' drift along it, and the hospital's money now (the planner's trade, not in the time).
+        (grown.drift == null
+          ? ""
+          : `the cities' drift along it (#418: at its end ${grown.drift.worked} worked, its population ` +
+            `×${grown.drift.populationRatio.toFixed(3)} the one read), `) +
+        (grown.moneyLostPerSecond == null
+          ? ""
+          : `the hospital $${Math.round(grown.moneyLostPerSecond).toLocaleString("en-US")} a second now, `) +
         `${estimate === null ? "B6's not estimated yet" : `${aboutSeconds(estimate.seconds)} at the competence now (B6's)`}`) +
     `; ${THE_RED_PILL}'s ${redPill}${view.choice.redPillHopeless === true ? ", hopeless" : ""}: ` +
     `${view.choice.route === "blackOps" ? "the Black Ops" : THE_RED_PILL} chosen (${view.choice.why})` +

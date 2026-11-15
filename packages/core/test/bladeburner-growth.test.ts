@@ -984,3 +984,51 @@ describe("the skills along the route at a range read (#415): B3's rule as the br
     console.log(rows.join("\n"));
   });
 });
+
+describe("the playability with the cities' drift (#418): the estimate carrying the six cities, the chances priced over each step", () => {
+  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
+  /** A BN6.1 start's six cities as the tests' one (`CITY`: 1e9, 50 communities, no chaos), the division in Sector-12. */
+  const SIX = ["Aevum", "Chongqing", "Sector-12", "New Tokyo", "Ishima", "Volhaven"].map((name) => ({ name, ...CITY }));
+  // BN6 at combat 100 in CI (#418's round-2 review, for the cost); the other three behind the env knob
+  // (`BLADEBURNER_DRIFT_PLAYABILITY_FULL=1`), each about 4 to 5 s here.
+  const FULL = process.env.BLADEBURNER_DRIFT_PLAYABILITY_FULL === "1";
+  const CASES = [6, 7]
+    .flatMap((bitNode) => [100, 300].map((combat) => ({ bitNode, combat })))
+    .filter(({ bitNode, combat }) => FULL || (bitNode === 6 && combat === 100));
+  test.each(CASES)("BN$bitNode, combat $combat, read at the truth: as is and with the shop", ({ bitNode, combat }) => {
+    const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+    const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+    const { combat: figures, input: read, at } = startAt(combat);
+    const plain = { ...read, rankMultiplier };
+    const input = { ...plain, drift: { cities: SIX, city: "Sector-12" } };
+    const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
+    const started = performance.now();
+    const shop = blackOpsInstallTiming({
+      input,
+      at,
+      combat: figures,
+      gain,
+      installable: true,
+      growth: { costMultiplier },
+    });
+    const ms = performance.now() - started;
+    const before = blackOpsInstallTiming({
+      input: plain,
+      at,
+      combat: figures,
+      gain,
+      installable: true,
+      growth: { costMultiplier },
+    });
+    const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
+    const beforeSeconds = before.choice === "install" ? (before.installNowSeconds as number) : before.keepSeconds;
+    console.log(
+      `BN${bitNode} combat ${combat}, the truth, with the drift: as is ${(shop.keepSeconds / HOUR).toFixed(1)} h, the ` +
+        `shop ${shop.choice} ${(shopSeconds / HOUR).toFixed(1)} h (without it: ${(before.keepSeconds / HOUR).toFixed(1)} ` +
+        `h and ${before.choice} ${(beforeSeconds / HOUR).toFixed(1)} h; ${ms.toFixed(0)} ms)`,
+    );
+    // Unplayable either way: past the bar as is and with the shop.
+    expect(shop.keepSeconds).toBeGreaterThan(BAR_SECONDS);
+    expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+  });
+});

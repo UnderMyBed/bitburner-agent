@@ -393,8 +393,9 @@ export function bladeburnerSecondsToRankAtLeast(step: BladeburnerRankStep, rank:
  * not from where the count runs out: labelled.
  * Left out, and labelled: the skill points the max rank earns (B3's), either way, as both routes earn them about in
  * proportion to the rank they make; the stamina's own path (a cycle's rest spread over its attempts,
- * `bladeburnerCycleStep`), and the chances moving with the levels opened, the skills bought and the city's chaos
- * (the rule re-plans at each reading: this weighs the walk as if the step stayed as it is now).
+ * `bladeburnerCycleStep`), and the chances moving with the levels opened and the skills bought (the rule re-plans at
+ * each reading: this weighs the walk as if the step stayed as it is now); since #418 the city's chaos and population in
+ * the step's chance, its mean over the horizon, not along the walk.
  */
 export function bladeburnerSecondsToRank(
   step: BladeburnerRankStep,

@@ -73,7 +73,13 @@ import {
   winRouteOf,
   worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
-import { bladeburnerRuleInputOf, bladeburnerSnapshotOf, bladeburnerSpeedOf } from "./bladeburner.ts";
+import {
+  type BladeburnerActionsReading,
+  bladeburnerHospitalOf,
+  bladeburnerRuleInputOf,
+  bladeburnerSnapshotOf,
+  bladeburnerSpeedOf,
+} from "./bladeburner.ts";
 import { BLADEBURNER_RANK_ALPHA, BLADEBURNER_REST_SLACK_MS } from "./bladeburner-actions-report.ts";
 
 /** The last Black Op's rank: Operation Daedalus's 400,000 (`data/BlackOperations.ts:704-735`). */
@@ -127,6 +133,23 @@ export function blackOpsDoneIn(mediumData: unknown): number | null {
 }
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/**
+ * The route's drift and hospital (#418), as the rule's input has them (`bladeburnerRuleInputOf`): the cities read and
+ * the city worked, and the player's max HP and money; each absent where not read.
+ */
+function routeDriftOf(
+  actions: Pick<BladeburnerActionsReading, "cities" | "city">,
+  player: unknown,
+): Pick<BladeburnerActionInput, "drift" | "hospital"> {
+  const hospital = bladeburnerHospitalOf(player);
+  return {
+    ...(actions.city === null || actions.cities === null || !actions.cities.some((each) => each.name === actions.city)
+      ? {}
+      : { drift: { cities: actions.cities, city: actions.city } }),
+    ...(hospital === null ? {} : { hospital }),
+  };
+}
 
 /**
  * The route from the medium snapshot (#398): `rankPerSecond` the rank measured, `expPerSecond` the hacking experience
@@ -190,6 +213,7 @@ export function blackOpsRouteOf({
           rankMultiplier,
           speed: bladeburnerSpeedOf(actions.bonusSeconds),
           skills: { read: actions.skills?.levels ?? {} },
+          ...routeDriftOf(actions, mediumData?.player),
         };
   const estimate: BlackOpsRouteTime | null =
     done === BLACK_OPS_COUNT
@@ -246,7 +270,10 @@ export function blackOpsRouteOf({
     const attempt = blackOpSeconds(op, input.person, mults);
     rankStallMs = 2 * (rest + attempt + rebuild) * 1000 + BLADEBURNER_REST_SLACK_MS;
     const climbing =
-      plan ?? chooseBladeburnerAction(bladeburnerRuleInputOf(actions, input.person, input.rankMultiplier).input);
+      plan ??
+      chooseBladeburnerAction(
+        bladeburnerRuleInputOf(actions, input.person, input.rankMultiplier, mediumData?.player).input,
+      );
     const work = climbing.work;
     // The climb's mean (#400's round 2): the plan's own rate where under ρ (the LP's mix can outrun the one plan run).
     const climbRate = Math.min(rate, climbing.rankPerSecond);
@@ -255,7 +282,7 @@ export function blackOpsRouteOf({
       work === null || action === null
         ? { perSecond: 0, variance: 0, below: 0 }
         : {
-            perSecond: climbing.duty / work.seconds,
+            perSecond: climbing.duty / (work.seconds + work.diplomacySeconds),
             variance: work.rankVariance,
             below: work.rankMean + 1.1 * actionRankLoss(action, work.level),
           };
@@ -360,6 +387,7 @@ export function blackOpsInstallFiguresOf(
         rankMultiplier,
         speed: bladeburnerSpeedOf(actions.bonusSeconds),
         skills: { read: actions.skills?.levels ?? {} },
+        ...routeDriftOf(actions, mediumData?.player),
       },
       at: { rank, next, chanceRead: nextRead.chance },
       combat,

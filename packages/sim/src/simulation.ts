@@ -233,6 +233,8 @@ export class Simulation {
      * outcome, the mean rank of a success and of a failure, and the rank before and after. Only observed.
      */
     bladeburnerAttempts: (from = 0) => this.rpc.call("diagnostics.bladeburnerAttempts", { from }),
+    /** Every city's true population, estimate, communities and chaos (#418), as they stand. Only observed. */
+    bladeburnerCities: () => this.rpc.call("diagnostics.bladeburnerCities", {}),
     random: (count: number) => this.rpc.call("diagnostics.random", { count }),
     /** Starts the seeded random streams again from `seed`, as at boot (#341). A harness edit. */
     reseedRandom: (seed: number) => this.rpc.call("diagnostics.reseedRandom", { seed }),
@@ -284,6 +286,8 @@ export class Simulation {
       chaos?: number;
       stamina?: number;
       maxLevels?: Record<string, number>;
+      /** Contracts' and operations' counts by name (#418). */
+      counts?: Record<string, number>;
       /** The Black Ops done (#398): the next is the n-th. */
       blackOpsDone?: number;
     }) => this.rpc.call("diagnostics.setBladeburnerFigures", { figures }),

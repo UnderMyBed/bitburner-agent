@@ -168,4 +168,6 @@ test("BN6.1 mid-route: the planner installs the Bladeburners' shop; the rank, sk
     /^ {4}from .* to strength 100, defense 100, dexterity 100, agility 100: estimated .*; under way at the window's end$/,
   );
   expect(report.failures).toEqual([]);
-});
+  // A hang guard (#418's ruling 6): its fastest completed CI time, 29.7 s (PR #419's run 43684859936, db48800), × the
+  // largest same-code swing over those runs, 3.743 (augmentations.test 58.8 s against 15.7 s).
+}, 112_000);

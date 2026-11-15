@@ -32,6 +32,7 @@ import { BLADEBURNER_ACTIONS_HOLD } from "../src/bladeburner.ts";
 import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-actions-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
+import { expectCitiesAsPredicted } from "./helpers/drift-prediction.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 import { attemptsIn, expectGrownHindcast, grownHindcastIn, steadyExpected } from "./helpers/grown-hindcast.ts";
 
@@ -66,6 +67,9 @@ test("BN6.1, an hour from a harness join: each plan the least time to its target
   // The first action sent, once the reading has B2's figures.
   await fresh.game.runUntil(() => fresh.controller().bladeburnerView().actions != null, 2 * MINUTE);
   const startedAtMs = fresh.game.clock.now();
+  // #418: the six cities' true figures at the hour's start, and the charisma Diplomacy cuts the chaos by.
+  const startCities = await fresh.simulation.diagnostics.bladeburnerCities();
+  const charisma = (medium()?.player as { skills?: { charisma?: number } } | undefined)?.skills?.charisma ?? 1;
   const first = fresh.controller().bladeburnerView();
   console.log(first.line);
   // No brain's work, which would stop the action: A5's, with a faction to work for, held for it.
@@ -117,6 +121,15 @@ test("BN6.1, an hour from a harness join: each plan the least time to its target
   );
   console.log(hindcast.line);
   expectGrownHindcast(hindcast);
+  // #418: each city's chaos and true population after the hour against the drift's prediction (core's mean path from
+  // the simulator's true figures at the hour's start, each attempt the rule made at its own chance, the decay and the
+  // events' mean between; within 4 standard deviations of the draws' spread), and the attempts' own effects alone.
+  const hourAttempts = await attemptsIn(fresh.simulation, startedAtMs, fresh.game.clock.now());
+  const endCities = await fresh.simulation.diagnostics.bladeburnerCities();
+  console.log(
+    `the cities after the hour against the drift's prediction (#418):
+` + expectCitiesAsPredicted(startCities, endCities, hourAttempts, startedAtMs, fresh.game.clock.now(), charisma),
+  );
   console.log(fresh.controller().bladeburnerView().line);
   console.log(`under way: ${[...seen].join(", ")}; the stamina's lowest ${(100 * lowest).toFixed(0)}% of the max`);
   console.log(
@@ -210,4 +223,6 @@ test("BN6.1, an hour from a harness join: each plan the least time to its target
   expect(section).toContain("  an action stopped at stamina 0 at any reading:\n    none\n");
   expect(section).toContain("  the rank from the actions run below its forecast's bound:\n    none");
   expect(failures).toEqual([]);
-}, 240_000);
+  // A hang guard (#418's ruling 6): its fastest completed CI time, 63.2 s (PR #419's run 43684859936, db48800), × the
+  // largest same-code swing over those runs, 3.743 (augmentations.test 58.8 s against 15.7 s).
+}, 237_000);

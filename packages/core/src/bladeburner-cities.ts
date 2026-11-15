@@ -21,8 +21,9 @@
  *   Contracts.ts`, `data/Operations.ts`), and every city's chaos + 10, then + chaos / log10(chaos) (`:1229-1233`,
  *   `City.ts:89-91`).
  * Left out, and labelled: the random events every 240–600 s (`:601-699`: populations, communities and riots' chaos),
- * read, not forecast; the chaos and population the actions themselves move (`:803-890`: Raid's +1–5% chaos, Sting's
- * +0.1, Stealth Retirement's −1–3%, the kills' population), read, not forecast; the estimate's accuracy (Field
+ * read, not forecast here; the chaos and population the actions themselves move (`:793-890`: Raid's +1–5% chaos, Sting's
+ * +0.1, Stealth Retirement's −1–3%, the kills' population), read, not forecast here (since #418 B2's plans under a
+ * target price both, ./bladeburner-drift.ts; the chaos actions here weigh the chaos read); the estimate's accuracy (Field
  * Analysis, Tracking, Investigation, Undercover and Datamancer sharpen it, `City.ts:35-58`), which raises the low end
  * the rule reads, not the true chance.
  */
@@ -30,6 +31,7 @@ import {
   BLADEBURNER_CONSTANTS,
   type BladeburnerActionPlan,
   type BladeburnerLevelledAction,
+  bladeburnerDriftHorizon,
   bladeburnerLevelledAction,
   chaosDifficultyFactor,
   chooseBladeburnerAction,
@@ -184,6 +186,8 @@ export interface BladeburnerCityChoice {
   incite: (BladeburnerChaosMeasure & { work: string; countGain: number; unbounded: number }) | null;
   /** The chaos action to run, or null: Diplomacy where it pays, else Incite Violence where it pays. */
   chaosAction: BladeburnerChaosActionName | null;
+  /** The drift's horizon the cities' plans were priced over (#418's review: once a reading), where priced. */
+  horizonSeconds?: number;
 }
 
 /** B2's forecast input with the skills read, as `chooseBladeburnerAction` takes it, the city aside. */
@@ -225,7 +229,9 @@ export function chooseBladeburnerCity(
     from: BladeburnerCityForecastInput = input,
   ) => {
     const ratio = cityCompetenceRatio(here, { population: there.population, chaos }) ?? 0;
-    return choose({ ...from, readings, city: { ratio, raid: there.communities > 0 } });
+    // The drift (#418) from that city, at that chaos.
+    const drift = from.drift === undefined ? {} : { drift: { ...from.drift, city: there.name, chaos } };
+    return choose({ ...from, readings, city: { ratio, raid: there.communities > 0 }, ...drift });
   };
   // The chaos actions are weighed by rank a second (#386: a target aside, labelled), and each city's rate shown.
   const rateInput = { ...input, target: undefined };
@@ -234,6 +240,7 @@ export function chooseBladeburnerCity(
     plan: forecastIn(each, each.chaos, input.readings, rateInput),
   }));
   const target = input.target;
+  let horizonSeconds: number | null = input.drift?.horizonSeconds ?? null;
   if (target !== undefined && target.rank < target.target) {
     // Under a target (#386), the least time to it, the current city on a tie. Every chance there is the one read times
     // the city's ratio, and a walk's time falls as its chance rises (each success at the lower chance is one at the
@@ -255,7 +262,19 @@ export function chooseBladeburnerCity(
         each === topWithRaid ||
         (each === current && [top, topWithRaid].some((other) => other !== null && ratioOf(other) === ratioOf(each))),
     );
-    for (const each of weighed) each.plan = forecastIn(each);
+    // The drift's horizon (#418's review): once, in the city read, for every city weighed (each then one solve).
+    if (input.drift !== undefined && !((input.drift.horizonSeconds ?? 0) > 0)) {
+      horizonSeconds = bladeburnerDriftHorizon({
+        ...input,
+        city: { ratio: 1, raid: here.communities > 0 },
+        drift: { ...input.drift, city },
+      });
+    }
+    const priced =
+      horizonSeconds === null || input.drift === undefined
+        ? input
+        : { ...input, drift: { ...input.drift, horizonSeconds } };
+    for (const each of weighed) each.plan = forecastIn(each, each.chaos, input.readings, priced);
   }
   // Under a target, the least time to it among the cities weighed; else the most rank a second. The current city on a
   // tie.
@@ -299,7 +318,8 @@ export function chooseBladeburnerCity(
   if (work !== null && action !== null && unbounded.rankPerSecond > now && unbounded.duty > 0) {
     const after = chaosAfterIncite(chosen.chaos);
     const countGain = inciteCountGain(action);
-    const gain = countGain * (work.seconds / unbounded.duty) * (unbounded.rankPerSecond - now);
+    const gain =
+      countGain * ((work.seconds + work.diplomacySeconds) / unbounded.duty) * (unbounded.rankPerSecond - now);
     const baseline = atChaos(chaosThreshold, unboundedReadings);
     const chaosCost = chaosRankLoss((chaos) => atChaos(chaos, unboundedReadings), baseline, chosen.chaos, after);
     const cost = BLADEBURNER_CHAOS_ACTION_SECONDS * chaosActionForgone(nowPlan) + chaosCost;
@@ -325,5 +345,6 @@ export function chooseBladeburnerCity(
     diplomacy,
     incite,
     chaosAction: diplomacy?.pays ? DIPLOMACY : incite?.pays ? INCITE_VIOLENCE : null,
+    ...(horizonSeconds !== null && horizonSeconds > 0 ? { horizonSeconds } : {}),
   };
 }

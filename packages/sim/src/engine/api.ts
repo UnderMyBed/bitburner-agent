@@ -112,6 +112,8 @@ export interface EngineApi {
   homePeak(): HomePeak;
   /** Every Bladeburner attempt since the game booted, from `from` on (#411), each as the game drew it. */
   bladeburnerAttempts(from: number): BladeburnerAttempt[];
+  /** Every city's true population, estimate, communities and chaos (#418), as they stand. */
+  bladeburnerCities(): { name: string; population: number; estimate: number; communities: number; chaos: number }[];
   /** The game-side fields of the game diagnostics (the host adds `bootMs`). */
   gameDiagnostics(): Omit<GameDiagnostics, "bootMs" | "defaultLocale" | "pinnedLocale">;
   /**
@@ -196,6 +198,7 @@ const API_FUNCTIONS = {
   saveJson: true,
   homePeak: true,
   bladeburnerAttempts: true,
+  bladeburnerCities: true,
   gameDiagnostics: true,
   installPageGlobals: true,
   setGameEventListener: true,
@@ -224,7 +227,7 @@ export function assertEngineApi(exports: unknown): asserts exports is EngineApi 
 
 /**
  * Bladeburner's figures a harness may set (#375): its current city's population, estimate, communities and chaos, the
- * stamina, and contracts' and operations' max levels by name. Each absent is left as it is.
+ * stamina, and contracts' and operations' max levels and (#418) counts by name. Each absent is left as it is.
  */
 export interface BladeburnerFigures {
   population?: number;
@@ -233,6 +236,7 @@ export interface BladeburnerFigures {
   chaos?: number;
   stamina?: number;
   maxLevels?: Record<string, number>;
+  counts?: Record<string, number>;
   /** The Black Ops done (#398), a whole number to 21. */
   blackOpsDone?: number;
 }

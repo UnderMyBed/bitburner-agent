@@ -394,7 +394,7 @@ export class BladeburnerActionsFold {
     const levels = reading.skills?.levels ?? {};
     const factions = (data.player as { factions?: unknown } | undefined)?.factions;
     const factionJoined = Array.isArray(factions) && factions.includes(BLADEBURNER_FACTION);
-    const rule = bladeburnerRuleInputOf(reading, person, rankMultiplier);
+    const rule = bladeburnerRuleInputOf(reading, person, rankMultiplier, data.player);
     const kept: Kept = {
       atMs,
       rank,
@@ -687,7 +687,15 @@ export class BladeburnerActionsFold {
       .filter(([name, level]) => (level ?? 0) > (first.levels[name as keyof BladeburnerSkillLevels] ?? 0))
       .map(([name, level]) => `${name} ${first.levels[name as keyof BladeburnerSkillLevels] ?? 0} → ${level}`);
     const withSkills = this.#plan(last.kept).rankPerSecond;
+    // The same rule with none (#418): under the same target, so at the same horizon's drift as the plan with them.
     const without = chooseBladeburnerAction({
+      ...this.#forecastInput(last.kept),
+      skills: { read: last.kept.levels, planned: {} },
+      ...(last.kept.target === null ? {} : { target: { rank: last.kept.rank, target: last.kept.target } }),
+    }).rankPerSecond;
+    // With none at the hour's own horizon (#418's ruling 1): rank a second at the chances read, no target (main's
+    // measure for an hour's rank, the drift over a reading).
+    const withoutNow = chooseBladeburnerAction({
       ...this.#forecastInput(last.kept),
       skills: { read: last.kept.levels, planned: {} },
     }).rankPerSecond;
@@ -695,7 +703,7 @@ export class BladeburnerActionsFold {
       `  the skills (#379): bought over the window: ${bought.length === 0 ? "none" : bought.join(", ")}; at the last ` +
         `reading, ${formatIsoTime(last.kept.atMs)}: ${describeSkillPlan(last.plan, last.kept.levels, last.kept.costMultiplier)}`,
       `    the rule's forecast there: ${perMinute(withSkills)} with the levels read (${levelsText(last.kept.levels)}); ` +
-        `${perMinute(without)} with none (B2's)`,
+        `${perMinute(without)} with none (B2's); ${perMinute(withoutNow)} with none at rank a second (an hour's)`,
     ];
     lines.push(`  skill points unspent with a level to buy, past ${formatDuration(BLADEBURNER_SKILLS_WITHIN_MS)}:`);
     const long = [...this.#unspent, ...(this.#unspentOpen === null ? [] : [this.#unspentOpen])].filter(

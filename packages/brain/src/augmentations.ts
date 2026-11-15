@@ -284,11 +284,19 @@ export const AUGMENTATION_RESERVE_LOOKAHEAD_MS = CLOUD_SERVER_PAYBACK_LIMIT_MS;
 export const NOT_QUEUED_AFTER_READS = 2;
 
 /**
- * The money sources that are earnings (`utils/MoneySourceTracker.ts`): what the income counts. The rest are spending
- * (servers, augmentations, Hacknet's and a gang's expenses, classes, hospitals), mixed (stocks, corporations, casino),
- * or "other", which holds program purchases and an install's starting money alike.
+ * The money sources that are earnings (`utils/MoneySourceTracker.ts`): what the income counts, net of the hospital's
+ * bills (`HOSPITAL_SOURCE`). The rest are spending (servers, augmentations, Hacknet's and a gang's expenses, classes),
+ * mixed (stocks, corporations, casino), or "other", which holds program purchases and an install's starting money alike.
  */
 export const EARNING_SOURCES = ["hacking", "work", "crime", "hacknet", "codingcontract", "infiltration"] as const;
+
+/**
+ * The hospital's money source (#418's review, ruling 3: priced wherever money buys augmentations): Bladeburner's
+ * failures' bills (a failure's damage at 0 HP, `Bladeburner.ts:983-990`, hospitalises: `PlayerObjectGeneralMethods.ts:
+ * 281-283`, `loseMoney(cost, "hospitalization")`, a loss, so under 0), taken off the
+ * income A6 buys from, as they come out of the money its purchases need. Absent: none.
+ */
+export const HOSPITAL_SOURCE = "hospitalization";
 
 /** The events the rule stores (#210), for the run report. */
 export const AUGMENTATION_INSTALL_CHOSEN_EVENT_KIND = "augmentationInstallChosen";
@@ -432,6 +440,13 @@ export interface BlackOpsInstallView {
    * where installing doesn't lead, or never at an eighth of the step. Absent in events before #409.
    */
   marginMs?: number | null;
+  /**
+   * The hospital's money a game second on each side (#418, core's `moneyLostPerSecond`): keeping at the money read,
+   * installing now from the $1,000 it leaves; null, not read. Shown, not traded against the time (the planner's,
+   * #359); priced where money buys augmentations, A6's income net of it (`earnedOf`). Keeping's side never installs in
+   * B7's model: optimistic for keeping, as a later install buys less. Absent in events before #418.
+   */
+  moneyLostPerSecond?: { keep: number | null; installNow: number | null };
 }
 
 /** Core's timing as the view keeps it (#404). */
@@ -446,6 +461,7 @@ export function blackOpsInstallViewOf(timing: BlackOpsInstallTiming): BlackOpsIn
     choice: timing.choice,
     gain: { successChance, maxStamina, staminaGain },
     marginMs: ms(timing.marginSeconds),
+    moneyLostPerSecond: { ...timing.moneyLostPerSecond },
   };
 }
 
@@ -466,11 +482,27 @@ export function describeBlackOpsInstallTiming(view: BlackOpsInstallView | null):
   return (
     `the Black Ops' route (#404), the grown estimate of the time to the destroy (#408): keep ${time(view.keepMs)}, ` +
     `${install}` +
+    describeHospitalSides(view.moneyLostPerSecond) +
     (view.marginMs == null
       ? ""
       : `, the difference's error at the step ${time(view.marginMs)} (#406's rule: installing must beat it)`) +
     ": " +
     (view.choice === "install" ? "installing now" : "keeping")
+  );
+}
+
+/**
+ * The hospital's money on each side (#418), in words: " (the hospital $1,234 a second keeping, $1 installing now from
+ * the $1,000 an install leaves, #418: shown, not traded; A6's income net of it; keeping never installs in this model,
+ * optimistic for keeping, as a later install buys less)"; "" where neither is read.
+ */
+function describeHospitalSides(sides: BlackOpsInstallView["moneyLostPerSecond"]): string {
+  if (sides === undefined || (sides.keep === null && sides.installNow === null)) return "";
+  const each = (money: number | null) => (money === null ? "unread" : `${formatMoney(money)} a second`);
+  return (
+    ` (the hospital ${each(sides.keep)} keeping, ${each(sides.installNow)} installing now from the $1,000 an install ` +
+    "leaves, #418: shown, not traded; A6's income net of it; keeping never installs in this model, optimistic for " +
+    "keeping, as a later install buys less)"
   );
 }
 
@@ -1086,12 +1118,15 @@ function resetInfoOf(slowData: SlowSnapshotData) {
   };
 }
 
-/** The money earned since the install, from the slow snapshot's money sources, or null without them. */
+/**
+ * The money earned since the install net of the hospital's bills (#418), from the slow snapshot's money sources, or
+ * null without them.
+ */
 export function earnedOf(slowData: SlowSnapshotData): number | null {
   const sources = slowData.moneySources;
   if (typeof sources !== "object" || sources === null) return null;
   let earned = 0;
-  for (const source of EARNING_SOURCES) {
+  for (const source of [...EARNING_SOURCES, HOSPITAL_SOURCE]) {
     const value = sources[source] ?? 0;
     if (!isFiniteNumber(value)) return null;
     earned += value;

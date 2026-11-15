@@ -54,7 +54,9 @@
  *   purpose), against installing; their weights are small (the contracts' charisma 0.1, hacking 0);
  * - the rank the actions gain during the rebuild (Training gains none, `Bladeburner.ts:1094-1105`), cautious;
  * - the Bladeburners faction's reputation lost to favour, which only the next purchases need, not the route;
- * - the money the install resets, and the hospital's: the route's time doesn't read them;
+ * - the money the install resets, and the hospital's (#418: shown on each side, `moneyLostPerSecond`): the route's time
+ *   doesn't read them. The hospital's is priced where money buys augmentations (A6's income net of it, the brain's
+ *   `earnedOf`); keeping's side never installs in this model, optimistic for keeping, as a later install buys less;
  * - the gym, the planner's choice of the player's one focus (#359), later.
  */
 import { AUGMENTATIONS } from "./augmentation-data.ts";
@@ -71,6 +73,7 @@ import type { BladeburnerBlackOp } from "./bladeburner-black-ops.ts";
 import {
   BLADEBURNER_GROWTH_FRACTION,
   BLADEBURNER_GROWTH_LEAST_STEP,
+  type BlackOpsGrownTime,
   blackOpsRouteGrownEstimate,
 } from "./bladeburner-growth.ts";
 
@@ -218,6 +221,15 @@ export interface BlackOpsInstallTiming {
    * installing must beat; null where installing doesn't lead at the step (not measured), 0 where keeping is never.
    */
   marginSeconds: number | null;
+  /**
+   * The hospital's money a game second on each side (#418, the grown estimate's `moneyLostPerSecond`): keeping, at the
+   * money read; installing now, from the $1,000 an install leaves (`MONEY_AFTER_INSTALL`, the floor, labelled there).
+   * Null, not read. Not traded against the time (the planner's trade, #359, the owner's): the money is priced where it
+   * buys augmentations, A6's income net of the hospital's bills (the brain's `earnedOf`), so B7's re-plan each 10 min
+   * sees the next install's purchases after them. Labelled: keeping's side never installs in its model (the route to
+   * the destroy without one), optimistic for keeping, as a later install buys less with the bills paid.
+   */
+  moneyLostPerSecond: { keep: number | null; installNow: number | null };
 }
 
 /** What the grown estimate reads beside B6's (#408): the BitNode's skill cost and the skill points unspent. */
@@ -260,14 +272,21 @@ function routeSeconds(
   growth: BlackOpsGrowthAt,
   forecast?: BladeburnerPerson,
   fine = false,
-): number {
+): BlackOpsGrownTime {
   return blackOpsRouteGrownEstimate(forecast === undefined ? input : { ...input, forecast }, at, {
     combat,
     costMultiplier: growth.costMultiplier,
     points: growth.points ?? 0,
     ...(fine ? { fraction: BLADEBURNER_GROWTH_FRACTION / 8, leastStep: BLADEBURNER_GROWTH_LEAST_STEP / 8 } : {}),
-  }).seconds;
+  });
 }
+
+/**
+ * The money an install leaves (`PlayerObjectGeneralMethods.ts:79-101`; #418: the hospital's bill after it). Labelled
+ * (#418's review): the floor, the money at the install's moment; the route after it earns, so its bills (capped by the
+ * money, `hospitalCostPerFailure`) rise from it: installing now's hospital money a lower bound.
+ */
+export const MONEY_AFTER_INSTALL = 1000;
 
 /**
  * The planner's install timing on the Black Ops' route (#404, see above): keep (the grown estimate now, #408) against
@@ -296,17 +315,30 @@ export function blackOpsInstallTiming({
   const priced = levels === undefined ? input.person : personAtLevels(input.person, levels);
   // Keeping finishes a rebuild under way first (Training from the levels now), then the route at its targets.
   const finish = levels === undefined ? 0 : bladeburnerRebuildSeconds(combat, { targets: levels }).seconds;
-  const keepAt = (fine: boolean) =>
-    finish +
-    (levels === undefined
+  const keepRoute = (fine: boolean) =>
+    levels === undefined
       ? routeSeconds(input, at, combat, growth, undefined, fine)
-      : routeSeconds(input, at, combatAt(combat, levels, null), growth, priced, fine));
+      : routeSeconds(input, at, combatAt(combat, levels, null), growth, priced, fine);
+  const keepAt = (fine: boolean) => finish + keepRoute(fine).seconds;
   const targets = levels ?? combat.skills;
   const rebuildSeconds = bladeburnerRebuildSeconds(combat, { targets, gain, fromZero: true }).seconds;
-  const afterAt = (fine: boolean) =>
-    routeSeconds(input, at, combatAt(combat, targets, gain), growth, bladeburnerPersonAfterInstall(priced, gain), fine);
-  const keepSeconds = keepAt(false);
-  const afterSeconds = afterAt(false);
+  // After the install (#418): the hospital's bill from the money it leaves.
+  const installed =
+    input.hospital === undefined ? input : { ...input, hospital: { ...input.hospital, money: MONEY_AFTER_INSTALL } };
+  const afterRoute = (fine: boolean) =>
+    routeSeconds(
+      installed,
+      at,
+      combatAt(combat, targets, gain),
+      growth,
+      bladeburnerPersonAfterInstall(priced, gain),
+      fine,
+    );
+  const afterAt = (fine: boolean) => afterRoute(fine).seconds;
+  const kept = keepRoute(false);
+  const keepSeconds = finish + kept.seconds;
+  const after = afterRoute(false);
+  const afterSeconds = after.seconds;
   const installNowSeconds = installable ? rebuildSeconds + afterSeconds : null;
   // #406's rule: the difference's error at the step, measured against an eighth of it where installing leads (keeping
   // never: no error to beat). A difference never at the eighth (an error of Infinity, or NaN) keeps.
@@ -320,7 +352,19 @@ export function blackOpsInstallTiming({
     installNowSeconds !== null && marginSeconds !== null && keepSeconds - installNowSeconds > marginSeconds
       ? "install"
       : "keep";
-  return { keepSeconds, rebuildSeconds, afterSeconds, installNowSeconds, choice, gain, marginSeconds };
+  return {
+    keepSeconds,
+    rebuildSeconds,
+    afterSeconds,
+    installNowSeconds,
+    choice,
+    gain,
+    marginSeconds,
+    moneyLostPerSecond: {
+      keep: kept.moneyLostPerSecond ?? null,
+      installNow: installable ? (after.moneyLostPerSecond ?? null) : null,
+    },
+  };
 }
 
 /**
@@ -349,7 +393,7 @@ export function bladeburnerAugmentationValues({
       combatAt(combat, combat.skills, gain),
       growth,
       bladeburnerPersonAfterInstall(input.person, gain),
-    );
+    ).seconds;
   const now = after(NO_INSTALL_GAIN);
   return augmentations.map((augmentation) => ({
     augmentation,

@@ -171,6 +171,10 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       return engine.bladeburnerAttempts(from);
     },
+    "diagnostics.bladeburnerCities": () => {
+      booted();
+      return engine.bladeburnerCities();
+    },
     "diagnostics.reseedRandom": ({ seed }) => {
       validateSeed(seed);
       reseedRandom(seed);
@@ -249,8 +253,11 @@ async function start(options: HostOptions): Promise<Host> {
     "diagnostics.setBladeburnerFigures": ({ figures }) => {
       booted();
       if (figures.city !== undefined && typeof figures.city !== "string") throw new RangeError("city must be a name");
-      for (const [name, value] of Object.entries({ ...figures, ...(figures.maxLevels ?? {}) })) {
-        if (name === "maxLevels" || name === "city") continue;
+      const counts = Object.fromEntries(
+        Object.entries(figures.counts ?? {}).map(([name, count]) => [`${name}'s count`, count]),
+      );
+      for (const [name, value] of Object.entries({ ...figures, ...(figures.maxLevels ?? {}), ...counts })) {
+        if (name === "maxLevels" || name === "counts" || name === "city") continue;
         if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
           throw new RangeError(`${name} must be finite and 0 or more, not ${value}`);
         }

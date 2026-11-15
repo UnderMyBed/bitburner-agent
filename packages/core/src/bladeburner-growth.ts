@@ -53,6 +53,15 @@
  *   review). Only the BN6 suites' hindcasts check ρ.
  * - **The first Black Op's rank:** B6's stock (B5's least expected time, `firstToRankSeconds`) where shorter than the
  *   growth's tail: each leaves out what the other counts (the counts' stock; the growth), so each errs long.
+ * - **The cities' drift** (#418, ./bladeburner-drift.ts), with the cities read (`input.drift`): the state carries the
+ *   six (`BladeburnerGrowthState`'s `drift`), each step's mix moving them on their mean path (its attempts, the decay
+ *   and the random events' mean, Diplomacy holding the city worked at 50, B4's city chosen again); each chance there is
+ *   the one read times the city worked's factor over the one read in (`driftedChance`), and the step's mix is priced
+ *   over the step ahead (its rank over the step before's rate) as B2's rule prices a plan over its horizon
+ *   (`bladeburnerGrownInput`'s `horizonSeconds`: tested equal at a step). Labelled: the step's pricing each action
+ *   alone (the mix's other actions' drift in it is the state's at the next step); the Black Ops' rebuilds priced at
+ *   the state (no step ahead); the events' mean for their spread, and the chance's mean over the paths (concave in the
+ *   population): optimistic.
  * Left out, and labelled:
  * - hacking, charisma and intelligence's experience from the actions (their weights in the competence are small, the
  *   contracts' charisma 0.1, the operations' hacking at most 0.25): cautious;
@@ -65,7 +74,8 @@
  *   optimistic by about 2% (above);
  * - the spread of the paths: the rate at the mean path stands for the paths' mean (the walk's whole route 2.8%
  *   shorter): cautious;
- * - B6's own (its stamina for the Black Ops, HP and the hospital, the destroy's minute): as B6 labels them;
+ * - B6's own (its stamina for the Black Ops, HP and the hospital, the destroy's minute): as B6 labels them (#418: the
+ *   hospital's money a second at the reading is reported, `moneyLostPerSecond`, not in the time);
  * - the counts' stock after the first Black Op, as B6: cautious.
  */
 import { COMBAT_STATS, type CombatPerson, type CombatStat, skillLevelOf } from "./bladeburner.ts";
@@ -73,7 +83,9 @@ import {
   actionChanceAtRatio,
   actionChanceOverSpread,
   actionDifficulty,
+  actionHpLoss,
   actionSkillCompetence,
+  BLADEBURNER_CONSTANTS,
   type BladeburnerActionInput,
   type BladeburnerActionReading,
   type BladeburnerLevelledAction,
@@ -97,6 +109,15 @@ import {
   blackOpSeconds,
   blackOpSuccessChance,
 } from "./bladeburner-black-ops.ts";
+import {
+  type BladeburnerDriftCity,
+  type BladeburnerDriftPart,
+  type BladeburnerDriftState,
+  bladeburnerDriftPath,
+  bladeburnerDriftStart,
+  driftedChance,
+  hospitalCostPerFailure,
+} from "./bladeburner-drift.ts";
 import { type BladeburnerSkillLevels, bladeburnerSkillMultsOf } from "./bladeburner-skills.ts";
 
 /**
@@ -138,9 +159,19 @@ export interface BladeburnerGrowthState {
   exp: Record<CombatStat, number>;
   /** Each contract's and operation's successes, by name. */
   successes: Record<string, number>;
+  /**
+   * The cities along the route (#418, ./bladeburner-drift.ts): the six as the mix's attempts, the time and Diplomacy
+   * have moved them, the brain's city chosen again (B4's), and the one the reading's chances were read in (`reference`).
+   * Absent: no cities read, no drift.
+   */
+  drift?: { state: BladeburnerDriftState; reference: BladeburnerDriftCity };
 }
 
-/** The state a reading starts the route at (#408): its skills, points, the combat experience, the least successes. */
+/**
+ * The state a reading starts the route at (#408): its skills, points, the combat experience, the least successes; and
+ * (#418) the cities read, the city worked the one the chances were read in, Diplomacy's ceiling the chaos threshold
+ * (B4 brings a chaos read over it down along the route; that Diplomacy's time left out, optimistic, a reading's).
+ */
 export function bladeburnerGrowthStart(
   input: Omit<BladeburnerActionInput, "target">,
   { rank, points, combat }: { rank: number; points: number; combat: CombatPerson },
@@ -150,7 +181,18 @@ export function bladeburnerGrowthStart(
     const action = bladeburnerLevelledAction(read.type, read.name);
     if (action !== null) successes[action.name] = successesOfMaxLevel(action, read.maxLevel);
   }
-  return { rank, points, levels: { ...(input.skills?.read ?? {}) }, exp: { ...combat.exp }, successes };
+  const start =
+    input.drift === undefined ? null : bladeburnerDriftStart(input.drift.cities, input.drift.city, input.drift.chaos);
+  const drift =
+    start === null
+      ? {}
+      : {
+          drift: {
+            state: { ...start, ceiling: BLADEBURNER_CONSTANTS.chaosThreshold },
+            reference: { ...(start.cities[start.worked] as BladeburnerDriftCity) },
+          },
+        };
+  return { rank, points, levels: { ...(input.skills?.read ?? {}) }, exp: { ...combat.exp }, successes, ...drift };
 }
 
 /** The person at a state (#408): the input's (or its forecast's), each combat stat at its experience's level, at least. */
@@ -178,12 +220,16 @@ export function bladeburnerGrownInput(
   input: Omit<BladeburnerActionInput, "target">,
   combat: CombatPerson,
   state: BladeburnerGrowthState,
+  /** The drift's horizon (#418): each chance priced over the step ahead (`chooseBladeburnerAction`'s `drift`). */
+  horizonSeconds = 0,
 ): Omit<BladeburnerActionInput, "target"> {
   const readMults = bladeburnerSkillMultsOf(input.skills?.read ?? {});
   const mults = bladeburnerSkillMultsOf(state.levels);
   const person = personAt(input, combat, state);
   const penalty = input.maxStamina > 0 ? staminaPenalty(input.stamina, input.maxStamina) : 0;
   const personRatio = personCompetenceFactor(person) / personCompetenceFactor(input.person);
+  // The city worked along the route (#418): its chance factor over the one read in, and its communities for Raid.
+  const city = state.drift === undefined ? null : (state.drift.state.cities[state.drift.state.worked] ?? null);
   const readings = input.readings.map((read): BladeburnerActionReading => {
     const action = bladeburnerLevelledAction(read.type, read.name);
     if (action === null || !(penalty > 0)) return read;
@@ -193,12 +239,30 @@ export function bladeburnerGrownInput(
     const level = Math.max(read.maxLevel, maxLevelOfSuccesses(action, state.successes[action.name] ?? 0));
     // Clipped at 1: exact at a true chance (#411's pricing); at the spread's mean, min(1, E × rise) is over
     // E[min(1, chance × rise)] past the cap (Jensen), optimistic there.
-    const chance = Math.min(1, (read.chance[0] / penalty) * ratio * action.difficultyFac ** (read.level - level));
+    const grown = Math.min(1, (read.chance[0] / penalty) * ratio * action.difficultyFac ** (read.level - level));
+    // In the city worked (#418): a chance read at 1 taken as 1 there, so it falls with the drift (cautious).
+    const chance =
+      city === null || state.drift === undefined
+        ? grown
+        : driftedChance({ action, chance: grown }, state.drift.reference, city, state.drift.state.ceiling);
     return { ...read, level, maxLevel: level, chance: [chance, chance] };
   });
   const maxStamina = maxStaminaAtSkills(input.person, input.maxStamina, readMults, mults, person);
-  const { forecast: _forecast, ...rest } = input;
-  return { ...rest, readings, person, stamina: maxStamina, maxStamina, skills: { read: { ...state.levels } } };
+  const { forecast: _forecast, drift: _drift, ...rest } = input;
+  // The drift from the city worked, its reference the state's own (the chances above are there now).
+  const drift =
+    state.drift === undefined || city === null
+      ? {}
+      : { drift: { cities: state.drift.state.cities, city: city.name, horizonSeconds } };
+  return {
+    ...rest,
+    readings,
+    person,
+    stamina: maxStamina,
+    maxStamina,
+    skills: { read: { ...state.levels } },
+    ...drift,
+  };
 }
 
 /**
@@ -234,6 +298,17 @@ export function bladeburnerPricedInput<T extends Omit<BladeburnerActionInput, "t
   });
   return { input: { ...input, readings }, ratio };
 }
+
+/**
+ * The chunks a step's drift is followed in at most (#418's review, for the cost): a step is 5% of the rank
+ * (`BLADEBURNER_GROWTH_FRACTION`), its pricing over the step ahead and the cities moved by it each a path, against the
+ * rule's `BLADEBURNER_DRIFT_CHUNKS` over the whole horizon; a city worked throughout converges in its chunks (core's
+ * test). Raid with B4's moves is followed an attempt at a time here too (`BLADEBURNER_DRIFT_EXACT_RAID`, #418's ruling
+ * 4: its chunks don't converge, B4's pick between near-tied homes flipping with the step; that flipping is #420), so
+ * the estimate's Raid is the rule's: at no measured cost (bn6-install 18.0 s here, 18.5 s with 16 chunks for it; core's
+ * route 177.1 h either way).
+ */
+export const BLADEBURNER_GROWTH_DRIFT_CHUNKS = 16;
 
 /** The least step of the integration, in rank: 10 skill points' worth. */
 export const BLADEBURNER_GROWTH_LEAST_STEP = 10 * BLADEBURNER_RANKS_PER_SKILL_POINT;
@@ -281,6 +356,13 @@ export interface BlackOpsGrownTime {
   solves: number;
   /** pop/popEst recovered from the next one's range read (#411), or null: the chances priced over the spread. */
   populationRatio: number | null;
+  /**
+   * The hospital's money a game second at the reading (#418): the mix's failures a second, each its mean bill at the
+   * money and max HP read (core's `hospitalCostPerFailure`); null, not read. Absent in figures before #418.
+   */
+  moneyLostPerSecond?: number | null;
+  /** The cities at the route's end (#418): the drift's mean path, the city worked, its population over the one read. */
+  drift?: { cities: BladeburnerDriftCity[]; worked: string; populationRatio: number } | null;
 }
 
 /**
@@ -329,16 +411,23 @@ export function blackOpsRouteGrownEstimate(
   let seconds = 0;
   let solves = 0;
   const path: { rank: number; seconds: number }[] = [{ rank, seconds: 0 }];
-  // The tail at a state: its grown input and the mix there.
-  const tailAt = (at: BladeburnerGrowthState) => {
-    const grown = bladeburnerGrownInput(input, combat, at);
+  // The tail at a state: its grown input and the mix there, each chance priced over `horizon` s ahead (#418), in
+  // `BLADEBURNER_GROWTH_DRIFT_CHUNKS` chunks.
+  const tailAt = (at: BladeburnerGrowthState, horizon = 0) => {
+    const grown = bladeburnerGrownInput(input, combat, at, horizon);
     solves += 1;
-    return { grown, mix: bladeburnerTailMix(grown) };
+    const priced =
+      grown.drift === undefined
+        ? grown
+        : { ...grown, drift: { ...grown.drift, chunks: BLADEBURNER_GROWTH_DRIFT_CHUNKS } };
+    return { grown, mix: bladeburnerTailMix(priced) };
   };
-  // Work for `dt` game seconds at a mix: its experience and successes accrued.
+  // Work for `dt` game seconds at a mix: its experience and successes accrued, and (#418) the cities moved by its
+  // attempts, the time and Diplomacy (its time in the mix's own, priced), the brain's city chosen again (B4's).
   const work = (at: BladeburnerGrowthState, mix: ReturnType<typeof bladeburnerTailMix>, dt: number) => {
     const exp = { ...at.exp };
     const successes = { ...at.successes };
+    const parts: BladeburnerDriftPart[] = [];
     for (const part of mix.work) {
       const action = bladeburnerLevelledAction(part.type, part.name) as BladeburnerLevelledAction;
       const gained = actionCombatExpPerAttempt(
@@ -350,8 +439,16 @@ export function blackOpsRouteGrownEstimate(
       );
       if (grow.stats) for (const stat of COMBAT_STATS) exp[stat] += gained[stat] * part.attemptsPerSecond * dt;
       if (grow.levels) successes[part.name] = (successes[part.name] ?? 0) + part.chance * part.attemptsPerSecond * dt;
+      parts.push({ action, chance: part.chance, attempts: part.attemptsPerSecond * dt });
     }
-    return { ...at, exp, successes };
+    if (at.drift === undefined || !(dt > 0)) return { ...at, exp, successes };
+    const city = at.drift.state.cities[at.drift.state.worked] as BladeburnerDriftCity;
+    const moved = bladeburnerDriftPath(at.drift.state, city, parts, dt, {
+      charisma: (input.forecast ?? input.person).skills.charisma,
+      moves: true,
+      chunks: BLADEBURNER_GROWTH_DRIFT_CHUNKS,
+    });
+    return { ...at, exp, successes, drift: { state: moved.state, reference: at.drift.reference } };
   };
   // The points unspent at a state, spent by B3's rule there, as the brain runs it: since #415 at the estimate's own
   // pricing, the true population's chances (the brain's rule input is `bladeburnerPricedInput`'s too), so the estimate
@@ -376,21 +473,34 @@ export function blackOpsRouteGrownEstimate(
     return gained > 0 ? spend(risen) : risen;
   };
   const first = tailAt(state);
+  // The hospital's money a second at the reading (#418): the mix's failures a second, each its mean bill.
+  const { hospital } = input;
+  const moneyLostPerSecond =
+    hospital === undefined
+      ? null
+      : first.mix.work.reduce((sum, part) => {
+          const action = bladeburnerLevelledAction(part.type, part.name) as BladeburnerLevelledAction;
+          const bill = hospitalCostPerFailure(actionHpLoss(action, part.level), hospital.hpMax, hospital.money);
+          return sum + part.attemptsPerSecond * (1 - part.chance) * bill;
+        }, 0);
   // The points read unspent, spent first (B3's, within a reading of coming): ρ now is the reading's, before them.
   state = spend(state);
   const rateNow = first.mix.rate;
+  // The drift's horizon a step (#418): the step's rank over the rate a step before (the first, the reading's).
+  let lastRate = rateNow;
   const left = BLADEBURNER_BLACK_OPS.slice(BLADEBURNER_BLACK_OPS.findIndex((op) => op.name === next.name));
   const steps: BlackOpsGrownStep[] = [];
   for (const [index, op] of left.entries()) {
     // The climb to its rank, step by step.
     const startSeconds = seconds;
     while (state.rank < op.rank && Number.isFinite(seconds)) {
-      const { mix } = tailAt(state);
+      const by = Math.min(op.rank - state.rank, Math.max(leastStep, fraction * state.rank));
+      const { mix } = tailAt(state, state.drift !== undefined && lastRate > 0 ? by / lastRate : 0);
       if (!(mix.rate > 0)) {
         seconds = Number.POSITIVE_INFINITY;
         break;
       }
-      const by = Math.min(op.rank - state.rank, Math.max(leastStep, fraction * state.rank));
+      lastRate = mix.rate;
       const dt = by / mix.rate;
       seconds += dt;
       state = rise(work(state, mix, dt), by);
@@ -476,7 +586,25 @@ export function blackOpsRouteGrownEstimate(
     state = rise(state, gain);
     path.push({ rank: state.rank, seconds });
   }
-  return { steps, seconds, rate: rateNow, path, solves, populationRatio };
+  const end = state.drift === undefined ? null : state.drift.state.cities[state.drift.state.worked];
+  return {
+    steps,
+    seconds,
+    rate: rateNow,
+    path,
+    solves,
+    populationRatio,
+    moneyLostPerSecond,
+    drift:
+      end == null || state.drift === undefined
+        ? null
+        : {
+            cities: state.drift.state.cities.map((city) => ({ ...city })),
+            worked: end.name,
+            populationRatio:
+              state.drift.reference.population > 0 ? end.population / state.drift.reference.population : 1,
+          },
+  };
 }
 
 /** The combat stats' experience multipliers of `combat`. */
