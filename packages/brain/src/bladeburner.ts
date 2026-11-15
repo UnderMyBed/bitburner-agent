@@ -575,10 +575,26 @@ export function bladeburnerMeasuredCitiesOf(
 }
 
 /**
+ * The drift's cities from a reading (#418, #420): the cities measured by the round, the city read, and its measured
+ * pop/popEst (`ratio`, absent where it isn't recovered: #422's round 2, so B2's and B3's chances there are priced at
+ * the same ratio as B4's); null without the round. The rule's input and the route's (`routeDriftOf`) take it.
+ */
+export function bladeburnerMeasuredDriftOf(
+  reading: BladeburnerActionsReading,
+  person: BladeburnerPerson,
+): { cities: BladeburnerCityReading[]; city: string; ratio?: number } | null {
+  const measured = bladeburnerMeasuredCitiesOf(reading, person);
+  if (measured === null || reading.city === null) return null;
+  const ratio = measured.measures.find((each) => each.name === reading.city)?.ratio ?? null;
+  return { cities: measured.cities, city: reading.city, ...(ratio === null ? {} : { ratio }) };
+}
+
+/**
  * What's wrong with a reading's round (#420), or null: none asked for (no cities read), or it's as it should be. The
  * `bladeburnerCityRound` alert's, and the run report's failure: the round failed (the worker's problems say why), none
  * from an Agent that reads the cities (an older one), the division not back in its city, or (#420's ruling 4) a city's
- * ranges not clipped giving different pop/popEst past 1e-9 (`measures`: the model off).
+ * ranges not clipped giving different pop/popEst past the float error's bar (core's `BLADEBURNER_RANGE_AGREEMENT`,
+ * 2.8e−14: `measures`, the model off).
  */
 export function bladeburnerRoundProblem(
   reading: BladeburnerActionsReading,
@@ -598,7 +614,8 @@ export function bladeburnerRoundProblem(
   if (off !== null) {
     return (
       `${off.name}'s ranges in the round give pop/popEst ${off.disagreement.toExponential(2)} apart, past ` +
-      `${BLADEBURNER_RANGE_AGREEMENT} (#420's ruling 4: the model of the game's range is off)`
+      `${BLADEBURNER_RANGE_AGREEMENT.toExponential(2)}, the float error's bar (#420's ruling 4: the model of the ` +
+      "game's range is off)"
     );
   }
   return null;
@@ -623,8 +640,7 @@ export function bladeburnerRuleInputOf(
   player?: unknown,
 ): BladeburnerRuleInput {
   const hospital = bladeburnerHospitalOf(player);
-  // The cities at their measured true populations (#420): none without the round.
-  const measured = bladeburnerMeasuredCitiesOf(reading, person);
+  const drift = bladeburnerMeasuredDriftOf(reading, person);
   const input = {
     readings: reading.actions,
     person,
@@ -633,8 +649,9 @@ export function bladeburnerRuleInputOf(
     rankMultiplier,
     speed: bladeburnerSpeedOf(reading.bonusSeconds),
     skills: { read: reading.skills?.levels ?? {} },
-    // The cities measured (#418, #420): each chance priced over the plan's horizon under a target (core's drift).
-    ...(measured === null || reading.city === null ? {} : { drift: { cities: measured.cities, city: reading.city } }),
+    // The cities measured (#418, #420): each chance priced over the plan's horizon under a target (core's drift), and
+    // (#422's round 2) at the city read's measured pop/popEst (core's `bladeburnerPricedInput`).
+    ...(drift === null ? {} : { drift }),
     ...(hospital === null ? {} : { hospital }),
   };
   const read = reading.blackOp;
@@ -1343,7 +1360,13 @@ export class BladeburnerRule {
               ? {}
               : {
                   drift: {
-                    ...forecast.drift,
+                    // The measured ratio is the city read's (#420): kept only where it's the city chosen.
+                    ...(there.name === readCity
+                      ? forecast.drift
+                      : {
+                          cities: forecast.drift.cities,
+                          ...(forecast.drift.chunks === undefined ? {} : { chunks: forecast.drift.chunks }),
+                        }),
                     city: there.name,
                     ...(cities.horizonSeconds === undefined ? {} : { horizonSeconds: cities.horizonSeconds }),
                   },

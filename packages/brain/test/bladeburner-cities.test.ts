@@ -255,8 +255,10 @@ const choiceOf = (options: ReadingOptions = {}) => {
       rankMultiplier: 1,
       speed: 1,
       skills: { read: {} },
-      // As the brain's input (#418): the cities read (the drift, under a target) and the player's max HP and money.
-      drift: { cities: read.cities as BladeburnerCityReading[], city: read.city as string },
+      // As the brain's input (#418): the cities read (the drift, under a target) and the player's max HP and money;
+      // and (#422's round 2) the round's measure of the city read, pop/popEst 1 (these readings' truth), at which the
+      // chances are priced in place of the spread.
+      drift: { cities: read.cities as BladeburnerCityReading[], city: read.city as string, ratio: 1 },
       hospital: { hpMax: 20, money: 1e6 },
     }),
     { city: read.city as string, cities: read.cities as BladeburnerCityReading[] },
@@ -276,7 +278,8 @@ describe("the rule (#383)", () => {
     expect(rule.acting()).toBe(true);
     expect(rule.view().actions?.cities).toEqual(choiceOf());
     expect(rule.view().line).toContain(`; ${describeCityChoice(choiceOf() as never, "Sector-12")}`);
-    expect(rule.view().line).toContain("; in Sector-12 (chaos 0.00, 0.31 rank/min: the most of the six)");
+    // At the round's pop/popEst 1 (#422's round 2: 0.31 over the spread before).
+    expect(rule.view().line).toContain("; in Sector-12 (chaos 0.00, 0.30 rank/min: the most of the six)");
   });
 
   test("an older Agent's reading (no cities): B2's work, the state's city null, so the Agent reads them", () => {
@@ -300,7 +303,7 @@ describe("the rule (#383)", () => {
       city: "Aevum",
     });
     expect(rule.view().line).toContain(
-      "; in Aevum (chaos 0.00, 0.31 rank/min: the most of the six, moving from Sector-12 (chaos 80.00, ",
+      "; in Aevum (chaos 0.00, 0.30 rank/min: the most of the six, moving from Sector-12 (chaos 80.00, ",
     );
     // Read in Aevum: kept there.
     expect(decide(rule, medium(reading({ all, city: "Aevum" }))).state?.city).toBe("Aevum");
@@ -526,6 +529,20 @@ describe("the round over the six (#420): each city at its own measured truth", (
     expect(away.view().actions?.cities).toBeNull();
   });
 
+  test("B2's and B3's chances in the city read at the round's ratio (#422's round 2), no Black Op read alone", () => {
+    // Sector-12's own pop/popEst 1.3; these readings carry no Black Op of `bladeburner.js`'s (a B4 Agent's): before,
+    // its chances were priced over the spread; now at the round's measure, as B4's.
+    const truthsHere = { "Sector-12": 1.3 };
+    const rule = new BladeburnerRule();
+    decide(rule, medium(reading({ all, round: roundOf(all, "Sector-12", PERSON, truthsHere) })), T0);
+    expect(rule.view().actions?.ratio).toBeCloseTo(1.3, 9);
+    expect(rule.view().line).toContain("at the true population (pop/popEst 1.300)");
+    // Without the round, the spread, as before.
+    const older = new BladeburnerRule();
+    decide(older, medium(reading({ all, round: false })), T0);
+    expect(older.view().actions?.ratio).toBeNull();
+  });
+
   test("a city's ranges that disagree (#420's ruling 4): the model off, the alert's", () => {
     const round = roundOf(all, "Sector-12", PERSON, truths);
     // Volhaven's Bounty Hunter range from a population 2% off its Black Op's.
@@ -547,7 +564,7 @@ describe("the round over the six (#420): each city at its own measured truth", (
     const rule = new BladeburnerRule();
     decide(rule, medium(reading({ all, round: off })), T0);
     expect(rule.roundProblem()?.problem).toMatch(
-      /^Volhaven's ranges in the round give pop\/popEst .* apart, past 1e-9/,
+      /^Volhaven's ranges in the round give pop\/popEst .* apart, past 2\.84e-14/,
     );
     // As read, all agree.
     const agreeing = new BladeburnerRule();
@@ -820,23 +837,38 @@ describe("the run report's cities (#383)", () => {
 
   test("a move wanted with Diplomacy's later run under way, not one the rule chose again (#422's review): 22 s", () => {
     const all = cities(0, { "Sector-12": { chaos: 80 } });
-    // Diplomacy under way from 0; at 0 to 60 s the rule's choice is no chaos action (every city at 0), so its second
-    // run (from 60 s) isn't kept (#385's `keptRun` stays 0), and the move first wanted at 70 s has the plain bound.
+    // Diplomacy under way from 0: its second run starts at 60 s, at a reading that doesn't keep it (#385's `keptRun`
+    // 0, the rule not yet having ordered it again there), and the move first wanted at that reading has the plain
+    // bound. (Diplomacy still under way at 70 s says the rule ordered it at 60 s, `order.name`: kept from then.)
     const unkept = (offsets: number[]) =>
       fold(
         at(offsets, (offsetMs) =>
-          offsetMs < 70_000
+          offsetMs < 60_000
             ? { all: cities(0), current: DIPLOMACY_UNDER_WAY, found: DIPLOMACY_UNDER_WAY }
             : { all, current: DIPLOMACY_UNDER_WAY, found: DIPLOMACY_UNDER_WAY },
         ),
       );
-    expect(unkept(every10s(0, 70_000 + BLADEBURNER_MOVE_WITHIN_MS)).failures).toEqual([]);
-    const late = unkept(every10s(0, 70_000 + BLADEBURNER_MOVE_WITHIN_MS + 1));
+    expect(unkept(every10s(0, 60_000 + BLADEBURNER_MOVE_WITHIN_MS)).failures).toEqual([]);
+    const late = unkept(every10s(0, 60_000 + BLADEBURNER_MOVE_WITHIN_MS + 1));
     expect(late.failures).toHaveLength(1);
     expect(late.failures[0]).toContain(
-      `a move to Aevum, wanted at ${new Date(T0 + 70_000).toISOString()}, within two readings and an Agent round; `,
+      `a move to Aevum, wanted at ${new Date(T0 + 60_000).toISOString()}, within two readings and an Agent round; `,
     );
     expect(late.failures[0]).toContain(`, past its bound ${formatDuration(BLADEBURNER_MOVE_WITHIN_MS)} (`);
+    // Its second run ordered again at 60 s (still under way at 70 s: `order.name`'s re-keep), the move first wanted at
+    // 80 s: that run's 40 s left are kept, the bound 22 + 40 s.
+    const rekept = (offsets: number[]) =>
+      fold(
+        at(offsets, (offsetMs) =>
+          offsetMs < 80_000
+            ? { all: cities(0), current: DIPLOMACY_UNDER_WAY, found: DIPLOMACY_UNDER_WAY }
+            : { all, current: DIPLOMACY_UNDER_WAY, found: DIPLOMACY_UNDER_WAY },
+        ),
+      );
+    expect(rekept(every10s(0, 80_000 + BLADEBURNER_MOVE_WITHIN_MS + 40_000)).failures).toEqual([]);
+    expect(rekept(every10s(0, 80_000 + BLADEBURNER_MOVE_WITHIN_MS + 40_001)).failures[0]).toContain(
+      "after the Diplomacy run under way, kept to its end (#385): 40 s of its 60 s left then;",
+    );
   });
 
   test("the round (#420): each city's measure over the window, the last in full; a reading without it fails", () => {
@@ -848,8 +880,8 @@ describe("the run report's cities (#383)", () => {
     expect(measured.failures).toEqual([]);
     expect(measured.text).toContain(
       "  the round over the six cities (#420): 2 of 2 readings measured each city; by city: Aevum recovered 2 " +
-        "(pop/popEst 0.900 to 0.900; by the Black Op's range 2, by an action's 0), at the draw's mean (every range " +
-        "clipped) 0; ",
+        "(pop/popEst 0.900 to 0.900; by the Black Op's range 2, by an action's 0; its branch by the estimate's pick 0), " +
+        "at the draw's mean (every range clipped) 0; ",
     );
     expect(measured.text).toContain(
       "    at the last: the round (#420): 6 of 6 recovered; Aevum pop/popEst 0.900 (the Black Op's, 10 ranges agreeing), ",

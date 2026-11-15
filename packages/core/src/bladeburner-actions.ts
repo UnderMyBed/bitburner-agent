@@ -1154,6 +1154,11 @@ function planCandidates({
     chaos?: number;
     horizonSeconds?: number;
     chunks?: number;
+    /**
+     * pop/popEst of `city` as the round measured it (#420, `bladeburnerCityMeasures`), or absent: none recovered there.
+     * Only `bladeburnerPricedInput` reads it (each chance at it, #422's round 2), not the forecast.
+     */
+    ratio?: number;
   };
   /** The max HP and the money read (#418): each plan's hospital money a second. None: not read (null). */
   hospital?: { hpMax: number; money: number };

@@ -94,7 +94,13 @@ export class BladeburnerCitiesFold {
   #rounds = 0;
   readonly #measured = new Map<
     string,
-    Record<BladeburnerCityMeasure["by"], number> & { blackOp: number; low: number; high: number }
+    Record<BladeburnerCityMeasure["by"], number> & {
+      blackOp: number;
+      estimate: number;
+      gap: number;
+      low: number;
+      high: number;
+    }
   >();
   #lastMeasures: BladeburnerCityMeasure[] | null = null;
   readonly #roundFailed: { fromMs: number; toMs: number; detail: string }[] = [];
@@ -103,6 +109,8 @@ export class BladeburnerCitiesFold {
   #chaosSince: { name: string; atMs: number; bonusSeconds: number; keptRun: number } | null = null;
   /** Whether the rule keeps the chaos action's run under way at the reading being added (#385, its `#keptChaosAction`). */
   #keptNow = false;
+  /** The previous reading's chaos action under way, its run and whether the rule kept it (for the re-keep on its order). */
+  #lastChaos: { name: string; run: number; kept: boolean } | null = null;
 
   /** A medium snapshot in the division with B4's reading (its `city` and `cities`), in BN6 or BN7 (`bitNode`). */
   add(
@@ -155,10 +163,17 @@ export class BladeburnerCitiesFold {
       this.#chaosSince = { name: chaosName, atMs, bonusSeconds: reading.bonusSeconds, keptRun: 0 };
     }
     const since = this.#chaosSince;
+    // The rule re-keeps a run on its order (`bladeburner.ts:1413`: `order.name` the chaos action, at a reading where
+    // the run wasn't kept; a Black Op's order or a rebuild's Training wins over it). The order isn't in the store, but
+    // the worker runs it, so it's this reading's action under way: the same chaos action still under way after a
+    // reading that didn't keep its run means the rule ordered it there, and keeps that run (#422's round 2).
+    const last = this.#lastChaos;
+    if (since !== null && last !== null && last.name === since.name && !last.kept) {
+      since.keptRun = Math.max(since.keptRun, last.run);
+    }
     const run = since === null ? 0 : this.#runOf(since, kept);
     this.#keptNow = since !== null && run <= since.keptRun;
-    // Not kept, the rule's choice this reading the same chaos action: it keeps this run from here (its `keptRun`).
-    if (since !== null && !this.#keptNow && choice?.chaosAction === since.name) since.keptRun = run;
+    this.#lastChaos = since === null ? null : { name: since.name, run, kept: this.#keptNow };
     this.#readings += 1;
     if (this.#first === null) this.#first = kept;
     const previous = this.#last;
@@ -197,9 +212,22 @@ export class BladeburnerCitiesFold {
     this.#rounds += 1;
     this.#lastMeasures = measures;
     for (const measure of measures) {
-      const seen = this.#measured.get(measure.name) ?? { recovered: 0, blackOp: 0, draw: 0, low: Infinity, high: 0 };
+      const seen = this.#measured.get(measure.name) ?? {
+        recovered: 0,
+        blackOp: 0,
+        draw: 0,
+        estimate: 0,
+        gap: 0,
+        low: Infinity,
+        high: 0,
+      };
       seen[measure.by] += 1;
       if (measure.source === "the Black Op") seen.blackOp += 1;
+      // Picked by the estimate's own chance (#422's round 2), with its bound: the other root's distance.
+      if (measure.pickedBy === "estimate") {
+        seen.estimate += 1;
+        seen.gap = Math.max(seen.gap, measure.rootGap);
+      }
       if (measure.ratio !== null) {
         seen.low = Math.min(seen.low, measure.ratio);
         seen.high = Math.max(seen.high, measure.ratio);
@@ -325,7 +353,10 @@ export class BladeburnerCitiesFold {
                   `${name} recovered ${seen.recovered}` +
                   (seen.recovered > 0
                     ? ` (pop/popEst ${seen.low.toFixed(3)} to ${seen.high.toFixed(3)}; by the Black Op's range ` +
-                      `${seen.blackOp}, by an action's ${seen.recovered - seen.blackOp})`
+                      `${seen.blackOp}, by an action's ${seen.recovered - seen.blackOp}; its branch by the ` +
+                      `estimate's pick ${seen.estimate}` +
+                      (seen.estimate > 0 ? `, at most ${(100 * seen.gap).toFixed(2)}% off if wrong` : "") +
+                      ")"
                     : "") +
                   `, at the draw's mean (every range clipped) ${seen.draw}`,
               )

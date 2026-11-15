@@ -18,6 +18,7 @@ import {
 import { BLADEBURNER_BLACK_OPS, blackOpSuccessChance } from "../src/bladeburner-black-ops.ts";
 import { BLADEBURNER_CITIES, type BladeburnerCityReading, cityCompetenceRatio } from "../src/bladeburner-cities.ts";
 import {
+  BLADEBURNER_BRANCH_BAND,
   BLADEBURNER_DRAW_RATIO,
   BLADEBURNER_RANGE_AGREEMENT,
   type BladeburnerCityMeasure,
@@ -140,6 +141,11 @@ describe("each city measured (#420): its own range, not another's", () => {
     // Its first range not clipped, in core's order (Tracking's high end clips at pop/popEst 1.9 here).
     expect(volhaven.source).toBe("Bounty Hunter");
     expect(volhaven.ranges).toBeGreaterThan(5);
+    // Its actions alone (all on one g): the branch by the estimate's pick, its bound the other root's distance; the
+    // others by the Black Op's and the actions' agreeing (#422's round 2).
+    expect(volhaven.pickedBy).toBe("estimate");
+    expect(volhaven.rootGap).toBeGreaterThan(1);
+    expect(measures.find((each) => each.name === "Aevum")?.pickedBy).toBe("agreement");
     expect(measures.find((each) => each.name === "Aevum")?.source).toBe("the Black Op");
     expect(bladeburnerRangesDisagree(measures)).toBeNull();
   });
@@ -197,7 +203,27 @@ describe("each city measured (#420): its own range, not another's", () => {
     expect(measures[0]?.ranges).toBe(6);
   });
 
-  test("ranges that disagree (#420's ruling 4): the most off is said, past 1e-9", () => {
+  test("the agreement bar from the float error, and the band near r 1 (#422's round 2)", () => {
+    // 256 unit roundoffs, 2.8e-14; the wrong branch's parting 0.408 (ln r)² passes it where |ln r| > 2.6e-7.
+    expect(BLADEBURNER_RANGE_AGREEMENT).toBeCloseTo(2.842e-14, 16);
+    expect(BLADEBURNER_BRANCH_BAND).toBeCloseTo(2.64e-7, 9);
+    // The parting on the wrong branch against its expansion, by hand at r 1 + 1e-3 and 1 − 1e-2: the Black Op's root
+    // (1/r) against an action's (g's root of 1/g(r)).
+    for (const r of [1.001, 0.99, 1.0008]) {
+      const g = (x: number) => (2 * x ** 0.7 - 1) * x;
+      const wrong = populationRatioOfActionRange(
+        actionSuccessRange(0.2 * r ** 0.7, 0.2, r, 1),
+        r > 1 ? actionSuccessRange(0.2 * r ** 0.7, 0.2, r, 1)[1] : actionSuccessRange(0.2 * r ** 0.7, 0.2, r, 1)[0],
+      ) as number;
+      // That root is the action's on the wrong branch: g(wrong) = the range's other ratio.
+      expect(g(wrong) > 0).toBe(true);
+      const parting = Math.abs(Math.log(wrong) - Math.log(1 / r));
+      expect(parting / Math.log(r) ** 2).toBeCloseTo((2 * 0.49) / 2.4, 2);
+      expect(parting).toBeGreaterThan(BLADEBURNER_RANGE_AGREEMENT);
+    }
+  });
+
+  test("ranges that disagree (#420's ruling 4): the most off is said, past the float error's bar", () => {
     const who = personAt(100);
     const { cities, round: read } = readOf(TRUTHS, who);
     // Aevum's Tracking range from a population 1% off its others': the model off somewhere.

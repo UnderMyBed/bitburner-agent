@@ -163,25 +163,32 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   });
   // Sent on this seed's hour (#422's review: not passing silently where none is).
   expect(firstIncite).toBeGreaterThan(0);
-  {
-    const before = mediums[firstIncite - 1]?.data as MediumSnapshotData;
-    const read = bladeburnerSnapshotOf(before).reading;
-    const person = bladeburnerPersonOf(before.player);
-    if (read.kind !== "read" || read.actions === null || person === null) throw new Error("no reading before Incite");
-    const measured = bladeburnerMeasuredCitiesOf(read.actions, person);
-    const choice = chooseBladeburnerCity(
-      bladeburnerRuleInputOf(read.actions, person, bladeburnerRankMultiplierOf(6) as number, before.player).input,
-      { city: read.actions.city as string, cities: measured?.cities ?? [] },
-    );
-    const incite = choice?.incite;
-    console.log(
-      `Incite Violence sent at the reading before ${new Date(mediums[firstIncite]?.receivedAtMs ?? 0).toISOString()}: ` +
-        `in ${choice?.city}, ${incite?.work}'s counts +${incite?.countGain.toFixed(2)} for ${incite?.gain.toFixed(3)} rank ` +
-        `against its cost ${incite?.cost.toFixed(3)} (its 60 s and the chaos it adds), the rate with every count ` +
-        `unbounded ${((incite?.unbounded ?? 0) * 60).toFixed(3)} rank/min`,
-    );
-    expect(incite?.pays).toBe(true);
+  const inciteBefore = mediums[firstIncite - 1]?.data as MediumSnapshotData;
+  const inciteRead = bladeburnerSnapshotOf(inciteBefore).reading;
+  const incitePerson = bladeburnerPersonOf(inciteBefore.player);
+  if (inciteRead.kind !== "read" || inciteRead.actions === null || incitePerson === null) {
+    throw new Error("no reading before Incite");
   }
+  const inciteChoice = chooseBladeburnerCity(
+    bladeburnerRuleInputOf(
+      inciteRead.actions,
+      incitePerson,
+      bladeburnerRankMultiplierOf(6) as number,
+      inciteBefore.player,
+    ).input,
+    {
+      city: inciteRead.actions.city as string,
+      cities: bladeburnerMeasuredCitiesOf(inciteRead.actions, incitePerson)?.cities ?? [],
+    },
+  );
+  const incite = inciteChoice?.incite;
+  console.log(
+    `Incite Violence sent at the reading before ${new Date(mediums[firstIncite]?.receivedAtMs ?? 0).toISOString()}: ` +
+      `in ${inciteChoice?.city}, ${incite?.work}'s counts +${incite?.countGain.toFixed(2)} for ` +
+      `${incite?.gain.toFixed(3)} rank against its cost ${incite?.cost.toFixed(3)} (its 60 s and the chaos it adds), ` +
+      `the rate with every count unbounded ${((incite?.unbounded ?? 0) * 60).toFixed(3)} rank/min`,
+  );
+  expect(incite?.pays).toBe(true);
   const hourAttempts = await attemptsIn(fresh.simulation, startedAtMs, fresh.game.clock.now());
   const endCities = await fresh.simulation.diagnostics.bladeburnerCities();
   console.log(

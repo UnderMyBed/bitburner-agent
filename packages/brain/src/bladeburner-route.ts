@@ -77,7 +77,7 @@ import {
 import {
   type BladeburnerActionsReading,
   bladeburnerHospitalOf,
-  bladeburnerMeasuredCitiesOf,
+  bladeburnerMeasuredDriftOf,
   bladeburnerRuleInputOf,
   bladeburnerSnapshotOf,
   bladeburnerSpeedOf,
@@ -138,8 +138,9 @@ const isFiniteNumber = (value: unknown): value is number => typeof value === "nu
 
 /**
  * The route's drift and hospital (#418), as the rule's input has them (`bladeburnerRuleInputOf`): the cities measured
- * by the round (#420, `bladeburnerMeasuredCitiesOf`) and the city worked, and the player's max HP and money; each
- * absent where not read (the drift without the round).
+ * by the round (#420, `bladeburnerMeasuredDriftOf`), the city worked and its measured pop/popEst (#422's round 2: the
+ * grown estimate's chances at it, as the rule's), and the player's max HP and money; each absent where not read (the
+ * drift without the round).
  */
 function routeDriftOf(
   actions: BladeburnerActionsReading,
@@ -147,9 +148,9 @@ function routeDriftOf(
   player: unknown,
 ): Pick<BladeburnerActionInput, "drift" | "hospital"> {
   const hospital = bladeburnerHospitalOf(player);
-  const measured = bladeburnerMeasuredCitiesOf(actions, person);
+  const drift = bladeburnerMeasuredDriftOf(actions, person);
   return {
-    ...(actions.city === null || measured === null ? {} : { drift: { cities: measured.cities, city: actions.city } }),
+    ...(drift === null ? {} : { drift }),
     ...(hospital === null ? {} : { hospital }),
   };
 }

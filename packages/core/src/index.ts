@@ -384,6 +384,7 @@ export {
   isBladeburnerCity,
 } from "./bladeburner-cities.ts";
 export {
+  BLADEBURNER_BRANCH_BAND,
   BLADEBURNER_DRAW_RATIO,
   BLADEBURNER_RANGE_AGREEMENT,
   type BladeburnerCityMeasure,

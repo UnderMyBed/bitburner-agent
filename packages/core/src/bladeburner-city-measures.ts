@@ -57,12 +57,39 @@ export interface BladeburnerCityMeasure {
   /** The ranges not clipped that gave r, and the most any's r is off the first's (relative; 0 with one). */
   ranges: number;
   disagreement: number;
+  /**
+   * How the branch was picked (#422's round 2): where the Black Op's range and an action's agree ("agreement"), or by
+   * the estimate's own chance with one kind of range alone ("estimate", whose wrong pick no disagreement shows, its
+   * error then at most `rootGap`, the other root's relative distance); null at the draw.
+   */
+  pickedBy: "agreement" | "estimate" | null;
+  rootGap: number;
   /** The true population the brain prices the city at: the estimate × pop/popEst recovered, else at the draw's mean. */
   population: number;
 }
 
-/** How far the ranges not clipped in a city may give different r and still agree (#420's ruling 4): 1e-9. */
-export const BLADEBURNER_RANGE_AGREEMENT = 1e-9;
+/**
+ * How far the ranges not clipped in a city may give different r and still agree (#420's ruling 4, #422's round 2:
+ * derived from the float error, not chosen). With u the unit roundoff (2^−53, `Number.EPSILON` / 2): a chance's end
+ * as the game computes it (`Actions/Action.ts:149-196`: about 20 products and quotients and a few `Math.pow`s, each
+ * within an ulp, the competence's sum of like-signed terms adding none past its terms', then real ± |real − est|,
+ * whose subtraction carries both chances' error, and × r) is within E = 64u of exact. A Black Op's r is high/low or
+ * low/high: within 2E. An action's is g's root of the same, d ln g / d ln r = 1 + 1.4r^0.7 / (2r^0.7 − 1) ≥ 1.7 on
+ * r over 0.371 (2.4 at r 1), so within 2E / 1.7; the root's bisection adds an ulp. Two ranges on the true branch so
+ * part by at most 2E + 2E/1.7 + 2u < 4E = 256u (2.8e−14); measured, at most 8.9e−16 over bn6-skills' and bn6-cities'
+ * 51,360 measures.
+ */
+export const BLADEBURNER_RANGE_AGREEMENT = 256 * (Number.EPSILON / 2);
+
+/**
+ * The band about r = 1 where the two branches can't be told apart (#422's round 2): on the wrong branch the Black
+ * Op's root and an action's part by 2a²y²/(1 + 2a) = 0.408y² (a = 0.7, y = ln r: the Black Op reads −y, an action
+ * the root of h(y′) = −h(y) with h(y) = ln g = (1 + 2a)y − a²y² + O(y³), so y′ = −y + 2a²y²/(1 + 2a)), measured
+ * 0.409 at Ishima's r 1.0008. Past the agreement bar where 0.408y² > `BLADEBURNER_RANGE_AGREEMENT`: |ln r| over
+ * 2.6e−7. Inside it the pick can go either way, its two roots then within 2.4|ln r|, under 6.3e−7 apart: below any
+ * figure the rule prints, labelled.
+ */
+export const BLADEBURNER_BRANCH_BAND = Math.sqrt(BLADEBURNER_RANGE_AGREEMENT / ((2 * 0.7 ** 2) / (1 + 2 * 0.7)));
 
 /**
  * pop/popEst at the draw's mean factor: E[U^−0.7]^(1/0.7), U uniform on the estimate's spread (`City.ts:23`), the
@@ -207,10 +234,14 @@ export function bladeburnerCityMeasures(
         source: null,
         ranges: 0,
         disagreement: 0,
+        pickedBy: null,
+        rootGap: 0,
         population: each.population * BLADEBURNER_DRAW_RATIO,
       };
     }
     const disagreement = Math.max(0, ...found.map((one) => Math.abs(one.ratio / first.ratio - 1)));
+    // Picked by the estimate (one kind of range alone, #422's round 2): its error at most the other root's distance.
+    const head = both[0] as (typeof both)[number];
     return {
       name: each.name,
       ratio: first.ratio,
@@ -218,6 +249,8 @@ export function bladeburnerCityMeasures(
       source: first.source,
       ranges: found.length,
       disagreement,
+      pickedBy: kinds ? "agreement" : "estimate",
+      rootGap: kinds ? 0 : head.above / head.below - 1,
       population: each.population * first.ratio,
     };
   });

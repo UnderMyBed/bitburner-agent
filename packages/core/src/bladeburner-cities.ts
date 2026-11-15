@@ -233,7 +233,9 @@ export function chooseBladeburnerCity(
   ) => {
     const ratio = cityCompetenceRatio(here, { population: there.population, chaos }) ?? 0;
     // The drift (#418) from that city, at that chaos.
-    const drift = from.drift === undefined ? {} : { drift: { ...from.drift, city: there.name, chaos } };
+    // (Its `ratio` is the city read's, #420: dropped elsewhere; only the priced input reads it.)
+    const { ratio: _ratio, ...rest } = from.drift ?? { cities: [], city: "" };
+    const drift = from.drift === undefined ? {} : { drift: { ...rest, city: there.name, chaos } };
     return choose({ ...from, readings, city: { ratio, raid: there.communities > 0 }, ...drift });
   };
   // The chaos actions are weighed by rank a second (#386: a target aside, labelled), and each city's rate shown.
