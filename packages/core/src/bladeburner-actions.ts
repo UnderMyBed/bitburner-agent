@@ -864,16 +864,15 @@ export function bladeburnerPlansToTarget(input: BladeburnerActionInput): Bladebu
 }
 
 /**
- * The drift's horizon at `input` under its target (#418's review): the least of the plans' mean times to it at the
- * chances read, or null with no target, none met or no drift. B4 takes it once a reading for every city it weighs
+ * The drift's horizon at `input` under its target (#418's review): the plans' least expected time to it at the chances
+ * read, or null with no target, none met or no drift. B4 takes it once a reading for every city it weighs
  * (`chooseBladeburnerCity`), so each city's choice is one solve.
- * - **Each plan's mean time** (`fluidSeconds`, for the cost: #386's chain over every plan was half of BN7.1's hour of
- *   the brain's and the report's solves): its stock's attempts at its mean rise an attempt (a success's gain, a
- *   failure's loss and its rest's share), then the rest of the distance at the sustainable rate (#392's tail); a plan
- *   with no count, the distance over its rate. Labelled: the chain's spread and floor (its expected first passage, not
- *   the mean's: shorter near the target, where Raid's 55 a success lands it; the same far from it) and the next-best
- *   plan between the stock and the tail (the tail's rate under it, so longer). In core's test, from 150 to Typhoon's
- *   2,500, 4,583.7 min by the chain, the figure below by this (`bladeburner-drift.test.ts`).
+ * - **Each plan's own chain** (#386's, `fluidSeconds`, for the cost: the rule's search over every plan, each next-best
+ *   found by its own chain, was half of BN7.1's hour of the brain's and the report's solves): its count, then its
+ *   next-best by their mean times (each plan's stock at its mean rise an attempt, then the tail's rate: another action,
+ *   with its own count, where it beats the tail straight away), then the tail. Labelled: the next-best by the mean, not
+ *   by its chain (the floor and the jumps out of that pick only). In core's test the horizon is the rule's chain's to
+ *   the bit (from 0 to 25, 25 to 2,500 and 150 to 2,500), and in BN7.1's hour its figures are main's.
  */
 export function bladeburnerDriftHorizon(input: BladeburnerActionInput): number | null {
   const { target, drift } = input;
@@ -889,20 +888,45 @@ function fluidSeconds(input: BladeburnerActionInput, { rank, target }: { rank: n
   if (!(distance > 0)) return 0;
   const first = candidates[0] as PlanCandidate;
   const tailRate = bladeburnerSustainableRate(supply, first.step === null ? first.plan.rankPerSecond : 0);
-  let least = Number.POSITIVE_INFINITY;
-  for (const { plan, step } of candidates) {
-    let seconds: number;
-    if (step === null) seconds = plan.rankPerSecond > 0 ? distance / plan.rankPerSecond : Number.POSITIVE_INFINITY;
-    else {
-      const rise = step.chance * step.gain - (1 - step.chance) * step.loss + step.rest;
-      const attempts = step.attempts ?? Number.POSITIVE_INFINITY;
-      if (rise > 0 && attempts * rise >= distance) seconds = (distance / rise) * step.seconds;
-      else if (Number.isFinite(attempts) && tailRate > 0) {
-        seconds = attempts * step.seconds + Math.max(0, distance - attempts * rise) / tailRate;
-      } else seconds = Number.POSITIVE_INFINITY;
+  // Each plan's mean time: its stock at its mean rise, then the tail's rate.
+  const meanOf = ({ plan, step }: PlanCandidate) => {
+    if (step === null) return plan.rankPerSecond > 0 ? distance / plan.rankPerSecond : Number.POSITIVE_INFINITY;
+    const rise = step.chance * step.gain - (1 - step.chance) * step.loss + step.rest;
+    const attempts = step.attempts ?? Number.POSITIVE_INFINITY;
+    if (rise > 0 && attempts * rise >= distance) return (distance / rise) * step.seconds;
+    if (Number.isFinite(attempts) && tailRate > 0) {
+      return attempts * step.seconds + Math.max(0, distance - attempts * rise) / tailRate;
     }
-    if (seconds < least) least = seconds;
-  }
+    return Number.POSITIVE_INFINITY;
+  };
+  const means = candidates.map(meanOf);
+  const tailOnly = tailRate > 0 ? distance / tailRate : Number.POSITIVE_INFINITY;
+  const bare = ({ attempts: _attempts, next: _next, tailRate: _tail, ...rest }: BladeburnerRankStep) => rest;
+  const counted = (each: BladeburnerRankStep) =>
+    each.attempts !== undefined && Number.isFinite(each.attempts) ? { ...bare(each), attempts: each.attempts } : null;
+  // A plan's own chain (#386's): its count, then its next-best by the mean (another action's, with its own count, where
+  // it beats the tail straight away), then the tail; its floor and its jumps in.
+  const chainOf = (index: number) => {
+    const fastest = candidates[index] as PlanCandidate;
+    const step = fastest.step;
+    if (step === null) return means[index] as number;
+    const own = counted(step);
+    if (own === null) return bladeburnerSecondsToRank(bare(step), rank, target);
+    let second = -1;
+    for (const [i, candidate] of candidates.entries()) {
+      if (candidate.step === null || candidate.name === fastest.name || !((means[i] as number) < tailOnly)) continue;
+      if (second < 0 || (means[i] as number) < (means[second] as number)) second = i;
+    }
+    const nextStep = second < 0 ? null : (candidates[second] as PlanCandidate).step;
+    if (nextStep === null) return bladeburnerSecondsToRank({ ...own, tailRate }, rank, target);
+    const bounded = counted(nextStep);
+    const next = bounded === null ? bare(nextStep) : { ...bounded, tailRate };
+    return bladeburnerSecondsToRank({ ...own, next }, rank, target);
+  };
+  // The least of every plan's chain (the mean leaves out the floor, from rank 0 a failure loses nothing, so the
+  // fastest by it is not always the fastest by the chain).
+  let least = Number.POSITIVE_INFINITY;
+  for (const [i, mean] of means.entries()) if (Number.isFinite(mean)) least = Math.min(least, chainOf(i));
   return least;
 }
 

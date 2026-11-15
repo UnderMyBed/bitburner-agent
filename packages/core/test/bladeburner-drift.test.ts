@@ -562,13 +562,12 @@ describe("the rule's horizon (#418): the plan's least expected time to the targe
         `×${work?.drift?.populationRatio.toFixed(4)}, Diplomacy ${work?.diplomacySeconds.toFixed(1)} s an attempt; ${work?.drift?.passes} passes, ` +
         `${ms.toFixed(0)} ms (read: ${readMs.toFixed(0)} ms)`,
     );
-    // One pass (`BLADEBURNER_DRIFT_PASSES`): the horizon the plans' least mean time at the chances read
-    // (`bladeburnerDriftHorizon`), to the bit; the chain's own time beside it (0 → 25: Raid's jumps of 55 land it
-    // sooner than its mean, 29.4 min against 38.4; far from it within 1%).
+    // One pass (`BLADEBURNER_DRIFT_PASSES`): the horizon `bladeburnerDriftHorizon`'s (each plan's own chain, its
+    // next-best by the mean), to the bit, and here the rule's chain at the chances read, its least expected time.
     expect(work?.drift?.passes).toBe(BLADEBURNER_DRIFT_PASSES);
     if (BLADEBURNER_DRIFT_PASSES === 1) expect(horizon).toBe(bladeburnerDriftHorizon({ ...input, target, drift }));
     const chain = plain.toTarget?.seconds as number;
-    if (to > 25) expect(Math.abs(horizon / chain - 1)).toBeLessThan(0.01);
+    expect(Math.abs(horizon / chain - 1)).toBeLessThan(1e-12);
     // Each Raid plan's chance under its read (its own fall, −0.75% of the population a failure, outruns the events'
     // rise); the actions that move no population rise with the events' (their chance over the read where the horizon
     // is long: the total population's 1.64% an hour).
