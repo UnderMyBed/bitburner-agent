@@ -536,7 +536,8 @@ export const BLADEBURNER_DRIFT_CHUNKS = 256;
  * 1,024 and 1,600 chunks, hundreds of switches each, the mean chance 1.15%, 4.3%, 0.1%, 3.6% and 0 off the attempt at a
  * time (core's test, the path's chunks). A bifurcation in B4's argmax, not the splitting's order or the clamp's
  * cohorts (a city worked throughout converges, above). An attempt at a time is the brain's own resolution (B4 reads
- * each 10 s, an attempt each minute or more): 4 times a path's cost (5.7 ms against 1.4).
+ * each 10 s, an attempt each minute or more): 4 times a path's cost (5.7 ms against 1.4). B4's own near-tie flipping
+ * (moving only by more than the error) is #420's.
  */
 export const BLADEBURNER_DRIFT_EXACT_RAID = true;
 

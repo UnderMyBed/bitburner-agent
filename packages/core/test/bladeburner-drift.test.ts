@@ -560,7 +560,9 @@ describe("the path's chunks (#418): against the same path an attempt at a time",
     // The error doesn't fall with the step: at 512 chunks more than at 256, and the home's share swings by over 20 points.
     const at = (pieces: number) => rows.find((row) => row.pieces === pieces) as (typeof rows)[number];
     expect(Math.abs(at(512).chance / exact.chance - 1)).toBeGreaterThan(Math.abs(at(256).chance / exact.chance - 1));
-    expect(Math.max(...rows.map((row) => row.volhaven)) - Math.min(...rows.map((row) => row.volhaven))).toBeGreaterThan(0.2);
+    expect(Math.max(...rows.map((row) => row.volhaven)) - Math.min(...rows.map((row) => row.volhaven))).toBeGreaterThan(
+      0.2,
+    );
     // In one city the same scheme converges: within a part in 10³ at 256 chunks.
     const fixed = run(attempts, false);
     expect(Math.abs(run(256, false).chance / fixed.chance - 1)).toBeLessThan(1e-3);

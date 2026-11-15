@@ -160,4 +160,5 @@ test("BN7.1, an hour from a harness join at BN7's multipliers: each plan the lea
   expect(section).toContain("  an action stopped at stamina 0 at any reading:\n    none\n");
   expect(section).toContain("  the rank from the actions run below its forecast's bound:\n    none");
   expect(failures).toEqual([]);
-}, 240_000);
+  // #418's ruling 5: 1.5 × the worst CI time seen, 261 s (PR #419's run 43681970864).
+}, 392_000);

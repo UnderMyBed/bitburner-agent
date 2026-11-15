@@ -68,7 +68,15 @@ export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
       "a failure loses none, so the window's expected rank (77.9) is a lottery's mean and the estimate's first-passage " +
       "time to it (2.71 h) is long against the fixed window (#411's diagnosis)",
   },
-  "B3's hour at rank 150": { ratio: 1.93, within: true, expected: 1.4, expectedWithin: true },
+  "B3's hour at rank 150": {
+    ratio: 2.61,
+    within: false,
+    expected: 1.75,
+    expectedWithin: true,
+    why:
+      "realised: 53 attempts' rank 120.6 against 76.4 expected (rank 150 to 275), Raid's successes (55 each) over " +
+      "their mean: a lottery's draw",
+  },
   "B4's hour, its chaos edited": { ratio: 0.61, within: true, expected: 0.76, expectedWithin: true },
   "B5's Typhoon": { ratio: 1.21, within: true, expected: 0.86, expectedWithin: true },
   "B5's climb to Zero": { ratio: 1.06, within: true, expected: 1.19, expectedWithin: true },

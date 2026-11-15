@@ -371,4 +371,5 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
       "estimate and 10 min, or a move's 22 s:\n    none",
   );
   expect(failures).toEqual([]);
-}, 240_000);
+  // #418's ruling 5: 1.5 × the worst CI time seen, 106 s (PR #419's run 43681970864).
+}, 159_000);

@@ -168,4 +168,5 @@ test("BN6.1 mid-route: the planner installs the Bladeburners' shop; the rank, sk
     /^ {4}from .* to strength 100, defense 100, dexterity 100, agility 100: estimated .*; under way at the window's end$/,
   );
   expect(report.failures).toEqual([]);
-});
+  // #418's ruling 5: 1.5 × the worst CI time seen, 30.7 s (PR #419's run 43681970864).
+}, 46_000);

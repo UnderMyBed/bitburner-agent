@@ -209,4 +209,5 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   expect(rows.length).toBeGreaterThan(0);
   expect(section).toContain("  skill points unspent with a level to buy, past 52 s:\n    none");
   expect(failures).toEqual([]);
-}, 240_000);
+  // #418's ruling 5: 1.5 × the worst CI time seen, 113 s (PR #419's run 43681970864).
+}, 170_000);
