@@ -18,13 +18,20 @@
  *   + Σ x·(p̄ − p)·(gain + loss) (`attemptRankMoments`' mean is p·gain − (1 − p)·loss), its time its rank over rate'.
  *   A route re-planned under the draws could do better still (#426). A climb step whose re-priced rate is 0 or under, or
  *   whose ratio to the mean path's is outside the range measured (`BLADEBURNER_REPLAY_LEAST_RATIO` to `…_MOST_RATIO`),
+ *   or whose mix has an action the instrument never sampled (`BLADEBURNER_REPLAY_SAMPLED_ACTIONS`, ruling 12),
  *   takes the mean path's rate there, counted (`fallbackSteps`). A Black Op's rebuild steps were never measured (the
  *   instrument sampled climb steps), so every replay prices them at the mean path's rate (#423's ruling 11, labelled):
- *   their attempts still move the replay's cities, but their span is the mean path's, about 0.56 h of BN6's best case.
+ *   their attempts still move the replay's cities, but their span is the mean path's: +8.5 h on BN6's best case's
+ *   first series (76.2 h against 67.7 h re-priced; the 0.56 h once said here is the install's Training rebuild).
  * - **Raid with no community** in the city B4 picks (none in any city) is unavailable (`data/Operations.ts:147-150`):
  *   no attempt, none of its effects; re-priced as an attempt that gains and loses nothing.
  */
-import { actionRankGain, actionRankLoss, type BladeburnerLevelledAction } from "./bladeburner-actions.ts";
+import {
+  actionRankGain,
+  actionRankLoss,
+  type BladeburnerLevelledAction,
+  bladeburnerRaidHasCommunity,
+} from "./bladeburner-actions.ts";
 import {
   type BladeburnerDriftCity,
   type BladeburnerDriftState,
@@ -93,6 +100,24 @@ export const BLADEBURNER_REPLAY_MOST_ERROR = 0.039;
  */
 export const BLADEBURNER_REPLAY_LEAST_RATIO = 0.08342624096023106;
 export const BLADEBURNER_REPLAY_MOST_RATIO = 6.600987476314665;
+
+/**
+ * The actions in the climb steps the instrument compared with the engine (#423's ruling 12, N1; the research's
+ * ruling9-samples.json, each of the 3,701 steps' mix): all nine contracts and operations, in BN6's and in BN7's best
+ * case alike (each in 221 to 1,819 of a BitNode's steps). A climb step whose mix has any other action counts as a
+ * fallback, as a ratio outside the range does (#389). Every route's mix is of these nine today, so it binds nothing yet.
+ */
+export const BLADEBURNER_REPLAY_SAMPLED_ACTIONS: ReadonlySet<string> = new Set([
+  "Tracking",
+  "Bounty Hunter",
+  "Retirement",
+  "Investigation",
+  "Undercover Operation",
+  "Sting Operation",
+  "Raid",
+  "Stealth Retirement Operation",
+  "Assassination",
+]);
 
 /** The gate's verdict on replays (see above): null, used; else why the mean path's figure is used instead. */
 export function bladeburnerReplayDeclined(
@@ -364,7 +389,7 @@ export function bladeburnerReplayAttempts(
     worked = bladeburnerMostFactorCity(seen, worked, attempt.action.name === "Raid", state.ceiling);
     const city = cities[worked] as BladeburnerDriftCity;
     // Raid unavailable with no community there (`data/Operations.ts:147-150`): no attempt, none of its effects.
-    if (attempt.action.name === "Raid" && !(city.communities >= 1)) {
+    if (attempt.action.name === "Raid" && !bladeburnerRaidHasCommunity(city.communities)) {
       skipped[k] = 1;
       continue;
     }
@@ -495,7 +520,8 @@ export function bladeburnerReplayRoute(
         least = Math.min(least, next / rate);
         most = Math.max(most, next / rate);
       }
-      if (next > 0 && next >= leastRatio * rate && next <= mostRatio * rate) return next;
+      const sampled = these.every((part) => BLADEBURNER_REPLAY_SAMPLED_ACTIONS.has(part.action.name));
+      if (sampled && next > 0 && next >= leastRatio * rate && next <= mostRatio * rate) return next;
       fell++;
       return rate;
     };

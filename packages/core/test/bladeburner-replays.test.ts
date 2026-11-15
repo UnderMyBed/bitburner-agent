@@ -23,6 +23,7 @@ import {
   BLADEBURNER_REPLAY_MOST_ERROR,
   BLADEBURNER_REPLAY_MOST_FALLBACK,
   BLADEBURNER_REPLAY_MOST_RATIO,
+  BLADEBURNER_REPLAY_SAMPLED_ACTIONS,
   BLADEBURNER_ROUTE_REPLAYS,
   bladeburnerAttemptDraw,
   bladeburnerEventDraw,
@@ -376,5 +377,41 @@ describe("the most ratio, Raid with no community, the Black Ops' rebuilds (#423'
     expect(without.meanPathRebuilds).toBe(0);
     expect(replayed.segmentSeconds[0]).toBe(without.segmentSeconds[0]);
     expect(replayed.segmentSeconds[2]).not.toBe(without.segmentSeconds[2]);
+  });
+});
+
+describe("the actions the instrument sampled (#423's ruling 12, N1): a climb step with another counts as a fallback", () => {
+  test("all nine contracts and operations sampled; a step whose mix has an unsampled one at the mean path's rate", () => {
+    expect([...BLADEBURNER_REPLAY_SAMPLED_ACTIONS].sort()).toEqual(
+      BLADEBURNER_LEVELLED_ACTIONS.map((each) => each.name).sort(),
+    );
+    const start: BladeburnerDriftState = { cities: SIX.map((city) => ({ ...city })), worked: 0, ceiling: 50 };
+    const rate = 0.05;
+    const dt = 3600;
+    const climbOf = (part: {
+      action: BladeburnerLevelledAction;
+      level: number;
+      chance: number;
+      perSecond: number;
+    }) => ({
+      start,
+      reference: SIX[0] as BladeburnerDriftCity,
+      rankMultiplier: 1,
+      segments: [{ kind: "climb" as const, seconds: 0, dt, by: rate * dt, rate, parts: [part], state: start }],
+    });
+    const tracking = { action: action("Tracking"), level: 1, chance: 0.5, perSecond: 0.004 };
+    const bounds = { replays: 5, seed: 4233, leastRatio: 0, mostRatio: Number.POSITIVE_INFINITY };
+    const sampled = bladeburnerReplayRoute(climbOf(tracking), bounds);
+    expect(sampled.fallbackSteps).toBe(0);
+    // The same action under a name the instrument never saw: every replay's step at the mean path's rate.
+    const unsampled = bladeburnerReplayRoute(
+      climbOf({
+        ...tracking,
+        action: { ...tracking.action, name: "Unsampled" } as unknown as BladeburnerLevelledAction,
+      }),
+      bounds,
+    );
+    expect(unsampled.fallbackSteps).toBe(5);
+    for (const time of unsampled.times) expect(time).toBeCloseTo(dt, 6);
   });
 });

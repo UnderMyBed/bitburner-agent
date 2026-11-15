@@ -417,6 +417,15 @@ export function actionSkillCompetence(
 }
 
 /**
+ * Whether a city has a Synthoid community for Raid (#423's review N3, the one test): the game's Raid is unavailable
+ * below 1 (`data/Operations.ts:147-150`) and its chance 0 at 0 (`Actions/Operation.ts:63-68`). The game's count is
+ * whole, so above 0 is at least 1; a mean path's fractional count above 0 counts as one (as its chance always has).
+ */
+export function bladeburnerRaidHasCommunity(communities: number): boolean {
+  return communities > 0;
+}
+
+/**
  * The chance of `action` at `level` (`Actions/Action.ts:169-196`), at a city's population (the true one for the real
  * chance, the estimate for the estimated), with the stamina penalty and the skills' multipliers (none: all 1). No team:
  * its bonus 1 (labelled). Raid is 0 with no communities (`Actions/Operation.ts:63-68`).
@@ -431,7 +440,7 @@ export function actionSuccessChance(
     skills = NO_BLADEBURNER_SKILLS,
   }: { city: BladeburnerCityFigures; penalty: number; skills?: BladeburnerSkillMults },
 ): number {
-  if (action.name === "Raid" && city.communities <= 0) return 0;
+  if (action.name === "Raid" && !bladeburnerRaidHasCommunity(city.communities)) return 0;
   let difficulty = actionDifficulty(action, level);
   let competence = actionSkillCompetence(action, person, skills);
   // `calculateIntelligenceBonus(int, 0.75)` (`PersonObjects/formulas/intelligence.ts`).

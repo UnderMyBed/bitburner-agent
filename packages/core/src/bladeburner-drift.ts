@@ -40,7 +40,7 @@
  * each chance's mean over the spread is under the chance at the mean path's population, (pop)^0.7 concave), and the
  * estimate's own drift (the brain recovers pop/popEst at each reading, #411's ruling 4).
  */
-import type { BladeburnerLevelledAction } from "./bladeburner-actions.ts";
+import { type BladeburnerLevelledAction, bladeburnerRaidHasCommunity } from "./bladeburner-actions.ts";
 import { BLADEBURNER_CONSTANTS, chaosDifficultyFactor } from "./bladeburner-constants.ts";
 
 /** One attempt's mean effects on the city it runs in (#418): its chaos, its true population and its communities. */
@@ -272,7 +272,7 @@ function poisson(mean: number, most: number): number[] {
 
 /** P(at least one community): Raid's factor (`Actions/Operation.ts:63-68`), from the distribution where carried. */
 function communitiesFactor(city: BladeburnerDriftCity): number {
-  if (city.communitiesMix === undefined) return city.communities > 0 ? 1 : 0;
+  if (city.communitiesMix === undefined) return bladeburnerRaidHasCommunity(city.communities) ? 1 : 0;
   const { low, probs } = city.communitiesMix;
   return low > 0 ? 1 : 1 - (probs[0] ?? 0);
 }
