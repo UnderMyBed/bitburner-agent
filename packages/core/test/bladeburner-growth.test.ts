@@ -41,6 +41,7 @@ import {
   BLADEBURNER_GROWTH_LEAST_STEP,
   type BladeburnerGrowthState,
   blackOpsRouteGrownEstimate,
+  blackOpsRouteTimelineOf,
   bladeburnerGrownInput,
   bladeburnerGrowthStart,
   bladeburnerPricedInput,
@@ -55,7 +56,13 @@ import {
   bladeburnerRebuildSeconds,
   NO_INSTALL_GAIN,
 } from "../src/bladeburner-installs.ts";
-import { BLADEBURNER_ROUTE_REPLAYS } from "../src/bladeburner-replays.ts";
+import {
+  BLADEBURNER_REPLAY_LEAST_RATIO,
+  BLADEBURNER_ROUTE_REPLAYS,
+  bladeburnerReplayDeclined,
+  bladeburnerReplayRoute,
+  bladeburnerReplaySeedOf,
+} from "../src/bladeburner-replays.ts";
 import { blackOpsRouteEstimate } from "../src/bladeburner-route.ts";
 import {
   BLADEBURNER_SKILL_NAMES,
@@ -1071,10 +1078,11 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
     const first = solved.get("6 100") ?? caseOf(6, 100);
     caseOf(7, 300);
     expect(caseOf(6, 100)).toEqual(first);
-    // Since #423 (its ruling 7): both sides' replays pass the gate, so their figures, first-order: 98.8 h as is and
-    // 68.9 h installing (the mean path's 155.5 h and 113.6 h); the replays on the default seed series, a solve's own.
-    expect(first.keep / HOUR).toBeCloseTo(98.8, 1);
-    expect((first.install as number) / HOUR).toBeCloseTo(68.9, 1);
+    // Since #423 (its rulings 7 and 10): both sides' replays pass the gate (on all 10 seed series, below), so their figures,
+    // first-order: 98.8 h as is and 68.9 h installing (the mean path's 155.5 h and 113.6 h), on the default seed series, a
+    // solve's own; each within 3 of its replays' standard errors (1.5 h and 0.7 h), not to the digit (the machines' `**`).
+    expect(Math.abs(first.keep / HOUR - 98.8)).toBeLessThanOrEqual(3 * 1.5);
+    expect(Math.abs((first.install as number) / HOUR - 68.9)).toBeLessThanOrEqual(3 * 0.7);
     // #423: 12.4 s here with the replays (6.5 s on 61e0b1f); × 3.743 (#418's ruling 6), 46 s: twice that.
   }, 93_000);
 });
@@ -1160,12 +1168,14 @@ describe("the playability under the route's replays (#423): the gate's figures, 
         `${(unpaired / 60).toFixed(1)} min): ${timing.choice}`,
     );
     expect(timing.choice).toBe("install");
-    // Re-stated (#423's ruling 7): 68.9 h at best, first-order, still past the bar (×1.27).
-    expect((timing.installNowSeconds as number) / HOUR).toBeCloseTo(68.9, 1);
+    // Re-stated (#423's rulings 7 and 10): 68.9 h at best, first-order, still past the bar (×1.27); within 3 of its error.
+    expect(Math.abs((timing.installNowSeconds as number) - 68.9 * HOUR)).toBeLessThanOrEqual(
+      3 * (after.secondsError ?? 0),
+    );
     expect(timing.installNowSeconds as number).toBeGreaterThan(BAR_SECONDS);
   }, 120_000);
 
-  test("BN7, combat 100: keep declines (the fallback), so both sides the mean path's; the shop's route alone the replays'", () => {
+  test("BN7, combat 100: keep declines (the fallback), so both sides the mean path's; the shop's route by its mean path", () => {
     const { keep, after, timing } = solve(7);
     // Its figures said before the assertions (a failure shows them).
     console.log(`BN7 combat 100, before the checks: ${line("keep", keep)}; ${line("after the shop", after)}`);
@@ -1178,7 +1188,6 @@ describe("the playability under the route's replays (#423): the gate's figures, 
     expect(keep.path.at(-1)?.seconds).toBe(keep.meanPathSeconds);
     expect(kept.times).toHaveLength(BLADEBURNER_ROUTE_REPLAYS);
     expect(kept.times.every((x) => Number.isFinite(x))).toBe(true);
-    expect(after.replays?.used).toBe(true);
     // One method both sides: the mean path's (a replay figure against keep's mean path would lean to installing).
     expect(timing.method).toBe("mean path");
     expect(timing.keepSeconds).toBe(keep.meanPathSeconds);
@@ -1189,8 +1198,68 @@ describe("the playability under the route's replays (#423): the gate's figures, 
         `install now ${((timing.installNowSeconds as number) / HOUR).toFixed(1)} h against keep ` +
         `${(timing.keepSeconds / HOUR).toFixed(1)} h: ${timing.choice}`,
     );
-    // Re-stated (#423's ruling 7): the shop's route 116.3 h at best by its replays (first-order, past the bar).
-    expect((timing.rebuildSeconds + after.seconds) / HOUR).toBeCloseTo(116.3, 1);
-    expect(timing.rebuildSeconds + after.seconds).toBeGreaterThan(BAR_SECONDS);
+    // Re-stated (#423's ruling 10): the shop's route's replays are unstable across seed series (9 of 10 pass, below), so
+    // its figure is the mean path's, 182.6 h at best (its first-order 116 h unmeasured until #426), past the bar.
+    expect((timing.rebuildSeconds + (after.meanPathSeconds as number)) / HOUR).toBeCloseTo(182.6, 1);
+    expect(timing.rebuildSeconds + (after.meanPathSeconds as number)).toBeGreaterThan(BAR_SECONDS);
   }, 120_000);
+
+  test("the gate on 10 seed series (#423's rulings 8 and 10): BN6's best and keep pass on all, BN7's keep on none", () => {
+    // Each route's mean path once, its timeline replayed on the seed series of a refresh at the suites' epoch and the 9
+    // after it. Asserted only where the verdict holds on all 10 (here and on CI): BN6's two pass, BN7's keep declines.
+    // BN7's best splits (9 of 10 at ruling 10), so it is said, not asserted: "unstable across seed series".
+    const rows: string[] = [];
+    const passes = new Map<string, number>();
+    for (const bitNode of [6, 7]) {
+      const { keep, after } = solveRoutes(bitNode);
+      for (const [label, route] of [
+        ["keep", keep],
+        ["best", after],
+      ] as const) {
+        const timeline = blackOpsRouteTimelineOf(route);
+        if (timeline === null) throw new Error("no timeline");
+        const verdicts: string[] = [];
+        let used = 0;
+        for (let k = 0; k < 10; k++) {
+          const seed = bladeburnerReplaySeedOf(Date.UTC(2026, 0, 1) + k * BLACK_OPS_GROWN_REFRESH_MS_HERE);
+          const r = bladeburnerReplayRoute(timeline, { seed });
+          const declined = bladeburnerReplayDeclined(r);
+          if (declined === null) used++;
+          verdicts.push(
+            declined === null
+              ? `${(r.seconds / HOUR).toFixed(1)}±${(r.error / HOUR).toFixed(1)}`
+              : `declined (${r.replaysWithFallback} at the fallback, ${((100 * r.error) / r.seconds).toFixed(1)}%)`,
+          );
+        }
+        passes.set(`${bitNode} ${label}`, used);
+        rows.push(`BN${bitNode} ${label}: ${used}/10 [${verdicts.join(" ")}]`);
+      }
+    }
+    console.log(
+      `the gate on 10 seed series (the least step ratio ×${BLADEBURNER_REPLAY_LEAST_RATIO}):\n${rows.join("\n")}`,
+    );
+    expect(passes.get("6 keep")).toBe(10);
+    expect(passes.get("6 best")).toBe(10);
+    expect(passes.get("7 keep")).toBe(0);
+  }, 600_000);
 });
+
+/** `BLACK_OPS_GROWN_REFRESH_MS` (the brain's 10-minute refresh, ./bladeburner-route.ts): the seed series' spacing. */
+const BLACK_OPS_GROWN_REFRESH_MS_HERE = 10 * 60_000;
+
+/** BN`bitNode` at combat 100 with the six read: keep's grown route and the shop's after it (#423's series). */
+function solveRoutes(bitNode: number) {
+  const SIX = ["Aevum", "Chongqing", "Sector-12", "New Tokyo", "Ishima", "Volhaven"].map((name) => ({ name, ...CITY }));
+  const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+  const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+  const { combat: figures, input: read, at, who } = startAt(100);
+  const input = { ...read, rankMultiplier, drift: { cities: SIX, city: "Sector-12" } };
+  const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
+  return {
+    keep: blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier }),
+    after: blackOpsRouteGrownEstimate({ ...input, forecast: bladeburnerPersonAfterInstall(who, gain) }, at, {
+      combat: combatAfter(figures, gain),
+      costMultiplier,
+    }),
+  };
+}

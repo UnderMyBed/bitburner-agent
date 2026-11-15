@@ -142,7 +142,7 @@ test("BN6.1 with 20 Black Ops done at rank 400,000: Operation Daedalus done, the
       nextBitNode: 5,
       replay: null,
       skipped:
-        "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#423: 68.9 h at best, first-order, the bar 54.2 h); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#423: 116.3 h at best, first-order, the bar 54.2 h); BN3 skipped: no hacking multipliers or prices yet",
+        "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#423: 68.9 h at best, first-order, the bar 54.2 h); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#423: 182.6 h at best, its route's replays unstable across seed series, the bar 54.2 h); BN3 skipped: no hacking multipliers or prices yet",
     },
   ]);
   expect(brain.logLines).toContainEqual(

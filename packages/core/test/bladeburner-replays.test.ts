@@ -14,6 +14,7 @@ import {
   bladeburnerEventDrift,
 } from "../src/bladeburner-drift.ts";
 import {
+  BLADEBURNER_REPLAY_LEAST_RATIO,
   BLADEBURNER_REPLAY_MOST_ERROR,
   BLADEBURNER_REPLAY_MOST_FALLBACK,
   BLADEBURNER_ROUTE_REPLAYS,
@@ -22,6 +23,7 @@ import {
   bladeburnerEventIntervalDraw,
   bladeburnerReplayAttempts,
   bladeburnerReplayDeclined,
+  bladeburnerReplayRoute,
   bladeburnerReplaySeedOf,
   bladeburnerSeeded,
 } from "../src/bladeburner-replays.ts";
@@ -213,5 +215,41 @@ describe("the gate (#423's ruling 7) and the 200 replays' derivation", () => {
     expect(Math.max(...at200)).toBeGreaterThan(Math.max(...staleness) / 2.5);
     // The gate's bound is the largest of them (3.9%).
     expect(BLADEBURNER_REPLAY_MOST_ERROR).toBeCloseTo(Math.max(...at200), 3);
+  });
+});
+
+describe("the least step ratio (#423's ruling 10): a step under it a fallback, at the mean path's rate", () => {
+  test("a replay's step just under the bound counts; just over it doesn't; the bound the least ratio measured", () => {
+    expect(BLADEBURNER_REPLAY_LEAST_RATIO).toBe(0.0834);
+    const start: BladeburnerDriftState = { cities: SIX.map((city) => ({ ...city })), worked: 0, ceiling: 50 };
+    const rate = 0.05;
+    const dt = 3600;
+    const timeline = {
+      start,
+      reference: SIX[0] as BladeburnerDriftCity,
+      rankMultiplier: 1,
+      segments: [
+        {
+          kind: "climb" as const,
+          seconds: 0,
+          dt,
+          by: rate * dt,
+          rate,
+          parts: [{ action: action("Raid"), level: 1, chance: 0.3, perSecond: 0.004 }],
+          state: start,
+        },
+      ],
+    };
+    // The replays with no bound (only a rate at 0 or under): each replay's one step and its ratio.
+    const free = bladeburnerReplayRoute(timeline, { replays: 20, seed: 4233, leastRatio: 0 });
+    const ratio = free.leastRatios[0] as number;
+    expect(ratio).toBeGreaterThan(0);
+    // Just under it: that replay's step counts, its time the mean path's; just over: re-priced as before.
+    const under = bladeburnerReplayRoute(timeline, { replays: 20, seed: 4233, leastRatio: ratio * (1 + 1e-9) });
+    const over = bladeburnerReplayRoute(timeline, { replays: 20, seed: 4233, leastRatio: ratio * (1 - 1e-9) });
+    expect(under.times[0]).toBeCloseTo(dt, 6);
+    expect(over.times[0]).toBeCloseTo(free.times[0] as number, 9);
+    expect(under.fallbackSteps).toBeGreaterThan(over.fallbackSteps);
+    expect(under.replaysWithFallback).toBeGreaterThanOrEqual(1);
   });
 });

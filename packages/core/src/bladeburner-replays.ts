@@ -77,14 +77,14 @@ export const BLADEBURNER_REPLAY_MOST_ERROR = 0.039;
 
 /**
  * The least re-priced step rate, over the mean path's for that step, the first-order re-pricing is measured at (#423's
- * ruling 8, #389: no unmeasured extrapolation): the engine check (the brain's bladeburner-drift-parity.test.ts, a grown
- * route's opening hour in 10 engine runs, each within 4 sd of the replays) re-prices that route's first step at each
- * run's drawn chances between ×0.9323 and ×1.0895 of its mean path's rate. Below the lowest a step is unmeasured, so a
- * replay with one counts as a fallback (its rate the mean path's there), as one at 0 or under. The check covers
- * nothing lower: the low end is the lowest it covered. Not applied yet (ruling 9: measured at the ratios the replays
- * reach first, `bladeburnerReplayRoute`'s `leastRatio` 0 until then).
+ * rulings 8 to 10, #389: no unmeasured extrapolation): 3,701 replay-steps of BN6's and BN7's best cases (the first
+ * seed series), each the engine run for 60 attempts from the replay's drawn state against 1,000 of core's replays of
+ * those attempts, the relative bias (engine − first-order) / first-order by ratio (docs/architecture.md's table):
+ * within 1.5% from ×0.7 up, pessimistic below it (+22% ± 5.9% under ×0.5 in BN7: the engine's chooser leaves a
+ * collapsed city), never optimistic past 3 standard errors. Its least ratio, BN7's ×0.0834, the bound: a replay with a
+ * step under it (unmeasured), or at a rate of 0 or under, counts as a fallback (its rate the mean path's there).
  */
-export const BLADEBURNER_REPLAY_LEAST_RATIO = 0.9323;
+export const BLADEBURNER_REPLAY_LEAST_RATIO = 0.0834;
 
 /** The gate's verdict on replays (see above): null, used; else why the mean path's figure is used instead. */
 export function bladeburnerReplayDeclined(
@@ -370,8 +370,8 @@ export function bladeburnerReplayRoute(
     replays = BLADEBURNER_ROUTE_REPLAYS,
     seed,
     meanChaos = false,
-    // The least step ratio counted a fallback: 0 (a rate at 0 or under) until #423's ruling 9's measurement rules on one.
-    leastRatio = 0,
+    // The least step ratio measured (#423's ruling 10): a step under it counts as a fallback.
+    leastRatio = BLADEBURNER_REPLAY_LEAST_RATIO,
   }: { replays?: number; seed: number; meanChaos?: boolean; leastRatio?: number },
 ): BladeburnerRouteReplays {
   const { reference, segments } = timeline;
