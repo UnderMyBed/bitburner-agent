@@ -435,6 +435,7 @@ export {
   type BladeburnerGrowthChannels,
   type BladeburnerGrowthState,
   blackOpsRouteGrownEstimate,
+  blackOpsRouteTimelineOf,
   bladeburnerGrownInput,
   bladeburnerGrowthStart,
   bladeburnerPricedInput,

@@ -73,6 +73,7 @@ export const BLADEBURNER_ROUTE_REPLAYS = 200;
  * else the mean path's, labelled. Re-choosing each replay's mix at its drawn chances is #426.
  */
 export const BLADEBURNER_REPLAY_MOST_FALLBACK = 0.01;
+export const BLADEBURNER_REPLAY_MOST_ERROR = 0.039;
 
 /**
  * The least re-priced step rate, over the mean path's for that step, the first-order re-pricing is measured at (#423's
@@ -80,10 +81,10 @@ export const BLADEBURNER_REPLAY_MOST_FALLBACK = 0.01;
  * route's opening hour in 10 engine runs, each within 4 sd of the replays) re-prices that route's first step at each
  * run's drawn chances between ×0.9323 and ×1.0895 of its mean path's rate. Below the lowest a step is unmeasured, so a
  * replay with one counts as a fallback (its rate the mean path's there), as one at 0 or under. The check covers
- * nothing lower: the low end is the lowest it covered.
+ * nothing lower: the low end is the lowest it covered. Not applied yet (ruling 9: measured at the ratios the replays
+ * reach first, `bladeburnerReplayRoute`'s `leastRatio` 0 until then).
  */
 export const BLADEBURNER_REPLAY_LEAST_RATIO = 0.9323;
-export const BLADEBURNER_REPLAY_MOST_ERROR = 0.039;
 
 /** The gate's verdict on replays (see above): null, used; else why the mean path's figure is used instead. */
 export function bladeburnerReplayDeclined(
@@ -302,7 +303,14 @@ export function bladeburnerReplayAttempts(
   reference: BladeburnerDriftCity,
   attempts: readonly BladeburnerReplayAttempt[],
   { seed, end, meanChaos = false }: { seed: number; end?: number; meanChaos?: boolean },
-): { chances: Float64Array; successes: number; cities: BladeburnerDriftCity[] } {
+): {
+  chances: Float64Array;
+  /** Each attempt's city factor over the reference's (its chance at a competence of 1, uncapped): #423's checks. */
+  factors: Float64Array;
+  successes: number;
+  cities: BladeburnerDriftCity[];
+  worked: number;
+} {
   const events = bladeburnerSeeded(seed);
   const random = bladeburnerSeeded(seed + 104729);
   const cities: BladeburnerDriftCity[] = start.cities.map((city) => ({
@@ -326,6 +334,7 @@ export function bladeburnerReplayAttempts(
     decayed = t;
   };
   const chances = new Float64Array(attempts.length);
+  const factors = new Float64Array(attempts.length);
   let successes = 0;
   for (const [k, attempt] of attempts.entries()) {
     pass(attempt.at);
@@ -337,19 +346,16 @@ export function bladeburnerReplayAttempts(
     worked = bladeburnerMostFactorCity(seen, worked, attempt.action.name === "Raid", state.ceiling);
     const city = cities[worked] as BladeburnerDriftCity;
     city.chaos = Math.min(city.chaos, state.ceiling);
-    const p = driftedChance(
-      { action: attempt.action, chance: attempt.competence },
-      reference,
-      seen === cities ? city : (seen[worked] as BladeburnerDriftCity),
-      state.ceiling,
-    );
+    const at = seen === cities ? city : (seen[worked] as BladeburnerDriftCity);
+    const p = driftedChance({ action: attempt.action, chance: attempt.competence }, reference, at, state.ceiling);
     chances[k] = p;
+    factors[k] = driftedChance({ action: attempt.action, chance: 1e-6 }, reference, at, state.ceiling) / 1e-6;
     const success = random() < p;
     if (success) successes++;
     bladeburnerAttemptDraw(cities, worked, attempt.action, success, random);
   }
   if (end !== undefined) pass(end);
-  return { chances, successes, cities };
+  return { chances, factors, successes, cities, worked };
 }
 
 /**
@@ -364,7 +370,8 @@ export function bladeburnerReplayRoute(
     replays = BLADEBURNER_ROUTE_REPLAYS,
     seed,
     meanChaos = false,
-    leastRatio = BLADEBURNER_REPLAY_LEAST_RATIO,
+    // The least step ratio counted a fallback: 0 (a rate at 0 or under) until #423's ruling 9's measurement rules on one.
+    leastRatio = 0,
   }: { replays?: number; seed: number; meanChaos?: boolean; leastRatio?: number },
 ): BladeburnerRouteReplays {
   const { reference, segments } = timeline;

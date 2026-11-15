@@ -55,11 +55,7 @@ import {
   bladeburnerRebuildSeconds,
   NO_INSTALL_GAIN,
 } from "../src/bladeburner-installs.ts";
-import {
-  BLADEBURNER_REPLAY_LEAST_RATIO,
-  BLADEBURNER_ROUTE_REPLAYS,
-  bladeburnerReplaySeedOf,
-} from "../src/bladeburner-replays.ts";
+import { BLADEBURNER_ROUTE_REPLAYS } from "../src/bladeburner-replays.ts";
 import { blackOpsRouteEstimate } from "../src/bladeburner-route.ts";
 import {
   BLADEBURNER_SKILL_NAMES,
@@ -1133,106 +1129,6 @@ describe("the playability under the route's replays (#423): the gate's figures, 
       `${r?.replaysWithFallback} of ${r?.count} at the fallback: ${r?.used ? "used" : `declined, ${r?.declined}`})`
     );
   };
-
-  // R423 TEMP: the gate on 10 seed series, the rule before ruling 8 and its.
-  test("R423 SERIES", () => {
-    const rows: string[] = [];
-    for (const bitNode of [6, 7]) {
-      const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
-      const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
-      const { combat: figures, input: read, at, who } = startAt(100);
-      const input = { ...read, rankMultiplier, drift: { cities: SIX, city: "Sector-12" } };
-      const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
-      const forecast = { ...input, forecast: bladeburnerPersonAfterInstall(who, gain) };
-      for (const [label, solve] of [
-        ["keep", (o: object) => blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier, ...o })],
-        ["best", (o: object) => blackOpsRouteGrownEstimate(forecast, at, { combat: combatAfter(figures, gain), costMultiplier, ...o })],
-      ] as const) {
-        const verdicts: Record<string, string[]> = { old: [], now: [] };
-        let least = Number.POSITIVE_INFINITY;
-        for (let k = 0; k < 10; k++) {
-          const replaySeed = bladeburnerReplaySeedOf(Date.UTC(2026, 0, 1) + k * 600_000);
-          for (const [rule, ratio] of [
-            ["old", 0],
-            ["now", BLADEBURNER_REPLAY_LEAST_RATIO],
-          ] as const) {
-            const r = solve({ replaySeed, replayLeastRatio: ratio });
-            const rep = r.replays as NonNullable<typeof r.replays>;
-            least = Math.min(least, ...rep.leastRatios);
-            (verdicts[rule] as string[]).push(
-              rep.used
-                ? `${(rep.seconds / HOUR).toFixed(1)}±${(rep.error / HOUR).toFixed(1)}`
-                : `x(${rep.replaysWithFallback}f, ${((100 * rep.error) / rep.seconds).toFixed(1)}%)`,
-            );
-          }
-        }
-        const passes = (rule: string) => (verdicts[rule] as string[]).filter((v) => !v.startsWith("x")).length;
-        rows.push(
-          `BN${bitNode} ${label}: before ruling 8 ${passes("old")}/10 [${verdicts.old?.join(" ")}]; now ${passes("now")}/10 ` +
-            `[${verdicts.now?.join(" ")}]; the least step ratio ${least.toFixed(4)}`,
-        );
-      }
-    }
-    console.log(`R423SERIES\n${rows.join("\n")}`);
-  }, 900_000);
-
-  // R423 TEMP: the math functions' results to every bit, to compare machines.
-  test("R423 MATH", () => {
-    const random = seeded(4239);
-    const bits = new Float64Array(1);
-    const words = new BigUint64Array(bits.buffer);
-    const fns: [string, (x: number, y: number) => number][] = [
-      ["pow", (x, y) => x ** y],
-      ["pow0.7", (x) => (x * 1e9) ** 0.7],
-      ["exp", (x) => Math.exp(x * 20 - 10)],
-      ["log", (x) => Math.log(x * 1e9 + 1e-9)],
-      ["log1p", (x) => Math.log1p(x * 2 - 0.99)],
-      ["expm1", (x) => Math.expm1(x * 2 - 1)],
-      ["sqrt", (x) => Math.sqrt(x * 1e6)],
-      ["log10", (x) => Math.log10(x * 1e9 + 1)],
-      ["log2", (x) => Math.log2(x * 1e9 + 1)],
-      ["cbrt", (x) => Math.cbrt(x * 1e6)],
-      ["sin", (x) => Math.sin(x * 100)],
-      ["cos", (x) => Math.cos(x * 100)],
-      ["atan", (x) => Math.atan(x * 100 - 50)],
-      ["tanh", (x) => Math.tanh(x * 10 - 5)],
-    ];
-    const rows: string[] = [];
-    const inputs = Array.from({ length: 200_000 }, () => [random(), random() * 4] as const);
-    for (const [name, fn] of fns) {
-      let digest = 0n;
-      for (const [x, y] of inputs) {
-        bits[0] = fn(x, y);
-        digest = (digest * 1000003n + (words[0] as bigint)) & 0xffffffffffffffffn;
-      }
-      rows.push(`${name} ${digest.toString(16)}`);
-    }
-    console.log(`R423MATH ${rows.join("; ")}`);
-  });
-
-  // R423 TEMP: the figures to every digit, to compare machines.
-  test("R423 DIGEST", () => {
-    for (const bitNode of [6, 7]) {
-      const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
-      const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
-      const { combat: figures, input: read, at, who } = startAt(100);
-      const input = { ...read, rankMultiplier, drift: { cities: SIX, city: "Sector-12" } };
-      const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
-      const forecast = { ...input, forecast: bladeburnerPersonAfterInstall(who, gain) };
-      const routes = {
-        keep: blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier, replays: 0 }),
-        after: blackOpsRouteGrownEstimate(forecast, at, { combat: combatAfter(figures, gain), costMultiplier, replays: 0 }),
-        keepReplays: blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier }),
-      };
-      for (const [label, r] of Object.entries(routes)) {
-        const digits = r.path.map((p) => p.seconds.toPrecision(17));
-        console.log(
-          `R423DIGEST BN${bitNode} ${label} seconds ${r.seconds.toPrecision(17)} solves ${r.solves} points ${digits.length} ` +
-            `replaysSum ${(r.replays?.times ?? []).reduce((a, b) => a + b, 0).toPrecision(17)} path ${digits.join(",")}`,
-        );
-      }
-    }
-  }, 300_000);
 
   test("BN6, combat 100: both sides pass, so the replays; B7's margin the step's error and 3 of the paired replays'", () => {
     const { keep, after, timing, step } = solve(6);

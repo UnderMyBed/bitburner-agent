@@ -736,7 +736,7 @@ export function blackOpsRouteGrownEstimate(
     seconds = replayed.seconds;
   }
   const end = state.drift === undefined ? null : state.drift.state.cities[state.drift.state.worked];
-  return {
+  const result: BlackOpsGrownTime = {
     steps,
     seconds,
     meanPathSeconds,
@@ -771,6 +771,17 @@ export function blackOpsRouteGrownEstimate(
               state.drift.reference.population > 0 ? end.population / state.drift.reference.population : 1,
           },
   };
+  // The timeline its replays ran, for #423's checks (kept beside the result, out of what it serializes).
+  if (timeline !== null) ROUTE_TIMELINES.set(result, timeline);
+  return result;
+}
+
+/** Each grown result's route timeline (#423's checks: the engine against the replays at the states they reach). */
+const ROUTE_TIMELINES = new WeakMap<BlackOpsGrownTime, BladeburnerRouteTimeline>();
+
+/** The timeline a grown result's replays ran (`blackOpsRouteGrownEstimate`'s, with the cities read), or null. */
+export function blackOpsRouteTimelineOf(result: BlackOpsGrownTime): BladeburnerRouteTimeline | null {
+  return ROUTE_TIMELINES.get(result) ?? null;
 }
 
 /** The combat stats' experience multipliers of `combat`. */
