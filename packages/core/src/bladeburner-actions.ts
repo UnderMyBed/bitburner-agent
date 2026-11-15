@@ -845,7 +845,11 @@ export interface BladeburnerChainNext {
  *   better than Field Analysis (less stamina, no rank), so it isn't weighed.
  * - **The drift** (#418, `drift`, ./bladeburner-drift.ts): under a target each chance is its mean over the attempts the
  *   plan makes in its horizon (`driftedToTarget`), the city moved by them, the events and Diplomacy's time on each
- *   attempt; past every target, the chances read (no horizon). **The hospital** (#418, `hospital`): each plan's money a
+ *   attempt; past every target, the chances read (no horizon). Since #421 (term 3) a plan's own action over the
+ *   attempts its chain makes (its count, then its share of the tail's mix), the tail's ways over the most the tail can
+ *   make of each (the horizon's at its duty, its count and regrowth at most).
+ * - **The attempt under way** (#421's ruling 3, `underWay`): under a target, each plan of the action under way has its
+ *   first attempt cost only its time left (the level read's seconds less those done); past every target, left out. **The hospital** (#418, `hospital`): each plan's money a
  *   second (`moneyLostPerSecond`), shown, not in the objective (money against rank is the planner's, decision 67).
  * Left out, and labelled: a failure's HP in the objective (above: its money is reported, not traded, so the choice is
  * optimistic for the actions that lose the most HP, Raid about 386 a failure, Stealth Retirement 85, Assassination 50,
@@ -1160,70 +1164,71 @@ interface PlanCandidate {
 }
 
 /** Every plan `chooseBladeburnerAction` weighs, in the game's order, resting alone first. */
-function planCandidates({
-  readings,
-  person,
-  stamina,
-  maxStamina,
-  rankMultiplier,
-  speed,
-  skills = {},
-  city,
-  forecast,
-  drift,
-  hospital,
-  underWay,
-}: {
-  readings: readonly BladeburnerActionReading[];
-  person: BladeburnerPerson;
-  /**
-   * Another person to forecast at (#404: an install's, core's `bladeburnerPersonAfterInstall`): each action's low end
-   * scaled by its competence there over the competence read, as the skills' are, the times, the max stamina and the
-   * regain computed there. None: the person read.
-   */
-  forecast?: BladeburnerPerson;
-  stamina: number;
-  maxStamina: number;
-  rankMultiplier: number;
-  /** Game seconds a real second: 5 with bonus time, else 1. */
-  speed: number;
-  /** The skill levels read (none: all 0), and those to forecast at (none: the levels read). */
-  skills?: { read?: BladeburnerSkillLevels; planned?: BladeburnerSkillLevels };
-  /** Another city or chaos than the one read (#383): the competence there over the competence read, and Raid there. */
-  city?: { ratio: number; raid: boolean };
-  /** The rank now and the next current-rank target (#386, ./bladeburner-targets.ts): under it, the least time to it. */
-  target?: { rank: number; target: number };
-  /**
-   * The cities read and the city the chances are for (#418, ./bladeburner-drift.ts), its chaos where it's another's
-   * (B4's forecasts), and the horizon: each contract's and operation's chance priced at its mean over the attempts the
-   * plan makes in `horizonSeconds`, the city moved by them, and Diplomacy's time holding the chaos. Under a target the
-   * rule solves the horizon itself (`chooseBladeburnerAction`); 0 or absent, the chances read. None: no drift.
-   * `chunks`: each path's at most (`BLADEBURNER_DRIFT_CHUNKS` absent; the grown estimate's steps fewer).
-   */
-  drift?: {
-    cities: readonly BladeburnerDriftCity[];
-    city: string;
-    chaos?: number;
-    horizonSeconds?: number;
-    chunks?: number;
+function planCandidates(
+  {
+    readings,
+    person,
+    stamina,
+    maxStamina,
+    rankMultiplier,
+    speed,
+    skills = {},
+    city,
+    forecast,
+    drift,
+    hospital,
+    underWay,
+  }: {
+    readings: readonly BladeburnerActionReading[];
+    person: BladeburnerPerson;
     /**
-     * pop/popEst of `city` as the round measured it (#420, `bladeburnerCityMeasures`), or absent: none recovered there.
-     * Only `bladeburnerPricedInput` reads it (each chance at it, #422's round 2), not the forecast.
+     * Another person to forecast at (#404: an install's, core's `bladeburnerPersonAfterInstall`): each action's low end
+     * scaled by its competence there over the competence read, as the skills' are, the times, the max stamina and the
+     * regain computed there. None: the person read.
      */
-    ratio?: number;
-  };
-  /** The max HP and the money read (#418): each plan's hospital money a second. None: not read (null). */
-  hospital?: { hpMax: number; money: number };
-  /**
-   * The contract or operation under way (#421's ruling 3): its name, the level read and its seconds done. Its started
-   * attempt's time is fixed (`Bladeburner.ts:186-188`) and a level set keeps it (`NetscriptFunctions/Bladeburner.ts:
-   * 218-227`), so each plan of that action's first attempt is the time left of it, the level read's seconds less those
-   * done; another action's starts again at 0 (`Bladeburner.ts:187`). None: nothing under way, or not read.
-   */
-  underWay?: { name: string; level: number; secondsDone: number };
-},
-/** The plans as well as the tail's supply: the tail's own callers (`bladeburnerTailMix`, its rate) need only the latter. */
-plans = true,
+    forecast?: BladeburnerPerson;
+    stamina: number;
+    maxStamina: number;
+    rankMultiplier: number;
+    /** Game seconds a real second: 5 with bonus time, else 1. */
+    speed: number;
+    /** The skill levels read (none: all 0), and those to forecast at (none: the levels read). */
+    skills?: { read?: BladeburnerSkillLevels; planned?: BladeburnerSkillLevels };
+    /** Another city or chaos than the one read (#383): the competence there over the competence read, and Raid there. */
+    city?: { ratio: number; raid: boolean };
+    /** The rank now and the next current-rank target (#386, ./bladeburner-targets.ts): under it, the least time to it. */
+    target?: { rank: number; target: number };
+    /**
+     * The cities read and the city the chances are for (#418, ./bladeburner-drift.ts), its chaos where it's another's
+     * (B4's forecasts), and the horizon: each contract's and operation's chance priced at its mean over the attempts the
+     * plan makes in `horizonSeconds`, the city moved by them, and Diplomacy's time holding the chaos. Under a target the
+     * rule solves the horizon itself (`chooseBladeburnerAction`); 0 or absent, the chances read. None: no drift.
+     * `chunks`: each path's at most (`BLADEBURNER_DRIFT_CHUNKS` absent; the grown estimate's steps fewer).
+     */
+    drift?: {
+      cities: readonly BladeburnerDriftCity[];
+      city: string;
+      chaos?: number;
+      horizonSeconds?: number;
+      chunks?: number;
+      /**
+       * pop/popEst of `city` as the round measured it (#420, `bladeburnerCityMeasures`), or absent: none recovered there.
+       * Only `bladeburnerPricedInput` reads it (each chance at it, #422's round 2), not the forecast.
+       */
+      ratio?: number;
+    };
+    /** The max HP and the money read (#418): each plan's hospital money a second. None: not read (null). */
+    hospital?: { hpMax: number; money: number };
+    /**
+     * The contract or operation under way (#421's ruling 3): its name, the level read and its seconds done. Its started
+     * attempt's time is fixed (`Bladeburner.ts:186-188`) and a level set keeps it (`NetscriptFunctions/Bladeburner.ts:
+     * 218-227`), so each plan of that action's first attempt is the time left of it, the level read's seconds less those
+     * done; another action's starts again at 0 (`Bladeburner.ts:187`). None: nothing under way, or not read.
+     */
+    underWay?: { name: string; level: number; secondsDone: number };
+  },
+  /** The plans as well as the tail's supply: the tail's own callers (`bladeburnerTailMix`, its rate) need only the latter. */
+  plans = true,
 ): { candidates: PlanCandidate[]; supply: BladeburnerRankSource[] } {
   const readMults = bladeburnerSkillMultsOf(skills.read ?? {});
   const mults = skills.planned === undefined ? readMults : bladeburnerSkillMultsOf(skills.planned);

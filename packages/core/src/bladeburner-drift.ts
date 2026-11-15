@@ -588,14 +588,13 @@ export interface BladeburnerDriftResult {
  * random events' mean (`bladeburnerEventDrift`) over the time, and Diplomacy holding the worked city's chaos at the
  * ceiling (its time returned, not taken from `seconds`). `moves`: the brain's city chosen again as the path goes (B4's,
  * the most chance factor), else the city worked throughout. Since #420 the brain measures every city's true population
- * each reading, so its B4 picks by the truth, as the path's. Labelled (#420's ruling 3, #422's review): against walks
- * of the game's draws from 150 to Typhoon's 2,500 the rule is pessimistic by 14.7% (Bounty Hunter first) and 15.1%
- * (Raid first), the plans' order the same. Measured by term (core's test, check 3): the path carries each city at its
- * mean and picks the best mean, but the events spread the cities apart and B4 works the best of them (Bounty Hunter's
- * chance 0.418 priced, 0.528 an attempt walked); at the walked chance the plan takes 3,978 min against the walks'
- * 4,775, the rest the walks' own greedy tail and rests against the chain's sustainable tail; and the path's horizon
- * attempts (2,312 and 1,223) over the chain's (49 and 55 in the count, then the tail). #421's. In attempts one at a
- * time to `BLADEBURNER_DRIFT_CHUNKS`,
+ * each reading, so its B4 picks by the truth, as the path's. Labelled (#421): against walks of the game's draws from
+ * 150 to Typhoon's 2,500, the walks following the rule's own chain and its tail's mix (check 3, core's test), the rule
+ * is pessimistic by 13.8% (Bounty Hunter first) and 15.0% (Raid first); the two plans tie in the chain (5,470.8 min)
+ * and the walks' gap (50.7 ± 6.0 min) is inside the chain's error of their difference (68.8 min): a tie at the model's
+ * resolution. What's left is the city the path carries at its mean where B4 works the best of six the events spread
+ * apart (Bounty Hunter's chance 0.417 priced, 0.485 an attempt walked: #423), and the chain's stamina reserve and its
+ * tail after the earlier stretches (#424). In attempts one at a time to `BLADEBURNER_DRIFT_CHUNKS`,
  * past it in that many chunks, each chunk's attempts at the chance before each, as if linear over the chunk (the
  * success-moved effects, Raid's and the kills', at the chance at the chunk's start).
  */
