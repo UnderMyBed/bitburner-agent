@@ -291,6 +291,8 @@ export interface BladeburnerRouteReplays {
   replaysWithFallback: number;
   /** Each replay's least ratio of a climb step's re-priced rate to its mean path's (before any fallback). */
   leastRatios: number[];
+  /** Each replay's most ratio of a climb step's re-priced rate to its mean path's (before any fallback; #423's ruling 12). */
+  mostRatios: number[];
   /** The Black Ops whose rebuilds took the mean path's rate in every replay (#423's ruling 11: never measured). */
   meanPathRebuilds: number;
 }
@@ -450,6 +452,7 @@ export function bladeburnerReplayRoute(
   let fallbackSteps = 0;
   let replaysWithFallback = 0;
   const leastRatios: number[] = [];
+  const mostRatios: number[] = [];
   const attempts: BladeburnerReplayAttempt[] = order.map((i) => ({
     at: at[i] as number,
     action: (parts[keys[i] as number] as { part: BladeburnerRoutePart }).part.action,
@@ -481,13 +484,17 @@ export function bladeburnerReplayRoute(
     let total = 0;
     let fell = 0;
     let least = Number.POSITIVE_INFINITY;
+    let most = Number.NEGATIVE_INFINITY;
     const repriced = (rate: number, these: readonly BladeburnerRoutePart[]) => {
       let next = rate;
       for (const part of these) {
         next += part.perSecond * (drawn(key) - part.chance) * (parts[key] as { plus: number }).plus;
         key++;
       }
-      if (rate > 0) least = Math.min(least, next / rate);
+      if (rate > 0) {
+        least = Math.min(least, next / rate);
+        most = Math.max(most, next / rate);
+      }
       if (next > 0 && next >= leastRatio * rate && next <= mostRatio * rate) return next;
       fell++;
       return rate;
@@ -507,6 +514,7 @@ export function bladeburnerReplayRoute(
     if (fell > 0) replaysWithFallback++;
     times.push(total);
     leastRatios.push(least);
+    mostRatios.push(most);
   }
   const mean = times.reduce((sum, x) => sum + x, 0) / Math.max(1, times.length);
   const variance = times.reduce((sum, x) => sum + (x - mean) ** 2, 0) / Math.max(1, times.length - 1);
@@ -520,6 +528,7 @@ export function bladeburnerReplayRoute(
     fallbackSteps,
     replaysWithFallback,
     leastRatios,
+    mostRatios,
     meanPathRebuilds: segments.filter((segment) => segment.kind === "blackOp" && segment.works.length > 0).length,
   };
 }

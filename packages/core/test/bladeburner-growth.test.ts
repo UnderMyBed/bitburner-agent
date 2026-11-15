@@ -1232,10 +1232,20 @@ describe("the playability under the route's replays (#423): the gate's figures, 
           const r = bladeburnerReplayRoute(timeline, { seed });
           const declined = bladeburnerReplayDeclined(r);
           if (declined === null) used++;
+          // Which bound fired (#423's ruling 12): the replays past each, and how far past the most, in its ulps.
+          const most = BLADEBURNER_REPLAY_MOST_RATIO;
+          const ulp = 2 ** (Math.floor(Math.log2(most)) - 52);
+          const above = r.mostRatios.filter((x) => x > most).map((x) => Math.round((x - most) / ulp));
+          const below = r.leastRatios.filter((x) => x < BLADEBURNER_REPLAY_LEAST_RATIO).length;
+          const past =
+            `; ${below} under the least, ${above.length} over the most` +
+            (above.length > 0
+              ? ` by ${Math.min(...above)}–${Math.max(...above)} ulps`
+              : ` (the most ${Math.round((Math.max(...r.mostRatios) - most) / ulp)} ulps from it)`);
           verdicts.push(
             declined === null
-              ? `${(r.seconds / HOUR).toFixed(1)}±${(r.error / HOUR).toFixed(1)} (${r.replaysWithFallback} at the fallback)`
-              : `declined (${r.replaysWithFallback} at the fallback, ${((100 * r.error) / r.seconds).toFixed(1)}%)`,
+              ? `${(r.seconds / HOUR).toFixed(1)}±${(r.error / HOUR).toFixed(1)} (${r.replaysWithFallback} at the fallback${past})`
+              : `declined (${r.replaysWithFallback} at the fallback, ${((100 * r.error) / r.seconds).toFixed(1)}%${past})`,
           );
         }
         passes.set(`${bitNode} ${label}`, used);
