@@ -22,6 +22,7 @@ import {
   bladeburnerLevelledAction,
   bladeburnerPlansToTarget,
   bladeburnerTailMix,
+  bladeburnerTailRate,
   chooseBladeburnerAction,
   countGrowthPerSecond,
   maxStaminaOf,
@@ -48,7 +49,11 @@ import {
   bladeburnerGrowthStart,
 } from "../src/bladeburner-growth.ts";
 import { blackOpsInstallTiming, bladeburnerInstallGain } from "../src/bladeburner-installs.ts";
-import { bladeburnerAttemptsInCount } from "../src/bladeburner-targets.ts";
+import {
+  bladeburnerAttemptsInCount,
+  bladeburnerCycleStep,
+  bladeburnerSecondsToRank,
+} from "../src/bladeburner-targets.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -900,6 +905,94 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
     expect(work.chance).toBeCloseTo(successes / drift.attempts, 9);
   });
 
+  test("#421's term 3, every action: each plan's attempts its count, then its share of the chain's tail", () => {
+    // Every action read, 4 h given: each one's share its attempts a second in the tail's mix there (some at their
+    // whole regrowth, some at none: Raid's priced out of the tail by its drift), so its plan's attempts its count's,
+    // then that share's over the rest of the horizon; past it, the horizon's at its cycle. Within 1%: the attempts and
+    // Diplomacy's seconds solved in three passes (as the count-free case above).
+    const read = readAt(who);
+    const horizonSeconds = 4 * 3600;
+    const given = { cities: SIX, city: "New Tokyo", horizonSeconds };
+    const plans = bladeburnerPlansToTarget({ ...read, target: { rank: 150, target: 2500 }, drift: given });
+    const mix = bladeburnerTailMix({ ...read, drift: given });
+    const shareOf = (name: string) =>
+      mix.work.filter((part) => part.name === name).reduce((sum, part) => sum + part.attemptsPerSecond, 0);
+    let counted = 0;
+    let unshared = 0;
+    for (const plan of plans) {
+      const work = plan.work;
+      if (work === null || work.drift === undefined) continue;
+      const growth = countGrowthPerSecond(action(work.name));
+      const cycle = (work.seconds + work.diplomacySeconds) / plan.duty;
+      const inCount = bladeburnerAttemptsInCount(20, growth, cycle);
+      const most = 20 + growth * horizonSeconds;
+      const share = shareOf(work.name);
+      const chain =
+        inCount * cycle < horizonSeconds
+          ? Math.min(inCount + share * (horizonSeconds - inCount * cycle), most)
+          : Math.min(horizonSeconds / cycle, most);
+      if (inCount * cycle < horizonSeconds) counted += 1;
+      if (inCount * cycle < horizonSeconds && share < growth / 2) unshared += 1;
+      expect(Math.abs(work.drift.attempts / chain - 1), `${work.name} ${work.level} ${plan.rest.name}`).toBeLessThan(
+        0.01,
+      );
+    }
+    // The case is what it's for: plans whose count binds, some with no or little share of the tail.
+    expect(counted).toBeGreaterThan(0);
+    expect(unshared).toBeGreaterThan(0);
+  });
+
+  test("#421's ruling 1: the chain's next-best regrown over the first count's stretch, by hand", () => {
+    // Check 3's reading: Raid first, then Bounty Hunter's count, then the tail. Bounty Hunter's count where its stretch
+    // starts is its 20 read plus its regrowth over Raid's attempts × cycle seconds (`Bladeburner.ts:1386-1393`).
+    const input = readAt(who);
+    const target = { rank: 150, target: 2500 };
+    const drift = { cities: SIX, city: "New Tokyo" };
+    const plans = bladeburnerPlansToTarget({ ...input, target, drift });
+    const raid = plans.find((plan) => plan.work?.name === "Raid" && plan.toTarget?.next?.name === "Bounty Hunter");
+    if (raid === undefined) throw new Error("no Raid plan with Bounty Hunter next");
+    const nextOf = raid.toTarget?.next as NonNullable<NonNullable<typeof raid.toTarget>["next"]>;
+    const hunter = plans.find(
+      (plan) =>
+        plan.work?.name === nextOf.name && plan.work.level === nextOf.level && plan.rest.name === nextOf.rest,
+    );
+    if (hunter === undefined) throw new Error("no next-best plan");
+    const stepOf = (plan: (typeof plans)[number]) => {
+      const work = plan.work as NonNullable<(typeof plan)["work"]>;
+      const each = action(work.name);
+      const cycle = bladeburnerCycleStep({
+        chance: work.chance,
+        gain: actionRankGain(each, work.level, 1),
+        loss: actionRankLoss(each, work.level),
+        seconds: work.seconds + work.diplomacySeconds,
+        duty: plan.duty,
+        restRankPerSecond: plan.rest.rankPerSecond,
+      });
+      const growth = countGrowthPerSecond(each);
+      return { cycle, growth, attempts: bladeburnerAttemptsInCount(20, growth, cycle.seconds) };
+    };
+    const first = stepOf(raid);
+    const second = stepOf(hunter);
+    const horizonSeconds = raid.work?.drift?.horizonSeconds as number;
+    const tailRate = bladeburnerTailRate({ ...input, drift: { ...drift, horizonSeconds } });
+    const stretch = first.attempts * first.cycle.seconds;
+    const regrown = bladeburnerAttemptsInCount(20 + second.growth * stretch, second.growth, second.cycle.seconds);
+    const secondsWith = (attempts: number) =>
+      bladeburnerSecondsToRank(
+        { ...first.cycle, attempts: first.attempts, next: { ...second.cycle, attempts, tailRate } },
+        target.rank,
+        target.target,
+      );
+    console.log(
+      `#421's ruling 1: Raid's ${first.attempts} attempts over ${(stretch / 60).toFixed(1)} min, then Bounty Hunter's ` +
+        `${regrown} regrown (${second.attempts} read): ${((raid.toTarget?.seconds as number) / 60).toFixed(1)} min, ` +
+        `${(secondsWith(second.attempts) / 60).toFixed(1)} without the regrowth`,
+    );
+    expect(regrown).toBeGreaterThan(second.attempts);
+    expect(Math.abs((raid.toTarget?.seconds as number) / secondsWith(regrown) - 1)).toBeLessThan(1e-12);
+    expect(Math.abs((raid.toTarget?.seconds as number) / secondsWith(second.attempts) - 1)).toBeGreaterThan(1e-6);
+  });
+
   test("each plan's attempts over its horizon at most its count and its regrowth", () => {
     const drift = { cities: SIX, city: "New Tokyo" };
     const plans = bladeburnerPlansToTarget({ ...input, target: { rank: 25, target: 2500 }, drift });
@@ -1285,6 +1378,11 @@ function walkPlan(
     restSeconds: 0,
     restRank: 0,
   };
+  // The tail's own record over every walk (#421's term 2): each way's attempts made and the tail's seconds.
+  const tailMade = policy.tail.map(() => 0);
+  let tailSeconds = 0;
+  // And the chain's: each of its ways' attempts in its stretch.
+  const chainMade = policy.chain.map(() => 0);
   for (let walk = 0; walk < walks; walk++) {
     // Two streams a walk (common random numbers: a walk's events the same draws under either plan, as its own
     // attempts'), so the plans' gap is read walk by walk.
@@ -1384,9 +1482,12 @@ function walkPlan(
       let part = -1;
       if (phase < policy.chain.length) {
         const each = policy.chain[phase] as WalkedWay;
-        if (workable(each)) way = each;
+        if (workable(each)) {
+          way = each;
+          chainMade[phase] = (chainMade[phase] as number) + 1;
+        }
       } else {
-        // The tail: the way most behind its share (its attempts a second over the tail's time, less those made).
+            // The tail: the way most behind its share (its attempts a second over the tail's time, less those made).
         let behind = 0;
         for (const [k, { way: each, perSecond }] of policy.tail.entries()) {
           const owed = perSecond * (clock - tailFrom) - (made[k] as number);
@@ -1484,10 +1585,16 @@ function walkPlan(
     }
     times.push(clock);
     attemptsOf.push(attempts);
+    if (phase >= policy.chain.length) {
+      tailSeconds += clock - tailFrom;
+      for (const k of made.keys()) tailMade[k] = (tailMade[k] as number) + (made[k] as number);
+    }
   }
   return {
     times,
     ...meanOf(times),
+    tail: { made: tailMade, seconds: tailSeconds },
+    chain: chainMade.map((made) => made / walks),
     attempts: attemptsOf.reduce((a, b) => a + b, 0) / walks,
     first: {
       attempts: first.attempts / walks,
@@ -1570,6 +1677,23 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
           .join(", "),
     );
     const ms = performance.now() - started;
+    // The walks' tail is the mix's (#421's term 2): no way worked past its share. A way is attempted only when its
+    // attempts a second times the tail's time reach its attempts made, so over the walks its attempts are at most its
+    // share × the tails' seconds, plus one a walk (the attempt that time allows at once).
+    for (const [plan, walked] of [
+      [chosen, ruled],
+      [rival as (typeof plans)[number], raided],
+    ] as const) {
+      // The rule's own chain walked: its count, its next-best's where it has one, each attempted in its stretch.
+      expect(walked.chain.length, plan.work?.name).toBe(plan.toTarget?.next === undefined ? 1 : 2);
+      for (const made of walked.chain) expect(made, plan.work?.name).toBeGreaterThan(0);
+      const rates = tail.map(({ way, perSecond }, k) => {
+        const made = walked.tail.made[k] as number;
+        expect(made, way.action.name).toBeLessThanOrEqual(perSecond * walked.tail.seconds + PLAN_WALKS);
+        return `${way.action.name} ${((3600 * made) / walked.tail.seconds).toFixed(2)} an hour (its share ${(3600 * perSecond).toFixed(2)})`;
+      });
+      console.log(`the walks' tail (#421's term 2): ${rates.join(", ")}`);
+    }
     const minutes = (x: number) => (x / 60).toFixed(1);
     // The gap walk by walk (the same seeds: common random numbers).
     const { mean: gap, error } = meanOf(raided.times.map((time, i) => time - (ruled.times[i] as number)));
