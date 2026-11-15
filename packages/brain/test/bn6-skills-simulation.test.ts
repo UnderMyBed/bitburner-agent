@@ -79,7 +79,9 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
     console.log(
       `the first reading's plans to rank 2500 (#421's ruling 2), each action's best: ` +
         [...best.entries()]
-          .map(([name, each]) => `${name} with ${each.rest.name} ${((each.toTarget?.seconds ?? 0) / 3600).toFixed(2)} h`)
+          .map(
+            ([name, each]) => `${name} with ${each.rest.name} ${((each.toTarget?.seconds ?? 0) / 3600).toFixed(2)} h`,
+          )
           .join("; "),
     );
   }

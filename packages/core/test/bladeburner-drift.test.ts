@@ -953,8 +953,7 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
     if (raid === undefined) throw new Error("no Raid plan with Bounty Hunter next");
     const nextOf = raid.toTarget?.next as NonNullable<NonNullable<typeof raid.toTarget>["next"]>;
     const hunter = plans.find(
-      (plan) =>
-        plan.work?.name === nextOf.name && plan.work.level === nextOf.level && plan.rest.name === nextOf.rest,
+      (plan) => plan.work?.name === nextOf.name && plan.work.level === nextOf.level && plan.rest.name === nextOf.rest,
     );
     if (hunter === undefined) throw new Error("no next-best plan");
     const stepOf = (plan: (typeof plans)[number]) => {
@@ -1487,7 +1486,7 @@ function walkPlan(
           chainMade[phase] = (chainMade[phase] as number) + 1;
         }
       } else {
-            // The tail: the way most behind its share (its attempts a second over the tail's time, less those made).
+        // The tail: the way most behind its share (its attempts a second over the tail's time, less those made).
         let behind = 0;
         for (const [k, { way: each, perSecond }] of policy.tail.entries()) {
           const owed = perSecond * (clock - tailFrom) - (made[k] as number);

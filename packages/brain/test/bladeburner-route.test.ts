@@ -505,6 +505,12 @@ describe("#408's hindcasts (#409's review, #411): the BN6 and BN7 suites' share 
       "B2's hour from a harness join",
     ]);
     expect(GROWN_HINDCASTS["B2's hour from a harness join"]?.why).toContain("first-passage");
+    // The realised share (#421's ruling 2): 6 of 8 within ×2, B3's hour in since #421; out, the two B2 hours' lotteries.
+    expect(realised.length).toBe(6);
+    expect(rows.filter(([, row]) => !row.within).map(([label]) => label)).toEqual([
+      "B2's hour from a harness join",
+      "B2's hour from a harness join, BN7",
+    ]);
     // Every row a BN6 or (#411) BN7 suite's, asserted there on its side (`expectGrownHindcast`); every suite's a row.
     const directory = new URL(".", import.meta.url);
     const suites = readdirSync(directory)
