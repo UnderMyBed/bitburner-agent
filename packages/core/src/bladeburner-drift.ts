@@ -590,11 +590,11 @@ export interface BladeburnerDriftResult {
  * the most chance factor), else the city worked throughout. Since #420 the brain measures every city's true population
  * each reading, so its B4 picks by the truth, as the path's. Labelled (#421): against walks of the game's draws from
  * 150 to Typhoon's 2,500, the walks following the rule's own chain and its tail's mix (check 3, core's test), the rule
- * is pessimistic by 13.8% (Bounty Hunter first) and 15.0% (Raid first); the two plans tie in the chain (5,470.8 min)
- * and the walks' gap (50.7 ± 6.0 min) is inside the chain's error of their difference (68.8 min): a tie at the model's
- * resolution. What's left is the city the path carries at its mean where B4 works the best of six the events spread
- * apart (Bounty Hunter's chance 0.417 priced, 0.485 an attempt walked: #423), and the chain's stamina reserve and its
- * tail after the earlier stretches (#424). In attempts one at a time to `BLADEBURNER_DRIFT_CHUNKS`,
+ * is pessimistic by 13.8% (Bounty Hunter first) and 15.0% (Raid first); the two plans tie in the chain (5,470.8 min),
+ * the rule takes Bounty Hunter first (main's pick), and the walks put Raid first 50.7 ± 6.0 min ahead: a known loss of
+ * the chain, pinned by check 3 (#421's ruling 6) and #424's to fix (the chain's stamina reserve, and its one tail rate
+ * after whatever the earlier stretches left). And the city the path carries at its mean where B4 works the best of six
+ * the events spread apart (Bounty Hunter's chance 0.417 priced, 0.485 an attempt walked: #423). In attempts one at a time to `BLADEBURNER_DRIFT_CHUNKS`,
  * past it in that many chunks, each chunk's attempts at the chance before each, as if linear over the chunk (the
  * success-moved effects, Raid's and the kills', at the chance at the chunk's start).
  */

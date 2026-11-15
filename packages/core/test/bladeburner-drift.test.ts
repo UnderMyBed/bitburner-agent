@@ -1703,7 +1703,7 @@ function walkPlan(
 }
 
 describe("the rule's order under walks of the game's draws (#418's ruling 2, check 3): its plan against rank a second's", () => {
-  test("150 to 2,500 from the six cities read: the walks order the two plans as the rule does, or tie them", () => {
+  test("150 to 2,500 from the six cities read: the walks order the two plans as the rule does, or the known loss pinned", () => {
     const combat = combatOf(100);
     const who = personOf(combat);
     const input = readAt(who);
@@ -1759,18 +1759,9 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
       city: "New Tokyo",
       walks: PLAN_WALKS,
     };
-    // The held-out plan (#421's ruling 5): the rule's best-ranked after the two judged, by its own priced order, taken
-    // before any walk: the first plan in `plans` (sorted by the priced time) of an action neither of them works.
-    const third = plans.find(
-      (plan) => plan.work !== null && plan.work.name !== chosen.work?.name && plan.work.name !== rival?.work?.name,
-    ) as (typeof plans)[number];
-    expect(third?.work).not.toBeNull();
     const started = performance.now();
     const ruled = walkPlan(policyOf(chosen), { ...setting, seed: 3861 });
     const raided = walkPlan(policyOf(rival as (typeof plans)[number]), { ...setting, seed: 3861 });
-    const thirdStarted = performance.now();
-    const held = walkPlan(policyOf(third), { ...setting, seed: 3861 });
-    const thirdMs = performance.now() - thirdStarted;
     console.log(
       `the policy (#421's term 2): ${chosen.work?.name} first, then ${chosen.toTarget?.next?.name ?? "the tail"}; ` +
         `${rival?.work?.name} first, then ${rival?.toTarget?.next?.name ?? "the tail"}; the tail's mix at ` +
@@ -1857,145 +1848,93 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
     // The rule's order: the estimate's least is the rule's pick (`plans` sorted, `chosen` the first); an equal price is
     // the rule's free choice, the first in the game's order (#406; here the two tie at 5,470.8 min, #421's ruling 4).
     expect(rival?.toTarget?.seconds as number).toBeGreaterThanOrEqual(chosen.toTarget?.seconds as number);
-    // The walks' the same beyond 3 standard errors of the gap, or a tie at the model's resolution measured on pairs
-    // held out from the pair judged (#421's ruling 5): each plan's bias, priced less walked; each held-out pair's
-    // difference of biases and the walks' error of its gap.
-    const walkedPlans = [
-      { label: `${chosen.work?.name} first`, plan: chosen, walked: ruled },
-      { label: `${rival?.work?.name} first`, plan: rival as (typeof plans)[number], walked: raided },
-      { label: `${third.work?.name} first`, plan: third, walked: held },
-    ].map((each) => ({ ...each, bias: (each.plan.toTarget?.seconds as number) - each.walked.mean }));
-    const heldOut = heldOutPairs(walkedPlans.length, [0, 1]).map(([i, j]) => {
-      const a = walkedPlans[i] as (typeof walkedPlans)[number];
-      const b = walkedPlans[j] as (typeof walkedPlans)[number];
-      return {
-        label: `${a.label} and ${b.label}`,
-        biasDifference: a.bias - b.bias,
-        gapError: meanOf(b.walked.times.map((time, k) => time - (a.walked.times[k] as number))).error,
-      };
-    });
-    const verdict = checkThreeVerdict({ gap, error, heldOut });
+    // (a) The walks order the plans as the rule does beyond 3 standard errors of the gap (#418's bar); (b) else the
+    // chain's known loss pinned (#421's ruling 6): the rule's pick main's at this reading, and the walks' loss no more
+    // than the measured one plus 3 standard errors of this gap. Each plan's bias, priced less walked, printed.
+    const biasOf = (plan: (typeof plans)[number], walked: ReturnType<typeof walkPlan>) =>
+      (plan.toTarget?.seconds as number) - walked.mean;
     console.log(
-      `check 3's plans (#421's ruling 5; the third by the rule's rank, taken before the walks, ${thirdMs.toFixed(0)} ms ` +
-        `for its ${PLAN_WALKS} walks): ` +
-        walkedPlans
-          .map(
-            (each) =>
-              `${each.label} ${minutes(each.plan.toTarget?.seconds as number)} priced, ${minutes(each.walked.mean)} ` +
-              `± ${minutes(each.walked.error)} walked, bias ${minutes(each.bias)}`,
-          )
-          .join("; ") +
-        `; the held-out pairs: ${heldOut.map((pair) => `${pair.label} ${minutes(pair.biasDifference)} ± ${minutes(pair.gapError)}`).join(", ")}`,
+      `check 3's plans: ${chosen.work?.name} first, bias ${minutes(biasOf(chosen, ruled))} min; ` +
+        `${rival?.work?.name} first, bias ${minutes(biasOf(rival as (typeof plans)[number], raided))} min`,
     );
+    const verdict = checkThreeVerdict({ gap, error, pick: chosen.work?.name ?? null });
     console.log(
-      `check 3 (#421's ruling 5): ${verdict.kind}; the walks' gap ${minutes(gap)} min (3× its error ` +
-        `${minutes(3 * error)}); the held-out error of the difference ${minutes(verdict.resolution)} min ` +
-        `(${verdict.by}); the rule's loss ${minutes(verdict.loss)} min`,
+      `check 3 (#421's ruling 6): ${verdict.kind}; the walks' gap ${minutes(gap)} min (3× its error ` +
+        `${minutes(3 * error)}); the rule's loss ${minutes(verdict.loss)} min against the pin ` +
+        `${minutes(verdict.pin)} min (the known ${minutes(CHECK_THREE_KNOWN_LOSS)} and 3 errors; #424)`,
     );
     expect(verdict.pass, verdict.kind).toBe(true);
-    // A hang guard (#418's ruling 6), with the held-out plan's walks (#421's ruling 5): its CI time at two plans, 13.1 s
-    // (PR #425's run 43724265600, dbc4913), × the three plans' local time over the two's (9.0 s against 6.2), × the
-    // largest same-code swing over ruling 6's runs, 3.743.
-  }, 71_000);
+  });
 });
 
 /**
- * The pairs of `count` walked plans held out from the pair judged (#421's ruling 5): every pair but `judged` itself,
- * whose error of the difference would hold the gap being judged (ruling 2's, which couldn't fail).
+ * Main's pick at check 3's reading (#421's ruling 6): Bounty Hunter first, as 13564b5's check 3 measured it ("the rule's
+ * Bounty Hunter first … 5,475.8 priced", 1,200 walks, seed 3861; the issue's own figures). Main's chooser isn't in this
+ * tree to run, so cited.
  */
-function heldOutPairs(count: number, judged: readonly [number, number]): [number, number][] {
-  const pairs: [number, number][] = [];
-  for (let i = 0; i < count; i++) {
-    for (let j = i + 1; j < count; j++) {
-      if ((i === judged[0] && j === judged[1]) || (i === judged[1] && j === judged[0])) continue;
-      pairs.push([i, j]);
-    }
-  }
-  return pairs;
-}
+const CHECK_THREE_MAIN_PICK = "Bounty Hunter";
 
 /**
- * Check 3's verdict (#421's rulings 2 and 5: at the model's resolution, measured on held-out pairs). The chain's error
- * of a difference is the largest over the pairs held out from the one judged (`heldOutPairs`) of |bias_i − bias_j|
- * (each bias the plan's priced time less its walked) + 3 × the walks' error of that pair's gap: the chain's own miss of
- * a difference between plans it prices, measured where it isn't the difference being judged. It passes where the walks
- * order the judged plans as the rule does beyond 3 errors (`gap`: the rival's walked time less the rule's plan's, walk
- * by walk), or where the rule's loss (the walks' gap the other way, max(0, −gap)) is at most that error: a tie at the
- * model's resolution, the rule's free choice (#406). A loss past it, or no held-out pair to measure it on, fails.
+ * The chain's known loss at check 3's reading (#421's ruling 6): the walks, following the rule's own chain, put Raid
+ * first 50.7 min ahead of the rule's Bounty Hunter first (4,755.6 ± 17.6 against 4,806.3 ± 17.9 min, its gap's error
+ * 6.0), both priced 5,470.8. #424 is the fix: the chain's stamina reserve (the first stretch shorter than its cycle
+ * prices) and its one tail rate after whatever the earlier stretches left (Raid's drain lowering the tail's chances).
+ */
+const CHECK_THREE_KNOWN_LOSS = 50.7 * 60;
+
+/**
+ * Check 3's verdict (#421's ruling 6), two branches, each asserting. (a) The order: the walks order the judged plans as
+ * the rule does beyond 3 errors (`gap`: the rival's walked time less the rule's plan's, walk by walk, `error` its
+ * standard error): #418's bar. (b) Else the known loss, pinned, not excused: the rule's pick is main's at the same
+ * reading (`CHECK_THREE_MAIN_PICK`: a different pick would be this PR's change), and the rule's loss (the walks' gap
+ * the other way, max(0, −gap)) is at most the known one plus 3 errors of this gap (`CHECK_THREE_KNOWN_LOSS`, #424's).
  */
 function checkThreeVerdict({
   gap,
   error,
-  heldOut,
+  pick,
+  mainPick = CHECK_THREE_MAIN_PICK,
+  knownLoss = CHECK_THREE_KNOWN_LOSS,
 }: {
   gap: number;
   error: number;
-  heldOut: readonly { label: string; biasDifference: number; gapError: number }[];
-}): { pass: boolean; kind: string; resolution: number; loss: number; by: string } {
-  let resolution = 0;
-  let by = "no held-out pair";
-  for (const pair of heldOut) {
-    const each = Math.abs(pair.biasDifference) + 3 * pair.gapError;
-    if (each > resolution) {
-      resolution = each;
-      by = pair.label;
-    }
-  }
+  pick: string | null;
+  mainPick?: string;
+  knownLoss?: number;
+}): { pass: boolean; kind: string; loss: number; pin: number } {
   const loss = Math.max(0, -gap);
-  if (gap > 3 * error) return { pass: true, kind: "ordered", resolution, loss, by };
-  const pass = heldOut.length > 0 && loss <= resolution;
+  const pin = knownLoss + 3 * error;
+  if (gap > 3 * error) return { pass: true, kind: "ordered (#418's bar)", loss, pin };
+  if (pick !== mainPick) {
+    return { pass: false, kind: `the rule's pick ${pick} first, not main's ${mainPick} first`, loss, pin };
+  }
+  const pass = loss <= pin;
   return {
     pass,
-    kind: pass ? "a tie at the model's resolution" : "the rule's loss past the model's resolution",
-    resolution,
+    kind: pass ? "the known loss pinned (#424's)" : "the rule's loss past the known loss's pin",
     loss,
-    by,
+    pin,
   };
 }
 
-describe("check 3's verdict (#421's rulings 2 and 5): by hand", () => {
-  test("the held-out pairs: every pair but the one judged", () => {
-    expect(heldOutPairs(3, [0, 1])).toEqual([
-      [0, 2],
-      [1, 2],
-    ]);
-    expect(heldOutPairs(4, [1, 0])).toEqual([
-      [0, 2],
-      [0, 3],
-      [1, 2],
-      [1, 3],
-      [2, 3],
-    ]);
-    expect(heldOutPairs(2, [0, 1])).toEqual([]);
-  });
-
-  test("ordered beyond 3 errors; a tie within the held-out error of the difference; a loss past it fails", () => {
-    const pair = (biasDifference: number, gapError = 6) => ({ label: "held out", biasDifference, gapError });
-    // Ordered: the walks' gap past 3 errors, the rule's way.
-    expect(checkThreeVerdict({ gap: 300, error: 10, heldOut: [pair(5)] })).toMatchObject({
+describe("check 3's verdict (#421's ruling 6): by hand", () => {
+  test("ordered beyond 3 errors; else main's pick and the loss within the known one's pin, or it fails", () => {
+    // (a) Ordered: the walks' gap past 3 errors, the rule's way.
+    expect(checkThreeVerdict({ gap: 300, error: 10, pick: "Raid" })).toMatchObject({
       pass: true,
-      kind: "ordered",
+      kind: "ordered (#418's bar)",
     });
-    // A loss of 50.7 ± 6.0 min against a held-out difference of 40 ± 5: 55 min, a tie; of 30 ± 5: 45 min, it fails.
-    const tie = checkThreeVerdict({ gap: -50.7, error: 6, heldOut: [pair(-40, 5), pair(10, 5)] });
-    expect(tie.resolution).toBeCloseTo(55, 9);
-    expect(tie).toMatchObject({ pass: true, loss: 50.7 });
-    expect(checkThreeVerdict({ gap: -50.7, error: 6, heldOut: [pair(30, 5)] }).pass).toBe(false);
-    // Check 3's figures (#421's ruling 5): biases 664.4, 715.2 and 672.3 min (Bounty Hunter, Raid and Retirement
-    // first), the held-out gaps' errors 2.8 and 5.8 min: 42.9 + 17.4 = 60.3 min against the loss of 50.7, a tie.
-    const today = checkThreeVerdict({
-      gap: -50.7,
-      error: 6,
-      heldOut: [
-        { label: "Bounty Hunter first and Retirement first", biasDifference: 664.4 - 672.3, gapError: 2.8 },
-        { label: "Raid first and Retirement first", biasDifference: 715.2 - 672.3, gapError: 5.8 },
-      ],
-    });
-    expect(today.resolution).toBeCloseTo(715.2 - 672.3 + 3 * 5.8, 9);
-    expect(today).toMatchObject({ pass: true, by: "Raid first and Retirement first" });
-    // No held-out pair: no resolution to tie within.
-    expect(checkThreeVerdict({ gap: -1, error: 6, heldOut: [] }).pass).toBe(false);
-    // The rule's way but within its error: no loss, a tie.
-    expect(checkThreeVerdict({ gap: 10, error: 6, heldOut: [pair(0)] })).toMatchObject({ pass: true, loss: 0 });
+    // The other way past 3 errors: not ordered, so (b), and a loss past the pin fails.
+    expect(checkThreeVerdict({ gap: -300 * 60, error: 10, pick: "Bounty Hunter" }).pass).toBe(false);
+    // (b) Check 3's figures: 50.7 ± 6.0 min the other way, main's pick: the pin 50.7 + 18.0 = 68.7 min.
+    const pinned = checkThreeVerdict({ gap: -50.7 * 60, error: 6 * 60, pick: "Bounty Hunter" });
+    expect(pinned.pin).toBeCloseTo(68.7 * 60, 9);
+    expect(pinned).toMatchObject({ pass: true, loss: 50.7 * 60 });
+    // A loss inside the pin only by its 3 errors: 60 min against 50.7 + 18.0.
+    expect(checkThreeVerdict({ gap: -60 * 60, error: 6 * 60, pick: "Bounty Hunter" }).pass).toBe(true);
+    // Past the pin: 70 min.
+    expect(checkThreeVerdict({ gap: -70 * 60, error: 6 * 60, pick: "Bounty Hunter" }).pass).toBe(false);
+    // Another pick than main's: this PR's change, it fails whatever the loss.
+    expect(checkThreeVerdict({ gap: -10 * 60, error: 6 * 60, pick: "Raid" }).pass).toBe(false);
   });
 });
