@@ -942,7 +942,10 @@ function fluidSeconds(input: BladeburnerActionInput, { rank, target }: { rank: n
       if (candidate.step === null || candidate.name === fastest.name || !((means[i] as number) < tailOnly)) continue;
       if (second < 0 || (means[i] as number) < (means[second] as number)) second = i;
     }
-    return second < 0 ? { ...own, tailRate } : { ...own, next: nextOf(second) };
+    // The next-best's count regrown over the plan's own (#421's ruling 1, `regrownNext`), as the rule's chain.
+    return second < 0
+      ? { ...own, tailRate }
+      : { ...own, next: regrownNext(nextOf(second), candidates[second] as PlanCandidate, own) };
   };
   const boundOf = (sequence: BladeburnerRankStep) => {
     let most = Math.max(0, tailRate);
@@ -1152,6 +1155,27 @@ interface PlanCandidate {
   plan: BladeburnerActionPlan;
   step: BladeburnerRankStep | null;
   name: string | null;
+  /** Its action's count read and its mean regrowth a second (0 resting alone): a next-best's count regrown (#421). */
+  count: number;
+  growth: number;
+}
+
+/**
+ * A chain's next-best with its count regrown over the stretch before it (#421's ruling 1): every contract's and
+ * operation's count grows each second whatever is worked (`Bladeburner.ts:1386-1393`, core's `countGrowthPerSecond`),
+ * so the next-best's count where its stretch starts is its count read plus its regrowth over the first's
+ * attempts × seconds, and its attempts in it `bladeburnerAttemptsInCount` from there. A step with no count to bound it
+ * (or resting alone's) as it is.
+ */
+function regrownNext(
+  next: BladeburnerRankStep,
+  { count, growth }: Pick<PlanCandidate, "count" | "growth">,
+  first: BladeburnerRankStep,
+): BladeburnerRankStep {
+  const attempts = next.attempts ?? Number.POSITIVE_INFINITY;
+  const stretch = (first.attempts ?? Number.POSITIVE_INFINITY) * first.seconds;
+  if (!Number.isFinite(attempts) || !Number.isFinite(stretch)) return next;
+  return { ...next, attempts: bladeburnerAttemptsInCount(count + growth * stretch, growth, next.seconds) };
 }
 
 /** Every plan `chooseBladeburnerAction` weighs, in the game's order, resting alone first. */
@@ -1240,7 +1264,7 @@ function planCandidates({
     regain,
   };
   // Every plan weighed, in the game's order (resting alone first): its step to a target with it (#386).
-  const candidates: PlanCandidate[] = [{ plan: alone, step: null, name: null }];
+  const candidates: PlanCandidate[] = [{ plan: alone, step: null, name: null, count: 0, growth: 0 }];
   // Each action's long-run supply (#392's decision, #395's review): every way to work it, whatever its count now (its
   // regrowth is the action's).
   const supply: BladeburnerRankSource[] = [];
@@ -1502,7 +1526,7 @@ function planCandidates({
           rankPerSecond: duty * rate + (1 - duty) * rest.rankPerSecond,
           regain,
         };
-        candidates.push({ plan, step, name: action.name });
+        candidates.push({ plan, step, name: action.name, count: read.count, growth });
       }
     }
   }
@@ -1573,7 +1597,7 @@ function fastestToTarget(
     if (!counted) return bladeburnerSecondsToRankAtLeast(step, rank, target);
     // The next-best's search: its own count, then the tail. The choice's: the plan's count, then its next-best's.
     if (!bounded || name === null) return leastThrough([withCount(step)]);
-    const next = nextAfter(name);
+    const next = regrownAfter(step, name);
     return next === undefined ? leastThrough([withCount(step)]) : leastThrough([step, ...sequenceOf(next)]);
   };
   // The best among `pool` by `secondsOf`, Wald's bound (`leastOf`) ruling out the rest when pruned.
@@ -1610,8 +1634,8 @@ function fastestToTarget(
   // The next-best after an action's count (cached by the action spent): its step, with its own count (#392), then
   // resting alone.
   const nextBest = new Map<string, BladeburnerRankStep | undefined>();
-  // Its plan, where there's one (the walks' chain, `nextOf`).
-  const nextPlans = new Map<string, BladeburnerActionPlan>();
+  // Its candidate, where there's one (its count regrown, `regrownAfter`; the walks' chain, `nextOf`).
+  const nextPlans = new Map<string, PlanCandidate>();
   // Each plan's time with its own count then resting alone, solved once for every next-best search it's in.
   const counted = new Map<PlanCandidate, number>();
   const countedSeconds = (candidate: PlanCandidate) => {
@@ -1640,15 +1664,23 @@ function fastestToTarget(
             ? bladeburnerRestStep(best.candidate.plan.rankPerSecond)
             : withCount(step),
       );
-      if (!none) nextPlans.set(name, best.candidate.plan);
+      if (!none) nextPlans.set(name, best.candidate);
     }
     return nextBest.get(name);
+  };
+  // The next-best after `step`'s count (#421's ruling 1): its count regrown over that count's stretch
+  // (`regrownNext`). Labelled: which plan is the next-best is still chosen at the counts read (`nextAfter`, cached by
+  // the action spent, for the cost).
+  const regrownAfter = (step: BladeburnerRankStep, name: string) => {
+    const next = nextAfter(name);
+    const candidate = nextPlans.get(name);
+    return next === undefined || candidate === undefined ? next : regrownNext(next, candidate, step);
   };
   const secondsOf = ({ plan, step, name }: PlanCandidate) => {
     if (step === null) return aloneSeconds(plan);
     const bounded = (step.attempts ?? Number.POSITIVE_INFINITY) < Number.POSITIVE_INFINITY && name !== null;
     if (!bounded) return bladeburnerSecondsToRank(unbounded(step), rank, target);
-    const next = nextAfter(name);
+    const next = regrownAfter(step, name);
     return bladeburnerSecondsToRank({ ...step, ...(next === undefined ? { tailRate } : { next }) }, rank, target);
   };
   // The plan the chain follows a plan's count with (#421's term 2: check 3's walks follow the rule's own chain).
@@ -1657,7 +1689,7 @@ function fastestToTarget(
       return undefined;
     }
     if (nextAfter(name) === undefined) return undefined;
-    const plan = nextPlans.get(name);
+    const plan = nextPlans.get(name)?.plan;
     if (plan === undefined) return undefined;
     return { name: plan.work?.name ?? null, level: plan.work?.level ?? null, rest: plan.rest.name };
   };
