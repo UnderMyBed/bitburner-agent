@@ -1167,6 +1167,8 @@ describe("the playability under the route's replays (#423): the gate's figures, 
 
   test("BN7, combat 100: keep declines (the fallback), so both sides the mean path's; the shop's route alone the replays'", () => {
     const { keep, after, timing } = solve(7);
+    // Its figures said before the assertions (a failure shows them).
+    console.log(`BN7 combat 100, before the checks: ${line("keep", keep)}; ${line("after the shop", after)}`);
     const kept = keep.replays as NonNullable<typeof keep.replays>;
     expect(kept.used).toBe(false);
     expect(kept.declined).toMatch(/replays needed the rate's fallback, past 1%$/);
