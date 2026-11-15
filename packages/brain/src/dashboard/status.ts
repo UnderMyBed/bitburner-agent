@@ -215,8 +215,11 @@ export interface DashboardStatusOptions {
   stopAtBitNodeEnd?: StopAtBitNodeEndView;
   /** The gang's view (#325), the controller's. */
   gang?: { line: string };
-  /** Bladeburner's view (#367), the controller's. */
-  bladeburner?: { line: string };
+  /**
+   * Bladeburner's view (#367), the controller's: and (#420) its round's problem since when, for the
+   * `bladeburnerCityRound` alert.
+   */
+  bladeburner?: { line: string; round?: { problem: string | null; sinceMs: number | null } | null };
   /** The gang's silent stalls past their bounds (#354), the controller's, for the `gangStalled` alerts. */
   gangStalls?: GangStallStretch[];
   /** This start's store thinning that failed (#283's review), for the `storeThinningFailed` alert; null or absent: none. */
@@ -414,6 +417,10 @@ export function buildDashboardStatus({
       installAwaitingRestart,
       worldDaemonStall,
       gangStalls,
+      bladeburnerCityRound:
+        bladeburner?.round?.problem == null
+          ? null
+          : { sinceMs: bladeburner.round.sinceMs ?? nowMs, problem: bladeburner.round.problem },
       storeThinningFailure,
       dataBackupProblem,
     }),

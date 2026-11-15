@@ -1145,11 +1145,10 @@ interface WalkedWay {
  * communities), its rank ±10% (`addOffset`) and the floor at 0 (`:1267-1275`); its effects as
  * `completeOperation`/`completeContract` draw them (`:793-890`: Raid's −1% or −(5–10)/10 % and +1–5% chaos and a
  * community; Bounty Hunter's and Retirement's −1 and +0.02/+0.04 chaos; Investigation's and Undercover's failures a
- * migration's chance; Sting's); the city B4's before each attempt, by the estimates as the game's B4 reads them (#418's
- * round-2 review: the most estimate^0.7 over the chaos's factor, Raid's only where there are communities), each
- * estimate the truth read at the start and moved as the game moves it (`City.ts:35-87`: Raid's and Sting's successes
- * by the population's own change, Bounty Hunter's and Retirement's by −1, Tracking's by 100–1,000 towards the truth,
- * Investigation's and Undercover's by 0.4% and 0.8%; the events and the migrations not at all), Diplomacy as B4 spends
+ * migration's chance; Sting's); the city B4's before each attempt, by each city's true figure as the brain measures it
+ * at every reading (#420's ruling 2: the round over the six recovers each city's pop/popEst, so the most true
+ * population^0.7 over the chaos's factor, Raid's only where there are communities; until #420 the walks picked by the
+ * estimates, which the events don't move, `City.ts:35-87`, as the brain then did), Diplomacy as B4 spends
  * it after an attempt over 50 (60 s an attempt at ×keep, taken whole: 60·ln(50/chaos)/ln(keep) s, the city at 50, then
  * the time); an event each 240–600 s in one of the six as `randomEvent` (`:601-699`) draws it and the decay
  * (`:1395-1401`) over every second. Left out, labelled: the count's regrowth's draw (its mean taken), the skills'
@@ -1198,8 +1197,6 @@ function walkPlan(
     const random = seeded(seed + 7919 * walk + 104729);
     const offset = (x: number) => x * (1 + (random() * 2 - 1) * 0.1);
     const pops = read.map((city) => city.population);
-    // B4's estimates: the truth read, then moved only by the attempts (`City.ts:35-87`).
-    const estimates = read.map((city) => city.population);
     const comms = read.map((city) => city.communities);
     const chaos = read.map((city) => city.chaos);
     const counts = order.map(() => 20);
@@ -1238,18 +1235,6 @@ function walkPlan(
       pops[s] = (pops[s] as number) + change;
       return change;
     };
-    // `improvePopulationEstimateByCount` and `ByPercentage` (`City.ts:35-58`), towards the truth, never past it.
-    const towards = (s: number, next: (estimate: number) => number) => {
-      const truth = pops[s] as number;
-      const moved = next(estimates[s] as number);
-      estimates[s] = (estimates[s] as number) < truth ? Math.min(truth, moved) : Math.max(truth, moved);
-    };
-    const byCount = (s: number, n: number) =>
-      towards(s, (estimate) => (estimate < (pops[s] as number) ? estimate + n : estimate - n));
-    const byPercentage = (s: number, p: number) =>
-      towards(s, (estimate) =>
-        estimate < (pops[s] as number) ? (estimate + p) * (1 + p / 100) : (estimate - p) / (1 + p / 100),
-      );
     const event = () => {
       const kind = events();
       const s = Math.floor(events() * 6);
@@ -1296,14 +1281,13 @@ function walkPlan(
         continue;
       }
       const raid = way.action.name === "Raid";
-      // B4's city: the most factor by the estimates (Raid's among those with communities).
+      // B4's city: the most true factor, measured each reading (#420; Raid's among those with communities).
       let city = -1;
       for (const i of pops.keys()) {
         if (raid && !((comms[i] as number) > 0)) continue;
         if (
           city < 0 ||
-          factorOf(estimates[i] as number, chaos[i] as number) >
-            factorOf(estimates[city] as number, chaos[city] as number)
+          factorOf(pops[i] as number, chaos[i] as number) > factorOf(pops[city] as number, chaos[city] as number)
         )
           city = i;
       }
@@ -1318,7 +1302,7 @@ function walkPlan(
       switch (way.action.name) {
         case "Raid":
           if (success) {
-            estimates[city] = Math.max(0, (estimates[city] as number) + grow(city, -0.01));
+            grow(city, -0.01);
             comms[city] = (comms[city] as number) - 1;
           } else grow(city, intIn(random, -10, -5) / 1000);
           chaos[city] = (chaos[city] as number) * (1 + intIn(random, 1, 5) / 100);
@@ -1327,20 +1311,15 @@ function walkPlan(
         case "Retirement":
           if (success) {
             pops[city] = (pops[city] as number) - 1;
-            estimates[city] = Math.max(0, (estimates[city] as number) - 1);
             chaos[city] = (chaos[city] as number) + (way.action.name === "Retirement" ? 0.04 : 0.02);
           }
           break;
-        case "Tracking":
-          if (success) byCount(city, intIn(random, 100, 1000));
-          break;
         case "Investigation":
         case "Undercover Operation":
-          if (success) byPercentage(city, way.action.name === "Investigation" ? 0.4 : 0.8);
-          else if (random() < (way.action.name === "Investigation" ? 0.1 : 0.15)) migration(city, random);
+          if (!success && random() < (way.action.name === "Investigation" ? 0.1 : 0.15)) migration(city, random);
           break;
         case "Sting Operation":
-          if (success) estimates[city] = Math.max(0, (estimates[city] as number) + grow(city, -0.001));
+          if (success) grow(city, -0.001);
           chaos[city] = (chaos[city] as number) + 0.1;
           break;
       }
@@ -1422,8 +1401,8 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
         `${minutes(raided.mean)} ± ${minutes(raided.error)} min walked (${raided.attempts.toFixed(0)} attempts), ` +
         `${minutes(rival?.toTarget?.seconds as number)} priced; the gap ${minutes(gap)} ± ${minutes(error)} min; the ` +
         `rule optimistic by ${(100 * (1 - (chosen.toTarget?.seconds as number) / ruled.mean)).toFixed(1)}% and ` +
-        `${(100 * (1 - (rival?.toTarget?.seconds as number) / raided.mean)).toFixed(1)}% (labelled: its path moves B4 ` +
-        `by the true population, which the events grow, the game's B4 by the estimates, which they don't)`,
+        `${(100 * (1 - (rival?.toTarget?.seconds as number) / raided.mean)).toFixed(1)}% (its path's B4 and the ` +
+        `walks' both by each city's true figure, measured each reading, #420)`,
     );
     // The rule's order: its plan the faster.
     expect((rival?.toTarget?.seconds as number) > (chosen.toTarget?.seconds as number)).toBe(true);

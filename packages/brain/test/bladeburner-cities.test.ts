@@ -11,12 +11,16 @@ import { ControlChannel } from "@bitburner-agent/bridge";
 import { ManualClock, MemoryConnection } from "@bitburner-agent/bridge/test-helpers";
 import {
   actionSuccessChance,
+  actionSuccessRange,
   BLADEBURNER_CITIES,
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_READING_SECONDS,
   type BladeburnerActionReading,
+  type BladeburnerBlackOp,
   type BladeburnerCityReading,
   type BladeburnerPerson,
+  blackOpSuccessChance,
+  bladeburnerBlackOp,
   bladeburnerPricedInput,
   CONTROL_PROTOCOL_VERSION,
   chooseBladeburnerAction,
@@ -84,6 +88,44 @@ function actionReadings(
   });
 }
 
+/**
+ * The round over the six (#420) as the city worker reads it, each city at its estimate (pop/popEst 1, `truths` aside:
+ * a city's true population over its estimate there), the Black Op's range there its chance and that × the ratio
+ * (`Actions/Action.ts:144-167`, no population factor), each action's its range at its truth and estimate.
+ */
+function roundOf(
+  all: BladeburnerCityReading[],
+  city: string,
+  who: BladeburnerPerson = PERSON,
+  truths: Record<string, number> = {},
+) {
+  const formula = blackOpSuccessChance(bladeburnerBlackOp("Operation Typhoon") as BladeburnerBlackOp, who, {
+    penalty: 1,
+  });
+  return {
+    blackOp: "Operation Typhoon",
+    city,
+    cities: all.map((each) => {
+      const ratio = truths[each.name] ?? 1;
+      const truth = { ...each, population: each.population * ratio };
+      return {
+        name: each.name,
+        blackOp: actionSuccessRange(formula, formula, truth.population, each.population),
+        actions: BLADEBURNER_LEVELLED_ACTIONS.map((action) => ({
+          type: action.type,
+          name: action.name,
+          chance: actionSuccessRange(
+            actionSuccessChance(action, 1, who, { city: truth, penalty: 1 }),
+            actionSuccessChance(action, 1, who, { city: each, penalty: 1 }),
+            truth.population,
+            each.population,
+          ),
+        })),
+      };
+    }),
+  };
+}
+
 interface ReadingOptions {
   rank?: number;
   stamina?: number;
@@ -94,6 +136,8 @@ interface ReadingOptions {
   all?: BladeburnerCityReading[] | null;
   counts?: Record<string, number>;
   who?: BladeburnerPerson;
+  /** The round (#420): absent, each city's at its estimate; null, one that failed; false, none (an older Agent). */
+  round?: ReturnType<typeof roundOf> | null | false;
 }
 /** The worker's reading in the division with B4's cities (`all`, read in `city`): full stamina, idle. */
 function reading({
@@ -106,8 +150,13 @@ function reading({
   all = cities(),
   counts = {},
   who = PERSON,
+  round,
 }: ReadingOptions = {}) {
   const here = all?.find((each) => each.name === city) ?? cities()[2];
+  const theRound =
+    round === false
+      ? {}
+      : { round: round === undefined && city !== null && all !== null ? roundOf(all, city, who) : (round ?? null) };
   return {
     rank,
     problems: [],
@@ -118,6 +167,7 @@ function reading({
     current,
     actions: actionReadings(here as BladeburnerCityReading, counts, who),
     ...(all === null ? {} : { city, cities: all }),
+    ...(all === null ? {} : theRound),
   };
 }
 
@@ -399,7 +449,7 @@ describe("the rule (#383)", () => {
     ]) {
       expect(bladeburnerSnapshotOf(medium(bad)).reading).toEqual({
         kind: "unread",
-        problem: "the Bladeburner reading's stamina, actions, skills, cities or Black Op aren't figures",
+        problem: "the Bladeburner reading's stamina, actions, skills, cities, Black Op or round aren't figures",
       });
     }
   });
@@ -417,6 +467,70 @@ describe("the rule (#383)", () => {
       "bladeburner: in the division, rank 0.0; Bladeburners joined; Diplomacy, then: Tracking level 1",
     ]);
     expect(lines[1]).toContain("; in Aevum (");
+  });
+});
+
+describe("the round over the six (#420): each city at its own measured truth", () => {
+  const decide = (rule: BladeburnerRule, data: MediumSnapshotData, nowMs: number | null = null) =>
+    rule.update({ mediumData: data, slowData: slow(6), homeKeptGb: 32, ownersWork: false, nowMs });
+  // Volhaven's estimate low (0.8e9), its truth high (1.2e9: pop/popEst 1.5, its own draw): the others at 1e9, each its own.
+  const all = cities(0, { Volhaven: { population: 0.8e9 } });
+  const truths = { Volhaven: 1.5, Aevum: 0.9 };
+
+  test("Volhaven's estimate under the others', its truth over: moved there by its own round, each ratio said", () => {
+    const rule = new BladeburnerRule();
+    expect(decide(rule, medium(reading({ all, round: roundOf(all, "Sector-12", PERSON, truths) }))).state?.city).toBe(
+      "Volhaven",
+    );
+    expect(rule.view().round?.problem).toBeNull();
+    expect(rule.view().round?.measures?.map((each) => [each.name, each.by, Number(each.ratio?.toFixed(6))])).toEqual(
+      BLADEBURNER_CITIES.map((name) => [name, "recovered", (truths as Record<string, number>)[name] ?? 1]),
+    );
+    expect(rule.view().line).toContain(
+      "; the round (#420): 6 of 6 recovered; Aevum pop/popEst 0.900, Chongqing pop/popEst 1.000, ",
+    );
+    expect(rule.roundProblem()).toBeNull();
+    // By the estimates alone (#418's shared ratio, gone), Volhaven's the least of the six: kept in Sector-12.
+    const shared = new BladeburnerRule();
+    expect(decide(shared, medium(reading({ all }))).state?.city).toBe("Sector-12");
+  });
+
+  test("no round (an older Agent), one that failed, or not back in the division's city: no city weighed, the alert's", () => {
+    const moveWanted = cities(0, { "Sector-12": { chaos: 80 } });
+    const older = new BladeburnerRule();
+    // Sector-12's chaos at 80 wants Aevum, but with no city measured none is weighed: kept, and said.
+    expect(decide(older, medium(reading({ all: moveWanted, round: false })), T0).state?.city).toBe("Sector-12");
+    expect(older.view().actions?.cities).toBeNull();
+    expect(older.roundProblem()).toEqual({
+      sinceMs: T0,
+      problem: "no round over the six cities in the reading (an Agent from before #420)",
+    });
+    expect(older.view().line).toContain("; no round over the six cities in the reading (an Agent from before #420)");
+    // Its since held while it lasts, cleared once a round comes.
+    decide(older, medium(reading({ all: moveWanted, round: false })), T0 + 10 * SECOND);
+    expect(older.roundProblem()?.sinceMs).toBe(T0);
+    decide(older, medium(reading({ all: moveWanted })), T0 + 20 * SECOND);
+    expect(older.roundProblem()).toBeNull();
+    expect(older.view().actions?.cities?.city).toBe("Aevum");
+    // Failed (the worker's problem said), and not back.
+    const failed = new BladeburnerRule();
+    const problem = "the round (#420): the game didn't move the division to Ishima";
+    decide(failed, medium({ ...reading({ all: moveWanted, round: null }), problems: [problem] }), T0);
+    expect(failed.roundProblem()?.problem).toBe(`the round over the six cities failed: ${problem}`);
+    expect(failed.view().actions?.cities).toBeNull();
+    const away = new BladeburnerRule();
+    decide(away, medium(reading({ all: moveWanted, round: roundOf(moveWanted, "Aevum") })), T0);
+    expect(away.roundProblem()?.problem).toBe("the round left the division in Aevum, not Sector-12");
+    expect(away.view().actions?.cities).toBeNull();
+  });
+
+  test("the round's figures checked: a range not a pair, or a city not the six's, is unread", () => {
+    const round = roundOf(all, "Sector-12");
+    const bad = { ...round, cities: [{ ...round.cities[0], blackOp: [0.2] }, ...round.cities.slice(1)] };
+    expect(bladeburnerSnapshotOf(medium(reading({ all, round: bad as never }))).reading.kind).toBe("unread");
+    const unknown = { ...round, cities: [{ ...round.cities[0], name: "Tokyo" }, ...round.cities.slice(1)] };
+    expect(bladeburnerSnapshotOf(medium(reading({ all, round: unknown as never }))).reading.kind).toBe("unread");
+    expect(bladeburnerSnapshotOf(medium(reading({ all, round }))).reading.kind).toBe("read");
   });
 });
 
@@ -648,6 +762,31 @@ describe("the run report's cities (#383)", () => {
       "(Sector-12's chaos 80.00 at its start, a move to Aevum, within two readings and an Agent round; the rule's choice: ",
     );
     expect(late.failures[0]).toContain(`, past its bound ${formatDuration(BLADEBURNER_MOVE_WITHIN_MS)} (`);
+  });
+
+  test("the round (#420): each city's measure over the window, the last in full; a reading without it fails", () => {
+    const truths = { Volhaven: 1.5, Aevum: 0.9 };
+    const all = cities(0);
+    const measured = fold(
+      at([0, 10_000], () => ({ all, current: BOUNTY, round: roundOf(all, "Sector-12", PERSON, truths) })),
+    );
+    expect(measured.failures).toEqual([]);
+    expect(measured.text).toContain(
+      "  the round over the six cities (#420): 2 of 2 readings measured each city; by city: Aevum recovered 2 " +
+        "(pop/popEst 0.900 to 0.900), by its own ranges 0, at the draw's mean 0; ",
+    );
+    expect(measured.text).toContain("    at the last: the round (#420): 6 of 6 recovered; Aevum pop/popEst 0.900, ");
+    expect(measured.text).toContain(
+      "  the readings without the round's measure (failed, missing, or the division not back in its city):\n    none",
+    );
+    const missing = fold(
+      at([0, 10_000, 20_000], (offsetMs) => ({ all, current: BOUNTY, round: offsetMs < 20_000 ? false : undefined })),
+    );
+    expect(missing.failures).toEqual([
+      `Bladeburner's round over the cities failed from ${new Date(T0).toISOString()} to ` +
+        `${new Date(T0 + 10 * SECOND).toISOString()} (no round over the six cities in the reading (an Agent from before #420))`,
+    ]);
+    expect(missing.text).toContain("1 of 3 readings measured each city");
   });
 
   test("with an older Agent's readings (no cities): said, no failure", () => {

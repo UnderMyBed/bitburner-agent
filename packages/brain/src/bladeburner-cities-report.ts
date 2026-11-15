@@ -2,6 +2,10 @@
 // readings in the division with the cities (every 10 s), where the division worked, each city's chaos and population
 // estimate, the counts, the time in Diplomacy and Incite Violence, and the rule's choice (core's
 // `chooseBladeburnerCity`) at the last reading. Paths are `vendor/bitburner-src/src/`'s.
+// - **The round** (#420): each reading's round over the six, its cities recovered (with the pop/popEst each gave), by
+//   their own ranges, or at the draw's mean, as the brain measures them (`bladeburnerMeasuredCitiesOf`); the rule's
+//   choice is weighed at those. A reading with the cities read and no round (it failed, an older Agent's, or the
+//   division not back in its city) is a failure at once, as it's the `bladeburnerCityRound` alert (Fail Fast).
 // - **The chaos left** (decision 45): the chaos where the division works over 50, with the rule's own measure wanting
 //   it off (core's `chooseBladeburnerCity` on each reading), for longer than its bound: a failure.
 //   - **Diplomacy paying:** twice the rule's own Diplomacy estimate (core's `diplomaciesTo50` of 60 s each, at the
@@ -18,6 +22,7 @@ import {
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_READING_SECONDS,
   type BladeburnerCityChoice,
+  type BladeburnerCityMeasure,
   bladeburnerBlackOp,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
@@ -29,7 +34,14 @@ import {
   INCITE_VIOLENCE,
   type MediumSnapshotData,
 } from "@bitburner-agent/core";
-import { type BladeburnerActionsReading, bladeburnerRuleInputOf, describeCityChoice } from "./bladeburner.ts";
+import {
+  type BladeburnerActionsReading,
+  bladeburnerMeasuredCitiesOf,
+  bladeburnerRoundProblem,
+  bladeburnerRuleInputOf,
+  describeCityChoice,
+  describeCityMeasures,
+} from "./bladeburner.ts";
 import { BLADEBURNER_GAP_MS } from "./bladeburner-actions-report.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
 
@@ -76,6 +88,12 @@ export class BladeburnerCitiesFold {
   readonly #chaosActionMs = new Map<string, number>();
   readonly #left: Left[] = [];
   #leftOpen: Left | null = null;
+  /** The rounds (#420): the readings measured, each city's counts by kind and pop/popEst's range, the last's. */
+  #rounds = 0;
+  readonly #measured = new Map<string, Record<BladeburnerCityMeasure["by"], number> & { low: number; high: number }>();
+  #lastMeasures: BladeburnerCityMeasure[] | null = null;
+  readonly #roundFailed: { fromMs: number; toMs: number; detail: string }[] = [];
+  #roundOpen: { fromMs: number; toMs: number; detail: string } | null = null;
 
   /** A medium snapshot in the division with B4's reading (its `city` and `cities`), in BN6 or BN7 (`bitNode`). */
   add(
@@ -88,6 +106,8 @@ export class BladeburnerCitiesFold {
     rank: number | null = null,
     /** B2's forecast for this reading, shared with its other folds (#392); none given, its own. */
     choose: typeof chooseBladeburnerAction = chooseBladeburnerAction,
+    /** The reading's problems (#420: the round's among them). */
+    problems: readonly string[] = [],
   ): void {
     const { city, cities } = reading;
     if (city === null || cities === null) return;
@@ -99,15 +119,21 @@ export class BladeburnerCitiesFold {
     // The next Black Op's rank (#392) the target too, as the brain's.
     const blackOpRank = reading.blackOp == null ? null : (bladeburnerBlackOp(reading.blackOp.name)?.rank ?? null);
     const target = rank === null ? null : bladeburnerRankTarget({ rank, factionJoined, blackOpRank });
-    const choice = chooseBladeburnerCity(
-      {
-        // As the brain's (#415): each chance at the true population.
-        ...bladeburnerRuleInputOf(reading, person, rankMultiplier, data.player).input,
-        ...(target === null || rank === null ? {} : { target: { rank, target } }),
-      },
-      { city, cities },
-      choose,
-    );
+    // Each city measured by the round (#420), as the brain's: none weighed without it.
+    const measured = bladeburnerMeasuredCitiesOf(reading, person);
+    this.#watchRound(atMs, reading, problems, measured?.measures ?? null);
+    const choice =
+      measured === null
+        ? null
+        : chooseBladeburnerCity(
+            {
+              // As the brain's (#415): each chance at the true population.
+              ...bladeburnerRuleInputOf(reading, person, rankMultiplier, data.player).input,
+              ...(target === null || rank === null ? {} : { target: { rank, target } }),
+            },
+            { city, cities: measured.cities },
+            choose,
+          );
     const kept: Kept = { atMs, city, reading, lastAugReset, choice };
     this.#readings += 1;
     if (this.#first === null) this.#first = kept;
@@ -123,6 +149,36 @@ export class BladeburnerCitiesFold {
     const under = previous.reading.current;
     if (under?.type === "General" && (under.name === DIPLOMACY || under.name === INCITE_VIOLENCE)) {
       this.#chaosActionMs.set(under.name, (this.#chaosActionMs.get(under.name) ?? 0) + intervalMs);
+    }
+  }
+
+  /**
+   * The round (#420) at a reading: each city's measure counted (recovered, with the least and most pop/popEst it gave;
+   * by its own ranges; at the draw's mean), the last kept, and a stretch of readings with its problem (failed, missing,
+   * or not back in the division's city), each a failure from its first reading.
+   */
+  #watchRound(
+    atMs: number,
+    reading: BladeburnerActionsReading,
+    problems: readonly string[],
+    measures: BladeburnerCityMeasure[] | null,
+  ): void {
+    const problem = bladeburnerRoundProblem(reading, problems);
+    if (problem === null || this.#roundOpen?.detail !== problem) {
+      if (this.#roundOpen !== null) this.#roundFailed.push(this.#roundOpen);
+      this.#roundOpen = problem === null ? null : { fromMs: atMs, toMs: atMs, detail: problem };
+    } else this.#roundOpen.toMs = atMs;
+    if (measures === null) return;
+    this.#rounds += 1;
+    this.#lastMeasures = measures;
+    for (const measure of measures) {
+      const seen = this.#measured.get(measure.name) ?? { recovered: 0, range: 0, draw: 0, low: Infinity, high: 0 };
+      seen[measure.by] += 1;
+      if (measure.ratio !== null) {
+        seen.low = Math.min(seen.low, measure.ratio);
+        seen.high = Math.max(seen.high, measure.ratio);
+      }
+      this.#measured.set(measure.name, seen);
     }
   }
 
@@ -200,8 +256,33 @@ export class BladeburnerCitiesFold {
         `${formatDuration(timeIn(INCITE_VIOLENCE))} (60 s a run; bonus time runs them up to 5 times as fast)`,
     );
     lines.push(
-      `    the rule's choice at the last reading: ${last.choice === null ? "none (the city read isn't among the six, or its estimate is 0)" : describeCityChoice(last.choice, last.city)}`,
+      `    the rule's choice at the last reading: ${last.choice === null ? "none (no round measuring the cities, the city read not among the six, or its estimate 0)" : describeCityChoice(last.choice, last.city)}`,
     );
+    // The rounds (#420): each city's measure over the window, the last reading's in full, and each stretch without one.
+    lines.push(
+      `  the round over the six cities (#420): ${this.#rounds} of ${this.#readings} readings measured each city` +
+        (this.#rounds === 0
+          ? ""
+          : `; by city: ${[...this.#measured]
+              .map(
+                ([name, seen]) =>
+                  `${name} recovered ${seen.recovered}` +
+                  (seen.recovered > 0 ? ` (pop/popEst ${seen.low.toFixed(3)} to ${seen.high.toFixed(3)})` : "") +
+                  `, by its own ranges ${seen.range}, at the draw's mean ${seen.draw}`,
+              )
+              .join("; ")}`),
+    );
+    if (this.#lastMeasures !== null) lines.push(`    at the last: ${describeCityMeasures(this.#lastMeasures)}`);
+    lines.push("  the readings without the round's measure (failed, missing, or the division not back in its city):");
+    const unmeasured = [...this.#roundFailed, ...(this.#roundOpen === null ? [] : [this.#roundOpen])];
+    if (unmeasured.length === 0) lines.push("    none");
+    for (const each of unmeasured) {
+      const line =
+        `Bladeburner's round over the cities failed from ${formatIsoTime(each.fromMs)} to ${formatIsoTime(each.toMs)} ` +
+        `(${each.detail})`;
+      lines.push(`    ${line}`);
+      failures.push(line);
+    }
     lines.push(
       "  the chaos over 50 where the division works, the rule's measure wanting it off, past twice its Diplomacy " +
         `estimate and 10 min, or a move's ${formatDuration(BLADEBURNER_MOVE_WITHIN_MS)}:`,

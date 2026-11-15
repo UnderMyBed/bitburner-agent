@@ -59,6 +59,7 @@ export type AlertName =
   | "installNotRestarted"
   | "worldDaemonStalled"
   | "gangStalled"
+  | "bladeburnerCityRound"
   | "storeThinningFailed"
   | "dataBackupFailed";
 
@@ -141,6 +142,11 @@ export interface AlertFacts {
    * the respect flat with members working; the controller's (`GangRule.stalls`). Optional for callers with no gang.
    */
   gangStalls?: GangStallStretch[];
+  /**
+   * Bladeburner's round over the six cities (#420) failed, missing, or not back in the division's city, since its first
+   * reading so: the Bladeburner rule's; null or absent, none.
+   */
+  bladeburnerCityRound?: { sinceMs: number; problem: string } | null;
   /** This brain start's store thinning, failed (#283's review), or null. Optional for the callers that don't thin. */
   storeThinningFailure?: { atMs: number; failure: string } | null;
   /** The newest data backup's problem (#284), until one is taken cleanly; null or absent: none. */
@@ -162,7 +168,7 @@ export interface IncomeFacts {
  * intent, then one backdoorOverdue per overdue backdoor, then factionWorkStalled, then batcherNotRunning, then
  * batcherOutOfStep, then one augmentationNotQueued per purchase not queued, then one augmentationDonationFailed per
  * donation not shown (#225), then installNotRestarted, then worldDaemonStalled, then one gangStalled per gang stall
- * (#354), then storeThinningFailed, then dataBackupFailed.
+ * (#354), then bladeburnerCityRound (#420), then storeThinningFailed, then dataBackupFailed.
  */
 export function activeAlerts(facts: AlertFacts): Alert[] {
   const alerts: Alert[] = [];
@@ -275,6 +281,15 @@ export function activeAlerts(facts: AlertFacts): Alert[] {
     alerts.push({ name: "worldDaemonStalled", sinceMs: stall.sinceMs, detail: `${stall.detail}, for ${minutes} min` });
   }
   alerts.push(...gangStalledAlerts(facts));
+  const round = facts.bladeburnerCityRound ?? null;
+  if (round !== null) {
+    // At once (#420, Fail Fast): without the round, B4 weighs no city but the one read, and the drift none.
+    alerts.push({
+      name: "bladeburnerCityRound",
+      sinceMs: round.sinceMs,
+      detail: `${round.problem}: Bladeburner's cities aren't measured, so it stays in the city it's in`,
+    });
+  }
   const thinning = facts.storeThinningFailure ?? null;
   if (thinning !== null) {
     alerts.push({

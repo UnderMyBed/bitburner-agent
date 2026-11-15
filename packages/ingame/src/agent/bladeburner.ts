@@ -7,8 +7,9 @@
 // - With a city in the state (#383: one of the six, or null for none to move to; absent from a B3 brain, which runs
 //   nothing more), `bladeburner-city.js` (../entries/bladeburner-city.ts) first, which moves the division there and
 //   reads the six cities: so `bladeburner.js`'s ranges are read in the city set. The runner waits for each to exit
-//   (./run-worker.ts), so they never hold home's RAM at once. Its city and cities go into the reading, and its problems
-//   with the other's. A run of either that doesn't report is tried again, both, next round.
+//   (./run-worker.ts), so they never hold home's RAM at once. Its city and cities go into the reading, and (#420) its
+//   round over the six, and its problems with the other's. A run of either that doesn't report is tried again, both,
+//   next round.
 import {
   BLADEBURNER_CITY_WORKER_NAME,
   BLADEBURNER_WORKER_NAME,
@@ -72,7 +73,14 @@ export function createBladeburnerActivity(
       reading =
         cities === null || read.rank === null
           ? read
-          : { ...read, problems: [...cities.problems, ...read.problems], city: cities.city, cities: cities.cities };
+          : {
+              ...read,
+              problems: [...cities.problems, ...read.problems],
+              city: cities.city,
+              cities: cities.cities,
+              // The round over the six (#420): null where it failed (its problems say why).
+              ...(cities.round === undefined ? {} : { round: cities.round }),
+            };
       schedule.dueAfter(BLADEBURNER_ROUNDS_BETWEEN);
       const { rank, problems } = reading;
       logOutcome(

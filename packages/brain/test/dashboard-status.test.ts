@@ -90,6 +90,7 @@ const status = (
     dataBackupProblem = null,
     gangStalls,
     timeline,
+    bladeburner,
   }: {
     income?: IncomeFacts | null;
     loop?: HackLoopView;
@@ -103,9 +104,11 @@ const status = (
     dataBackupProblem?: DataBackupProblem | null;
     gangStalls?: GangStallStretch[];
     timeline?: CampaignTimelineView;
+    bladeburner?: { line: string; round?: { problem: string | null; sinceMs: number | null } | null };
   } = {},
 ) =>
   buildDashboardStatus({
+    ...(bladeburner === undefined ? {} : { bladeburner }),
     store,
     environment: "E0",
     brainRelease: "v0.2.0",
@@ -288,6 +291,21 @@ test("gangStalled (#354): from the gang rule's stalls past their bounds, one ale
   ]);
   expect(status(nowMs, { gangStalls: [] }).alerts).toEqual([]);
   expect(status(nowMs).alerts).toEqual([]);
+});
+
+test("bladeburnerCityRound (#420): from the Bladeburner rule's view, its round's problem since its first reading so", () => {
+  const nowMs = STARTED_AT_MS + 30_000;
+  const problem = "the round over the six cities failed";
+  expect(
+    status(nowMs, { bladeburner: { line: "Bladeburner: …", round: { problem, sinceMs: STARTED_AT_MS + 5_000 } } })
+      .alerts,
+  ).toMatchObject([
+    { name: "bladeburnerCityRound", sinceMs: STARTED_AT_MS + 5_000, detail: expect.stringContaining(problem) },
+  ]);
+  expect(
+    status(nowMs, { bladeburner: { line: "Bladeburner: …", round: { problem: null, sinceMs: null } } }).alerts,
+  ).toEqual([]);
+  expect(status(nowMs, { bladeburner: { line: "Bladeburner: …" } }).alerts).toEqual([]);
 });
 
 test("dataBackupFailed (#284): from the newest data backup's problem, gone once one is taken cleanly", () => {

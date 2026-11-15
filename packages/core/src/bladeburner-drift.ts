@@ -793,8 +793,9 @@ function mostFactor(cities: readonly BladeburnerDriftCity[], current: number, ra
 }
 
 /**
- * The drift's start from the cities read (#418): their estimates (B4's: each city's taken as far off its truth as the
- * city worked's, `cityCompetenceRatio`'s convention, so the ratios are the brain's), communities and chaos, the city
+ * The drift's start from the cities read (#418): their populations (since #420 each city's measured true population,
+ * core's `bladeburnerMeasuredCities`, as B4's are: the walk's and the grown estimate's B4 then picks by each city's own
+ * figure, as the brain does), communities and chaos, the city
  * worked `city`, its chaos at `chaos` where given (B4's forecasts at another chaos), Diplomacy's ceiling 50 or the
  * chaos read over it. Null with `city` not among them.
  */

@@ -352,7 +352,10 @@ function withCities() {
         return reports.city
           ? {
               outcome: "reported",
-              report: { pid: 1, data: { city: "Aevum", cities: [CITY_READ], problems: ["a city problem"] } },
+              report: {
+                pid: 1,
+                data: { city: "Aevum", cities: [CITY_READ], problems: ["a city problem"], round: CITY_ROUND },
+              },
             }
           : { outcome: "noReport" };
       }
@@ -366,6 +369,12 @@ function withCities() {
   return { bladeburner, runs, reports, round: () => bladeburner.convergeIfDue(Number.POSITIVE_INFINITY) };
 }
 const CITY_READ = { name: "Aevum", population: 1.2e9, communities: 40, chaos: 3 };
+/** The round's (#420), as the city worker reports it: passed into the reading as it is. */
+const CITY_ROUND = {
+  blackOp: "Operation Typhoon",
+  cities: [{ name: "Aevum", blackOp: [0.2, 0.3], actions: [] }],
+  city: "Aevum",
+};
 
 test("with a city in the state (#383): bladeburner-city.js first, then bladeburner.js; the cities in the reading", async () => {
   const { bladeburner, runs, round } = withCities();
@@ -381,6 +390,7 @@ test("with a city in the state (#383): bladeburner-city.js first, then bladeburn
     problems: ["a city problem", "a reading problem"],
     city: "Aevum",
     cities: [CITY_READ],
+    round: CITY_ROUND,
   });
   // Null: the cities read, none to move to.
   bladeburner.desire({ joinTheFaction: false, city: null });
@@ -411,32 +421,55 @@ test("a city run that doesn't report: no reading run, both tried again next roun
   expect(bladeburner.reading()?.city).toBe("Aevum");
 });
 
-/** A stand-in NS's Bladeburner for the cities (#383): in the division or not, its city, and whether a switch takes. */
-function cityStandIn({ inDivision = true, city = "Sector-12", switches = true } = {}) {
+/**
+ * A stand-in NS's Bladeburner for the cities (#383): in the division or not, its city, whether a switch takes (or which
+ * city refuses one), and whether the switch back is dropped; and (#420) each range read in the city the division is in
+ * then (the low end the city's index, the Black Op's a tenth over it), and a game "tick" queued at each switch, as a
+ * microtask: any range read once one ran is marked, so a yield inside the round shows.
+ */
+function cityStandIn({
+  inDivision = true,
+  city = "Sector-12",
+  switches = true,
+  refuses = null as string | null,
+  next = "Operation Typhoon" as string | null,
+} = {}) {
   const calls: string[] = [];
+  const ranges: { city: string; name: string; afterTick: boolean }[] = [];
   let at = city;
+  let ticked = false;
   const ns = {
     bladeburner: {
       inBladeburner: () => inDivision,
       getCity: () => at,
       switchCity: (name: string) => {
         calls.push(`switchCity(${name})`);
-        if (switches) at = name;
-        return switches;
+        queueMicrotask(() => {
+          ticked = true;
+        });
+        const takes = switches && name !== refuses;
+        if (takes) at = name;
+        return takes;
       },
       getCityEstimatedPopulation: (name: string) => 1e9 + name.length,
       getCityCommunities: (name: string) => name.length,
       getCityChaos: (name: string) => (name === at ? 7 : 0),
+      getNextBlackOp: () => (next === null ? null : { name: next, rank: 2500 }),
+      getActionEstimatedSuccessChance: (type: string, name: string) => {
+        ranges.push({ city: at, name, afterTick: ticked });
+        const index = BLADEBURNER_CITIES.indexOf(at as (typeof BLADEBURNER_CITIES)[number]) + 1;
+        return type === BLACK_OPERATIONS ? [index / 100, index / 100 + 0.1] : [index / 10, index / 10 + 0.05];
+      },
     },
   } as unknown as NS;
-  return { ns, calls };
+  return { ns, calls, ranges, tickedYet: () => ticked };
 }
 
 test("bladeburner-city.js (#383): moved unless there, then the six read; null moves nothing; refusals", () => {
   const moving = cityStandIn();
   const reading = bladeburnerCityReading(moving.ns, "Aevum");
-  expect(moving.calls).toEqual(["switchCity(Aevum)"]);
-  expect(reading).toEqual({
+  expect(moving.calls[0]).toBe("switchCity(Aevum)");
+  expect(reading).toMatchObject({
     city: "Aevum",
     cities: BLADEBURNER_CITIES.map((name) => ({
       name,
@@ -448,22 +481,59 @@ test("bladeburner-city.js (#383): moved unless there, then the six read; null mo
   });
   const there = cityStandIn({ city: "Aevum" });
   expect(bladeburnerCityReading(there.ns, "Aevum").city).toBe("Aevum");
-  expect(there.calls).toEqual([]);
+  expect(there.calls[0]).toBe("switchCity(Aevum)");
+  expect(there.calls).toHaveLength(7);
   const none = cityStandIn();
   expect(bladeburnerCityReading(none.ns, null).city).toBe("Sector-12");
-  expect(none.calls).toEqual([]);
   const refused = cityStandIn({ switches: false });
   expect(bladeburnerCityReading(refused.ns, "Ishima")).toMatchObject({
     city: "Sector-12",
-    problems: ["the game didn't move the division to Ishima"],
+    problems: [
+      "the game didn't move the division to Ishima",
+      "the round (#420): the game didn't move the division to Aevum",
+    ],
+    round: null,
   });
   const unknown = cityStandIn();
   expect(bladeburnerCityReading(unknown.ns, "Tokyo")).toMatchObject({
     city: "Sector-12",
     problems: ['no city "Tokyo" to work in'],
   });
-  expect(unknown.calls).toEqual([]);
+  expect(unknown.calls.includes("switchCity(Tokyo)")).toBe(false);
   const out = cityStandIn({ inDivision: false });
   expect(bladeburnerCityReading(out.ns, "Aevum")).toEqual({ city: null, cities: [], problems: [] });
   expect(out.calls).toEqual([]);
+});
+
+test("bladeburner-city.js's round (#420): each city's own ranges, then back; synchronous; a refusal, no round", () => {
+  const stand = cityStandIn({ city: "Ishima" });
+  const reading = bladeburnerCityReading(stand.ns, null);
+  // A switch to each in the game's order, then back to the division's city: no yield between (no tick ran).
+  expect(stand.calls).toEqual([...BLADEBURNER_CITIES.map((name) => `switchCity(${name})`), "switchCity(Ishima)"]);
+  expect(reading).not.toBeInstanceOf(Promise);
+  expect(stand.tickedYet()).toBe(false);
+  expect(stand.ranges.every((each) => !each.afterTick)).toBe(true);
+  expect(reading.city).toBe("Ishima");
+  expect(reading.round?.city).toBe("Ishima");
+  expect(reading.round?.blackOp).toBe("Operation Typhoon");
+  // Each city's ranges are its own: read with the division there.
+  for (const [i, name] of BLADEBURNER_CITIES.entries()) {
+    const own = reading.round?.cities[i];
+    expect(own?.name).toBe(name);
+    expect(own?.blackOp).toEqual([(i + 1) / 100, (i + 1) / 100 + 0.1]);
+    expect(own?.actions.map((each) => each.name)).toEqual(BLADEBURNER_LEVELLED_ACTIONS.map((each) => each.name));
+    expect(own?.actions.every((each) => each.chance[0] === (i + 1) / 10)).toBe(true);
+  }
+  expect(stand.ranges.filter((each) => each.city === "Volhaven")).toHaveLength(1 + BLADEBURNER_LEVELLED_ACTIONS.length);
+  // All 21 done: no Black Op range, the actions' still.
+  const done = bladeburnerCityReading(cityStandIn({ next: null }).ns, null);
+  expect(done.round?.blackOp).toBeNull();
+  expect(done.round?.cities.every((each) => each.blackOp === null && each.actions.length > 0)).toBe(true);
+  // A city refusing the switch: no round, the division back, the problem said.
+  const refusing = cityStandIn({ refuses: "New Tokyo" });
+  const refused = bladeburnerCityReading(refusing.ns, null);
+  expect(refused.round).toBeNull();
+  expect(refused.problems).toEqual(["the round (#420): the game didn't move the division to New Tokyo"]);
+  expect(refusing.calls.at(-1)).toBe("switchCity(Sector-12)");
+  expect(refused.city).toBe("Sector-12");
 });

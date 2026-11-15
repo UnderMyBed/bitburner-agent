@@ -182,6 +182,11 @@ export function expectCitiesAsPredicted(
         `${(city.population / 1e6).toFixed(1)}m (predicted ${(at.population / 1e6).toFixed(1)}m ± ` +
         `${((4 * at.populationSpread) / 1e6).toFixed(1)}m)`,
     );
+  }
+  // Every city's row first, so a failure shows them all.
+  console.log(rows.join("\n"));
+  for (const city of end) {
+    const at = predicted.find((each) => each.name === city.name) as PredictedCity;
     expect(Math.abs(city.chaos - at.chaos), `${city.name}'s chaos`).toBeLessThanOrEqual(4 * at.chaosSpread + 1e-6);
     expect(Math.abs(city.population - at.population), `${city.name}'s population`).toBeLessThanOrEqual(
       4 * at.populationSpread + 1,

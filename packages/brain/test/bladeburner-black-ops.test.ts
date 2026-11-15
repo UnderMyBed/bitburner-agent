@@ -307,7 +307,7 @@ describe("the rule (#392)", () => {
     ]) {
       expect(bladeburnerSnapshotOf(medium({ ...reading(), blackOp })).reading).toEqual({
         kind: "unread",
-        problem: "the Bladeburner reading's stamina, actions, skills, cities or Black Op aren't figures",
+        problem: "the Bladeburner reading's stamina, actions, skills, cities, Black Op or round aren't figures",
       });
     }
   });
