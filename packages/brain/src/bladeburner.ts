@@ -89,6 +89,7 @@ import {
   BLADEBURNER_FACTION,
   BLADEBURNER_FACTION_RANK,
   BLADEBURNER_JOIN_LEVEL,
+  BLADEBURNER_RANGE_AGREEMENT,
   BLADEBURNER_SKILL_NAMES,
   BLADEBURNER_TRAINING,
   BLADEBURNER_WORKER_RAM_GB,
@@ -99,7 +100,9 @@ import {
   type BladeburnerBlackOpCheck,
   type BladeburnerBlackOpReading,
   type BladeburnerChaosActionName,
+  type BladeburnerCitiesRound,
   type BladeburnerCityChoice,
+  type BladeburnerCityMeasure,
   type BladeburnerCityReading,
   type BladeburnerPerson,
   type BladeburnerReading,
@@ -107,12 +110,15 @@ import {
   type BladeburnerSkillPlan,
   type BladeburnerState,
   bladeburnerBlackOp,
+  bladeburnerMeasuredCities,
   bladeburnerPersonOf,
   bladeburnerPricedInput,
+  bladeburnerRangesDisagree,
   bladeburnerRankMultiplierOf,
   bladeburnerRankTarget,
   bladeburnerRebuildSeconds,
   bladeburnerResting,
+  bladeburnerRoundMeasures,
   bladeburnerSkillCostMultiplierOf,
   bladeburnerWorkerFits,
   type ClassChoice,
@@ -359,6 +365,39 @@ export interface BladeburnerActionsReading {
   cities: BladeburnerCityReading[] | null;
   /** B5's (#392): the next Black Op and the game's range for it (null: all 21 done); undefined from a B4 Agent. */
   blackOp?: BladeburnerBlackOpReading | null;
+  /** The round over the six (#420): each city's own ranges; null where it failed, undefined from an older Agent. */
+  round?: BladeburnerCitiesRound | null;
+}
+
+const isRange = (value: unknown): value is [number, number] =>
+  Array.isArray(value) && value.length === 2 && value.every(isNumber);
+
+/** The round of a reading (#420): undefined with none (an older Agent), false with one not as it should be. */
+function roundReadingOf(reading: Partial<BladeburnerReading>): BladeburnerCitiesRound | null | undefined | false {
+  const { round } = reading;
+  if (round === undefined) return undefined;
+  if (round === null) return null;
+  const { blackOp, cities, city } = (typeof round === "object" ? round : {}) as Partial<Record<string, unknown>>;
+  if (
+    (blackOp !== null && (typeof blackOp !== "string" || bladeburnerBlackOp(blackOp) === null)) ||
+    !isBladeburnerCity(city)
+  )
+    return false;
+  if (!Array.isArray(cities)) return false;
+  const checked: BladeburnerCitiesRound["cities"] = [];
+  for (const each of cities as unknown[]) {
+    const { name, blackOp: range, actions } = (each ?? {}) as Partial<Record<string, unknown>>;
+    if (!isBladeburnerCity(name) || !(range === null || isRange(range)) || !Array.isArray(actions)) return false;
+    const read: BladeburnerCitiesRound["cities"][number]["actions"] = [];
+    for (const action of actions as unknown[]) {
+      const { type, name: actionName, level, chance } = (action ?? {}) as Partial<Record<string, unknown>>;
+      if (typeof type !== "string" || typeof actionName !== "string" || !isRange(chance)) return false;
+      if (level !== undefined && !isNumber(level)) return false;
+      read.push({ type, name: actionName, ...(level === undefined ? {} : { level }), chance: [chance[0], chance[1]] });
+    }
+    checked.push({ name, blackOp: range === null ? null : [range[0], range[1]], actions: read });
+  }
+  return { blackOp: blackOp as string | null, cities: checked, city };
 }
 
 /** B5's Black Op of a reading (#392): undefined with none read (a B4 Agent), false with one not as it should be. */
@@ -447,7 +486,8 @@ function actionsReadingOf(reading: Partial<BladeburnerReading>): BladeburnerActi
   const skills = skillsReadingOf(reading);
   const cities = citiesReadingOf(reading);
   const blackOp = blackOpReadingOf(reading);
-  if (skills === undefined || cities === undefined || blackOp === false) return undefined;
+  const round = roundReadingOf(reading);
+  if (skills === undefined || cities === undefined || blackOp === false || round === false) return undefined;
   return {
     stamina,
     maxStamina,
@@ -458,6 +498,7 @@ function actionsReadingOf(reading: Partial<BladeburnerReading>): BladeburnerActi
     skills,
     ...cities,
     ...(blackOp === undefined ? {} : { blackOp }),
+    ...(round === undefined ? {} : { round }),
   };
 }
 
@@ -485,7 +526,7 @@ export function bladeburnerSnapshotOf(mediumData: unknown): BladeburnerSnapshot 
       joined,
       reading: {
         kind: "unread",
-        problem: "the Bladeburner reading's stamina, actions, skills, cities or Black Op aren't figures",
+        problem: "the Bladeburner reading's stamina, actions, skills, cities, Black Op or round aren't figures",
       },
     };
   }
@@ -508,6 +549,79 @@ export interface BladeburnerRuleInput {
 }
 
 /**
+ * Each city at its own true population (#420), from the reading's round over the six (core's `bladeburnerRoundMeasures`:
+ * recovered from any of its own ranges not clipped, the Black Op's first, #420's ruling 4; at the draw's mean where
+ * every range there clips), and the cities at it; null
+ * without the cities, or without the round (an older Agent, or one that failed: its problem the reading's, and the
+ * `bladeburnerCityRound` alert's), or with the round not back in the division's city. B4, the drift (the walk) and the
+ * grown estimate price these alone: the cities' estimates never stand for their true populations.
+ */
+export function bladeburnerMeasuredCitiesOf(
+  reading: BladeburnerActionsReading,
+  person: BladeburnerPerson,
+): { measures: BladeburnerCityMeasure[]; cities: BladeburnerCityReading[] } | null {
+  const { city, cities, round } = reading;
+  if (city === null || cities === null || round == null || round.city !== city) return null;
+  const measures = bladeburnerRoundMeasures(
+    {
+      person,
+      stamina: reading.stamina,
+      maxStamina: reading.maxStamina,
+      skills: { read: reading.skills?.levels ?? {} },
+    },
+    { cities, round, city },
+  );
+  return measures === null ? null : { measures, cities: bladeburnerMeasuredCities(cities, measures) };
+}
+
+/**
+ * The drift's cities from a reading (#418, #420): the cities measured by the round, the city read, and its measured
+ * pop/popEst (`ratio`, absent where it isn't recovered: #422's round 2, so B2's and B3's chances there are priced at
+ * the same ratio as B4's); null without the round. The rule's input and the route's (`routeDriftOf`) take it.
+ */
+export function bladeburnerMeasuredDriftOf(
+  reading: BladeburnerActionsReading,
+  person: BladeburnerPerson,
+): { cities: BladeburnerCityReading[]; city: string; ratio?: number } | null {
+  const measured = bladeburnerMeasuredCitiesOf(reading, person);
+  if (measured === null || reading.city === null) return null;
+  const ratio = measured.measures.find((each) => each.name === reading.city)?.ratio ?? null;
+  return { cities: measured.cities, city: reading.city, ...(ratio === null ? {} : { ratio }) };
+}
+
+/**
+ * What's wrong with a reading's round (#420), or null: none asked for (no cities read), or it's as it should be. The
+ * `bladeburnerCityRound` alert's, and the run report's failure: the round failed (the worker's problems say why), none
+ * from an Agent that reads the cities (an older one), the division not back in its city, or (#420's ruling 4) a city's
+ * ranges not clipped giving different pop/popEst past the float error's bar (core's `BLADEBURNER_RANGE_AGREEMENT`,
+ * 2.8e−14: `measures`, the model off).
+ */
+export function bladeburnerRoundProblem(
+  reading: BladeburnerActionsReading,
+  problems: readonly string[],
+  measures: readonly BladeburnerCityMeasure[] | null = null,
+): string | null {
+  if (reading.city === null || reading.cities === null) return null;
+  if (reading.round === undefined) return "no round over the six cities in the reading (an Agent from before #420)";
+  if (reading.round === null) {
+    const said = problems.filter((each) => each.startsWith("the round (#420)"));
+    return `the round over the six cities failed${said.length > 0 ? `: ${said.join("; ")}` : ""}`;
+  }
+  if (reading.round.city !== reading.city) {
+    return `the round left the division in ${reading.round.city}, not ${reading.city}`;
+  }
+  const off = measures === null ? null : bladeburnerRangesDisagree(measures);
+  if (off !== null) {
+    return (
+      `${off.name}'s ranges in the round give pop/popEst ${off.disagreement.toExponential(2)} apart, past ` +
+      `${BLADEBURNER_RANGE_AGREEMENT.toExponential(2)}, the float error's bar (#420's ruling 4: the model of the ` +
+      "game's range is off)"
+    );
+  }
+  return null;
+}
+
+/**
  * B2's and B3's input from the worker's reading (#415, after #411's ruling 4): each contract's and operation's range
  * priced at the true population (core's `bladeburnerPricedInput`, the grown estimate's own): pop/popEst recovered from
  * the next Black Op's range read, one end its formula (`Actions/BlackOperation.ts:55-61`, `Actions/Action.ts:145-166`),
@@ -526,6 +640,7 @@ export function bladeburnerRuleInputOf(
   player?: unknown,
 ): BladeburnerRuleInput {
   const hospital = bladeburnerHospitalOf(player);
+  const drift = bladeburnerMeasuredDriftOf(reading, person);
   const input = {
     readings: reading.actions,
     person,
@@ -534,10 +649,9 @@ export function bladeburnerRuleInputOf(
     rankMultiplier,
     speed: bladeburnerSpeedOf(reading.bonusSeconds),
     skills: { read: reading.skills?.levels ?? {} },
-    // The cities read (#418): each chance priced over the plan's horizon under a target (core's drift).
-    ...(reading.city === null || reading.cities === null || !reading.cities.some((each) => each.name === reading.city)
-      ? {}
-      : { drift: { cities: reading.cities, city: reading.city } }),
+    // The cities measured (#418, #420): each chance priced over the plan's horizon under a target (core's drift), and
+    // (#422's round 2) at the city read's measured pop/popEst (core's `bladeburnerPricedInput`).
+    ...(drift === null ? {} : { drift }),
     ...(hospital === null ? {} : { hospital }),
   };
   const read = reading.blackOp;
@@ -621,6 +735,27 @@ export interface BladeburnerView {
   skills?: BladeburnerSkillPlan | null;
   /** In the division after an install (#404): the rebuild by Training under way; null, none. */
   rebuild?: BladeburnerRebuildView | null;
+  /**
+   * In the division with the cities read (#420): each city measured by the reading's round (null: none), and what's
+   * wrong with the round and since when (the `bladeburnerCityRound` alert's), or null; null with no cities read.
+   */
+  round?: { measures: BladeburnerCityMeasure[] | null; problem: string | null; sinceMs: number | null } | null;
+}
+
+/**
+ * Each city measured by the round (#420), in words: "the round (#420): 5 of 6 recovered; Aevum pop/popEst 1.234 (the
+ * Black Op's, 10 ranges agreeing), Chongqing 1.080e+9 at the draw's mean (every range clipped), ...".
+ */
+export function describeCityMeasures(measures: readonly BladeburnerCityMeasure[]): string {
+  const each = measures.map((measure) =>
+    measure.by === "recovered"
+      ? `${measure.name} pop/popEst ${(measure.ratio as number).toFixed(3)} (${
+          measure.source === "the Black Op" ? "the Black Op's" : `${measure.source}'s`
+        }, ${measure.ranges} range${measure.ranges === 1 ? "" : "s"} agreeing)`
+      : `${measure.name} ${measure.population.toExponential(3)} at the draw's mean (every range clipped)`,
+  );
+  const recovered = measures.filter((measure) => measure.by === "recovered").length;
+  return `the round (#420): ${recovered} of ${measures.length} recovered; ${each.join(", ")}`;
 }
 
 /** "1.23 rank/min". */
@@ -809,6 +944,8 @@ export class BladeburnerRule {
   #resting = false;
   /** The chaos action under way (#383), since its first reading under way: the controller's time and the bonus time. */
   #chaosSince: { name: BladeburnerChaosActionName; atMs: number; bonusSeconds: number; keptRun: number } | null = null;
+  /** The round's problem (#420) since its first reading so, the controller's time; null, none. */
+  #roundSince: number | null = null;
   /** The levels' record (#404), the store's once read; undefined not read yet. */
   #record: BladeburnerLevelsRecord | null | undefined = undefined;
   readonly #settings: BladeburnerSettings | null;
@@ -1073,6 +1210,7 @@ export class BladeburnerRule {
       rebuild === null || rebuild.skipped ? null : describeRebuild(rebuild, person.skills),
     );
     const skills = this.#skills(reading.kind === "read" ? reading.actions : null, mediumData, bitNode);
+    const round = this.#round(reading.kind === "read" ? reading : null, mediumData, nowMs);
     const line =
       reading.kind === "absent"
         ? "Bladeburner: in the division; waiting for its worker's reading"
@@ -1087,6 +1225,8 @@ export class BladeburnerRule {
             (actions.text === null ? "" : `; ${actions.text}`) +
             (rebuild?.skipped === true ? `; ${describeRebuild(rebuild, person.skills)}` : "") +
             (skills.text === null ? "" : `; ${skills.text}`) +
+            (round?.measures == null ? "" : `; ${describeCityMeasures(round.measures)}`) +
+            (round?.problem == null ? "" : `; ${round.problem}`) +
             (reading.problems.length > 0 ? `; ${reading.problems.join("; ")}` : "");
     const state: BladeburnerState = {
       joinTheFaction,
@@ -1096,9 +1236,37 @@ export class BladeburnerRule {
       ...(actions.city === undefined ? {} : { city: actions.city }),
     };
     return this.#decide(
-      { stage: "joined", line, training: null, actions: actions.sent, skills: skills.plan, rebuild },
+      { stage: "joined", line, training: null, actions: actions.sent, skills: skills.plan, rebuild, round },
       { ...none, state, skillIntents: skills.intents },
     );
+  }
+
+  /**
+   * The round of a reading (#420): each city measured, and what's wrong with it since its first reading so (the
+   * controller's time); null with no cities read (none asked for, a B3 Agent), or no reading.
+   */
+  #round(
+    reading: Extract<BladeburnerSnapshot["reading"], { kind: "read" }> | null,
+    mediumData: MediumSnapshotData,
+    nowMs: number | null,
+  ): BladeburnerView["round"] {
+    const actions = reading?.actions ?? null;
+    if (reading === null || actions === null || actions.city === null || actions.cities === null) {
+      this.#roundSince = null;
+      return null;
+    }
+    const person = bladeburnerPersonOf(mediumData.player);
+    const measures = person === null ? null : (bladeburnerMeasuredCitiesOf(actions, person)?.measures ?? null);
+    const problem = bladeburnerRoundProblem(actions, reading.problems, measures);
+    if (problem === null) this.#roundSince = null;
+    else this.#roundSince ??= nowMs ?? 0;
+    return { measures, problem, sinceMs: problem === null ? null : this.#roundSince };
+  }
+
+  /** The round's problem and since when (#420), as of the last update: the `bladeburnerCityRound` alert's; or null. */
+  roundProblem(): { sinceMs: number; problem: string } | null {
+    const round = this.#view.round;
+    return round?.problem == null ? null : { sinceMs: round.sinceMs ?? 0, problem: round.problem };
   }
 
   /** The rebuild under way after an install (#404), as of the last update: the stall's bound; null none. */
@@ -1171,14 +1339,16 @@ export class BladeburnerRule {
     // At the chances the game draws against (#415): the true population, recovered from the next Black Op's range.
     const { input: base, ratio } = bladeburnerRuleInputOf(reading, person, rankMultiplier, mediumData.player);
     const forecast = { ...base, ...(target === null || rank === null ? {} : { target: { rank, target } }) };
+    // Each city at its measured true population (#420): without the round, no city weighed but the one read.
+    const measured = bladeburnerMeasuredCitiesOf(reading, person)?.cities ?? null;
     const cities =
-      readCity === null || reading.cities === null
+      readCity === null || measured === null
         ? null
-        : chooseBladeburnerCity(forecast, { city: readCity, cities: reading.cities });
+        : chooseBladeburnerCity(forecast, { city: readCity, cities: measured });
     const plan = cities?.plan ?? chooseBladeburnerAction(forecast);
     // The input in the city chosen, as core's `chooseBladeburnerCity` weighs it there.
-    const here = reading.cities?.find((each) => each.name === readCity);
-    const there = reading.cities?.find((each) => each.name === cities?.city);
+    const here = measured?.find((each) => each.name === readCity);
+    const there = measured?.find((each) => each.name === cities?.city);
     const input: BladeburnerActionInput =
       cities === null || here === undefined || there === undefined
         ? forecast
@@ -1190,7 +1360,13 @@ export class BladeburnerRule {
               ? {}
               : {
                   drift: {
-                    ...forecast.drift,
+                    // The measured ratio is the city read's (#420): kept only where it's the city chosen.
+                    ...(there.name === readCity
+                      ? forecast.drift
+                      : {
+                          cities: forecast.drift.cities,
+                          ...(forecast.drift.chunks === undefined ? {} : { chunks: forecast.drift.chunks }),
+                        }),
                     city: there.name,
                     ...(cities.horizonSeconds === undefined ? {} : { horizonSeconds: cities.horizonSeconds }),
                   },

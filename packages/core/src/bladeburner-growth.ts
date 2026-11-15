@@ -271,7 +271,10 @@ export function bladeburnerGrownInput(
  * point), pop/popEst recovered from the next Black Op's range read `chanceRead` against its formula at the reading
  * (its stamina's penalty in; core's `populationRatioOfBlackOpRange`, `actionChanceAtRatio`); where it can't be (no
  * Black Op read, `next` null: all 21 done or an older Agent's; or clipped), each at its mean over the estimate's spread
- * (`actionChanceOverSpread`, its bias labelled there). `ratio`: the one recovered, or null.
+ * (`actionChanceOverSpread`, its bias labelled there). Since #420 (#422's round 2), where the input's drift carries
+ * the round's measure of the city read (`drift.ratio`, core's `bladeburnerCityMeasures`: from every range there not
+ * clipped, the branch where they agree), that ratio, so B2, B3 and B4 read one; the Black Op's formula only without
+ * a round (its pick near r 1 erred by 0.16% in bn6-skills, Ishima at 1.0008). `ratio`: the one used, or null.
  */
 export function bladeburnerPricedInput<T extends Omit<BladeburnerActionInput, "target">>(
   input: T,
@@ -281,16 +284,19 @@ export function bladeburnerPricedInput<T extends Omit<BladeburnerActionInput, "t
   }: { next: BladeburnerBlackOp; chanceRead: readonly [number, number] } | { next: null; chanceRead: null },
 ): { input: T; ratio: number | null } {
   const penalty = input.maxStamina > 0 ? staminaPenalty(input.stamina, input.maxStamina) : 0;
+  const measured = input.drift?.ratio;
   const ratio =
-    next === null
-      ? null
-      : populationRatioOfBlackOpRange(
-          chanceRead,
-          blackOpSuccessChance(next, input.person, {
-            penalty,
-            skills: bladeburnerSkillMultsOf(input.skills?.read ?? {}),
-          }),
-        );
+    typeof measured === "number"
+      ? measured
+      : next === null
+        ? null
+        : populationRatioOfBlackOpRange(
+            chanceRead,
+            blackOpSuccessChance(next, input.person, {
+              penalty,
+              skills: bladeburnerSkillMultsOf(input.skills?.read ?? {}),
+            }),
+          );
   const readings = input.readings.map((read) => {
     const at = ratio === null ? null : actionChanceAtRatio(read.chance, ratio);
     const chance = at ?? actionChanceOverSpread(read.chance);

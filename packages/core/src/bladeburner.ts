@@ -104,12 +104,15 @@ export const BLADEBURNER_SKILL_WORKER_RAM_GB = 9.6;
 /**
  * `bladeburner-city.js`'s RAM by the game's calculator (ram-budget.json, which a test keeps in step): 1.6 GB for a
  * script, and 4 GB each for `getCityEstimatedPopulation`, `getCityCommunities`, `getCityChaos`, `getCity` and
- * `switchCity` (`Netscript/RamCostGenerator.ts:366-370`). The Agent runs it just before `bladeburner.js`, waiting for
+ * `switchCity` (`Netscript/RamCostGenerator.ts:366-370`); and since #420 the round over the six (each city's own
+ * ranges and each action's level), 4 GB each for `getActionEstimatedSuccessChance` (`:348`) and `getActionCurrentLevel`
+ * (`:354`), and 2 GB for `getNextBlackOp` (`:339`): 31.6 GB. The Agent runs it just before `bladeburner.js`, waiting for
  * each to exit (ingame's `run-worker.ts`), so they never hold home's RAM at once: under `BLADEBURNER_WORKER_RAM_GB`, it
  * fits wherever B1's gate lets that one run, and home keeps nothing more for it (#383). In `bladeburner.js` instead,
- * the reading would be 70.6 GB: 65.9 + 70.6 = 136.5 GB at SF4.3, past a 128 GB home.
+ * the reading would be 72.6 GB (the city calls and `getNextBlackOp` its own): 65.9 + 72.6 = 138.5 GB at SF4.3, past a
+ * 128 GB home.
  */
-export const BLADEBURNER_CITY_WORKER_RAM_GB = 21.6;
+export const BLADEBURNER_CITY_WORKER_RAM_GB = 31.6;
 /**
  * An action the brain asks `bladeburner.js` to run (#375): its type and name as the NS API has them, and its level;
  * or (#392) the next Black Op, `Black Operations` (`Bladeburner/Enums.ts:5`), at no level.
@@ -133,11 +136,37 @@ export interface BladeburnerState {
   city?: string | null;
 }
 
-/** What `bladeburner-city.js` reads (#383): the division's city (null out of it), the six, and its problems. */
+/**
+ * One city's own reading in the round (#420): the next Black Op's range and each contract's and operation's, in
+ * core's order, read with the division switched there (`getActionEstimatedSuccessChance` reads the current city's
+ * population, estimate and chaos, `Actions/Action.ts:144-167`, `:88-103`); the Black Op's null with all 21 done.
+ */
+export interface BladeburnerCityRound {
+  name: string;
+  blackOp: [number, number] | null;
+  /** Each one's level there (`getActionCurrentLevel`, #420's ruling 4: the estimate's chance at it); absent: older. */
+  actions: { type: string; name: string; level?: number; chance: [number, number] }[];
+}
+
+/**
+ * The round over the six (#420): the next Black Op it read each city's range of (null, all done), each city's own
+ * reading in the game's order, and the division's city after it, switched back (the city it was in before the round).
+ */
+export interface BladeburnerCitiesRound {
+  blackOp: string | null;
+  cities: BladeburnerCityRound[];
+  city: string;
+}
+
+/**
+ * What `bladeburner-city.js` reads (#383): the division's city (null out of it), the six, and its problems; and
+ * (#420, absent from an older Agent) the round over the six, null where it failed (its problems say why).
+ */
 export interface BladeburnerCityWorkerReading {
   city: string | null;
   cities: BladeburnerCityReading[];
   problems: string[];
+  round?: BladeburnerCitiesRound | null;
 }
 
 /**
@@ -164,6 +193,8 @@ export interface BladeburnerReading {
   skillLevels?: Record<string, number>;
   city?: string | null;
   cities?: BladeburnerCityReading[];
+  /** The round over the six (#420, `bladeburner-city.js`'s; absent from an older Agent), null where it failed. */
+  round?: BladeburnerCitiesRound | null;
   /** B5's (#392, absent from a B4 Agent): the next Black Op in order and the game's range for it, or null: all done. */
   blackOp?: BladeburnerBlackOpReading | null;
 }

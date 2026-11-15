@@ -101,10 +101,11 @@ export function inciteCountGain(action: BladeburnerLevelledAction): number {
 
 /**
  * What an action's competence in city `to` is over that in `from`, the difficulty's chaos factor folded in, by their
- * estimates: (estimate to / estimate from)^0.7 × chaosFactor(from) / chaosFactor(to) (`Actions/Action.ts:88-103`). The
- * game's range scales with it while neither end is clamped (#375's `chanceLowAt`); by the estimates, not the true
- * populations (the API's): so it takes `to`'s estimate as far off its truth as `from`'s, labelled. Null with `from`'s
- * estimate not above 0.
+ * populations: (population to / population from)^0.7 × chaosFactor(from) / chaosFactor(to) (`Actions/Action.ts:88-103`).
+ * The chance scales with it while it isn't clamped at 1 (#375's `chanceLowAt`). Since #420 the brain gives each city's
+ * measured true population (core's `bladeburnerMeasuredCities`, from the round over the six), not its estimate: the
+ * game draws each city's estimate on its own (`City.ts:23`), so one city's pop/popEst says nothing of another's. Null
+ * with `from`'s population not above 0.
  */
 export function cityCompetenceRatio(
   from: { population: number; chaos: number },
@@ -195,9 +196,11 @@ export type BladeburnerCityForecastInput = Omit<Parameters<typeof chooseBladebur
 
 /**
  * The city and the chaos action (#383), each by B2's forecast (`chooseBladeburnerAction`), from the reading in `city`
- * (its ranges read there) and every city's figures (`cities`). None of it takes a picked threshold:
- * - **The city:** each city's forecast, its ranges scaled by `cityCompetenceRatio` from the city read (Raid out with no
- *   communities, `Actions/Operation.ts:63-68`); the most rank a second, the current city on a tie. Switching is free.
+ * (its ranges read there) and every city's figures (`cities`: since #420 each at its measured true population, core's
+ * `bladeburnerMeasuredCities`). None of it takes a picked threshold:
+ * - **The city:** each city's forecast, its chances scaled by `cityCompetenceRatio` from the city read (Raid out with no
+ *   communities, `Actions/Operation.ts:63-68`); the most rank a second, the current city on a tie. Switching is free
+ *   and can be undone at the next reading, so no margin (#420's ruling 1): the best expected figure.
  *   Under a current-rank target (#386, `input.target`), the least expected time to it. The chaos actions below are
  *   weighed by rank a second still: their effect on the time to a target is left out, and labelled.
  * - **Diplomacy,** the city chosen at a chaos c over 50: one more, to c' = `chaosAfterDiplomacy`, pays when its 60 s
@@ -212,7 +215,7 @@ export type BladeburnerCityForecastInput = Omit<Parameters<typeof chooseBladebur
  *   `chaosActionForgone`) and the rank the chaos it adds would lose in the city chosen (`chaosRankLoss` from c to
  *   `chaosAfterIncite`(c), against R∞ at 50, with no Diplomacy: it errs against Incite). Left out, and labelled: the
  *   counts it adds to the other actions, and the other cities' chaos.
- * Null with the city read not among `cities`, or its estimate not above 0: no city to scale from.
+ * Null with the city read not among `cities`, or its population not above 0: no city to scale from.
  */
 export function chooseBladeburnerCity(
   input: BladeburnerCityForecastInput,
@@ -230,7 +233,9 @@ export function chooseBladeburnerCity(
   ) => {
     const ratio = cityCompetenceRatio(here, { population: there.population, chaos }) ?? 0;
     // The drift (#418) from that city, at that chaos.
-    const drift = from.drift === undefined ? {} : { drift: { ...from.drift, city: there.name, chaos } };
+    // (Its `ratio` is the city read's, #420: dropped elsewhere; only the priced input reads it.)
+    const { ratio: _ratio, ...rest } = from.drift ?? { cities: [], city: "" };
+    const drift = from.drift === undefined ? {} : { drift: { ...rest, city: there.name, chaos } };
     return choose({ ...from, readings, city: { ratio, raid: there.communities > 0 }, ...drift });
   };
   // The chaos actions are weighed by rank a second (#386: a target aside, labelled), and each city's rate shown.

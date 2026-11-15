@@ -135,6 +135,29 @@ describe("augmentations (#210)", () => {
     expect(activeAlerts(quiet)).toEqual([]);
   });
 
+  test("Bladeburner's round over the six cities (#420): at once, with why, from its first reading so", () => {
+    const round = { sinceMs: quiet.nowMs - 10_000, problem: "the round left the division in Aevum, not Sector-12" };
+    expect(activeAlerts({ ...quiet, bladeburnerCityRound: round })).toEqual([
+      {
+        name: "bladeburnerCityRound",
+        sinceMs: round.sinceMs,
+        detail:
+          "the round left the division in Aevum, not Sector-12: Bladeburner's cities aren't measured, so it stays in " +
+          "the city it's in",
+      },
+    ]);
+    // After the gang's, before the store's thinning.
+    expect(
+      activeAlerts({
+        ...quiet,
+        bladeburnerCityRound: round,
+        storeThinningFailure: { atMs: 1, failure: "y" },
+        gangStalls: [{ kind: "respect", fromMs: 3_000, toMs: 63_000, detail: "x" }],
+      }).map((alert) => alert.name),
+    ).toEqual(["gangStalled", "bladeburnerCityRound", "storeThinningFailed"]);
+    expect(activeAlerts({ ...quiet, bladeburnerCityRound: null })).toEqual([]);
+  });
+
   test("the store's thinning at this start failed (#283's review): with why, from its time", () => {
     const failure = { atMs: quiet.nowMs - 60_000, failure: "disk I/O error" };
     expect(activeAlerts({ ...quiet, storeThinningFailure: failure })).toEqual([

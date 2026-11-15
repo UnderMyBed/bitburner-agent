@@ -171,6 +171,10 @@ async function start(options: HostOptions): Promise<Host> {
       booted();
       return engine.bladeburnerAttempts(from);
     },
+    "diagnostics.bladeburnerGeneralActions": ({ from }) => {
+      booted();
+      return engine.bladeburnerGeneralActions(from);
+    },
     "diagnostics.bladeburnerCities": () => {
       booted();
       return engine.bladeburnerCities();

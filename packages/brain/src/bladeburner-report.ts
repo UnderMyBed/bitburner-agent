@@ -333,7 +333,7 @@ export class BladeburnerFold {
       // hundreds of milliseconds).
       const choose = memoizedBladeburnerChoice();
       this.#actions.add(atMs, data, rank, reading.actions, slow.bitNode, slow.lastAugReset, choose);
-      this.#cities.add(atMs, data, reading.actions, slow.bitNode, slow.lastAugReset, rank, choose);
+      this.#cities.add(atMs, data, reading.actions, slow.bitNode, slow.lastAugReset, rank, choose, reading.problems);
       this.#blackOps.add(atMs, data, rank, reading.actions, slow.bitNode, slow.lastAugReset);
     }
     if (reading.kind === "read") {

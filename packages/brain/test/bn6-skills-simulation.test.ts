@@ -15,11 +15,12 @@ import {
   BLADEBURNER_READING_SECONDS,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
+  chooseBladeburnerCity,
   type MediumSnapshotData,
   skillExpFor,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { bladeburnerRuleInputOf, bladeburnerSnapshotOf } from "../src/bladeburner.ts";
+import { bladeburnerMeasuredCitiesOf, bladeburnerRuleInputOf, bladeburnerSnapshotOf } from "../src/bladeburner.ts";
 import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-actions-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -149,11 +150,58 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   // #418: each city's chaos and true population after the hour against the drift's prediction (core's mean path from
   // the simulator's true figures at the hour's start, each attempt the rule made at its own chance, the decay and the
   // events' mean between; within 4 standard deviations of the draws' spread), and the attempts' own effects alone.
+  // Incite Violence (#420's ruling 3): since #420 the rule sends it in this hour (Raid's count binding in the city it
+  // measures best); why, by its own figures at the reading before the first under way (core's `chooseBladeburnerCity`
+  // on the brain's input there, the cities measured by the round), its measure paying.
+  const mediums = fresh.data.store
+    .snapshots({ environment: "E1" })
+    .filter((each) => each.tier === "medium")
+    .sort((a, b) => a.receivedAtMs - b.receivedAtMs);
+  const firstIncite = mediums.findIndex((each) => {
+    const read = bladeburnerSnapshotOf(each.data).reading;
+    return read.kind === "read" && read.actions?.current?.name === "Incite Violence";
+  });
+  // Sent on this seed's hour (#422's review: not passing silently where none is).
+  expect(firstIncite).toBeGreaterThan(0);
+  const inciteBefore = mediums[firstIncite - 1]?.data as MediumSnapshotData;
+  const inciteRead = bladeburnerSnapshotOf(inciteBefore).reading;
+  const incitePerson = bladeburnerPersonOf(inciteBefore.player);
+  if (inciteRead.kind !== "read" || inciteRead.actions === null || incitePerson === null) {
+    throw new Error("no reading before Incite");
+  }
+  const inciteChoice = chooseBladeburnerCity(
+    bladeburnerRuleInputOf(
+      inciteRead.actions,
+      incitePerson,
+      bladeburnerRankMultiplierOf(6) as number,
+      inciteBefore.player,
+    ).input,
+    {
+      city: inciteRead.actions.city as string,
+      cities: bladeburnerMeasuredCitiesOf(inciteRead.actions, incitePerson)?.cities ?? [],
+    },
+  );
+  const incite = inciteChoice?.incite;
+  console.log(
+    `Incite Violence sent at the reading before ${new Date(mediums[firstIncite]?.receivedAtMs ?? 0).toISOString()}: ` +
+      `in ${inciteChoice?.city}, ${incite?.work}'s counts +${incite?.countGain.toFixed(2)} for ` +
+      `${incite?.gain.toFixed(3)} rank against its cost ${incite?.cost.toFixed(3)} (its 60 s and the chaos it adds), ` +
+      `the rate with every count unbounded ${((incite?.unbounded ?? 0) * 60).toFixed(3)} rank/min`,
+  );
+  expect(incite?.pays).toBe(true);
   const hourAttempts = await attemptsIn(fresh.simulation, startedAtMs, fresh.game.clock.now());
   const endCities = await fresh.simulation.diagnostics.bladeburnerCities();
   console.log(
     `the cities after the hour against the drift's prediction (#418):\n` +
-      expectCitiesAsPredicted(startCities, endCities, hourAttempts, startedAtMs, fresh.game.clock.now(), charisma),
+      expectCitiesAsPredicted(
+        startCities,
+        endCities,
+        hourAttempts,
+        startedAtMs,
+        fresh.game.clock.now(),
+        charisma,
+        await fresh.simulation.diagnostics.bladeburnerGeneralActions(0),
+      ),
   );
 
   const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() } as const;

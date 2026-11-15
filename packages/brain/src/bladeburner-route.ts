@@ -46,6 +46,7 @@ import {
   type BlackOpsRouteTime,
   type BladeburnerActionInput,
   type BladeburnerActionPlan,
+  type BladeburnerPerson,
   blackOpRankLoss,
   blackOpSeconds,
   blackOpStaminaCost,
@@ -76,6 +77,7 @@ import {
 import {
   type BladeburnerActionsReading,
   bladeburnerHospitalOf,
+  bladeburnerMeasuredDriftOf,
   bladeburnerRuleInputOf,
   bladeburnerSnapshotOf,
   bladeburnerSpeedOf,
@@ -135,18 +137,20 @@ export function blackOpsDoneIn(mediumData: unknown): number | null {
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
 /**
- * The route's drift and hospital (#418), as the rule's input has them (`bladeburnerRuleInputOf`): the cities read and
- * the city worked, and the player's max HP and money; each absent where not read.
+ * The route's drift and hospital (#418), as the rule's input has them (`bladeburnerRuleInputOf`): the cities measured
+ * by the round (#420, `bladeburnerMeasuredDriftOf`), the city worked and its measured pop/popEst (#422's round 2: the
+ * grown estimate's chances at it, as the rule's), and the player's max HP and money; each absent where not read (the
+ * drift without the round).
  */
 function routeDriftOf(
-  actions: Pick<BladeburnerActionsReading, "cities" | "city">,
+  actions: BladeburnerActionsReading,
+  person: BladeburnerPerson,
   player: unknown,
 ): Pick<BladeburnerActionInput, "drift" | "hospital"> {
   const hospital = bladeburnerHospitalOf(player);
+  const drift = bladeburnerMeasuredDriftOf(actions, person);
   return {
-    ...(actions.city === null || actions.cities === null || !actions.cities.some((each) => each.name === actions.city)
-      ? {}
-      : { drift: { cities: actions.cities, city: actions.city } }),
+    ...(drift === null ? {} : { drift }),
     ...(hospital === null ? {} : { hospital }),
   };
 }
@@ -213,7 +217,7 @@ export function blackOpsRouteOf({
           rankMultiplier,
           speed: bladeburnerSpeedOf(actions.bonusSeconds),
           skills: { read: actions.skills?.levels ?? {} },
-          ...routeDriftOf(actions, mediumData?.player),
+          ...routeDriftOf(actions, person, mediumData?.player),
         };
   const estimate: BlackOpsRouteTime | null =
     done === BLACK_OPS_COUNT
@@ -387,7 +391,7 @@ export function blackOpsInstallFiguresOf(
         rankMultiplier,
         speed: bladeburnerSpeedOf(actions.bonusSeconds),
         skills: { read: actions.skills?.levels ?? {} },
-        ...routeDriftOf(actions, mediumData?.player),
+        ...routeDriftOf(actions, person, mediumData?.player),
       },
       at: { rank, next, chanceRead: nextRead.chance },
       combat,

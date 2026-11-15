@@ -344,6 +344,13 @@ export interface BladeburnerAttempt {
   atMs: number;
 }
 
+/** A general Bladeburner action the player completed (#420): its name, the city it completed in, and when (virtual). */
+export interface BladeburnerGeneralAction {
+  name: string;
+  city: string;
+  atMs: number;
+}
+
 export interface HomePeak {
   /** The highest RAM in use, in GB. */
   ramUsed: number;
@@ -492,6 +499,8 @@ export interface HostMethods {
   "diagnostics.homePeak"(params: Record<string, never>): HomePeak;
   /** Every Bladeburner attempt the game has made since it booted, from `from` on (#411): only observed. */
   "diagnostics.bladeburnerAttempts"(params: { from: number }): BladeburnerAttempt[];
+  /** Every general Bladeburner action the player has completed since boot, from `from` on (#420): only observed. */
+  "diagnostics.bladeburnerGeneralActions"(params: { from: number }): BladeburnerGeneralAction[];
   /** Every city's true population, estimate, communities and chaos (#418), as they stand. */
   "diagnostics.bladeburnerCities"(params: Record<string, never>): {
     name: string;

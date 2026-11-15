@@ -827,8 +827,8 @@ export interface BladeburnerActionPlan {
  *   action's low end scales with its competence (`actionSkillCompetence`), the time and the regain are computed at
  *   those levels, and the max stamina with them (`maxStaminaAtSkills`). No skills given: none read or planned.
  * - **The city** (#383, ./bladeburner-cities.ts): in another city than the one read, or at another chaos, each
- *   action's low end scales by `city.ratio` (core's `cityCompetenceRatio`: the estimates' and the chaos factors'),
- *   as with the skills; Raid out where `city.raid` is false (no communities, `Actions/Operation.ts:63-68`). None
+ *   action's low end scales by `city.ratio` (core's `cityCompetenceRatio`: since #420 the measured true populations'
+ *   and the chaos factors', core's `bladeburnerMeasuredCities`), as with the skills; Raid out where `city.raid` is false (no communities, `Actions/Operation.ts:63-68`). None
  *   given: the city read.
  * - **Under a current-rank target** (#386, `target`, ./bladeburner-targets.ts): the plan with the least expected time
  *   to it (`fastestToTarget`), not the most rank a second; met (the rank at it), rank a second. Training never rests
@@ -1154,6 +1154,11 @@ function planCandidates({
     chaos?: number;
     horizonSeconds?: number;
     chunks?: number;
+    /**
+     * pop/popEst of `city` as the round measured it (#420, `bladeburnerCityMeasures`), or absent: none recovered there.
+     * Only `bladeburnerPricedInput` reads it (each chance at it, #422's round 2), not the forecast.
+     */
+    ratio?: number;
   };
   /** The max HP and the money read (#418): each plan's hospital money a second. None: not read (null). */
   hospital?: { hpMax: number; money: number };

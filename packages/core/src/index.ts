@@ -246,6 +246,8 @@ export {
   BLADEBURNER_WORKER_NAME,
   BLADEBURNER_WORKER_RAM_GB,
   type BladeburnerActionOrder,
+  type BladeburnerCitiesRound,
+  type BladeburnerCityRound,
   type BladeburnerCityWorkerReading,
   type BladeburnerReading,
   type BladeburnerState,
@@ -381,6 +383,18 @@ export {
   inciteCountGain,
   isBladeburnerCity,
 } from "./bladeburner-cities.ts";
+export {
+  BLADEBURNER_BRANCH_BAND,
+  BLADEBURNER_DRAW_RATIO,
+  BLADEBURNER_RANGE_AGREEMENT,
+  type BladeburnerCityMeasure,
+  type BladeburnerCityMeasureKind,
+  bladeburnerCityMeasures,
+  bladeburnerMeasuredCities,
+  bladeburnerRangesDisagree,
+  bladeburnerRoundMeasures,
+  populationRatioOfActionRange,
+} from "./bladeburner-city-measures.ts";
 export {
   BLADEBURNER_CHAOS_COHORTS,
   BLADEBURNER_DRIFT_CHUNKS,

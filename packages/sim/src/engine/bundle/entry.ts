@@ -58,6 +58,7 @@ import { commitHash } from "../../../../../vendor/bitburner-src/src/utils/helper
 import { decodeSaveData } from "../../../../../vendor/bitburner-src/src/utils/SaveDataUtils";
 import type {
   BladeburnerAttempt,
+  BladeburnerGeneralAction,
   GameAugmentationCost,
   GameData,
   GameEvent,
@@ -598,11 +599,19 @@ ActionClass.prototype.attempt = function (this: ActionClass, bladeburner: Bladeb
   }
   return success;
 };
+/**
+ * Every general action the player completes (#420's ruling 3): its name, the city it completed in and when. Diplomacy
+ * and Incite Violence move the chaos (`Bladeburner.ts:1187-1198`, `:1221-1235`), with no `attempt` to record them.
+ */
+const bladeburnerGeneralSoFar: BladeburnerGeneralAction[] = [];
 const completeAction = Bladeburner.prototype.completeAction;
 Bladeburner.prototype.completeAction = function (this: Bladeburner, person, actionIdent, isPlayer = true) {
   attemptDrawn = null;
   const rankBefore = this.rank;
   const stats = completeAction.call(this, person, actionIdent, isPlayer);
+  if (isPlayer && actionIdent.type === BladeburnerActionType.General) {
+    bladeburnerGeneralSoFar.push({ name: actionIdent.name, city: this.getCurrentCity().name, atMs: Date.now() });
+  }
   // Set by `attempt`, within the call.
   const drawn = attemptDrawn as Omit<BladeburnerAttempt, "rankBefore" | "rankAfter" | "atMs" | "after"> | null;
   if (drawn !== null && isPlayer) {
@@ -617,6 +626,10 @@ Bladeburner.prototype.completeAction = function (this: Bladeburner, person, acti
 
 export function bladeburnerAttempts(from: number) {
   return bladeburnerAttemptsSoFar.slice(from);
+}
+
+export function bladeburnerGeneralActions(from: number) {
+  return bladeburnerGeneralSoFar.slice(from);
 }
 
 /**

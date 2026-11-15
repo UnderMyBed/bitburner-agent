@@ -4,9 +4,17 @@
 // Agent's Bladeburner worker (`bladeburner.js`) reading the rank into the medium snapshot and joining the Bladeburners
 // faction at rank 25, with the medium snapshot's `inBladeburner`. The combat stats and the rank by harness edits. B3
 // (#379): the `upgradeBladeburnerSkill` intent through both backends (`bladeburner-skill.js` the ui's), each refusing
-// what the game refuses (out of the division; too few points), and the worker reading the points and the levels.
+// what the game refuses (out of the division; too few points), and the worker reading the points and the levels. #420:
+// the city worker's round over the six in the real game, each city's own ranges, the division back in its city.
 import {
+  BLADEBURNER_BLACK_OPS,
+  BLADEBURNER_CITIES,
   BLADEBURNER_SKILL_NAMES,
+  type BladeburnerCitiesRound,
+  type BladeburnerCityReading,
+  type BladeburnerPerson,
+  bladeburnerPersonOf,
+  bladeburnerRoundMeasures,
   type DesiredState,
   type FastSnapshotData,
   type Intent,
@@ -150,6 +158,70 @@ test("the Bladeburner worker's action (#375): a level over its max refused; held
   fresh.brain.channel.setDesiredState(order(null));
   await fresh.game.run(30_000);
   expect(reading()).toMatchObject({ current: { name: "Field Analysis" }, found: { name: "Field Analysis" } });
+}, 120_000);
+
+test("the city worker's round (#420): each city's own ranges in the game, its pop/popEst recovered, the division back", async () => {
+  const fresh = await freshStart({ withDesiredState: false, fixture: BN6, beforeAgent: trainedWithRoom });
+  expect(await triedOnce(fresh, JOIN_BLADEBURNER_INTENT)).toMatchObject({ done: true });
+  // Each city its own pop/popEst (`City.ts:23`'s draw is each city's), by harness edits a script can't make.
+  const ratios: Record<string, number> = {
+    Aevum: 0.8,
+    Chongqing: 1.6,
+    "Sector-12": 1,
+    "New Tokyo": 1.25,
+    Ishima: 0.7,
+    Volhaven: 1.9,
+  };
+  for (const [city, ratio] of Object.entries(ratios)) {
+    await fresh.simulation.diagnostics.setBladeburnerFigures({
+      city,
+      population: 1.2e9,
+      estimate: 1.2e9 / ratio,
+      communities: 40,
+      chaos: 0,
+    });
+  }
+  fresh.brain.channel.setDesiredState({
+    hackLoop: HACK_LOOP_OFF,
+    intents: [],
+    bladeburner: { joinTheFaction: false, city: null },
+  });
+  const reading = () => fresh.medium()?.bladeburner;
+  await fresh.game.runUntil(() => reading()?.round != null, 30_000);
+  const read = reading() as NonNullable<ReturnType<typeof reading>>;
+  expect(read.problems).toEqual([]);
+  // Back in the division's city, its own.
+  expect(read.city).toBe("Sector-12");
+  expect(read.round?.city).toBe("Sector-12");
+  expect(read.round?.blackOp).toBe(BLADEBURNER_BLACK_OPS[0]?.name);
+  expect(read.round?.cities.map((each) => each.name)).toEqual([...BLADEBURNER_CITIES]);
+  // Each city's Black Op range its own: its chance at one end, that × its pop/popEst at the other (no population
+  // factor, `Actions/BlackOperation.ts:55-61`).
+  for (const each of read.round?.cities ?? []) {
+    const [low, high] = each.blackOp as [number, number];
+    const ratio = ratios[each.name] as number;
+    expect(ratio < 1 ? low / high : high / low, each.name).toBeCloseTo(ratio, 9);
+    expect(each.actions).toHaveLength(9);
+  }
+  // The brain measures each at its own (core's `bladeburnerRoundMeasures`, as the rule does).
+  const person = bladeburnerPersonOf((fresh.medium() as MediumSnapshotData).player) as BladeburnerPerson;
+  const measures = bladeburnerRoundMeasures(
+    { person, stamina: read.stamina as number, maxStamina: read.maxStamina as number },
+    {
+      cities: read.cities as BladeburnerCityReading[],
+      round: read.round as BladeburnerCitiesRound,
+      city: "Sector-12",
+    },
+  );
+  for (const measure of measures ?? []) {
+    expect(measure.by, measure.name).toBe("recovered");
+    expect(measure.ratio, measure.name).toBeCloseTo(ratios[measure.name] as number, 9);
+  }
+  // The engine's own truths: each city's population the one set.
+  for (const city of await fresh.simulation.diagnostics.bladeburnerCities()) {
+    const measure = measures?.find((each) => each.name === city.name);
+    expect((measure?.population ?? 0) / city.population, city.name).toBeCloseTo(1, 6);
+  }
 }, 120_000);
 
 test("the brain gone: the Agent forgets the Bladeburner state, so its worker doesn't run on in safe mode", async () => {

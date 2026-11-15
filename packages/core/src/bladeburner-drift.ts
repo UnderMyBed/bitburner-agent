@@ -587,10 +587,15 @@ export interface BladeburnerDriftResult {
  * city worked, each moving it by its mean effects at its chance there (`bladeburnerAttemptDrift`), the decay and the
  * random events' mean (`bladeburnerEventDrift`) over the time, and Diplomacy holding the worked city's chaos at the
  * ceiling (its time returned, not taken from `seconds`). `moves`: the brain's city chosen again as the path goes (B4's,
- * the most chance factor), else the city worked throughout. Labelled (#418's round-2 review): the path's B4 moves by the
- * true population, which the events grow, the game's by the estimates, which they don't (`City.ts:35-87`), so the path
- * finds the grown city at once: optimistic, against walks of the game's draws picking by the estimates from 150 to
- * Typhoon's 2,500, by 3.1% (Bounty Hunter first) and 4.4% (Raid first), the plans' order the same. In attempts one at a time to `BLADEBURNER_DRIFT_CHUNKS`,
+ * the most chance factor), else the city worked throughout. Since #420 the brain measures every city's true population
+ * each reading, so its B4 picks by the truth, as the path's. Labelled (#420's ruling 3, #422's review): against walks
+ * of the game's draws from 150 to Typhoon's 2,500 the rule is pessimistic by 14.7% (Bounty Hunter first) and 15.1%
+ * (Raid first), the plans' order the same. Measured by term (core's test, check 3): the path carries each city at its
+ * mean and picks the best mean, but the events spread the cities apart and B4 works the best of them (Bounty Hunter's
+ * chance 0.418 priced, 0.528 an attempt walked); at the walked chance the plan takes 3,978 min against the walks'
+ * 4,775, the rest the walks' own greedy tail and rests against the chain's sustainable tail; and the path's horizon
+ * attempts (2,312 and 1,223) over the chain's (49 and 55 in the count, then the tail). #421's. In attempts one at a
+ * time to `BLADEBURNER_DRIFT_CHUNKS`,
  * past it in that many chunks, each chunk's attempts at the chance before each, as if linear over the chunk (the
  * success-moved effects, Raid's and the kills', at the chance at the chunk's start).
  */
@@ -793,8 +798,9 @@ function mostFactor(cities: readonly BladeburnerDriftCity[], current: number, ra
 }
 
 /**
- * The drift's start from the cities read (#418): their estimates (B4's: each city's taken as far off its truth as the
- * city worked's, `cityCompetenceRatio`'s convention, so the ratios are the brain's), communities and chaos, the city
+ * The drift's start from the cities read (#418): their populations (since #420 each city's measured true population,
+ * core's `bladeburnerMeasuredCities`, as B4's are: the walk's and the grown estimate's B4 then picks by each city's own
+ * figure, as the brain does), communities and chaos, the city
  * worked `city`, its chaos at `chaos` where given (B4's forecasts at another chaos), Diplomacy's ceiling 50 or the
  * chaos read over it. Null with `city` not among them.
  */
