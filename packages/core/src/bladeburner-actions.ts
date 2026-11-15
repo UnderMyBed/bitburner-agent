@@ -1063,7 +1063,7 @@ function driftedSolve(
  * regrowth, the rest resting alone (Field Analysis's). Its target is ignored: the rate is the state's.
  */
 export function bladeburnerTailRate(input: BladeburnerActionInput): number {
-  const { candidates, supply } = planCandidates(input);
+  const { candidates, supply } = planCandidates(input, false);
   const first = candidates[0] as PlanCandidate;
   return bladeburnerSustainableRate(supply, first.step === null ? first.plan.rankPerSecond : 0);
 }
@@ -1088,7 +1088,7 @@ export interface BladeburnerTailWork {
  * resting alone. `rate` is the primal's, the tail rate's within the dual's bracket.
  */
 export function bladeburnerTailMix(input: BladeburnerActionInput): { rate: number; work: BladeburnerTailWork[] } {
-  const { candidates, supply } = planCandidates(input);
+  const { candidates, supply } = planCandidates(input, false);
   const first = candidates[0] as PlanCandidate;
   const { rate, parts } = bladeburnerSustainableMix(supply, first.step === null ? first.plan.rankPerSecond : 0);
   const work = parts.map(({ source, option, perSecond }): BladeburnerTailWork => {
@@ -1221,7 +1221,10 @@ function planCandidates({
    * done; another action's starts again at 0 (`Bladeburner.ts:187`). None: nothing under way, or not read.
    */
   underWay?: { name: string; level: number; secondsDone: number };
-}): { candidates: PlanCandidate[]; supply: BladeburnerRankSource[] } {
+},
+/** The plans as well as the tail's supply: the tail's own callers (`bladeburnerTailMix`, its rate) need only the latter. */
+plans = true,
+): { candidates: PlanCandidate[]; supply: BladeburnerRankSource[] } {
   const readMults = bladeburnerSkillMultsOf(skills.read ?? {});
   const mults = skills.planned === undefined ? readMults : bladeburnerSkillMultsOf(skills.planned);
   const at = forecast ?? person;
@@ -1452,6 +1455,7 @@ function planCandidates({
     }
     steps.push({ action, read, ways, most, priceOf, tailPrice, horizonOf });
   }
+  if (!plans) return { candidates, supply };
   // #421's term 3: each action's attempts a second in the chain's tail, the sustainable rate's (`fastestToTarget`'s,
   // over `supply`), from its linear programme's primal (`bladeburnerSustainableMix`, `bladeburnerTailMix`'s).
   const shares = new Map<string, number>();
