@@ -48,6 +48,7 @@ import {
   bladeburnerGrowthStart,
 } from "../src/bladeburner-growth.ts";
 import { blackOpsInstallTiming, bladeburnerInstallGain } from "../src/bladeburner-installs.ts";
+import { bladeburnerAttemptsInCount } from "../src/bladeburner-targets.ts";
 
 const gameSource = (file: string) =>
   readFileSync(new URL(`../../../vendor/bitburner-src/src/${file}`, import.meta.url), "utf8");
@@ -1192,7 +1193,20 @@ function walkPlan(
   const attemptsOf: number[] = [];
   // The plan's own action (`order[0]`), over every walk (#420's ruling 3, item 4: the priced time's terms against
   // the walks'): its attempts, their chances summed, the time worked on them, and Diplomacy's after them.
-  const first = { attempts: 0, chance: 0, atMean: 0, seconds: 0, diplomacy: 0 };
+  const first = { attempts: 0, chance: 0, atMean: 0, seconds: 0, diplomacy: 0, clock: 0 };
+  // The walks' time and rank by term (#422's review: each term of the priced time against the walk): the plan's own
+  // action, the others (the tail), each one's Diplomacy, and the rests; the rank each brought.
+  const terms = {
+    firstSeconds: 0,
+    firstDiplomacy: 0,
+    firstRank: 0,
+    otherSeconds: 0,
+    otherDiplomacy: 0,
+    otherRank: 0,
+    otherAttempts: 0,
+    restSeconds: 0,
+    restRank: 0,
+  };
   for (let walk = 0; walk < walks; walk++) {
     // Two streams a walk (common random numbers: a walk's events the same draws under either plan, as its own
     // attempts'), so the plans' gap is read walk by walk.
@@ -1281,6 +1295,8 @@ function walkPlan(
       if (way === undefined) {
         pass(30);
         rank += restRank * 30;
+        terms.restSeconds += 30;
+        terms.restRank += restRank * 30;
         continue;
       }
       const raid = way.action.name === "Raid";
@@ -1304,6 +1320,7 @@ function walkPlan(
         first.attempts += 1;
         first.chance += p;
         first.seconds += way.seconds;
+        first.clock += clock;
         // At the six's mean population and chaos (those with communities for Raid): the mean path's city, where the
         // six alike stay alike, against B4's pick of the best of six that the events spread apart.
         const pool = [...pops.keys()].filter((k) => !raid || (comms[k] as number) > 0);
@@ -1312,7 +1329,16 @@ function walkPlan(
         first.atMean += Math.min(1, (way.chanceRead * factorOf(meanPop, meanChaos)) / reference);
       }
       const success = random() < p;
+      const before = rank;
       rank = Math.max(0, rank + (success ? offset(way.gain) : -offset(way.loss)));
+      if (way === order[0]) {
+        terms.firstSeconds += way.seconds;
+        terms.firstRank += rank - before;
+      } else {
+        terms.otherSeconds += way.seconds;
+        terms.otherRank += rank - before;
+        terms.otherAttempts += 1;
+      }
       switch (way.action.name) {
         case "Raid":
           if (success) {
@@ -1341,7 +1367,10 @@ function walkPlan(
       if ((chaos[city] as number) > 50) {
         const seconds = (60 * Math.log(50 / (chaos[city] as number))) / Math.log(keep);
         chaos[city] = 50;
-        if (way === order[0]) first.diplomacy += seconds;
+        if (way === order[0]) {
+          first.diplomacy += seconds;
+          terms.firstDiplomacy += seconds;
+        } else terms.otherDiplomacy += seconds;
         pass(seconds);
       }
     }
@@ -1358,7 +1387,9 @@ function walkPlan(
       atMean: first.attempts > 0 ? first.atMean / first.attempts : 0,
       diplomacy: first.attempts > 0 ? first.diplomacy / first.attempts : 0,
       share: first.seconds / walks,
+      meanClock: first.attempts > 0 ? first.clock / first.attempts : 0,
     },
+    terms: Object.fromEntries(Object.entries(terms).map(([key, value]) => [key, value / walks])) as typeof terms,
   };
 }
 
@@ -1446,6 +1477,23 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
         ),
       }).find(
         (each) => each.work?.name === work.name && each.work.level === work.level && each.rest.name === plan.rest.name,
+      );
+      // The priced plan's own terms: its attempts in the horizon, its time worked, Diplomacy's and the rests' at its duty,
+      // its attempts in its count (the chain's step, then the tail), against the walks'.
+      const attemptsPriced = work.drift?.attempts ?? 0;
+      const cycle = (work.seconds + work.diplomacySeconds) / plan.duty;
+      const inCount = bladeburnerAttemptsInCount(20, countGrowthPerSecond(action(work.name)), cycle);
+      const t = walked.terms;
+      const hours = (seconds: number) => (seconds / 3600).toFixed(1);
+      console.log(
+        `the terms (#422's review), ${work.name} first: priced ${attemptsPriced.toFixed(0)} attempts in the horizon ` +
+          `(${inCount.toFixed(0)} in its count: the chain's step, then the tail), worked ${hours(attemptsPriced * work.seconds)} h, ` +
+          `Diplomacy ${hours(attemptsPriced * work.diplomacySeconds)} h, resting ${hours(attemptsPriced * cycle * (1 - plan.duty))} h ` +
+          `at duty ${plan.duty.toFixed(3)}; walked ${walked.first.attempts.toFixed(0)} attempts at ${hours(walked.first.meanClock)} h ` +
+          `on average (the horizon's middle ${hours((work.drift?.horizonSeconds ?? 0) / 2)} h), worked ${hours(t.firstSeconds)} h ` +
+          `for ${t.firstRank.toFixed(0)} rank, Diplomacy ${hours(t.firstDiplomacy)} h; the others ${t.otherAttempts.toFixed(0)} ` +
+          `attempts, ${hours(t.otherSeconds)} h for ${t.otherRank.toFixed(0)} rank, their Diplomacy ` +
+          `${hours(t.otherDiplomacy)} h; resting ${hours(t.restSeconds)} h for ${t.restRank.toFixed(0)} rank`,
       );
       return (
         `${work.name}: priced its chance ${work.chance.toFixed(4)} over ${(work.drift?.attempts ?? 0).toFixed(0)} attempts ` +

@@ -433,6 +433,7 @@ function cityStandIn({
   switches = true,
   refuses = null as string | null,
   next = "Operation Typhoon" as string | null,
+  throwsIn = null as string | null,
 } = {}) {
   const calls: string[] = [];
   const ranges: { city: string; name: string; afterTick: boolean }[] = [];
@@ -455,7 +456,10 @@ function cityStandIn({
       getCityCommunities: (name: string) => name.length,
       getCityChaos: (name: string) => (name === at ? 7 : 0),
       getNextBlackOp: () => (next === null ? null : { name: next, rank: 2500 }),
+      getActionCurrentLevel: () => 2,
       getActionEstimatedSuccessChance: (type: string, name: string) => {
+        // `Actions/Action.ts:193`'s throw (a competence NaN), in one city.
+        if (at === throwsIn) throw new Error("Competence calculated as NaN in Action.getSuccessChance()");
         ranges.push({ city: at, name, afterTick: ticked });
         const index = BLADEBURNER_CITIES.indexOf(at as (typeof BLADEBURNER_CITIES)[number]) + 1;
         return type === BLACK_OPERATIONS ? [index / 100, index / 100 + 0.1] : [index / 10, index / 10 + 0.05];
@@ -536,4 +540,15 @@ test("bladeburner-city.js's round (#420): each city's own ranges, then back; syn
   expect(refused.problems).toEqual(["the round (#420): the game didn't move the division to New Tokyo"]);
   expect(refusing.calls.at(-1)).toBe("switchCity(Sector-12)");
   expect(refused.city).toBe("Sector-12");
+  // Each action's level read with its range (#420's ruling 4).
+  expect(reading.round?.cities[0]?.actions.every((each) => each.level === 2)).toBe(true);
+  // A read that throws in New Tokyo (#422's review): the division switched back all the same (`finally`), no round.
+  const throwing = cityStandIn({ throwsIn: "New Tokyo" });
+  const threw = bladeburnerCityReading(throwing.ns, null);
+  expect(threw.round).toBeNull();
+  expect(threw.city).toBe("Sector-12");
+  expect(throwing.calls.at(-1)).toBe("switchCity(Sector-12)");
+  expect(threw.problems).toEqual([
+    "the round (#420): a read threw in New Tokyo: Competence calculated as NaN in Action.getSuccessChance()",
+  ]);
 });

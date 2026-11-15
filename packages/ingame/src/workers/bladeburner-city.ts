@@ -7,19 +7,21 @@
 // - Then the division's city (`getCity`), and each city's population estimate, communities and chaos
 //   (`getCityEstimatedPopulation`, `getCityCommunities`, `getCityChaos`, `:297-311`), in the game's order.
 // - Then (#420) the round over the six: in each, `switchCity` there, the next Black Op's range (`getNextBlackOp`,
-//   `:88-93`) and each contract's and operation's (`getActionEstimatedSuccessChance`, `:138-142`: the current city's
-//   population, estimate and chaos, `Bladeburner/Actions/Action.ts:144-167`); then `switchCity` back to the city it
-//   was in. All in one synchronous run, no `await` in it (`bladeburnerCitiesRound` returns no promise): a script's NS
-//   calls run at once (`Netscript/APIWrapper.ts:78-83`), and the game moves only in its own timer (`engine.tsx:441`,
+//   `:88-93`) and each contract's and operation's with its level (`getActionEstimatedSuccessChance`, `:138-142`: the
+//   current city's population, estimate and chaos, `Bladeburner/Actions/Action.ts:144-167`; `getActionCurrentLevel`,
+//   for the brain's estimate's chance, #420's ruling 4); then `switchCity` back to the city it was in, in a `finally`,
+//   a read that throws a problem. All in one synchronous run, no `await` in it (`bladeburnerCitiesRound` returns no
+//   promise): a script's NS calls run at once (`Netscript/APIWrapper.ts:78-83`), and the game moves only in its own timer (`engine.tsx:441`,
 //   its Bladeburner `process` at `:199-206`, an action completing in `processAction`, `Bladeburner/Bladeburner.ts:
 //   1296-1312`), which can't run until the script yields: so no action completes in another city, and the round takes
 //   no game time. A switch the game refuses, or the division not back where it was, is a problem and no round.
 // The Agent runs it just before `bladeburner.js` (../agent/bladeburner.ts), so that one's ranges are read in the city
 // set here, and waits for each to exit (`run-worker.ts`): they never hold home's RAM at once.
-// RAM (`Netscript/RamCostGenerator.ts:335`, `:339`, `:348`, `:366-370`): 4 GB each for `getCityEstimatedPopulation`,
-// `getCityCommunities`, `getCityChaos`, `getCity`, `switchCity` and `getActionEstimatedSuccessChance`, 2 GB for
-// `getNextBlackOp`, nothing for `inBladeburner`: 27.6 GB with the script's 1.6, under the reading worker's 50.6, so
-// B1's RAM gate (core's `bladeburnerWorkerFits`) covers it.
+// RAM (`Netscript/RamCostGenerator.ts:335`, `:339`, `:348`, `:354`, `:366-370`): 4 GB each for
+// `getCityEstimatedPopulation`, `getCityCommunities`, `getCityChaos`, `getCity`, `switchCity`,
+// `getActionEstimatedSuccessChance` and `getActionCurrentLevel`, 2 GB for `getNextBlackOp`, nothing for
+// `inBladeburner`: 31.6 GB with the script's 1.6, under the reading worker's 50.6, so B1's RAM gate (core's
+// `bladeburnerWorkerFits`) covers it.
 import {
   BLACK_OPERATIONS,
   BLADEBURNER_CITIES,
@@ -35,41 +37,51 @@ type ActionType = Parameters<NS["bladeburner"]["getActionEstimatedSuccessChance"
 type ActionName = Parameters<NS["bladeburner"]["getActionEstimatedSuccessChance"]>[1];
 
 /**
- * The round over the six (#420), synchronous: each city's own ranges, then back to the division's city. Null with a
- * switch refused or the division not back, its problem in `problems`.
+ * The round over the six (#420), synchronous: each city's own ranges and each action's level, then back to the
+ * division's city, in a `finally` (#422's review: a read that throws, `Actions/Action.ts:193`'s NaN, mustn't leave the
+ * division in another city, where its action would complete). Null with a switch refused, a read that threw, or the
+ * division not back, its problem in `problems`.
  */
 export function bladeburnerCitiesRound(ns: NS, problems: string[]): BladeburnerCitiesRound | null {
   const home = ns.bladeburner.getCity();
-  const next = ns.bladeburner.getNextBlackOp();
   const cities: BladeburnerCitiesRound["cities"] = [];
-  let refused: string | null = null;
-  for (const name of BLADEBURNER_CITIES) {
-    if (!ns.bladeburner.switchCity(name as CityName)) {
-      refused = name;
-      break;
+  let failed: string | null = null;
+  let next: { name: string } | null = null;
+  try {
+    next = ns.bladeburner.getNextBlackOp();
+    for (const name of BLADEBURNER_CITIES) {
+      if (!ns.bladeburner.switchCity(name as CityName)) {
+        failed = `the game didn't move the division to ${name}`;
+        break;
+      }
+      const range = (type: string, action: string): [number, number] => {
+        const [low, high] = ns.bladeburner.getActionEstimatedSuccessChance(type as ActionType, action as ActionName);
+        return [low, high];
+      };
+      const blackOp = next === null ? null : range(BLACK_OPERATIONS, next.name);
+      cities.push({
+        name,
+        blackOp,
+        actions: BLADEBURNER_LEVELLED_ACTIONS.map(({ type, name: action }) => ({
+          type,
+          name: action,
+          level: ns.bladeburner.getActionCurrentLevel(type as ActionType, action as ActionName),
+          chance: range(type, action),
+        })),
+      });
     }
-    const range = (type: string, action: string): [number, number] => {
-      const [low, high] = ns.bladeburner.getActionEstimatedSuccessChance(type as ActionType, action as ActionName);
-      return [low, high];
-    };
-    cities.push({
-      name,
-      blackOp: next === null ? null : range(BLACK_OPERATIONS, next.name),
-      actions: BLADEBURNER_LEVELLED_ACTIONS.map(({ type, name: action }) => ({
-        type,
-        name: action,
-        chance: range(type, action),
-      })),
-    });
+  } catch (error) {
+    failed = `a read threw in ${ns.bladeburner.getCity()}: ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    ns.bladeburner.switchCity(home as CityName);
   }
-  ns.bladeburner.switchCity(home as CityName);
   const after = ns.bladeburner.getCity();
-  if (refused !== null) problems.push(`the round (#420): the game didn't move the division to ${refused}`);
+  if (failed !== null) problems.push(`the round (#420): ${failed}`);
   if (after !== home) {
     problems.push(`the round (#420): the division left in ${after}, not back in ${home}`);
     return null;
   }
-  return refused === null ? { blackOp: next?.name ?? null, cities, city: after } : null;
+  return failed === null ? { blackOp: next?.name ?? null, cities, city: after } : null;
 }
 
 /** Sets the division's city to `city` (null: leaves it), reads the six, and makes the round over them (#420). */

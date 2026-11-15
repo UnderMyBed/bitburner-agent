@@ -92,12 +92,17 @@ export class BladeburnerCitiesFold {
   #leftOpen: Left | null = null;
   /** The rounds (#420): the readings measured, each city's counts by kind and pop/popEst's range, the last's. */
   #rounds = 0;
-  readonly #measured = new Map<string, Record<BladeburnerCityMeasure["by"], number> & { low: number; high: number }>();
+  readonly #measured = new Map<
+    string,
+    Record<BladeburnerCityMeasure["by"], number> & { blackOp: number; low: number; high: number }
+  >();
   #lastMeasures: BladeburnerCityMeasure[] | null = null;
   readonly #roundFailed: { fromMs: number; toMs: number; detail: string }[] = [];
   #roundOpen: { fromMs: number; toMs: number; detail: string } | null = null;
   /** The chaos action under way (#385) since its first reading under way, as the rule's `#keptChaosAction` counts it. */
-  #chaosSince: { name: string; atMs: number; bonusSeconds: number } | null = null;
+  #chaosSince: { name: string; atMs: number; bonusSeconds: number; keptRun: number } | null = null;
+  /** Whether the rule keeps the chaos action's run under way at the reading being added (#385, its `#keptChaosAction`). */
+  #keptNow = false;
 
   /** A medium snapshot in the division with B4's reading (its `city` and `cities`), in BN6 or BN7 (`bitNode`). */
   add(
@@ -139,15 +144,21 @@ export class BladeburnerCitiesFold {
             choose,
           );
     const kept: Kept = { atMs, city, reading, lastAugReset, choice };
-    // The chaos action under way since its first reading so (#385's rule's own clock: the controller's time and the
-    // bonus time then), for a move's wait on the run it keeps (#420's ruling 3).
+    // The chaos action under way since its first reading so, and the run #385's rule keeps (#422's review: mirroring
+    // the rule's `#keptChaosAction` and `#chaosRunOf`): the first run, and each later one the rule chose again at its
+    // first reading (`keptRun`). A move waits on a kept run only (#420's ruling 3).
     const now = reading.current;
     const chaosName =
       now?.type === "General" && (now.name === DIPLOMACY || now.name === INCITE_VIOLENCE) ? now.name : null;
     if (chaosName === null) this.#chaosSince = null;
     else if (this.#chaosSince?.name !== chaosName) {
-      this.#chaosSince = { name: chaosName, atMs, bonusSeconds: reading.bonusSeconds };
+      this.#chaosSince = { name: chaosName, atMs, bonusSeconds: reading.bonusSeconds, keptRun: 0 };
     }
+    const since = this.#chaosSince;
+    const run = since === null ? 0 : this.#runOf(since, kept);
+    this.#keptNow = since !== null && run <= since.keptRun;
+    // Not kept, the rule's choice this reading the same chaos action: it keeps this run from here (its `keptRun`).
+    if (since !== null && !this.#keptNow && choice?.chaosAction === since.name) since.keptRun = run;
     this.#readings += 1;
     if (this.#first === null) this.#first = kept;
     const previous = this.#last;
@@ -166,9 +177,10 @@ export class BladeburnerCitiesFold {
   }
 
   /**
-   * The round (#420) at a reading: each city's measure counted (recovered, with the least and most pop/popEst it gave;
-   * by its own ranges; at the draw's mean), the last kept, and a stretch of readings with its problem (failed, missing,
-   * or not back in the division's city), each a failure from its first reading.
+   * The round (#420) at a reading: each city's measure counted (recovered, with the least and most pop/popEst it gave,
+   * and how often by the Black Op's range; at the draw's mean, every range clipped, #420's ruling 4), the last kept,
+   * and a stretch of readings with its problem (failed, missing, not back in the division's city, or a city's ranges
+   * disagreeing), each a failure from its first reading.
    */
   #watchRound(
     atMs: number,
@@ -176,7 +188,7 @@ export class BladeburnerCitiesFold {
     problems: readonly string[],
     measures: BladeburnerCityMeasure[] | null,
   ): void {
-    const problem = bladeburnerRoundProblem(reading, problems);
+    const problem = bladeburnerRoundProblem(reading, problems, measures);
     if (problem === null || this.#roundOpen?.detail !== problem) {
       if (this.#roundOpen !== null) this.#roundFailed.push(this.#roundOpen);
       this.#roundOpen = problem === null ? null : { fromMs: atMs, toMs: atMs, detail: problem };
@@ -185,8 +197,9 @@ export class BladeburnerCitiesFold {
     this.#rounds += 1;
     this.#lastMeasures = measures;
     for (const measure of measures) {
-      const seen = this.#measured.get(measure.name) ?? { recovered: 0, range: 0, draw: 0, low: Infinity, high: 0 };
+      const seen = this.#measured.get(measure.name) ?? { recovered: 0, blackOp: 0, draw: 0, low: Infinity, high: 0 };
       seen[measure.by] += 1;
+      if (measure.source === "the Black Op") seen.blackOp += 1;
       if (measure.ratio !== null) {
         seen.low = Math.min(seen.low, measure.ratio);
         seen.high = Math.max(seen.high, measure.ratio);
@@ -242,16 +255,26 @@ export class BladeburnerCitiesFold {
   }
 
   /**
-   * The run under way's game seconds left at `kept` (#420's ruling 3), in ms: a chaos action's runs are 60 game seconds
+   * The kept run's game seconds left at `kept` (#420's ruling 3), in ms: a chaos action's runs are 60 game seconds
    * from its first reading under way, the bonus time spent since counted (the rule's `#chaosRunOf`), so 60 less the
-   * run's elapsed; 0 with none under way. Taken as real time: bonus time only shortens it, so the bound errs long.
+   * run's elapsed; 0 with none under way, or a run the rule doesn't keep (#422's review: then it moves at once). Taken
+   * as real time: bonus time only shortens it, so the bound errs long.
    */
   #keptRunLeftMs(kept: Kept): number {
     const since = this.#chaosSince;
-    if (since === null) return 0;
-    const gameSeconds = (kept.atMs - since.atMs) / 1000 + since.bonusSeconds - kept.reading.bonusSeconds;
+    if (since === null || !this.#keptNow) return 0;
     const run = BLADEBURNER_CHAOS_ACTION_SECONDS;
-    return (run - (((gameSeconds % run) + run) % run)) * 1000;
+    return (run - (((this.#gameSecondsOf(since, kept) % run) + run) % run)) * 1000;
+  }
+
+  /** The game seconds since the chaos action's first reading under way: the real time and the bonus time spent. */
+  #gameSecondsOf(since: { atMs: number; bonusSeconds: number }, kept: Kept): number {
+    return (kept.atMs - since.atMs) / 1000 + since.bonusSeconds - kept.reading.bonusSeconds;
+  }
+
+  /** Which 60 game seconds' run of the chaos action under way `kept` falls in, 0 the first (the rule's `#chaosRunOf`). */
+  #runOf(since: { atMs: number; bonusSeconds: number }, kept: Kept): number {
+    return Math.floor(this.#gameSecondsOf(since, kept) / BLADEBURNER_CHAOS_ACTION_SECONDS);
   }
 
   /** The cities' lines, its failures added to `failures`; one line without a reading with them. */
@@ -300,13 +323,19 @@ export class BladeburnerCitiesFold {
               .map(
                 ([name, seen]) =>
                   `${name} recovered ${seen.recovered}` +
-                  (seen.recovered > 0 ? ` (pop/popEst ${seen.low.toFixed(3)} to ${seen.high.toFixed(3)})` : "") +
-                  `, by its own ranges ${seen.range}, at the draw's mean ${seen.draw}`,
+                  (seen.recovered > 0
+                    ? ` (pop/popEst ${seen.low.toFixed(3)} to ${seen.high.toFixed(3)}; by the Black Op's range ` +
+                      `${seen.blackOp}, by an action's ${seen.recovered - seen.blackOp})`
+                    : "") +
+                  `, at the draw's mean (every range clipped) ${seen.draw}`,
               )
               .join("; ")}`),
     );
     if (this.#lastMeasures !== null) lines.push(`    at the last: ${describeCityMeasures(this.#lastMeasures)}`);
-    lines.push("  the readings without the round's measure (failed, missing, or the division not back in its city):");
+    lines.push(
+      "  the readings without the round's measure (failed, missing, the division not back in its city, or a city's " +
+        "ranges disagreeing):",
+    );
     const unmeasured = [...this.#roundFailed, ...(this.#roundOpen === null ? [] : [this.#roundOpen])];
     if (unmeasured.length === 0) lines.push("    none");
     for (const each of unmeasured) {

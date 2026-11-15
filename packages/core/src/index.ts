@@ -385,11 +385,14 @@ export {
 } from "./bladeburner-cities.ts";
 export {
   BLADEBURNER_DRAW_RATIO,
+  BLADEBURNER_RANGE_AGREEMENT,
   type BladeburnerCityMeasure,
   type BladeburnerCityMeasureKind,
   bladeburnerCityMeasures,
   bladeburnerMeasuredCities,
+  bladeburnerRangesDisagree,
   bladeburnerRoundMeasures,
+  populationRatioOfActionRange,
 } from "./bladeburner-city-measures.ts";
 export {
   BLADEBURNER_CHAOS_COHORTS,

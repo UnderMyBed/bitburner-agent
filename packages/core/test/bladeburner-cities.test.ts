@@ -172,7 +172,7 @@ describe("the formulas, worked by hand", () => {
     expect(inciteCountGain(raid as never)).toBeCloseTo((180 * 2.1) / 480, 12);
   });
 
-  test("a city's competence over another's: the estimates' ratio^0.7 and the chaos factors", () => {
+  test("a city's competence over another's: the populations' ratio^0.7 (#420: measured) and the chaos factors", () => {
     expect(cityCompetenceRatio({ population: 1e9, chaos: 0 }, { population: 1e9, chaos: 10 })).toBe(1);
     expect(cityCompetenceRatio({ population: 1e9, chaos: 0 }, { population: 2e9, chaos: 0 })).toBeCloseTo(2 ** 0.7, 12);
     expect(cityCompetenceRatio({ population: 1e9, chaos: 80 }, { population: 1e9, chaos: 0 })).toBeCloseTo(

@@ -105,13 +105,14 @@ export const BLADEBURNER_SKILL_WORKER_RAM_GB = 9.6;
  * `bladeburner-city.js`'s RAM by the game's calculator (ram-budget.json, which a test keeps in step): 1.6 GB for a
  * script, and 4 GB each for `getCityEstimatedPopulation`, `getCityCommunities`, `getCityChaos`, `getCity` and
  * `switchCity` (`Netscript/RamCostGenerator.ts:366-370`); and since #420 the round over the six (each city's own
- * ranges), 4 GB for `getActionEstimatedSuccessChance` (`:348`) and 2 GB for `getNextBlackOp` (`:339`): 27.6 GB. The
- * Agent runs it just before `bladeburner.js`, waiting for each to exit (ingame's `run-worker.ts`), so they never hold
- * home's RAM at once: under `BLADEBURNER_WORKER_RAM_GB`, it fits wherever B1's gate lets that one run, and home keeps
- * nothing more for it (#383). In `bladeburner.js` instead, the reading would be 72.6 GB (the city calls and
- * `getNextBlackOp` its own): 65.9 + 72.6 = 138.5 GB at SF4.3, past a 128 GB home.
+ * ranges and each action's level), 4 GB each for `getActionEstimatedSuccessChance` (`:348`) and `getActionCurrentLevel`
+ * (`:354`), and 2 GB for `getNextBlackOp` (`:339`): 31.6 GB. The Agent runs it just before `bladeburner.js`, waiting for
+ * each to exit (ingame's `run-worker.ts`), so they never hold home's RAM at once: under `BLADEBURNER_WORKER_RAM_GB`, it
+ * fits wherever B1's gate lets that one run, and home keeps nothing more for it (#383). In `bladeburner.js` instead,
+ * the reading would be 72.6 GB (the city calls and `getNextBlackOp` its own): 65.9 + 72.6 = 138.5 GB at SF4.3, past a
+ * 128 GB home.
  */
-export const BLADEBURNER_CITY_WORKER_RAM_GB = 27.6;
+export const BLADEBURNER_CITY_WORKER_RAM_GB = 31.6;
 /**
  * An action the brain asks `bladeburner.js` to run (#375): its type and name as the NS API has them, and its level;
  * or (#392) the next Black Op, `Black Operations` (`Bladeburner/Enums.ts:5`), at no level.
@@ -143,7 +144,8 @@ export interface BladeburnerState {
 export interface BladeburnerCityRound {
   name: string;
   blackOp: [number, number] | null;
-  actions: { type: string; name: string; chance: [number, number] }[];
+  /** Each one's level there (`getActionCurrentLevel`, #420's ruling 4: the estimate's chance at it); absent: older. */
+  actions: { type: string; name: string; level?: number; chance: [number, number] }[];
 }
 
 /**

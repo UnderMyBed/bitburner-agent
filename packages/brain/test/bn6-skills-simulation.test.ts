@@ -161,7 +161,9 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
     const read = bladeburnerSnapshotOf(each.data).reading;
     return read.kind === "read" && read.actions?.current?.name === "Incite Violence";
   });
-  if (firstIncite > 0) {
+  // Sent on this seed's hour (#422's review: not passing silently where none is).
+  expect(firstIncite).toBeGreaterThan(0);
+  {
     const before = mediums[firstIncite - 1]?.data as MediumSnapshotData;
     const read = bladeburnerSnapshotOf(before).reading;
     const person = bladeburnerPersonOf(before.player);

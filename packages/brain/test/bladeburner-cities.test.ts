@@ -114,6 +114,7 @@ function roundOf(
         actions: BLADEBURNER_LEVELLED_ACTIONS.map((action) => ({
           type: action.type,
           name: action.name,
+          level: 1,
           chance: actionSuccessRange(
             actionSuccessChance(action, 1, who, { city: truth, penalty: 1 }),
             actionSuccessChance(action, 1, who, { city: each, penalty: 1 }),
@@ -487,7 +488,8 @@ describe("the round over the six (#420): each city at its own measured truth", (
       BLADEBURNER_CITIES.map((name) => [name, "recovered", (truths as Record<string, number>)[name] ?? 1]),
     );
     expect(rule.view().line).toContain(
-      "; the round (#420): 6 of 6 recovered; Aevum pop/popEst 0.900, Chongqing pop/popEst 1.000, ",
+      "; the round (#420): 6 of 6 recovered; Aevum pop/popEst 0.900 (the Black Op's, 10 ranges agreeing), Chongqing " +
+        "pop/popEst 1.000 (the Black Op's, 10 ranges agreeing), ",
     );
     expect(rule.roundProblem()).toBeNull();
     // By the estimates alone (#418's shared ratio, gone), Volhaven's the least of the six: kept in Sector-12.
@@ -522,6 +524,35 @@ describe("the round over the six (#420): each city at its own measured truth", (
     decide(away, medium(reading({ all: moveWanted, round: roundOf(moveWanted, "Aevum") })), T0);
     expect(away.roundProblem()?.problem).toBe("the round left the division in Aevum, not Sector-12");
     expect(away.view().actions?.cities).toBeNull();
+  });
+
+  test("a city's ranges that disagree (#420's ruling 4): the model off, the alert's", () => {
+    const round = roundOf(all, "Sector-12", PERSON, truths);
+    // Volhaven's Bounty Hunter range from a population 2% off its Black Op's.
+    const off = {
+      ...round,
+      cities: round.cities.map((each) =>
+        each.name !== "Volhaven"
+          ? each
+          : {
+              ...each,
+              actions: each.actions.map((action) =>
+                action.name !== "Bounty Hunter"
+                  ? action
+                  : { ...action, chance: [action.chance[0] * 1.02, action.chance[1]] as [number, number] },
+              ),
+            },
+      ),
+    };
+    const rule = new BladeburnerRule();
+    decide(rule, medium(reading({ all, round: off })), T0);
+    expect(rule.roundProblem()?.problem).toMatch(
+      /^Volhaven's ranges in the round give pop\/popEst .* apart, past 1e-9/,
+    );
+    // As read, all agree.
+    const agreeing = new BladeburnerRule();
+    decide(agreeing, medium(reading({ all, round })), T0);
+    expect(agreeing.roundProblem()).toBeNull();
   });
 
   test("the round's figures checked: a range not a pair, or a city not the six's, is unread", () => {
@@ -787,6 +818,27 @@ describe("the run report's cities (#383)", () => {
     expect(late.failures[0]).toContain(`, past its bound ${formatDuration(boundMs)} (`);
   });
 
+  test("a move wanted with Diplomacy's later run under way, not one the rule chose again (#422's review): 22 s", () => {
+    const all = cities(0, { "Sector-12": { chaos: 80 } });
+    // Diplomacy under way from 0; at 0 to 60 s the rule's choice is no chaos action (every city at 0), so its second
+    // run (from 60 s) isn't kept (#385's `keptRun` stays 0), and the move first wanted at 70 s has the plain bound.
+    const unkept = (offsets: number[]) =>
+      fold(
+        at(offsets, (offsetMs) =>
+          offsetMs < 70_000
+            ? { all: cities(0), current: DIPLOMACY_UNDER_WAY, found: DIPLOMACY_UNDER_WAY }
+            : { all, current: DIPLOMACY_UNDER_WAY, found: DIPLOMACY_UNDER_WAY },
+        ),
+      );
+    expect(unkept(every10s(0, 70_000 + BLADEBURNER_MOVE_WITHIN_MS)).failures).toEqual([]);
+    const late = unkept(every10s(0, 70_000 + BLADEBURNER_MOVE_WITHIN_MS + 1));
+    expect(late.failures).toHaveLength(1);
+    expect(late.failures[0]).toContain(
+      `a move to Aevum, wanted at ${new Date(T0 + 70_000).toISOString()}, within two readings and an Agent round; `,
+    );
+    expect(late.failures[0]).toContain(`, past its bound ${formatDuration(BLADEBURNER_MOVE_WITHIN_MS)} (`);
+  });
+
   test("the round (#420): each city's measure over the window, the last in full; a reading without it fails", () => {
     const truths = { Volhaven: 1.5, Aevum: 0.9 };
     const all = cities(0);
@@ -796,11 +848,15 @@ describe("the run report's cities (#383)", () => {
     expect(measured.failures).toEqual([]);
     expect(measured.text).toContain(
       "  the round over the six cities (#420): 2 of 2 readings measured each city; by city: Aevum recovered 2 " +
-        "(pop/popEst 0.900 to 0.900), by its own ranges 0, at the draw's mean 0; ",
+        "(pop/popEst 0.900 to 0.900; by the Black Op's range 2, by an action's 0), at the draw's mean (every range " +
+        "clipped) 0; ",
     );
-    expect(measured.text).toContain("    at the last: the round (#420): 6 of 6 recovered; Aevum pop/popEst 0.900, ");
     expect(measured.text).toContain(
-      "  the readings without the round's measure (failed, missing, or the division not back in its city):\n    none",
+      "    at the last: the round (#420): 6 of 6 recovered; Aevum pop/popEst 0.900 (the Black Op's, 10 ranges agreeing), ",
+    );
+    expect(measured.text).toContain(
+      "  the readings without the round's measure (failed, missing, the division not back in its city, or a city's " +
+        "ranges disagreeing):\n    none",
     );
     const missing = fold(
       at([0, 10_000, 20_000], (offsetMs) => ({ all, current: BOUNTY, round: offsetMs < 20_000 ? false : undefined })),

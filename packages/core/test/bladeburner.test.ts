@@ -446,9 +446,9 @@ describe("the worker", () => {
     }
   });
 
-  test("the city worker (#383, #420's round): 27.6 GB, under the reading worker's, among the home workers", () => {
-    // 1.6 + 6 × 4 (the five city calls and `getActionEstimatedSuccessChance`) + 2 (`getNextBlackOp`).
-    expect(BLADEBURNER_CITY_WORKER_RAM_GB).toBe(27.6);
+  test("the city worker (#383, #420's round): 31.6 GB, under the reading worker's, among the home workers", () => {
+    // 1.6 + 7 × 4 (the five city calls, `getActionEstimatedSuccessChance`, `getActionCurrentLevel`) + 2 (`getNextBlackOp`).
+    expect(BLADEBURNER_CITY_WORKER_RAM_GB).toBe(31.6);
     expect(BLADEBURNER_CITY_WORKER_RAM_GB).toBeLessThan(BLADEBURNER_WORKER_RAM_GB);
     expect(bladeburnerWorkerFileNames()).toContain(BLADEBURNER_CITY_WORKER_NAME);
     // In bladeburner.js instead (its five city functions' 20 GB and `getNextBlackOp`'s 2), past a 128 GB home at SF4.3.
