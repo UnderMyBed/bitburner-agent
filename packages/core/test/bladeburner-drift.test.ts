@@ -722,6 +722,12 @@ describe("the path's own steps (#418): the time's effects, one attempt, the move
     // The chance before it, after the first half of the step's events (a part in 10⁵ of the population's growth).
     expect(one.chances[0]).toBeCloseTo(0.2, 5);
     expect(driftedChance({ action: action("Raid"), chance: 0.2 }, reference, { ...reference, communities: 0 })).toBe(0);
+    // Carried as a distribution (#418's review): Raid's chance there times P(at least one), not the mean's (0.3 > 0).
+    const carried = { ...reference, communities: 0.3, communitiesMix: { low: 0, probs: [0.7, 0.3] } };
+    expect(driftedChance({ action: action("Raid"), chance: 0.2 }, reference, carried)).toBeCloseTo(
+      0.2 * 0.3 * (cityChanceFactor(carried) / cityChanceFactor(reference)),
+      12,
+    );
   });
 
   test("the moves: past the read city's fall, another; with Raid alone, only to a city with communities", () => {
@@ -743,6 +749,11 @@ describe("the path's own steps (#418): the time's effects, one attempt, the move
     const stayed = bladeburnerDriftPath(kept, reference, raid, 0, options);
     expect(stayed.state.cities[stayed.state.worked]?.name).toBe("New Tokyo");
     expect(volhaven(stayed.state)).toBe(volhaven(kept));
+    // None anywhere, New Tokyo's too: nowhere to move to (a city without any is never Raid's, even from one without).
+    const none = cities.map((city) => ({ ...city, communities: 0 }));
+    const nowhere = bladeburnerDriftStart(none, "New Tokyo") as NonNullable<ReturnType<typeof bladeburnerDriftStart>>;
+    const still = bladeburnerDriftPath(nowhere, reference, raid, 0, options);
+    expect(still.state.cities[still.state.worked]?.name).toBe("New Tokyo");
   });
 });
 
@@ -751,6 +762,29 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
   const who = personOf(combat);
   const input = readAt(who);
   const typhoon = BLADEBURNER_BLACK_OPS[0] as (typeof BLADEBURNER_BLACK_OPS)[number];
+
+  test("no count to bound it: Raid's attempts its horizon over its cycle, Diplomacy's seconds in it", () => {
+    // Raid alone, its count past the horizon (50,000), 10 h given: the attempts the time allows at (seconds +
+    // Diplomacy's) over the duty there, its chaos held at 50 (every city at 45, so wherever B4 moves it).
+    const hot = SIX.map((city) => ({ ...city, chaos: 45 }));
+    const read = readAt(who, 5e4);
+    const raidOnly = { ...read, readings: read.readings.filter((each) => each.name === "Raid") };
+    const horizonSeconds = 36_000;
+    // Under a target with the horizon given (B4's way: one solve), each plan priced; Raid at Field Analysis.
+    const plans = bladeburnerPlansToTarget({
+      ...raidOnly,
+      target: { rank: 150, target: 2500 },
+      drift: { cities: hot, city: "New Tokyo", horizonSeconds },
+    });
+    const plan = plans.find((each) => each.work?.name === "Raid" && each.rest.name === "Field Analysis");
+    if (plan === undefined) throw new Error("no Raid plan");
+    const work = plan.work;
+    expect(work?.name).toBe("Raid");
+    expect(work?.diplomacySeconds).toBeGreaterThan(10);
+    const cycle = ((work?.seconds as number) + (work?.diplomacySeconds as number)) / plan.duty;
+    // Within 1%: the attempts and Diplomacy's seconds at them solved in three passes.
+    expect(Math.abs(((work?.drift?.attempts as number) * cycle) / horizonSeconds - 1)).toBeLessThan(0.01);
+  });
 
   test("each plan's attempts over its horizon at most its count and its regrowth", () => {
     const drift = { cities: SIX, city: "New Tokyo" };
