@@ -204,6 +204,9 @@ const choiceOf = (options: ReadingOptions = {}) => {
       rankMultiplier: 1,
       speed: 1,
       skills: { read: {} },
+      // As the brain's input (#418): the cities read (the drift, under a target) and the player's max HP and money.
+      drift: { cities: read.cities as BladeburnerCityReading[], city: read.city as string },
+      hospital: { hpMax: 20, money: 1e6 },
     }),
     { city: read.city as string, cities: read.cities as BladeburnerCityReading[] },
   );

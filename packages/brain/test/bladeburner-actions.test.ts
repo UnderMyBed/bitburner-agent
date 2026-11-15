@@ -171,6 +171,9 @@ function spread<T extends Parameters<typeof bladeburnerPricedInput>[0]>(input: T
   return bladeburnerPricedInput(input, { next: null, chanceRead: null }).input;
 }
 
+/** The medium snapshot's max HP and money (`medium`'s): the brain's input prices each plan's hospital money (#418). */
+const HOSPITAL = { hpMax: 20, money: 1e6 };
+
 /** The plan core makes of a reading at full stamina: Bounty Hunter level 1 at combat 100, Field Analysis to rest. */
 const PLAN = chooseBladeburnerAction(
   spread({
@@ -180,6 +183,7 @@ const PLAN = chooseBladeburnerAction(
     maxStamina: MAX_STAMINA,
     rankMultiplier: 1,
     speed: 1,
+    hospital: HOSPITAL,
   }),
 );
 const WORK = { type: "Contracts", name: "Bounty Hunter", level: 1 };
@@ -198,7 +202,8 @@ describe("the rule (#375)", () => {
     expect(rule.view().line).toBe(
       "Bladeburner: in the division, rank 0.0; Bladeburners joined; Bounty Hunter level 1 (22.4% over the " +
         "estimate's spread: the population not recovered, 0.58 rank/min worked), resting with Field Analysis; stamina " +
-        "39.8 / 39.8; worked 29% of a cycle, 0.31 rank/min over it",
+        "39.8 / 39.8; worked 29% of a cycle, 0.31 rank/min over it; the hospital about $266 a second (the planner's " +
+        "trade, #418)",
     );
   });
 
@@ -409,6 +414,7 @@ describe("the controller (#375)", () => {
       maxStamina: MAX_STAMINA,
       rankMultiplier: 1,
       speed: 1,
+      hospital: HOSPITAL,
     });
     const byRate = chooseBladeburnerAction(forecast);
     expect(byRate.work).toMatchObject(RAID);

@@ -21,8 +21,9 @@
  *   Contracts.ts`, `data/Operations.ts`), and every city's chaos + 10, then + chaos / log10(chaos) (`:1229-1233`,
  *   `City.ts:89-91`).
  * Left out, and labelled: the random events every 240–600 s (`:601-699`: populations, communities and riots' chaos),
- * read, not forecast; the chaos and population the actions themselves move (`:803-890`: Raid's +1–5% chaos, Sting's
- * +0.1, Stealth Retirement's −1–3%, the kills' population), read, not forecast; the estimate's accuracy (Field
+ * read, not forecast here; the chaos and population the actions themselves move (`:793-890`: Raid's +1–5% chaos, Sting's
+ * +0.1, Stealth Retirement's −1–3%, the kills' population), read, not forecast here (since #418 B2's plans under a
+ * target price both, ./bladeburner-drift.ts; the chaos actions here weigh the chaos read); the estimate's accuracy (Field
  * Analysis, Tracking, Investigation, Undercover and Datamancer sharpen it, `City.ts:35-58`), which raises the low end
  * the rule reads, not the true chance.
  */
@@ -225,7 +226,9 @@ export function chooseBladeburnerCity(
     from: BladeburnerCityForecastInput = input,
   ) => {
     const ratio = cityCompetenceRatio(here, { population: there.population, chaos }) ?? 0;
-    return choose({ ...from, readings, city: { ratio, raid: there.communities > 0 } });
+    // The drift (#418) from that city, at that chaos.
+    const drift = from.drift === undefined ? {} : { drift: { ...from.drift, city: there.name, chaos } };
+    return choose({ ...from, readings, city: { ratio, raid: there.communities > 0 }, ...drift });
   };
   // The chaos actions are weighed by rank a second (#386: a target aside, labelled), and each city's rate shown.
   const rateInput = { ...input, target: undefined };
@@ -299,7 +302,8 @@ export function chooseBladeburnerCity(
   if (work !== null && action !== null && unbounded.rankPerSecond > now && unbounded.duty > 0) {
     const after = chaosAfterIncite(chosen.chaos);
     const countGain = inciteCountGain(action);
-    const gain = countGain * (work.seconds / unbounded.duty) * (unbounded.rankPerSecond - now);
+    const gain =
+      countGain * ((work.seconds + work.diplomacySeconds) / unbounded.duty) * (unbounded.rankPerSecond - now);
     const baseline = atChaos(chaosThreshold, unboundedReadings);
     const chaosCost = chaosRankLoss((chaos) => atChaos(chaos, unboundedReadings), baseline, chosen.chaos, after);
     const cost = BLADEBURNER_CHAOS_ACTION_SECONDS * chaosActionForgone(nowPlan) + chaosCost;

@@ -322,10 +322,17 @@ export interface BladeburnerAttempt {
   chance: number;
   /** The game's range at that state (`getSuccessRange`, `Bladeburner/Actions/Action.ts:144-167`), as the API reads it. */
   range: [number, number];
-  /** The city it ran in, its true population and its estimate then. */
+  /** The city it ran in, its true population, its estimate, and (#418) its chaos and communities then. */
   city: string;
   population: number;
   estimate: number;
+  chaos: number;
+  communities: number;
+  /**
+   * The city's figures just after the attempt (#418): its own effects (`completeOperation`, `completeContract`,
+   * `Bladeburner.ts:796-890`), before any time passes (the decay, a random event).
+   */
+  after: { population: number; estimate: number; chaos: number; communities: number };
   success: boolean;
   /** The mean rank a success gains (0 where the action gains none). */
   gain: number;
@@ -485,6 +492,14 @@ export interface HostMethods {
   "diagnostics.homePeak"(params: Record<string, never>): HomePeak;
   /** Every Bladeburner attempt the game has made since it booted, from `from` on (#411): only observed. */
   "diagnostics.bladeburnerAttempts"(params: { from: number }): BladeburnerAttempt[];
+  /** Every city's true population, estimate, communities and chaos (#418), as they stand. */
+  "diagnostics.bladeburnerCities"(params: Record<string, never>): {
+    name: string;
+    population: number;
+    estimate: number;
+    communities: number;
+    chaos: number;
+  }[];
   "diagnostics.random"(params: { count: number }): RandomSample;
   /**
    * Starts the seeded Math.random and Web Crypto streams again from `seed`, as at boot (#341): the draws from here on
@@ -572,6 +587,8 @@ export interface HostMethods {
       chaos?: number;
       stamina?: number;
       maxLevels?: Record<string, number>;
+      /** Contracts' and operations' counts by name (#418). */
+      counts?: Record<string, number>;
       /** The Black Ops done (#398), a whole number to 21. */
       blackOpsDone?: number;
     };

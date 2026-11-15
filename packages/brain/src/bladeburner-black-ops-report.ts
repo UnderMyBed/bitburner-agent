@@ -86,7 +86,7 @@ export class BladeburnerBlackOpsFold {
       rank,
       reading,
       // As the brain's (#415): each chance at the true population.
-      input: bladeburnerRuleInputOf(reading, person, rankMultiplier).input,
+      input: bladeburnerRuleInputOf(reading, person, rankMultiplier, data.player).input,
       costMultiplier,
       lastAugReset,
     };

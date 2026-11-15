@@ -286,6 +286,7 @@ export {
   attemptRankMoments,
   BLADEBURNER_CONSTANTS,
   BLADEBURNER_CONTRACTS,
+  BLADEBURNER_DRIFT_PASSES,
   BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_OPERATIONS,
   BLADEBURNER_PERSON_STATS,
@@ -379,6 +380,24 @@ export {
   inciteCountGain,
   isBladeburnerCity,
 } from "./bladeburner-cities.ts";
+export {
+  BLADEBURNER_DRIFT_CHUNKS,
+  BLADEBURNER_EVENT_SECONDS,
+  type BladeburnerAttemptDrift,
+  type BladeburnerDriftCity,
+  type BladeburnerDriftPart,
+  type BladeburnerDriftResult,
+  type BladeburnerDriftState,
+  bladeburnerAttemptDrift,
+  bladeburnerDriftPath,
+  bladeburnerDriftStart,
+  bladeburnerEventDrift,
+  cityChanceFactor,
+  driftedChance,
+  HOSPITAL_COST_PER_HP,
+  hospitalCostPerFailure,
+  migrationShare,
+} from "./bladeburner-drift.ts";
 export {
   ALL_GROWTH,
   actionCombatExpPerAttempt,

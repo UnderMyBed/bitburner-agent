@@ -394,7 +394,7 @@ export class BladeburnerActionsFold {
     const levels = reading.skills?.levels ?? {};
     const factions = (data.player as { factions?: unknown } | undefined)?.factions;
     const factionJoined = Array.isArray(factions) && factions.includes(BLADEBURNER_FACTION);
-    const rule = bladeburnerRuleInputOf(reading, person, rankMultiplier);
+    const rule = bladeburnerRuleInputOf(reading, person, rankMultiplier, data.player);
     const kept: Kept = {
       atMs,
       rank,
@@ -687,9 +687,11 @@ export class BladeburnerActionsFold {
       .filter(([name, level]) => (level ?? 0) > (first.levels[name as keyof BladeburnerSkillLevels] ?? 0))
       .map(([name, level]) => `${name} ${first.levels[name as keyof BladeburnerSkillLevels] ?? 0} → ${level}`);
     const withSkills = this.#plan(last.kept).rankPerSecond;
+    // The same rule with none (#418): under the same target, so at the same horizon's drift as the plan with them.
     const without = chooseBladeburnerAction({
       ...this.#forecastInput(last.kept),
       skills: { read: last.kept.levels, planned: {} },
+      ...(last.kept.target === null ? {} : { target: { rank: last.kept.rank, target: last.kept.target } }),
     }).rankPerSecond;
     const lines = [
       `  the skills (#379): bought over the window: ${bought.length === 0 ? "none" : bought.join(", ")}; at the last ` +

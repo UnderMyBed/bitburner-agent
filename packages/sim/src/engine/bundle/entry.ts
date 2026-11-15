@@ -328,10 +328,10 @@ export function setBladeburnerRank(rank: number) {
 /**
  * Sets Bladeburner's figures (#375): its current city's population, estimate, communities and chaos
  * (`Bladeburner/City.ts:8-28`), or (#383) the named city's, the stamina (`Bladeburner.ts:121-122`), and contracts' and
- * operations' max levels by name (`Actions/LevelableAction.ts:28`), and (#398) the Black Ops done, each as given, the
- * rest left: a harness edit for core's parity tests and the cities' and the win route's scenarios, not something a
- * player can do. Not in the division, a city not one of the six, an action of neither kind, or a count of Black Ops
- * not a whole number to 21, throws.
+ * operations' max levels by name (`Actions/LevelableAction.ts:28`), and (#418) their counts (`:26`), and (#398) the
+ * Black Ops done, each as given, the rest left: a harness edit for core's parity tests and the cities' and the win
+ * route's scenarios, not something a player can do. Not in the division, a city not one of the six, an action of
+ * neither kind, or a count of Black Ops not a whole number to 21, throws.
  */
 export function setBladeburnerFigures(figures: {
   city?: string;
@@ -341,6 +341,7 @@ export function setBladeburnerFigures(figures: {
   chaos?: number;
   stamina?: number;
   maxLevels?: Record<string, number>;
+  counts?: Record<string, number>;
   blackOpsDone?: number;
 }) {
   const bladeburner = Player.bladeburner;
@@ -369,6 +370,14 @@ export function setBladeburnerFigures(figures: {
       (bladeburner.operations as Record<string, { maxLevel: number }>)[name];
     if (action === undefined) throw new RangeError(`no contract or operation ${name}`);
     action.maxLevel = maxLevel;
+  }
+  // The counts (#418, `Actions/LevelableAction.ts:26`).
+  for (const [name, count] of Object.entries(figures.counts ?? {})) {
+    const action =
+      (bladeburner.contracts as Record<string, { count: number }>)[name] ??
+      (bladeburner.operations as Record<string, { count: number }>)[name];
+    if (action === undefined) throw new RangeError(`no contract or operation ${name}`);
+    action.count = count;
   }
 }
 
@@ -558,7 +567,7 @@ export function homePeak() {
  * game draws as before. The player's alone (a sleeve's `isPlayer` false is left out).
  */
 const bladeburnerAttemptsSoFar: BladeburnerAttempt[] = [];
-let attemptDrawn: Omit<BladeburnerAttempt, "rankBefore" | "rankAfter" | "atMs"> | null = null;
+let attemptDrawn: Omit<BladeburnerAttempt, "rankBefore" | "rankAfter" | "atMs" | "after"> | null = null;
 const RANKED_TYPES: readonly string[] = [
   BladeburnerActionType.Contract,
   BladeburnerActionType.Operation,
@@ -580,6 +589,8 @@ ActionClass.prototype.attempt = function (this: ActionClass, bladeburner: Bladeb
       city: bladeburner.getCurrentCity().name,
       population: bladeburner.getCurrentCity().pop,
       estimate: bladeburner.getCurrentCity().popEst,
+      chaos: bladeburner.getCurrentCity().chaos,
+      communities: bladeburner.getCurrentCity().comms,
       success,
       gain: ranks.rankGain ? calculateActionRankGain(action) : 0,
       loss: ranks.rankLoss ? calculateActionRankLoss(action) : 0,
@@ -593,9 +604,12 @@ Bladeburner.prototype.completeAction = function (this: Bladeburner, person, acti
   const rankBefore = this.rank;
   const stats = completeAction.call(this, person, actionIdent, isPlayer);
   // Set by `attempt`, within the call.
-  const drawn = attemptDrawn as Omit<BladeburnerAttempt, "rankBefore" | "rankAfter" | "atMs"> | null;
+  const drawn = attemptDrawn as Omit<BladeburnerAttempt, "rankBefore" | "rankAfter" | "atMs" | "after"> | null;
   if (drawn !== null && isPlayer) {
-    bladeburnerAttemptsSoFar.push({ ...drawn, rankBefore, rankAfter: this.rank, atMs: Date.now() });
+    // The city after the attempt's own effects (#418, `completeOperation`/`completeContract`), before any time passes.
+    const city = this.getCurrentCity();
+    const after = { population: city.pop, estimate: city.popEst, chaos: city.chaos, communities: city.comms };
+    bladeburnerAttemptsSoFar.push({ ...drawn, rankBefore, rankAfter: this.rank, atMs: Date.now(), after });
   }
   attemptDrawn = null;
   return stats;
@@ -603,6 +617,22 @@ Bladeburner.prototype.completeAction = function (this: Bladeburner, person, acti
 
 export function bladeburnerAttempts(from: number) {
   return bladeburnerAttemptsSoFar.slice(from);
+}
+
+/**
+ * Every city's figures (#418): its true population, estimate, communities and chaos (`Bladeburner/City.ts:8-28`), as
+ * they stand; only observed. Not in the division throws.
+ */
+export function bladeburnerCities() {
+  const bladeburner = Player.bladeburner;
+  if (!bladeburner) throw new RangeError("not in the Bladeburner division");
+  return Object.values(bladeburner.cities).map((city) => ({
+    name: city.name as string,
+    population: city.pop,
+    estimate: city.popEst,
+    communities: city.comms,
+    chaos: city.chaos,
+  }));
 }
 
 export function gameSummary() {

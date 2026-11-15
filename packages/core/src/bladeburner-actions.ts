@@ -47,8 +47,15 @@
  * - **The city** (B4, #383; ./bladeburner-cities.ts): its population and chaos are in the range read; the forecast in
  *   another city, or at another chaos, scales it (`chooseBladeburnerAction`'s `city`).
  * The Black Ops are B5's (#392, ./bladeburner-black-ops.ts). Left out, and labelled: teams (an operation's team bonus at
- * 0 members: 1) and random events.
+ * 0 members: 1); the random events, but for their mean on the drift (#418, ./bladeburner-drift.ts).
  */
+
+import {
+  type BladeburnerDriftCity,
+  bladeburnerDriftPath,
+  bladeburnerDriftStart,
+  hospitalCostPerFailure,
+} from "./bladeburner-drift.ts";
 import {
   type BladeburnerSkillLevels,
   type BladeburnerSkillMults,
@@ -58,6 +65,7 @@ import {
   planBladeburnerSkills,
 } from "./bladeburner-skills.ts";
 import {
+  BLADEBURNER_TARGET_CELLS,
   type BladeburnerRankSource,
   type BladeburnerRankStep,
   bladeburnerAttemptsInCount,
@@ -785,8 +793,26 @@ export interface BladeburnerWork {
   stamina: number;
   hpLoss: number;
   money: number;
-  /** Rank a second while it runs: `rankMean` / `seconds`. */
+  /** Rank a second while it runs: `rankMean` / (`seconds` + `diplomacySeconds`). */
   rankPerSecond: number;
+  /**
+   * The drift over the plan's horizon (#418, ./bladeburner-drift.ts), where priced: the chance read (`chance` is its
+   * mean over the horizon), the horizon and the attempts in it, Diplomacy's seconds an attempt (holding the chaos it
+   * adds), and the city worked at the horizon's end (its chaos, and its population over the one read).
+   */
+  drift?: {
+    chanceRead: number;
+    horizonSeconds: number;
+    attempts: number;
+    chaos: number;
+    populationRatio: number;
+    /** Under a target, the horizon's passes (`driftedToTarget`). */
+    passes?: number;
+  };
+  /** Diplomacy's seconds an attempt (#418): 0 where the drift isn't priced. */
+  diplomacySeconds: number;
+  /** The hospital's money a game second while the plan runs (#418, `hospitalCostPerFailure`); null, not read. */
+  moneyLostPerSecond: number | null;
 }
 
 /** The rule's plan (#375): the work and the rest it alternates with, the share of time worked, and the cycle's rate. */
@@ -832,34 +858,100 @@ export interface BladeburnerActionPlan {
  * - **Under a current-rank target** (#386, `target`, ./bladeburner-targets.ts): the plan with the least expected time
  *   to it (`fastestToTarget`), not the most rank a second; met (the rank at it), rank a second. Training never rests
  *   better than Field Analysis (less stamina, no rank), so it isn't weighed.
- * Left out, and labelled: a failure's HP (#377's review), which costs money at the hospital, not rank (its mean is
- * `hpLoss`; the run report shows the visits and their money): so the choice is optimistic for the actions that lose
- * the most HP (Raid about 386 a failure, Stealth Retirement 85, Assassination 50, Bounty Hunter 5, against 20 HP at
- * defense 100), the money traded for rank the planner's (decision 67); money (contracts pay as a by-product); teams;
- * the chaos and population the actions themselves move (B4's, read, not forecast).
+ * - **The drift** (#418, `drift`, ./bladeburner-drift.ts): under a target each chance is its mean over the attempts the
+ *   plan makes in its horizon (`driftedToTarget`), the city moved by them, the events and Diplomacy's time on each
+ *   attempt; past every target, the chances read (no horizon). **The hospital** (#418, `hospital`): each plan's money a
+ *   second (`moneyLostPerSecond`), shown, not in the objective (money against rank is the planner's, decision 67).
+ * Left out, and labelled: a failure's HP in the objective (above: its money is reported, not traded, so the choice is
+ * optimistic for the actions that lose the most HP, Raid about 386 a failure, Stealth Retirement 85, Assassination 50,
+ * Bounty Hunter 5, against 20 HP at defense 100); money (contracts pay as a by-product); teams.
  */
 export function chooseBladeburnerAction(input: BladeburnerActionInput): BladeburnerActionPlan {
-  const { candidates, supply } = planCandidates(input);
   const { target } = input;
   if (target === undefined || !(target.rank < target.target)) {
+    const { candidates } = planCandidates(input);
     // Rank a second: the first with the most, in the game's order (resting alone first).
     let best = (candidates[0] as PlanCandidate).plan;
     for (const { plan } of candidates) if (plan.rankPerSecond > best.rankPerSecond) best = plan;
     return best;
   }
-  return fastestToTarget(candidates, supply, target, true)[0] as BladeburnerActionPlan;
+  return driftedToTarget(input, target, true)[0] as BladeburnerActionPlan;
 }
 
 /**
  * Every plan the rule weighs under `input.target` (#386), in the game's order (resting alone first), each with its
  * expected time to the target (`toTarget`), none ruled out by Wald's bound: what the tests check the choice against.
- * Empty with no target, or one met.
+ * Empty with no target, or one met. With the drift (#418), at the rule's own horizon (`driftedToTarget`).
  */
 export function bladeburnerPlansToTarget(input: BladeburnerActionInput): BladeburnerActionPlan[] {
   const { target } = input;
   if (target === undefined || !(target.rank < target.target)) return [];
-  const { candidates, supply } = planCandidates(input);
-  return fastestToTarget(candidates, supply, target, false);
+  return driftedToTarget(input, target, false);
+}
+
+/**
+ * The horizon's passes (#418, `driftedToTarget`): 1, the chain solved twice a choice (the chances read, then priced).
+ * More move the horizon to the priced plan's own time: in core's test, from rank 25 to Typhoon's 2,500, Raid 80 h at
+ * the chances read, Bounty Hunter 105 h priced once, 101 h at a fixed point (4 passes): the same choice. Each pass
+ * costs a solve (a far target's about 40 ms in BN7's hour), so one. Labelled: the horizon the time at the chances read,
+ * either way (the drift lowers Raid's chances and raises the population-neutral actions', the events' growth).
+ */
+export const BLADEBURNER_DRIFT_PASSES = 1;
+
+/** The rule's solves under a target with the drift kept (#418): the run report replays the brain's readings. */
+const DRIFTED_SOLVES = new Map<string, BladeburnerActionPlan[]>();
+/** The most kept, the oldest dropped first: a reading's few cities and the report's replays of them. */
+const DRIFTED_SOLVES_KEPT = 512;
+
+/**
+ * Under a target with the drift (#418): the plan's horizon is its own least expected time to the target (#386's
+ * chain): from the time with the chances read, each pass prices every chance at its mean over the horizon
+ * (`planCandidates`' `drift`) and solves the chain again, the best plan's time the next horizon; until it moves less
+ * than the chain's grid resolution (1/`BLADEBURNER_TARGET_CELLS` of it) or `BLADEBURNER_DRIFT_PASSES` passes. Without
+ * the drift, the chain once, as before. Each input's solve kept (`DRIFTED_SOLVES`: a pure function's, by its JSON).
+ */
+function driftedToTarget(
+  input: BladeburnerActionInput,
+  target: { rank: number; target: number },
+  prune: boolean,
+): BladeburnerActionPlan[] {
+  if (input.drift === undefined) return driftedSolve(input, target, prune);
+  const key = `${prune} ${JSON.stringify(input)}`;
+  const known = DRIFTED_SOLVES.get(key);
+  if (known !== undefined) return [...known];
+  const solved = driftedSolve(input, target, prune);
+  DRIFTED_SOLVES.set(key, solved);
+  if (DRIFTED_SOLVES.size > DRIFTED_SOLVES_KEPT) DRIFTED_SOLVES.delete(DRIFTED_SOLVES.keys().next().value as string);
+  return [...solved];
+}
+
+/** `driftedToTarget`'s solve. */
+function driftedSolve(
+  input: BladeburnerActionInput,
+  target: { rank: number; target: number },
+  prune: boolean,
+): BladeburnerActionPlan[] {
+  const solve = (priced: BladeburnerActionInput) => {
+    const { candidates, supply } = planCandidates(priced);
+    return fastestToTarget(candidates, supply, target, prune);
+  };
+  const { drift } = input;
+  if (drift === undefined) return solve(input);
+  let plans = solve({ ...input, drift: { ...drift, horizonSeconds: 0 } });
+  let horizon = plans[0]?.toTarget?.seconds ?? Number.POSITIVE_INFINITY;
+  let passes = 0;
+  while (passes < BLADEBURNER_DRIFT_PASSES && Number.isFinite(horizon) && horizon > 0) {
+    plans = solve({ ...input, drift: { ...drift, horizonSeconds: horizon } });
+    passes += 1;
+    const next = plans[0]?.toTarget?.seconds ?? Number.POSITIVE_INFINITY;
+    const settled = Math.abs(next - horizon) <= horizon / BLADEBURNER_TARGET_CELLS;
+    horizon = next;
+    if (settled) break;
+  }
+  // The passes each plan's drift took (the report's and the tests').
+  return plans.map((plan) =>
+    plan.work?.drift === undefined ? plan : { ...plan, work: { ...plan.work, drift: { ...plan.work.drift, passes } } },
+  );
 }
 
 /**
@@ -934,6 +1026,8 @@ function planCandidates({
   skills = {},
   city,
   forecast,
+  drift,
+  hospital,
 }: {
   readings: readonly BladeburnerActionReading[];
   person: BladeburnerPerson;
@@ -954,6 +1048,15 @@ function planCandidates({
   city?: { ratio: number; raid: boolean };
   /** The rank now and the next current-rank target (#386, ./bladeburner-targets.ts): under it, the least time to it. */
   target?: { rank: number; target: number };
+  /**
+   * The cities read and the city the chances are for (#418, ./bladeburner-drift.ts), its chaos where it's another's
+   * (B4's forecasts), and the horizon: each contract's and operation's chance priced at its mean over the attempts the
+   * plan makes in `horizonSeconds`, the city moved by them, and Diplomacy's time holding the chaos. Under a target the
+   * rule solves the horizon itself (`chooseBladeburnerAction`); 0 or absent, the chances read. None: no drift.
+   */
+  drift?: { cities: readonly BladeburnerDriftCity[]; city: string; chaos?: number; horizonSeconds?: number };
+  /** The max HP and the money read (#418): each plan's hospital money a second. None: not read (null). */
+  hospital?: { hpMax: number; money: number };
 }): { candidates: PlanCandidate[]; supply: BladeburnerRankSource[] } {
   const readMults = bladeburnerSkillMultsOf(skills.read ?? {});
   const mults = skills.planned === undefined ? readMults : bladeburnerSkillMultsOf(skills.planned);
@@ -990,6 +1093,35 @@ function planCandidates({
   // Each action's long-run supply (#392's decision, #395's review): every way to work it, whatever its count now (its
   // regrowth is the action's).
   const supply: BladeburnerRankSource[] = [];
+  // The drift (#418): the cities from the reading, the city the chances are for, its horizon.
+  const driftStart = drift === undefined ? null : bladeburnerDriftStart(drift.cities, drift.city, drift.chaos);
+  const horizon = drift?.horizonSeconds ?? 0;
+  const reference = driftStart?.cities[driftStart.worked];
+  /**
+   * An action worked alone over the horizon from the reading's cities, every `cycle` s, at most `most` attempts; the
+   * brain's city chosen again as they move (B4's, `moves`), Diplomacy in it.
+   */
+  const driftOver = (action: BladeburnerLevelledAction, chance: number, cycle: number, most: number) => {
+    if (driftStart === null || reference === undefined || !(cycle > 0)) return null;
+    const attempts = Math.max(0, Math.min(horizon / cycle, most));
+    if (!(attempts > 0)) return null;
+    const path = bladeburnerDriftPath(driftStart, reference, [{ action, chance, attempts }], attempts * cycle, {
+      charisma: at.skills.charisma,
+      moves: true,
+    });
+    const end = path.state.cities[path.state.worked] as BladeburnerDriftCity;
+    return {
+      chance: path.chances[0] as number,
+      diplomacySeconds: path.diplomacySeconds / attempts,
+      drift: {
+        chanceRead: chance,
+        horizonSeconds: horizon,
+        attempts,
+        chaos: end.chaos,
+        populationRatio: reference.population > 0 ? end.population / reference.population : 1,
+      },
+    };
+  };
   for (const read of readings) {
     const action = bladeburnerLevelledAction(read.type, read.name);
     if (action === null) continue;
@@ -1001,26 +1133,39 @@ function planCandidates({
       !scaled || !(readCompetence > 0) ? 1 : (actionSkillCompetence(action, at, mults) / readCompetence) * personRatio;
     const ratio = skillRatio * (city?.ratio ?? 1);
     for (let level = 1; level <= Math.max(1, read.maxLevel); level++) {
-      const chance = chanceLowAt(action, read, level, penalty, ratio);
-      if (chance === null) continue;
+      const chanceRead = chanceLowAt(action, read, level, penalty, ratio);
+      if (chanceRead === null) continue;
       const seconds = actionSeconds(action, level, at, mults);
       const short = read.count < 1 + (BLADEBURNER_READING_SECONDS * speed) / seconds;
       const gain = actionRankGain(action, level, rankMultiplier);
       const loss = actionRankLoss(action, level);
-      const { mean, variance } = attemptRankMoments(chance, gain, loss);
-      const rate = mean / seconds;
       const cost = actionStaminaCost(action, level);
-      const drain = cost / seconds - regain;
+      const dutyOf = (worked: number, rest: BladeburnerRest) => {
+        const drain = cost / worked - regain;
+        return drain <= 0 ? 1 : rest.staminaPerSecond > 0 ? rest.staminaPerSecond / (drain + rest.staminaPerSecond) : 0;
+      };
       for (const rest of worthResting) {
-        const duty =
-          drain <= 0 ? 1 : rest.staminaPerSecond > 0 ? rest.staminaPerSecond / (drain + rest.staminaPerSecond) : 0;
+        const readDuty = dutyOf(seconds, rest);
+        if (readDuty === 0) continue;
+        // The drift over the horizon (#418): its attempts at the cycle read (its own count and regrowth at most), the
+        // chance their mean, Diplomacy's time on each attempt's (no stamina, so a rest's share: `dutyOf`).
+        const priced =
+          driftStart === null || !(horizon > 0)
+            ? null
+            : driftOver(action, chanceRead, seconds / readDuty, read.count + countGrowthPerSecond(action) * horizon);
+        const chance = priced?.chance ?? chanceRead;
+        const diplomacySeconds = priced?.diplomacySeconds ?? 0;
+        const worked = seconds + diplomacySeconds;
+        const duty = priced === null ? readDuty : dutyOf(worked, rest);
+        const { mean, variance } = attemptRankMoments(chance, gain, loss);
+        const rate = mean / worked;
         const cycle = duty * rate + (1 - duty) * rest.rankPerSecond;
         if (duty === 0) continue;
         const cycleStep = bladeburnerCycleStep({
           chance,
           gain,
           loss,
-          seconds,
+          seconds: worked,
           duty,
           restRankPerSecond: rest.rankPerSecond,
         });
@@ -1037,6 +1182,7 @@ function planCandidates({
           ...cycleStep,
           attempts: bladeburnerAttemptsInCount(read.count, countGrowthPerSecond(action), cycleStep.seconds),
         };
+        const hpLoss = actionHpLoss(action, level);
         const plan: BladeburnerActionPlan = {
           work: {
             type: action.type,
@@ -1047,9 +1193,16 @@ function planCandidates({
             rankVariance: variance,
             seconds,
             stamina: cost,
-            hpLoss: actionHpLoss(action, level),
+            hpLoss,
             money: actionMoney(action, level),
             rankPerSecond: rate,
+            ...(priced === null ? {} : { drift: priced.drift }),
+            diplomacySeconds,
+            // Its failures a second over the cycle, each its mean bill (#418).
+            moneyLostPerSecond:
+              hospital === undefined
+                ? null
+                : (duty / worked) * (1 - chance) * hospitalCostPerFailure(hpLoss, hospital.hpMax, hospital.money),
           },
           rest,
           duty,

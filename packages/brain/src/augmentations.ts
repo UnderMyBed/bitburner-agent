@@ -432,6 +432,12 @@ export interface BlackOpsInstallView {
    * where installing doesn't lead, or never at an eighth of the step. Absent in events before #409.
    */
   marginMs?: number | null;
+  /**
+   * The hospital's money a game second on each side (#418, core's `moneyLostPerSecond`): keeping at the money read,
+   * installing now from the $1,000 it leaves; null, not read. Shown, not traded: neither side buys anything with it
+   * before the destroy. Absent in events before #418.
+   */
+  moneyLostPerSecond?: { keep: number | null; installNow: number | null };
 }
 
 /** Core's timing as the view keeps it (#404). */
@@ -446,6 +452,7 @@ export function blackOpsInstallViewOf(timing: BlackOpsInstallTiming): BlackOpsIn
     choice: timing.choice,
     gain: { successChance, maxStamina, staminaGain },
     marginMs: ms(timing.marginSeconds),
+    moneyLostPerSecond: { ...timing.moneyLostPerSecond },
   };
 }
 
@@ -466,11 +473,25 @@ export function describeBlackOpsInstallTiming(view: BlackOpsInstallView | null):
   return (
     `the Black Ops' route (#404), the grown estimate of the time to the destroy (#408): keep ${time(view.keepMs)}, ` +
     `${install}` +
+    describeHospitalSides(view.moneyLostPerSecond) +
     (view.marginMs == null
       ? ""
       : `, the difference's error at the step ${time(view.marginMs)} (#406's rule: installing must beat it)`) +
     ": " +
     (view.choice === "install" ? "installing now" : "keeping")
+  );
+}
+
+/**
+ * The hospital's money on each side (#418), in words: " (the hospital $1,234 a second keeping, $1 installing now, #418:
+ * shown, not traded: nothing is bought with it before the destroy)"; "" where neither is read.
+ */
+function describeHospitalSides(sides: BlackOpsInstallView["moneyLostPerSecond"]): string {
+  if (sides === undefined || (sides.keep === null && sides.installNow === null)) return "";
+  const each = (money: number | null) => (money === null ? "unread" : `${formatMoney(money)} a second`);
+  return (
+    ` (the hospital ${each(sides.keep)} keeping, ${each(sides.installNow)} installing now, #418: shown, not traded: ` +
+    "nothing is bought with it before the destroy)"
   );
 }
 

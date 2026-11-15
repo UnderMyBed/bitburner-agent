@@ -19,6 +19,7 @@ import { expect, test } from "vitest";
 import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-actions-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
+import { expectCitiesAsPredicted } from "./helpers/drift-prediction.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
 import { attemptsIn, attemptsSummary, expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.ts";
 
@@ -65,6 +66,10 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   for (const buy of plan.buys) expect(reading()?.skillLevels?.[buy.skill], buy.skill).toBe(buy.to);
   expect(reading()?.skillPoints).toBe(RANK / 3 - plan.spent);
   const startedAtMs = fresh.game.clock.now();
+  // #418: the six cities' true figures at the hour's start, and the charisma Diplomacy cuts the chaos by.
+  const startCities = await fresh.simulation.diagnostics.bladeburnerCities();
+  const charisma =
+    (fresh.medium() as { player?: { skills?: { charisma?: number } } } | null)?.player?.skills?.charisma ?? 1;
   await fresh.game.run(HOUR);
   // #408's hindcast: the grown estimate's time to the rank the hour reached, from the reading with the points.
   const hindcast = await grownHindcastIn(
@@ -75,6 +80,16 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   );
   console.log(hindcast.line);
   expectGrownHindcast(hindcast);
+
+  // #418: each city's chaos and true population after the hour against the drift's prediction (core's mean path from
+  // the simulator's true figures at the hour's start, each attempt the rule made at its own chance, the decay and the
+  // events' mean between; within 4 standard deviations of the draws' spread), and the attempts' own effects alone.
+  const hourAttempts = await attemptsIn(fresh.simulation, startedAtMs, fresh.game.clock.now());
+  const endCities = await fresh.simulation.diagnostics.bladeburnerCities();
+  console.log(
+    `the cities after the hour against the drift's prediction (#418):\n` +
+      expectCitiesAsPredicted(startCities, endCities, hourAttempts, startedAtMs, fresh.game.clock.now(), charisma),
+  );
 
   const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() } as const;
   const { text, failures } = runReport(fresh.data.store, window, { verbose: true });
