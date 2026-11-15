@@ -539,6 +539,41 @@ describe("the run report's actions (#375)", () => {
     expect(forecastOf(clipped)).toBeCloseTo(expected, 2);
   });
 
+  test("the hospital's money by the game's money sources (#417's review): its rise between slow snapshots in the window", () => {
+    const data = slow(6);
+    const withSpent = (atMs: number, spent: number, lastAugReset = 0) => ({
+      atMs,
+      data: {
+        ...data,
+        resetInfo: { ...data.resetInfo, lastAugReset },
+        moneySources: { hospitalization: -spent },
+      } as SlowSnapshotData,
+    });
+    const foldWith = (slows: { atMs: number; data: SlowSnapshotData }[]) => {
+      const folded = new BladeburnerFold();
+      for (const each of slows) folded.addSlow(each.atMs, each.data);
+      // Readings from T0 to T0 + 50 s; the slow snapshots added first, as the run report adds them.
+      for (const [atMs, medium] of run(Array.from({ length: 6 }, () => 0))) folded.addMedium(atMs, medium);
+      return folded.section([], T0 + 24 * 60 * MINUTE).join("\n");
+    };
+    // $1m before the window; $0.5m and $0.75m more between slow snapshots in it; one after the last reading, not.
+    const text = foldWith([
+      withSpent(T0 - 30 * SECOND, 0),
+      withSpent(T0, 1e6),
+      withSpent(T0 + 30 * SECOND, 1.5e6),
+      withSpent(T0 + 50 * SECOND, 2.25e6),
+      withSpent(T0 + 70 * SECOND, 9e6),
+    ]);
+    expect(text).toContain(
+      `planner's): $1,250,000 by the game's money sources from ${new Date(T0).toISOString()} to ` +
+        `${new Date(T0 + 50 * SECOND).toISOString()}; at least 0 visits by the failures whose damage reaches the max HP; `,
+    );
+    // An install between two (the money since it from 0): that pair not counted.
+    expect(
+      foldWith([withSpent(T0, 1e6), withSpent(T0 + 30 * SECOND, 1.5e6), withSpent(T0 + 50 * SECOND, 2e5, 1)]),
+    ).toContain("planner's): $500,000 by the game's money sources from ");
+  });
+
   test("Tracking for 10 min at its forecast: the lines, and no failure", () => {
     const ranks = Array.from({ length: N }, (_, index) => (index * expected) / (N - 1));
     const { text, failures } = fold(run(ranks));
@@ -555,8 +590,8 @@ describe("the run report's actions (#375)", () => {
     expect(text).toContain("  an action stopped at stamina 0 at any reading:\n    none\n");
     expect(text).toContain("  the rank from the actions run below its forecast's bound:\n    none");
     expect(text).toContain(
-      "    the hospital (HP isn't in the rule's choice: money against rank is the planner's): 0 visits seen, at least " +
-        "$0; the failures' HP ",
+      "    the hospital (HP isn't in the rule's choice: money against rank is the planner's): its money unread (no two " +
+        "slow snapshots with it in the division); 0 visits seen, at least $0; the failures' HP ",
     );
   });
 
@@ -652,7 +687,7 @@ describe("the run report's actions (#375)", () => {
     );
     const { text, failures } = fold(mediums);
     // One visit (5 → 20 under Tracking), $100,000 at least (10% of $1m, under 20 × $100k); the Chamber's +2 none.
-    expect(text).toContain(": 1 visit seen, at least $100,000; the failures' HP ");
+    expect(text).toContain("; 1 visit seen, at least $100,000; the failures' HP ");
     expect(failures).toEqual([]);
     // The smaller of the two readings' money (#377's re-review): $100,000 spent between them, 10% of $900,000.
     const spent = mediums.map(([atMs, data], index) =>
@@ -660,9 +695,9 @@ describe("the run report's actions (#375)", () => {
         ? ([atMs, { ...data, player: { ...data.player, money: 9e5 } }] as [number, MediumSnapshotData])
         : [atMs, data],
     ) as [number, MediumSnapshotData][];
-    expect(fold(spent).text).toContain(": 1 visit seen, at least $90,000; the failures' HP ");
+    expect(fold(spent).text).toContain("; 1 visit seen, at least $90,000; the failures' HP ");
     // An install between the readings refills the HP: no visit.
-    expect(fold(mediums, [T0 + 15 * SECOND]).text).toContain(": 0 visits seen, at least $0; ");
+    expect(fold(mediums, [T0 + 15 * SECOND]).text).toContain("; 0 visits seen, at least $0; ");
   });
 
   test("stuck resting: the plan's work waiting past twice the rule's time to the max and 10 min fails; at it passes", () => {

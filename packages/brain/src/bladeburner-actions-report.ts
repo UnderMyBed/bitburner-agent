@@ -39,7 +39,14 @@
 //   $100k) with the HP at 0 or under (`Hospital/Hospital.ts:4-17`, `Constants.ts:47`), so at least
 //   min(10% of the money, max × $100k), the money the smaller of the two readings' (a purchase between them doesn't
 //   raise it). Two visits between readings count as one; none across a gap or an install, which refills the HP
-//   (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:135`).
+//   (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:135`). **Since #417's review** that check alone was blind: a
+//   failure doing at least the max HP hospitalises and refills at once (`Bladeburner.ts:983-991`, `takeDamage` then
+//   `hospitalize`, `PlayerObjectGeneralMethods.ts:265-290`), so no reading sees the HP under its max (Raid's ~386
+//   against 21 HP: about 33 visits an hour shown as none). Now also: the money, the game's own
+//   (`getMoneySources().sinceInstall.hospitalization`, the slow snapshot's, `loseMoney(cost, "hospitalization")`),
+//   its rise summed between the slow snapshots of a cycle from the first reading in the division (any cause; in the
+//   division the actions'); and the visits at least, one per failure whose least damage (90% of its mean, the ±10%)
+//   reaches the max HP, its failures from the counts' fall and the rank (the lines by action's estimates).
 // - **The focus** (#377's review): A5's faction work waits all the actions' time, the rests' too, Field Analysis's rank
 //   all it gains then; the time and that rank are shown, the trade the planner's.
 // - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings, at the brain's input,
@@ -339,6 +346,10 @@ export class BladeburnerActionsFold {
   #switches = 0;
   #stretches = 0;
   #hpLost = 0;
+  /** The failures whose least damage reaches the max HP (#417's review): each a visit, at once. */
+  #hospitalised = 0;
+  /** The slow snapshots' hospital money since the install (#417's review), each with its time and cycle. */
+  readonly #slowMoney: { atMs: number; lastAugReset: number | null; spent: number }[] = [];
   #gameSeconds = 0;
   readonly #byAction = new Map<string, number>();
   /** Each action's own figures (#381's review), by its name. */
@@ -510,6 +521,37 @@ export class BladeburnerActionsFold {
     return found;
   }
 
+  /**
+   * A slow snapshot's hospital money (#417's review): `moneySources.hospitalization` since the install (a loss, so
+   * negative). Its fall between two slow snapshots of a cycle, both within the readings in the division, is the money
+   * the hospital took meanwhile (`hospital`; the run report adds the slow snapshots before the mediums).
+   */
+  addSlowMoney(atMs: number, lastAugReset: number | null, hospitalization: number | null): void {
+    if (hospitalization !== null) this.#slowMoney.push({ atMs, lastAugReset, spent: -hospitalization });
+  }
+
+  /** The game's hospital money over the window, and the slow snapshots it's between (#417's review); null, none. */
+  hospital(): { money: number; fromMs: number; toMs: number; visitsAtLeast: number } | null {
+    const first = this.#first;
+    const last = this.#last;
+    if (first === null || last === null) return null;
+    const points = this.#slowMoney
+      .filter((each) => each.atMs >= first.atMs && each.atMs <= last.atMs)
+      .sort((a, b) => a.atMs - b.atMs);
+    let money = 0;
+    let fromMs: number | null = null;
+    let toMs: number | null = null;
+    for (let index = 1; index < points.length; index++) {
+      const a = points[index - 1] as (typeof points)[number];
+      const b = points[index] as (typeof points)[number];
+      if (a.lastAugReset !== b.lastAugReset) continue;
+      money += Math.max(0, b.spent - a.spent);
+      fromMs ??= a.atMs;
+      toMs = b.atMs;
+    }
+    return fromMs === null || toMs === null ? null : { money, fromMs, toMs, visitsAtLeast: this.#hospitalised };
+  }
+
   /** An attempt cut short (a switch, a stretch's end): the whole's allowance and its action's. */
   #cut(running: Running | null): void {
     this.#allowance += running?.cut ?? 0;
@@ -550,8 +592,11 @@ export class BladeburnerActionsFold {
     const after = kept.reading.actions.find(id);
     if (before === undefined || after === undefined) return;
     const fell = Math.max(0, before.count - after.count + countGrowthPerSecond(levelled) * seconds);
+    const successes = Math.min(fell, Math.max(0, (rank + fell * attempt.loss) / (attempt.gain + attempt.loss)));
     each.attempts += fell;
-    each.successes += Math.min(fell, Math.max(0, (rank + fell * attempt.loss) / (attempt.gain + attempt.loss)));
+    each.successes += successes;
+    // Each failure whose least damage reaches the max HP: a visit (#417's review).
+    if (previous.hp !== null && 0.9 * attempt.hpLoss >= previous.hp.max) this.#hospitalised += fell - successes;
   }
 
   /** Stuck resting: the plan has work and a rest is under way; each stretch's bound from its first reading. */
@@ -738,9 +783,17 @@ export class BladeburnerActionsFold {
     }
     const bills = this.#visits.reduce((total, each) => total + each.leastBill, 0);
     const maxHp = last.hp?.max;
+    const hospital = this.hospital();
+    const dollars = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
     lines.push(
-      `    the hospital (HP isn't in the rule's choice: money against rank is the planner's): ${this.#visits.length} ` +
-        `visit${this.#visits.length === 1 ? "" : "s"} seen, at least $${Math.round(bills).toLocaleString("en-US")}; ` +
+      `    the hospital (HP isn't in the rule's choice: money against rank is the planner's): ` +
+        (hospital === null
+          ? "its money unread (no two slow snapshots with it in the division); "
+          : `${dollars(hospital.money)} by the game's money sources from ${formatIsoTime(hospital.fromMs)} to ` +
+            `${formatIsoTime(hospital.toMs)}; at least ${Math.round(hospital.visitsAtLeast)} visits by the failures ` +
+            "whose damage reaches the max HP; ") +
+        `${this.#visits.length} visit${this.#visits.length === 1 ? "" : "s"} seen, at least ` +
+        `${dollars(bills)}; ` +
         `the failures' HP ${this.#hpLost.toFixed(1)} forecast` +
         (isNumber(maxHp) && maxHp > 0 ? `, about ${(this.#hpLost / maxHp).toFixed(1)} visits at ${maxHp} HP` : ""),
     );

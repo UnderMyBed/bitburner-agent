@@ -19,8 +19,10 @@
 // The hour isn't asked to reach 25 (#386's amendment): at rank 0 a failure loses nothing, so the least expected time
 // can be Raid's lottery, whose hour can end anywhere.
 import {
+  actionHpLoss,
   BLADEBURNER_CONTRACTS,
   type BladeburnerActionPlan,
+  bladeburnerLevelledAction,
   bladeburnerPlansToTarget,
   type MediumSnapshotData,
   skillExpFor,
@@ -31,7 +33,7 @@ import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-acti
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { expectGrownHindcast, grownHindcastIn, steadyExpected } from "./helpers/grown-hindcast.ts";
+import { attemptsIn, expectGrownHindcast, grownHindcastIn, steadyExpected } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -134,6 +136,38 @@ test("BN6.1, an hour from a harness join: each plan the least time to its target
   console.log(section);
   console.log(`virtual: ${((fresh.game.clock.now() - startedAtMs) / MINUTE).toFixed(1)} min of actions`);
   expect(fresh.game.clock.now() - startedAtMs).toBeGreaterThanOrEqual(HOUR);
+  // The hospital (#417's review): each Raid failure (its damage about 386 against 21 HP) a visit at once, refilled
+  // before any reading, so the money is the game's own. Against the simulator's Raid failures over the same span: each
+  // bill min(10% of the money then, the damage × $100k) (`Hospital/Hospital.ts:4-17`), so at least the least money's
+  // 10% or 90% of the mean damage's, and at most the most money's 10% a failure of any action.
+  const hospital =
+    /the hospital \([^)]*\): \$([\d,]+) by the game's money sources from (\S+) to (\S+); at least (\d+) visits/.exec(
+      section,
+    );
+  expect(hospital, "the hospital's money").not.toBeNull();
+  const [money, fromIso, toIso, visits] = (hospital ?? []).slice(1) as [string, string, string, string];
+  const spent = Number(money.replaceAll(",", ""));
+  const span = await attemptsIn(fresh.simulation, Date.parse(fromIso), Date.parse(toIso));
+  const failed = span.filter((each) => !each.success);
+  const raids = failed.filter((each) => each.name === "Raid");
+  const monies = fresh.data.store
+    .snapshots({ environment: "E1" })
+    .filter((each) => each.tier === "medium" && each.receivedAtMs >= Date.parse(fromIso) - 10_000)
+    .filter((each) => each.receivedAtMs <= Date.parse(toIso))
+    .map((each) => (each.data as MediumSnapshotData).player?.money)
+    .filter((each): each is number => typeof each === "number");
+  const raid = bladeburnerLevelledAction("Operations", "Raid");
+  if (raid === null) throw new Error("no Raid");
+  const leastBill = Math.min(0.1 * Math.min(...monies), 0.9 * actionHpLoss(raid, 1) * 100e3);
+  console.log(
+    `the hospital: $${spent.toLocaleString("en-US")} from ${fromIso} to ${toIso}, at least ${visits} visits by the ` +
+      `report; the simulator's failures there: ${raids.length} Raid, ${failed.length} in all; the money ` +
+      `$${Math.round(Math.min(...monies)).toLocaleString("en-US")} to $${Math.round(Math.max(...monies)).toLocaleString("en-US")}`,
+  );
+  expect(raids.length).toBeGreaterThan(0);
+  expect(spent).toBeGreaterThanOrEqual(raids.length * leastBill);
+  expect(spent).toBeLessThanOrEqual(failed.length * 0.1 * Math.max(...monies));
+  expect(Number(visits)).toBeGreaterThan(0);
   const measured =
     /rank from the actions run: (-?[\d.]+) measured against (-?[\d.]+) forecast \(σ ([\d.]+)\), its bound (-?[\d.]+)/.exec(
       section,

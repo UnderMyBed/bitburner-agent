@@ -26,9 +26,7 @@ import {
   BLADEBURNER_CHAOS_ACTION_SECONDS,
   BLADEBURNER_CITIES,
   BLADEBURNER_CONSTANTS,
-  type BladeburnerPerson,
-  bladeburnerPersonOf,
-  bladeburnerRankMultiplierOf,
+  type BladeburnerActionInput,
   chaosActionForgone,
   chaosAfterDiplomacy,
   chaosRankLoss,
@@ -39,7 +37,7 @@ import {
   skillExpFor,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { BLADEBURNER_ACTIONS_HOLD, bladeburnerRuleInputOf, bladeburnerSnapshotOf } from "../src/bladeburner.ts";
+import { BLADEBURNER_ACTIONS_HOLD, type BladeburnerView } from "../src/bladeburner.ts";
 import { BLADEBURNER_CHAOS_SLACK_MS } from "../src/bladeburner-cities-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -48,29 +46,31 @@ import { expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.t
 
 const freshStartOf = useFreshStarts();
 
+/** A city's figures as the reading has them: its population estimate, communities and chaos. */
+type CityFigures = { name: string; population: number; communities: number; chaos: number };
+
 /**
- * Diplomacy's gain less its cost at `chaos` in the reading's city (#415's ruling), as core's `chooseBladeburnerCity`
- * weighs it there: the forecast at each chaos x the rule's input (`bladeburnerRuleInputOf`) scaled by
- * `cityCompetenceRatio` from the chaos read, the gain `chaosRankLoss` from one Diplomacy's fall against the rate at 50,
- * the cost its 60 s of that rate's cycle (`chaosActionForgone`).
+ * Diplomacy's gain less its cost at `chaos` in the city `there` (#415's ruling, #417's review), as core's
+ * `chooseBladeburnerCity` weighs it: the forecast at each chaos x the rule's input (the reading priced, #415) scaled by
+ * `cityCompetenceRatio` from the city read, `here`, the gain `chaosRankLoss` from one Diplomacy's fall against the
+ * rate at 50, the cost its 60 s of that rate's cycle (`chaosActionForgone`).
  */
-function diplomacyMargin(data: MediumSnapshotData, chaos: number): number {
-  const { reading } = bladeburnerSnapshotOf(data);
-  const actions = reading.kind === "read" ? reading.actions : null;
-  const here = actions?.cities?.find((each) => each.name === actions.city);
-  if (actions == null || here === undefined) throw new Error("no reading with the cities");
-  const person = bladeburnerPersonOf(data.player) as BladeburnerPerson;
-  const { input } = bladeburnerRuleInputOf(actions, person, bladeburnerRankMultiplierOf(6) as number);
+function diplomacyMarginOf(
+  input: Omit<BladeburnerActionInput, "target" | "city">,
+  here: CityFigures,
+  there: CityFigures,
+  chaos: number,
+): number {
   const rate = (at: number) =>
     chooseBladeburnerAction({
       ...input,
       city: {
-        ratio: cityCompetenceRatio(here, { population: here.population, chaos: at }) ?? 0,
-        raid: here.communities > 0,
+        ratio: cityCompetenceRatio(here, { population: there.population, chaos: at }) ?? 0,
+        raid: there.communities > 0,
       },
     });
   const atFifty = rate(BLADEBURNER_CONSTANTS.chaosThreshold);
-  const after = chaosAfterDiplomacy(chaos, person.skills.charisma);
+  const after = chaosAfterDiplomacy(chaos, input.person.skills.charisma);
   const gain = chaosRankLoss((at) => rate(at).rankPerSecond, atFifty.rankPerSecond, after, chaos);
   return gain - BLADEBURNER_CHAOS_ACTION_SECONDS * chaosActionForgone(atFifty);
 }
@@ -142,10 +142,24 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
     pays: boolean;
     sent: boolean;
     kept: boolean;
-    data: MediumSnapshotData;
+    /** The decision's own input and the city it read (the view's), for core's margin there. */
+    input: Omit<BladeburnerActionInput, "target" | "city">;
+    here: CityFigures;
+    there: CityFigures;
   }[] = [];
   let lastView: unknown = null;
   let wasUnderWay = false;
+  // The decision's own figures (#417's review): its input (the reading priced, the rule's) and the city read. The store's
+  // latest medium can be a reading ahead of the view at a tick, so the view's own are taken.
+  const decisionOf = (actions: NonNullable<BladeburnerView["actions"]>) => {
+    const { target: _target, city, ...input } = actions.input as BladeburnerActionInput;
+    const byCity = actions.cities?.byCity ?? [];
+    const there = byCity.find((each) => each.name === actions.cities?.city);
+    // The city read: the one whose ratio to the city chosen is the input's (1 where they're one).
+    const here = byCity.find((each) => there !== undefined && cityCompetenceRatio(each, there) === (city?.ratio ?? 1));
+    if (here === undefined || there === undefined) throw new Error("no city read or chosen");
+    return { input, here, there };
+  };
   const observe = () => {
     const underWay = reading()?.current?.name === "Diplomacy";
     if (underWay && !wasUnderWay) starts.push(fresh.game.clock.now());
@@ -169,10 +183,14 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
       pays: diplomacy.pays,
       sent: actions?.order.name === "Diplomacy" && actions.kept == null,
       kept: actions?.kept != null,
-      data: fresh.medium() as MediumSnapshotData,
+      ...decisionOf(actions as NonNullable<BladeburnerView["actions"]>),
     });
   };
-  /** The decisions weighing Diplomacy from `fromMs`, each taken exactly where its gain beats its cost; said. */
+  /**
+   * The decisions weighing Diplomacy from `fromMs`, each taken exactly where its gain beats its cost, and its figures
+   * core's at its own input (`diplomacyMarginOf`, #417's review); said. (Its `pays` is gain > cost by construction, so
+   * it's not asserted: what is, is the order sent.)
+   */
   const judged = (label: string, fromMs: number) => {
     const these = weighed.filter((each) => each.atMs > fromMs);
     console.log(
@@ -181,12 +199,15 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
           .map(
             (each) =>
               `${each.chaos.toFixed(3)} gain ${each.gain.toFixed(3)} against cost ${each.cost.toFixed(3)}, ` +
-              `${each.kept ? "a run kept" : each.sent ? "sent" : "not sent"}`,
+              `${each.kept ? "a run kept" : each.sent ? "sent" : "not sent"} (core's margin there ${diplomacyMarginOf(each.input, each.here, each.there, each.chaos).toFixed(3)})`,
           )
           .join("; ") || "none"),
     );
     for (const each of these) {
-      expect(each.pays, `${label} at ${each.chaos}`).toBe(each.gain > each.cost);
+      expect(diplomacyMarginOf(each.input, each.here, each.there, each.chaos), `${label} at ${each.chaos}`).toBeCloseTo(
+        each.gain - each.cost,
+        9,
+      );
       if (!each.kept) expect(each.sent, `${label} at ${each.chaos}`).toBe(each.gain > each.cost);
     }
     return these;
@@ -258,9 +279,6 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
   expect(near.length).toBeGreaterThan(0);
   expect(near[0]?.chaos).toBeGreaterThan(50.1);
   expect(near[0]?.chaos).toBeLessThan(50.21);
-  // The figures are core's at the reading: its margin at the chaos read, from the reading alone.
-  const firstNear = near[0] as (typeof near)[number];
-  expect(diplomacyMargin(firstNear.data, firstNear.chaos)).toBeCloseTo(firstNear.gain - firstNear.cost, 9);
   // A run only on a decision's paying measure: its cost is the forecast's 60 s at that reading's stamina and figures.
   for (const atMs of starts.filter((each) => each > nearAtMs)) {
     expect(sentAfter(nearAtMs, atMs).length, `a Diplomacy started at ${atMs}`).toBeGreaterThan(0);
@@ -279,34 +297,63 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
   // Within ×2 since #415 (the table's).
   expectGrownHindcast(hindcast);
 
-  // Not paying, after the hour (its chaos left over 50 by the measure, Raid's own chaos then moves it, #415): the
-  // break-even at the reading now, gain = cost solved by bisection over (50, 52] (the margin rises with
-  // the chaos: the more over 50, the more one Diplomacy's fall saves), and every city set halfway between 50 and it.
-  const now = fresh.medium() as MediumSnapshotData;
-  let low: number = BLADEBURNER_CONSTANTS.chaosThreshold;
-  let high = 52;
-  expect(diplomacyMargin(now, high)).toBeGreaterThan(0);
-  for (let step = 0; step < 40; step++) {
-    const middle = (low + high) / 2;
-    if (diplomacyMargin(now, middle) > 0) high = middle;
-    else low = middle;
-  }
-  const breakEven = high;
-  const below = (BLADEBURNER_CONSTANTS.chaosThreshold + breakEven) / 2;
-  console.log(`the break-even at the reading: chaos ${breakEven.toFixed(4)}; every city set to ${below.toFixed(4)}`);
-  await setEvery(below);
-  const belowAtMs = fresh.game.clock.now();
-  await watch(belowAtMs);
-  const under = judged(`every city at ${below.toFixed(4)}`, belowAtMs);
-  // The decisions at the chaos set (the decay only lowers it; one on an earlier reading can show the chaos before):
-  // none paying, and one at least not sending a run.
-  const atBelow = under.filter((each) => each.chaos <= below);
-  expect(atBelow.length).toBeGreaterThan(0);
-  for (const each of atBelow) expect(each.pays, `at ${each.chaos}`).toBe(false);
-  expect(atBelow.some((each) => !each.kept && !each.sent)).toBe(true);
-  for (const atMs of starts.filter((each) => each > belowAtMs)) {
-    expect(sentAfter(belowAtMs, atMs).length, `a Diplomacy started at ${atMs}`).toBeGreaterThan(0);
-  }
+  // The break-even bracketed, after the hour (#415's ruling, #417's review: its chaos left over 50 by the measure,
+  // Raid's own chaos then moves it): at the reading now, gain = cost solved by bisection over (50, 52] (the margin rises
+  // with the chaos: the more over 50, the more one Diplomacy's fall saves), and every city set 10% of the way past it
+  // (be + 0.1(be − 50)): sent; then, solved again at the reading then, 10% short of it: not sent. Each judged at the
+  // first decision at the chaos set (the decay only lowers it; one on an earlier reading can show the chaos before).
+  const breakEvenNow = () => {
+    // The rule's last decision's own input and cities (its view's), as each judged decision's.
+    const now = decisionOf(fresh.controller().bladeburnerView().actions as NonNullable<BladeburnerView["actions"]>);
+    const diplomacyMargin = (_: unknown, chaos: number) => diplomacyMarginOf(now.input, now.here, now.there, chaos);
+    let low: number = BLADEBURNER_CONSTANTS.chaosThreshold;
+    let high = 52;
+    expect(diplomacyMargin(now, high)).toBeGreaterThan(0);
+    for (let step = 0; step < 40; step++) {
+      const middle = (low + high) / 2;
+      if (diplomacyMargin(now, middle) > 0) high = middle;
+      else low = middle;
+    }
+    return high;
+  };
+  const bracket = async (share: number) => {
+    // A decision at the chaos set, not a run kept to its end: with no Diplomacy under way, set; where the first decision
+    // at it keeps a run (sent on a reading from before the set, the chaos Raid had raised), the run is let end and the
+    // chaos set again from the break-even then (at most 3 times).
+    let chaos = Number.NaN;
+    let atMs = Number.NaN;
+    for (let tries = 0; tries < 3; tries++) {
+      await fresh.game.runUntil(() => {
+        observe();
+        return reading()?.current?.name !== "Diplomacy";
+      }, 2 * MINUTE);
+      const breakEven = breakEvenNow();
+      chaos = BLADEBURNER_CONSTANTS.chaosThreshold + share * (breakEven - BLADEBURNER_CONSTANTS.chaosThreshold);
+      console.log(
+        `the break-even at the reading: chaos ${breakEven.toFixed(4)}; every city set to ${chaos.toFixed(4)}`,
+      );
+      await setEvery(chaos);
+      atMs = fresh.game.clock.now();
+      // The first decision weighing it at the chaos set: one not keeping a run is the bracket's.
+      const at = (each: (typeof weighed)[number]) => each.atMs > atMs && each.chaos <= chaos;
+      await fresh.game.runUntil(() => {
+        observe();
+        return weighed.some(at);
+      }, 2 * MINUTE);
+      if (weighed.find(at)?.kept === false) break;
+    }
+    await watch(atMs);
+    const decided = judged(`every city at ${chaos.toFixed(4)}`, atMs).filter(
+      (each) => each.chaos <= chaos && !each.kept,
+    );
+    expect(decided.length, `at ${chaos}`).toBeGreaterThan(0);
+    for (const startedAt of starts.filter((each) => each > atMs)) {
+      expect(sentAfter(atMs, startedAt).length, `a Diplomacy started at ${startedAt}`).toBeGreaterThan(0);
+    }
+    return decided[0] as (typeof decided)[number];
+  };
+  expect((await bracket(1.1)).sent).toBe(true);
+  expect((await bracket(0.9)).sent).toBe(false);
 
   const window = { environment: "E1", sinceMs: EPOCH_MS, untilMs: fresh.game.clock.now() } as const;
   const { text, failures } = runReport(fresh.data.store, window, { verbose: true });

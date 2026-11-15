@@ -223,6 +223,17 @@ export class BladeburnerFold {
       homeKeptGb: homeKeptGbOf(singularityRamMultiplierOf(data)),
       lastAugReset: typeof reset === "number" && Number.isFinite(reset) ? reset : null,
     });
+    // The hospital's money (#417's review): the game's own, since the install.
+    const hospitalization = data.moneySources?.hospitalization;
+    this.#actions.addSlowMoney(
+      atMs,
+      typeof reset === "number" && Number.isFinite(reset) ? reset : null,
+      data.moneySources === undefined
+        ? null
+        : typeof hospitalization === "number" && Number.isFinite(hospitalization)
+          ? hospitalization
+          : 0,
+    );
   }
 
   /** The slow snapshot's figures at `atMs`: the last by then, or the first after, with none before. */
