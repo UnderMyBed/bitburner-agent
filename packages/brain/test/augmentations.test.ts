@@ -2126,7 +2126,10 @@ describe("the store and the figures", () => {
     expect(() => newRule()).toThrow("isn't a note the brain wrote");
   });
 
-  test("the income counts the earnings only: not spending, nor `other`", () => {
+  test("the income counts the earnings only, net of the hospital's bills (#418): not spending, nor `other`", () => {
+    // Bladeburner's failures' bills, a loss (under 0), come off the income A6 buys from.
+    expect(earnedOf({ ...slow(), moneySources: { hacking: 30, hospitalization: -4, servers: -100 } })).toBe(26);
+    expect(earnedOf({ ...slow(), moneySources: { hacking: 30, hospitalization: Number.NaN } })).toBeNull();
     expect(earnedOf(slow({ earned: 5 }))).toBe(5);
     expect(
       earnedOf({

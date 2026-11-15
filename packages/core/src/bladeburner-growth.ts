@@ -244,7 +244,7 @@ export function bladeburnerGrownInput(
     const chance =
       city === null || state.drift === undefined
         ? grown
-        : driftedChance({ action, chance: grown }, state.drift.reference, city);
+        : driftedChance({ action, chance: grown }, state.drift.reference, city, state.drift.state.ceiling);
     return { ...read, level, maxLevel: level, chance: [chance, chance] };
   });
   const maxStamina = maxStaminaAtSkills(input.person, input.maxStamina, readMults, mults, person);
@@ -298,6 +298,14 @@ export function bladeburnerPricedInput<T extends Omit<BladeburnerActionInput, "t
   });
   return { input: { ...input, readings }, ratio };
 }
+
+/**
+ * The chunks a step's drift is followed in at most (#418's review, for the cost): a step is 5% of the rank
+ * (`BLADEBURNER_GROWTH_FRACTION`), its pricing over the step ahead and the cities moved by it each a path, against the
+ * rule's `BLADEBURNER_DRIFT_CHUNKS` over the whole horizon. Labelled: B4's moves a sixteenth of a step late at most
+ * (first order in it; the step's state carried on, so not summed over the route).
+ */
+export const BLADEBURNER_GROWTH_DRIFT_CHUNKS = 16;
 
 /** The least step of the integration, in rank: 10 skill points' worth. */
 export const BLADEBURNER_GROWTH_LEAST_STEP = 10 * BLADEBURNER_RANKS_PER_SKILL_POINT;
@@ -400,11 +408,16 @@ export function blackOpsRouteGrownEstimate(
   let seconds = 0;
   let solves = 0;
   const path: { rank: number; seconds: number }[] = [{ rank, seconds: 0 }];
-  // The tail at a state: its grown input and the mix there, each chance priced over `horizon` s ahead (#418).
+  // The tail at a state: its grown input and the mix there, each chance priced over `horizon` s ahead (#418), in
+  // `BLADEBURNER_GROWTH_DRIFT_CHUNKS` chunks.
   const tailAt = (at: BladeburnerGrowthState, horizon = 0) => {
     const grown = bladeburnerGrownInput(input, combat, at, horizon);
     solves += 1;
-    return { grown, mix: bladeburnerTailMix(grown) };
+    const priced =
+      grown.drift === undefined
+        ? grown
+        : { ...grown, drift: { ...grown.drift, chunks: BLADEBURNER_GROWTH_DRIFT_CHUNKS } };
+    return { grown, mix: bladeburnerTailMix(priced) };
   };
   // Work for `dt` game seconds at a mix: its experience and successes accrued, and (#418) the cities moved by its
   // attempts, the time and Diplomacy (its time in the mix's own, priced), the brain's city chosen again (B4's).
@@ -430,6 +443,7 @@ export function blackOpsRouteGrownEstimate(
     const moved = bladeburnerDriftPath(at.drift.state, city, parts, dt, {
       charisma: (input.forecast ?? input.person).skills.charisma,
       moves: true,
+      chunks: BLADEBURNER_GROWTH_DRIFT_CHUNKS,
     });
     return { ...at, exp, successes, drift: { state: moved.state, reference: at.drift.reference } };
   };

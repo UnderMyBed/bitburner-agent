@@ -40,13 +40,19 @@
  * each chance's mean over the spread is under the chance at the mean path's population, (pop)^0.7 concave), and the
  * estimate's own drift (the brain recovers pop/popEst at each reading, #411's ruling 4).
  */
-import { BLADEBURNER_CONSTANTS, type BladeburnerLevelledAction, chaosDifficultyFactor } from "./bladeburner-actions.ts";
+import type { BladeburnerLevelledAction } from "./bladeburner-actions.ts";
+import { BLADEBURNER_CONSTANTS, chaosDifficultyFactor } from "./bladeburner-constants.ts";
 
 /** One attempt's mean effects on the city it runs in (#418): its chaos, its true population and its communities. */
 export interface BladeburnerAttemptDrift {
   /** The chaos after: chaos × `chaosScale` + `chaosAdd` (`City.ts:31-33`, `:89-91`). */
   chaosScale: number;
   chaosAdd: number;
+  /**
+   * The scale's log's mean, E[ln(1 + U/100)] over its draw (#418's review): Diplomacy's time to hold a chaos at its
+   * ceiling goes as the log, so its mean, under ln(chaosScale) (Jensen's); 0 at a scale of 1.
+   */
+  chaosLogScale: number;
   /** The true population × `populationScale` (`City.ts:79-87`). */
   populationScale: number;
   /** The share of the population migrated to another city, drawn of the other five (`triggerMigration`). */
@@ -73,7 +79,7 @@ export function bladeburnerAttemptDrift(
   communities = 1,
 ): BladeburnerAttemptDrift {
   const p = Math.max(0, Math.min(1, chance));
-  const none = { chaosScale: 1, chaosAdd: 0, populationScale: 1, migrated: 0, communities: 0 };
+  const none = { chaosScale: 1, chaosAdd: 0, chaosLogScale: 0, populationScale: 1, migrated: 0, communities: 0 };
   switch (action.name) {
     case "Bounty Hunter":
       return { ...none, chaosAdd: 0.02 * p };
@@ -92,13 +98,29 @@ export function bladeburnerAttemptDrift(
       return { ...none, chaosAdd: 0.1, populationScale: 1 - 0.001 * p };
     case "Raid":
       // Its failure's −(5 to 10)/10 %, 0.75% on average; the chaos's +1–5%, 3%.
-      return { ...none, chaosScale: 1.03, populationScale: p * 0.99 + (1 - p) * (1 - 0.0075), communities: -p };
+      return {
+        ...none,
+        chaosScale: 1.03,
+        chaosLogScale: logScaleMean(1, 5),
+        populationScale: p * 0.99 + (1 - p) * (1 - 0.0075),
+        communities: -p,
+      };
     case "Stealth Retirement Operation":
-      return { ...none, chaosScale: 0.98, populationScale: 1 - 0.005 * p };
+      return { ...none, chaosScale: 0.98, chaosLogScale: logScaleMean(-3, -1), populationScale: 1 - 0.005 * p };
+    case "Assassination":
+      // Its chaos ±5% (×1 on average) and its −1.
+      return { ...none, chaosLogScale: logScaleMean(-5, 5) };
     default:
-      // Tracking (the estimate only); Assassination's chaos ±5% (0 on average) and its −1.
+      // Tracking: the estimate only.
       return none;
   }
+}
+
+/** E[ln(1 + U/100)], U uniform over the whole numbers `low`..`high` (`getRandomIntInclusive`'s). */
+export function logScaleMean(low: number, high: number): number {
+  let sum = 0;
+  for (let u = low; u <= high; u++) sum += Math.log1p(u / 100);
+  return sum / (high - low + 1);
 }
 
 /** A city on the drift's path (#418): its population (any unit common to the six), communities and chaos. */
@@ -106,7 +128,221 @@ export interface BladeburnerDriftCity {
   name: string;
   population: number;
   communities: number;
+  /** The chaos (on the path, its mean over `chaosMix`). */
   chaos: number;
+  /** On the path (#418's review): the chaos as the share at 0 and the cohorts over it (`BladeburnerChaosMix`). */
+  chaosMix?: BladeburnerChaosMix;
+  /** On the path, once Raid works it (#418's review): the communities' distribution (`BladeburnerCommunitiesMix`). */
+  communitiesMix?: BladeburnerCommunitiesMix;
+}
+
+/**
+ * A city's chaos on the path (#418's review): the share of the paths at 0 and the cohorts over it, each its share and
+ * chaos. The decay's clamp at 0 (`Bladeburner.ts:1399-1400`) makes 0 a point the mean can't leave (the riots' mean,
+ * under the decay there, and Raid's ×1.03 of 0), while the game's draws do leave it: a riot jumps it to (0 + 1) × 1.125
+ * (`:681-683`), which Raid then compounds faster than the decay takes it down. So the share at 0 is carried apart: a
+ * riot in a chunk takes 1 − e^−λ of it (λ the city's riots in the chunk, 0.2 an event of 1/6, an event each 420 s),
+ * born a cohort at 1.125 halfway through the step; a cohort the decay takes to 0 joins it again. Over 0 each cohort
+ * follows the mean, which is exact there while no bound binds (every move is affine: Raid's ×1.03, a riot's
+ * (c + 1) × 1.125, the decay's −0.0001 a second); Diplomacy's ceiling is applied cohort by cohort. Labelled: a riot's
+ * spread on a cohort over 0 (each is its mean), a second riot on a cohort born in the chunk, and the cohorts merged past
+ * `BLADEBURNER_CHAOS_COHORTS` (the nearest two by their chaos's ratio, at their mean).
+ */
+export interface BladeburnerChaosMix {
+  zero: number;
+  cohorts: { mass: number; chaos: number }[];
+}
+
+/** The cohorts a city's chaos carries at most (`BladeburnerChaosMix`): past it, the nearest two merged. */
+export const BLADEBURNER_CHAOS_COHORTS = 16;
+
+/** A city's chaos mix: its own, or the chaos read as one cohort (0: all at 0). */
+function mixOf(city: BladeburnerDriftCity): BladeburnerChaosMix {
+  if (city.chaosMix !== undefined) return city.chaosMix;
+  return city.chaos > 0 ? { zero: 0, cohorts: [{ mass: 1, chaos: city.chaos }] } : { zero: 1, cohorts: [] };
+}
+
+/** Sets a city's mix and its mean chaos; a cohort at 0 or under joins the share at 0, and the cohorts are merged. */
+function setMix(city: BladeburnerDriftCity, mix: BladeburnerChaosMix): void {
+  let zero = mix.zero;
+  const cohorts: { mass: number; chaos: number }[] = [];
+  let sorted = true;
+  for (const cohort of mix.cohorts) {
+    if (!(cohort.mass > 0)) continue;
+    if (cohort.chaos > 0) {
+      const last = cohorts[cohorts.length - 1];
+      if (last !== undefined && cohort.chaos < last.chaos) sorted = false;
+      cohorts.push(cohort);
+    } else zero += cohort.mass;
+  }
+  // Every map on the path keeps the cohorts' order but a cohort born (the cost: sorted only where it isn't).
+  if (!sorted) cohorts.sort((a, b) => a.chaos - b.chaos);
+  while (cohorts.length > BLADEBURNER_CHAOS_COHORTS) {
+    let at = 0;
+    let best = (cohorts[1] as { chaos: number }).chaos / (cohorts[0] as { chaos: number }).chaos;
+    for (let i = 1; i + 1 < cohorts.length; i++) {
+      const ratio = (cohorts[i + 1] as { chaos: number }).chaos / (cohorts[i] as { chaos: number }).chaos;
+      if (ratio < best) {
+        at = i;
+        best = ratio;
+      }
+    }
+    const low = cohorts[at] as { mass: number; chaos: number };
+    const high = cohorts[at + 1] as { mass: number; chaos: number };
+    const mass = low.mass + high.mass;
+    cohorts.splice(at, 2, { mass, chaos: (low.mass * low.chaos + high.mass * high.chaos) / mass });
+  }
+  city.chaosMix = { zero, cohorts };
+  city.chaos = cohorts.reduce((sum, cohort) => sum + cohort.mass * cohort.chaos, 0);
+}
+
+/** The chaos's mean factor on a chance there, 1 over √(1 + chaos − 50) over 50, each cohort at most `ceiling`. */
+function chaosFactorOf(city: BladeburnerDriftCity, ceiling = Number.POSITIVE_INFINITY): number {
+  if (city.chaosMix === undefined) return 1 / chaosDifficultyFactor(Math.min(city.chaos, ceiling));
+  let factor = city.chaosMix.zero;
+  for (const cohort of city.chaosMix.cohorts)
+    factor += cohort.mass / chaosDifficultyFactor(Math.min(cohort.chaos, ceiling));
+  return factor;
+}
+
+/** A city copied with its mix (the path changes its own copies). */
+function copyCity(city: BladeburnerDriftCity): BladeburnerDriftCity {
+  const copied: BladeburnerDriftCity = { ...city };
+  if (city.chaosMix !== undefined) {
+    copied.chaosMix = { zero: city.chaosMix.zero, cohorts: city.chaosMix.cohorts.map((each) => ({ ...each })) };
+  }
+  if (city.communitiesMix !== undefined) {
+    copied.communitiesMix = { low: city.communitiesMix.low, probs: [...city.communitiesMix.probs] };
+  }
+  return copied;
+}
+
+/**
+ * A city's communities on the path once Raid works it (#418's review): their distribution over the whole numbers from
+ * `low` (`probs`). Raid's chance is 0 with none (`Actions/Operation.ts:63-68`) and a success takes one
+ * (`Bladeburner.ts:832-838`), so near 0 the chance is P(at least one), not the mean's: walks of the game's draws had
+ * Raid's mean chance 0.012 over 100 h where the mean (its events' +0.1 an hour over 0) kept it at 0.052.
+ */
+export interface BladeburnerCommunitiesMix {
+  low: number;
+  probs: number[];
+}
+
+/** A city's communities' distribution: its own, or the mean read split between its two whole numbers. */
+function communitiesMixOf(city: BladeburnerDriftCity): BladeburnerCommunitiesMix {
+  if (city.communitiesMix !== undefined) return city.communitiesMix;
+  const mean = Math.max(0, city.communities);
+  const low = Math.floor(mean);
+  const share = mean - low;
+  return { low, probs: share > 0 ? [1 - share, share] : [1] };
+}
+
+/** Sets a city's communities' distribution (its tails under 1e-12 dropped) and its mean. */
+function setCommunities(city: BladeburnerDriftCity, low: number, cells: Float64Array): void {
+  let first = 0;
+  let last = cells.length - 1;
+  while (first < last && !((cells[first] as number) > 1e-12)) first++;
+  while (last > first && !((cells[last] as number) > 1e-12)) last--;
+  let total = 0;
+  let sum = 0;
+  for (let i = first; i <= last; i++) {
+    total += cells[i] as number;
+    sum += (low + i) * (cells[i] as number);
+  }
+  if (!(total > 0)) return;
+  const probs: number[] = [];
+  for (let i = first; i <= last; i++) probs.push((cells[i] as number) / total);
+  city.communitiesMix = { low: low + first, probs };
+  city.communities = sum / total;
+}
+
+/** The Poisson's probabilities of 0..k at mean m, the rest at k (`Math.max` of a tail): a count's draws in a chunk. */
+function poisson(mean: number, most: number): number[] {
+  const out: number[] = [];
+  let term = Math.exp(-mean);
+  let sum = 0;
+  for (let k = 0; k < most; k++) {
+    out.push(term);
+    sum += term;
+    term *= mean / (k + 1);
+  }
+  out.push(Math.max(0, 1 - sum));
+  return out;
+}
+
+/** P(at least one community): Raid's factor (`Actions/Operation.ts:63-68`), from the distribution where carried. */
+function communitiesFactor(city: BladeburnerDriftCity): number {
+  if (city.communitiesMix === undefined) return city.communities > 0 ? 1 : 0;
+  const { low, probs } = city.communitiesMix;
+  return low > 0 ? 1 : 1 - (probs[0] ?? 0);
+}
+
+/**
+ * `successes` (a Poisson's mean: each attempt's success its own draw, a chunk's few at small chances) of Raid taking a
+ * community each, none taken at 0 (its chance 0 there); the communities taken, on average. Far from 0 (8 standard
+ * deviations of the draws over 1) with no distribution yet, the mean's, exact there.
+ */
+function takeCommunities(city: BladeburnerDriftCity, successes: number): number {
+  if (!(successes > 0)) return 0;
+  if (city.communitiesMix === undefined && city.communities - successes - 8 * Math.sqrt(successes + 1) >= 1) {
+    city.communities -= successes;
+    return successes;
+  }
+  const before = city.communities;
+  const { low, probs } = communitiesMixOf(city);
+  const draws = poisson(successes, Math.max(8, Math.ceil(successes + 8 * Math.sqrt(successes))));
+  // From 0 to the most there is now.
+  const cells = new Float64Array(low + probs.length);
+  for (const [i, mass] of probs.entries()) {
+    const count = low + i;
+    for (const [taken, chance] of draws.entries()) {
+      const after = count > taken ? count - taken : 0;
+      cells[after] = (cells[after] as number) + mass * chance;
+    }
+  }
+  setCommunities(city, 0, cells);
+  return Math.max(0, before - city.communities);
+}
+
+/**
+ * The events' communities over a step on a carried distribution (`randomEvent`, `Bladeburner.ts:601-699`): as the
+ * source (1/6 of the events) a new community +1 (0.05), a community's migration −1 (0.05, or +1 with none), a migration's
+ * community −1 (0.2 × 0.05, with some); as a destination +1 from each other city with some (1/30 of the events: 0.05 and
+ * 0.2 × 0.05). Each a Poisson's draws over the step, the gains and the losses apart.
+ */
+function eventCommunities(city: BladeburnerDriftCity, events: number, inflow: number): void {
+  const { low, probs } = communitiesMixOf(city);
+  const most = 4;
+  const losses = poisson((events * (0.05 + 0.2 * 0.05)) / 6, most);
+  const gainsSome = poisson((events * 0.05) / 6 + inflow, most);
+  const gainsNone = poisson((events * 0.1) / 6 + inflow, most);
+  const start = Math.max(0, low - most);
+  const size = low + probs.length + most - start;
+  // The gains, then the losses on what had some (the floor at 0 the same in turn, max(0, c + up − down)); with none,
+  // the gains alone (for the cost: two passes of 5, not 25).
+  const gained = new Float64Array(size);
+  const cells = new Float64Array(size);
+  for (const [i, mass] of probs.entries()) {
+    const count = low + i;
+    if (count === 0) {
+      for (const [up, chanceUp] of gainsNone.entries())
+        cells[up - start] = (cells[up - start] as number) + mass * chanceUp;
+      continue;
+    }
+    for (const [up, chanceUp] of gainsSome.entries()) {
+      gained[count + up - start] = (gained[count + up - start] as number) + mass * chanceUp;
+    }
+  }
+  for (let at = 0; at < size; at++) {
+    const mass = gained[at] as number;
+    if (!(mass > 0)) continue;
+    const count = at + start;
+    for (const [down, chanceDown] of losses.entries()) {
+      const after = Math.max(0, count - down) - start;
+      cells[after] = (cells[after] as number) + mass * chanceDown;
+    }
+  }
+  setCommunities(city, start, cells);
 }
 
 /** A random event's mean interval (`Bladeburner.ts:1403-1409`, `getRandomIntInclusive(240, 600)`): 420 s. */
@@ -160,16 +396,31 @@ export function bladeburnerEventDrift(
   });
 }
 
+/**
+ * A riot's log's mean on a chaos, E[ln(1 + U/100)], U of 5..20 (`Bladeburner.ts:682-683`): on a chaos Diplomacy holds,
+ * the time to hold it goes as the log (#418's review), so a riot there is taken at it, with its +1's ln(1 + 1/chaos).
+ */
+const RIOT_LOG = (() => {
+  let sum = 0;
+  for (let u = 5; u <= 20; u++) sum += Math.log1p(u / 100);
+  return sum / 16;
+})();
+
 /** The chaos's fall a second, every city's (`Bladeburner.ts:1398`). */
 const CHAOS_DECAY = 0.0001;
 
 /**
- * `dt` seconds of the random events' mean (`bladeburnerEventDrift`, the same figures, in place: the path's own, at each
- * chunk) and the decay, each city at least 0.
+ * Each city's `steps[i]` seconds of the random events' mean (`bladeburnerEventDrift`, the same figures, in place: the
+ * path's own, at each chunk) and the decay, each city at least 0; a city at 0 seconds left as it is. Each city's from the
+ * figures before the call, so the order of the six doesn't matter.
  */
-function applyEvents(cities: BladeburnerDriftCity[], dt: number): void {
+function applyEvents(
+  cities: BladeburnerDriftCity[],
+  steps: readonly number[],
+  /** The city worked and Diplomacy's hold there: a riot on a chaos held taken at its log's mean (`RIOT_LOG`). */
+  held: { index: number; ceiling: number } | null = null,
+): void {
   const n = cities.length;
-  const rate = dt / BLADEBURNER_EVENT_SECONDS / n;
   let sentPopulation = 0;
   let sentCommunities = 0;
   for (const city of cities) {
@@ -178,8 +429,9 @@ function applyEvents(cities: BladeburnerDriftCity[], dt: number): void {
     sentCommunities += has ? 0.05 + 0.2 * 0.05 : 0;
   }
   // Each city's change from the figures before the step, so the order of the six doesn't matter.
-  const changes = cities.map((city) => {
-    if (n < 2) return { population: 0, communities: 0, chaos: 0 };
+  const changes = cities.map((city, i) => {
+    const rate = (steps[i] ?? 0) / BLADEBURNER_EVENT_SECONDS / n;
+    if (n < 2 || !(rate > 0)) return { population: 0, communities: 0, chaos: 0 };
     const has = city.communities > 0;
     const ownPopulation = city.population * ((has ? 0.05 * 0.15 : 0) + 0.2 * migrationShare(city.communities));
     const ownCommunities = has ? 0.05 + 0.2 * 0.05 : 0;
@@ -190,14 +442,46 @@ function applyEvents(cities: BladeburnerDriftCity[], dt: number): void {
           ownPopulation +
           (sentPopulation - ownPopulation) / (n - 1)),
       communities: rate * (0.05 + (has ? 0 : 0.05) - ownCommunities + (sentCommunities - ownCommunities) / (n - 1)),
-      chaos: rate * 0.2 * ((city.chaos + 1) * 1.125 - city.chaos),
     };
   });
   for (const [i, city] of cities.entries()) {
-    const change = changes[i] as { population: number; communities: number; chaos: number };
+    const dt = steps[i] ?? 0;
+    if (!(dt > 0)) continue;
+    const rate = dt / BLADEBURNER_EVENT_SECONDS / n;
+    const change = changes[i] as { population: number; communities: number };
     city.population = Math.max(0, city.population + change.population);
-    city.communities = Math.max(0, city.communities + change.communities);
-    city.chaos = Math.max(0, city.chaos + change.chaos - CHAOS_DECAY * dt);
+    if (city.communitiesMix === undefined || n < 2) {
+      city.communities = Math.max(0, city.communities + change.communities);
+    } else {
+      // Carried (Raid works it): the events' draws on the distribution, each other city with some sending.
+      const events = dt / BLADEBURNER_EVENT_SECONDS;
+      let inflow = 0;
+      for (const [j, other] of cities.entries()) {
+        if (j !== i && other.communities > 0) inflow += (events * (0.05 + 0.2 * 0.05)) / (n * (n - 1));
+      }
+      eventCommunities(city, events, inflow);
+    }
+    // The chaos (`BladeburnerChaosMix`): each cohort over 0 its riots' mean and the decay; of the share at 0, those a
+    // riot reaches, 1 − e^−λ (λ = 0.2 × the city's events), born at 1.125 halfway through, so half the decay.
+    const mix = mixOf(city);
+    const riots = n < 2 ? 0 : rate * 0.2;
+    const atHold = held !== null && held.index === i ? held.ceiling : Number.POSITIVE_INFINITY;
+    // In place: the path's own copies (`copyCity`).
+    const cohorts = mix.cohorts;
+    for (const cohort of cohorts) {
+      cohort.chaos =
+        cohort.chaos >= atHold
+          ? cohort.chaos * Math.exp(riots * (RIOT_LOG + Math.log1p(1 / cohort.chaos))) - CHAOS_DECAY * dt
+          : cohort.chaos + riots * ((cohort.chaos + 1) * 1.125 - cohort.chaos) - CHAOS_DECAY * dt;
+    }
+    let zero = mix.zero;
+    const reached = zero * -Math.expm1(-riots);
+    if (reached > 0) {
+      const born = Math.max(0, 1.125 - (CHAOS_DECAY * dt) / 2);
+      cohorts.push({ mass: reached, chaos: born });
+      zero -= reached;
+    }
+    setMix(city, { zero, cohorts });
   }
 }
 
@@ -207,9 +491,18 @@ function diplomacyPercentOf(charisma: number): number {
 }
 const DIPLOMACY_SECONDS = 60;
 
-/** A city's competence factor on every chance there (#418): (pop)^0.7 over the chaos's factor (`Actions/Action.ts:88-103`). */
-export function cityChanceFactor(city: Pick<BladeburnerDriftCity, "population" | "chaos">): number {
-  return Math.max(0, city.population) ** BLADEBURNER_CONSTANTS.populationExponent / chaosDifficultyFactor(city.chaos);
+/**
+ * A city's competence factor on every chance there (#418): (pop)^0.7 over the chaos's factor (`Actions/Action.ts:
+ * 88-103`), on the path the factor's mean over its chaos mix, each cohort's chaos at most `ceiling` (Diplomacy's hold).
+ */
+export function cityChanceFactor(
+  city: Pick<BladeburnerDriftCity, "population" | "chaos" | "chaosMix">,
+  ceiling = Number.POSITIVE_INFINITY,
+): number {
+  return (
+    Math.max(0, city.population) ** BLADEBURNER_CONSTANTS.populationExponent *
+    chaosFactorOf(city as BladeburnerDriftCity, ceiling)
+  );
 }
 
 /** The drift's state (#418): the six cities, the one worked, and the chaos Diplomacy holds it at (`ceiling`). */
@@ -228,8 +521,12 @@ export interface BladeburnerDriftPart {
   attempts: number;
 }
 
-/** The chunks a path is followed in at most: past it, each a share of the attempts (`bladeburnerDriftPath`). */
-export const BLADEBURNER_DRIFT_CHUNKS = 64;
+/**
+ * The chunks a path is followed in at most: past it, each a share of the attempts (`bladeburnerDriftPath`). 256: in one
+ * city the chunks are exact to a part in 10⁴ against attempts one at a time; with B4's moves at the chunks' ends,
+ * Diplomacy's time off by 2.4 s an attempt over Raid's 1600 (8.2 s at 64, first order), its chance by 1.2%.
+ */
+export const BLADEBURNER_DRIFT_CHUNKS = 256;
 
 /**
  * An action's chance on the path (#418): its chance at `reference` times the worked city's factor over the reference's
@@ -237,13 +534,26 @@ export const BLADEBURNER_DRIFT_CHUNKS = 64;
  */
 export function driftedChance(
   part: Pick<BladeburnerDriftPart, "action" | "chance">,
-  reference: Pick<BladeburnerDriftCity, "population" | "chaos">,
+  reference: Pick<BladeburnerDriftCity, "population" | "chaos" | "chaosMix">,
   city: BladeburnerDriftCity,
+  /** The chaos Diplomacy holds the city at (its cohorts over it counted at it). */
+  ceiling = Number.POSITIVE_INFINITY,
 ): number {
-  if (part.action.name === "Raid" && !(city.communities > 0)) return 0;
+  // Raid by P(at least one community) there (none: 0, `Actions/Operation.ts:63-68`).
+  const communities = part.action.name === "Raid" ? communitiesFactor(city) : 1;
+  return chanceThere(part, reference, city, ceiling) * communities;
+}
+
+/** An action's chance in a city with the communities it needs (`driftedChance` but for Raid's P(some)). */
+function chanceThere(
+  part: Pick<BladeburnerDriftPart, "chance">,
+  reference: Pick<BladeburnerDriftCity, "population" | "chaos" | "chaosMix">,
+  city: BladeburnerDriftCity,
+  ceiling: number,
+): number {
   const from = cityChanceFactor(reference);
   if (!(from > 0)) return 0;
-  return Math.min(1, part.chance * (cityChanceFactor(city) / from));
+  return Math.min(1, part.chance * (cityChanceFactor(city, ceiling) / from));
 }
 
 /** What a path did (#418): the state after it, each part's mean chance, and Diplomacy's seconds on it. */
@@ -252,6 +562,11 @@ export interface BladeburnerDriftResult {
   /** Each part's mean chance over its attempts (its successes over its attempts); its chance there with none. */
   chances: number[];
   diplomacySeconds: number;
+  /**
+   * The first part's figures at each chunk's end (#418's review: an action's ways priced off one path), cumulative:
+   * its attempts, successes and Diplomacy's seconds.
+   */
+  curve: { attempts: number[]; successes: number[]; diplomacy: number[] };
 }
 
 /**
@@ -265,72 +580,152 @@ export interface BladeburnerDriftResult {
  */
 export function bladeburnerDriftPath(
   start: BladeburnerDriftState,
-  reference: Pick<BladeburnerDriftCity, "population" | "chaos">,
+  reference: Pick<BladeburnerDriftCity, "population" | "chaos" | "chaosMix">,
   parts: readonly BladeburnerDriftPart[],
   seconds: number,
-  { charisma, moves }: { charisma: number; moves: boolean },
+  {
+    charisma,
+    moves,
+    chunks: mostChunks = BLADEBURNER_DRIFT_CHUNKS,
+  }: {
+    charisma: number;
+    moves: boolean;
+    /** The chunks at most (`BLADEBURNER_DRIFT_CHUNKS`; the grown estimate's steps fewer, its own). */
+    chunks?: number;
+  },
 ): BladeburnerDriftResult {
-  const cities = start.cities.map((city) => ({ ...city }));
+  const cities = start.cities.map(copyCity);
   let worked = start.worked;
   const most = Math.max(0, ...parts.map((part) => part.attempts));
-  const chunks = Math.max(1, Math.min(BLADEBURNER_DRIFT_CHUNKS, Math.ceil(most)));
+  const chunks = Math.max(1, Math.min(mostChunks, Math.ceil(most)));
   const dt = Math.max(0, seconds) / chunks;
   const successes = parts.map(() => 0);
   const keep = 1 - diplomacyPercentOf(charisma) / 100;
   let diplomacySeconds = 0;
   // Raid alone (the rule's own pricing of it): the cities with communities only.
   const raidAlone = parts.length > 0 && parts.every((part) => part.action.name === "Raid");
+  const curve = { attempts: [0], successes: [0], diplomacy: [0] };
   for (let chunk = 0; chunk < chunks; chunk++) {
-    // Each chance at the chaos held (Diplomacy keeps it at the ceiling between the readings; its time at the chunk's end).
-    const held = (city: BladeburnerDriftCity) =>
-      city.chaos > start.ceiling ? { ...city, chaos: start.ceiling } : city;
+    // The time's own over the chunk's first half, the attempts, then its second half (Strang's splitting, second order
+    // in the chunk: at a chunk's end alone the attempts saw the population before the events' inflow, the drained city's
+    // chance low by 9% over 10 h at 64 chunks, against walks of the game's draws). The city worked only: the others,
+    // where no attempt falls, take the chunk's whole step at once (for the cost: their events a step's, from its start).
+    const whole = cities.map((_, i) => (i === worked ? dt / 2 : dt));
+    if (dt > 0) applyEvents(cities, whole, { index: worked, ceiling: start.ceiling });
     for (const [index, part] of parts.entries()) {
       const attempts = part.attempts / chunks;
       if (!(attempts > 0)) continue;
       const city = cities[worked] as BladeburnerDriftCity;
-      const before = driftedChance(part, reference, held(city));
+      // Each chance at the chaos held (Diplomacy keeps it at the ceiling between the readings; its time at the end).
+      const before = driftedChance(part, reference, city, start.ceiling);
       const drift = bladeburnerAttemptDrift(part.action, before, city.communities);
-      applyAttempts(cities, worked, drift, attempts);
-      const after = driftedChance(part, reference, held(cities[worked] as BladeburnerDriftCity));
+      const raid = part.action.name === "Raid";
+      const thereBefore = raid ? chanceThere(part, reference, city, start.ceiling) : 0;
+      applyAttempts(cities, worked, drift, attempts, { ceiling: start.ceiling, takesCommunities: raid });
+      const now = cities[worked] as BladeburnerDriftCity;
       // The chunk's attempts each drawn at the chance before it: Σ over j < a of p(j), exact where p is linear in j
       // (the trapezoid and half its fall); one attempt or less, the chance before it.
-      const drawn = attempts >= 1 ? (attempts * (before + after)) / 2 + (before - after) / 2 : attempts * before;
+      const linear = (from: number, to: number) =>
+        attempts >= 1 ? (attempts * (from + to)) / 2 + (from - to) / 2 : attempts * from;
+      // Raid's successes take communities, each where there's some (#418's review): its successes the communities taken,
+      // each attempt's success a Poisson's draw at its chance there, none at 0.
+      const drawn = raid
+        ? takeCommunities(now, linear(thereBefore, chanceThere(part, reference, now, start.ceiling)))
+        : linear(before, driftedChance(part, reference, now, start.ceiling));
       successes[index] = (successes[index] as number) + drawn;
     }
-    // The time's own over the chunk: the random events' mean and the decay.
-    if (dt > 0) applyEvents(cities, dt);
+    // The time's own over its second half, the city worked's: the random events' mean and the decay.
+    const half = cities.map((_, i) => (i === worked ? dt / 2 : 0));
+    if (dt > 0) applyEvents(cities, half, { index: worked, ceiling: start.ceiling });
     // B4's order: the city first (the most chance factor, its chaos as it is), then Diplomacy there, to its ceiling.
     if (moves) worked = mostFactor(cities, worked, raidAlone, start.ceiling);
     const here = cities[worked] as BladeburnerDriftCity;
-    if (here.chaos > start.ceiling && keep > 0 && keep < 1) {
-      diplomacySeconds += (DIPLOMACY_SECONDS * Math.log(start.ceiling / here.chaos)) / Math.log(keep);
-      here.chaos = start.ceiling;
+    if (here.chaos > 0 && keep > 0 && keep < 1) {
+      const mix = mixOf(here);
+      let spent = 0;
+      const cohorts = mix.cohorts.map((cohort) => {
+        if (!(cohort.chaos > start.ceiling)) return cohort;
+        spent += (cohort.mass * DIPLOMACY_SECONDS * Math.log(start.ceiling / cohort.chaos)) / Math.log(keep);
+        return { mass: cohort.mass, chaos: start.ceiling };
+      });
+      if (spent > 0) {
+        diplomacySeconds += spent;
+        setMix(here, { zero: mix.zero, cohorts });
+      }
     }
+    curve.attempts.push((((parts[0]?.attempts ?? 0) / chunks) * (chunk + 1)) as number);
+    curve.successes.push(successes[0] ?? 0);
+    curve.diplomacy.push(diplomacySeconds);
   }
   return {
     state: { cities, worked, ceiling: start.ceiling },
     chances: parts.map((part, index) =>
       part.attempts > 0
         ? (successes[index] as number) / part.attempts
-        : driftedChance(part, reference, start.cities[start.worked] as BladeburnerDriftCity),
+        : driftedChance(part, reference, start.cities[start.worked] as BladeburnerDriftCity, start.ceiling),
     ),
     diplomacySeconds,
+    curve,
   };
 }
 
-/** `attempts` attempts' mean effects on city `worked` (a migration's population to the other cities, evenly). */
+/** A path's curve at `attempts` (`BladeburnerDriftResult`'s `curve`): its successes and Diplomacy's, linear between chunks. */
+export function bladeburnerDriftCurveAt(
+  curve: BladeburnerDriftResult["curve"],
+  attempts: number,
+): { successes: number; diplomacy: number } {
+  const { attempts: at, successes, diplomacy } = curve;
+  const last = at.length - 1;
+  if (!(attempts > 0)) return { successes: 0, diplomacy: 0 };
+  let j = 1;
+  while (j < last && (at[j] as number) < attempts) j++;
+  const from = at[j - 1] as number;
+  const to = at[j] as number;
+  const share = to > from ? Math.min(1, (attempts - from) / (to - from)) : 1;
+  const mix = (xs: number[]) => (xs[j - 1] as number) + share * ((xs[j] as number) - (xs[j - 1] as number));
+  return { successes: mix(successes), diplomacy: mix(diplomacy) };
+}
+
+/**
+ * `attempts` attempts' mean effects on city `worked` (a migration's population to the other cities, evenly); its map
+ * on the chaos, c × scale + add (each cohort's, the share at 0 a cohort at `add` where it's over 0).
+ */
 function applyAttempts(
   cities: BladeburnerDriftCity[],
   worked: number,
   drift: BladeburnerAttemptDrift,
   attempts: number,
-): void {
+  {
+    ceiling = Number.POSITIVE_INFINITY,
+    takesCommunities = false,
+  }: {
+    /** Diplomacy's hold: a cohort there scaled by the log's mean (`chaosLogScale`), the time to hold it the log's. */
+    ceiling?: number;
+    /** Raid: its communities taken on their distribution after (`takeCommunities`), not here. */
+    takesCommunities?: boolean;
+  } = {},
+): { scale: number; add: number } {
   const city = cities[worked] as BladeburnerDriftCity;
   // chaos × s + a, k times: s^k·chaos + a·(s^k − 1)/(s − 1), or + a·k at s 1.
   const scaled = drift.chaosScale ** attempts;
   const added =
     drift.chaosScale === 1 ? drift.chaosAdd * attempts : (drift.chaosAdd * (scaled - 1)) / (drift.chaosScale - 1);
-  city.chaos = Math.max(0, city.chaos * scaled + added);
+  if (scaled !== 1 || added !== 0) {
+    const mix = mixOf(city);
+    // A cohort that reaches the hold: its mean scale to it, then the log's mean past it (the time to hold it its log's).
+    const growing = drift.chaosScale > 1;
+    const cohorts = mix.cohorts.map((cohort) => {
+      if (!growing || !(cohort.chaos * scaled > ceiling))
+        return { mass: cohort.mass, chaos: cohort.chaos * scaled + added };
+      const toHold = cohort.chaos >= ceiling ? 0 : Math.log(ceiling / cohort.chaos) / Math.log(drift.chaosScale);
+      return {
+        mass: cohort.mass,
+        chaos: Math.max(cohort.chaos, ceiling) * Math.exp(drift.chaosLogScale * (attempts - toHold)) + added,
+      };
+    });
+    if (added > 0 && mix.zero > 0) cohorts.push({ mass: mix.zero, chaos: added });
+    setMix(city, { zero: added > 0 ? 0 : mix.zero, cohorts });
+  }
   const kept = drift.populationScale ** attempts;
   const leaving = city.population * kept * (1 - (1 - drift.migrated) ** attempts);
   city.population = Math.max(0, city.population * kept - leaving);
@@ -339,10 +734,11 @@ function applyAttempts(
     for (const [i, other] of cities.entries()) if (i !== worked) other.population += leaving / others;
   }
   const moved = drift.communities * attempts;
-  city.communities = Math.max(0, city.communities + moved);
+  if (!takesCommunities && city.communitiesMix === undefined) city.communities = Math.max(0, city.communities + moved);
   if (others > 0 && drift.migrated > 0 && moved < 0) {
     for (const [i, other] of cities.entries()) if (i !== worked) other.communities += -moved / others;
   }
+  return { scale: scaled, add: added };
 }
 
 /**
@@ -355,12 +751,14 @@ function applyAttempts(
 function mostFactor(cities: readonly BladeburnerDriftCity[], current: number, raid: boolean, ceiling: number): number {
   const worked = cities[current] as BladeburnerDriftCity;
   const kept =
-    raid && !(worked.communities > 0) ? -1 : cityChanceFactor({ ...worked, chaos: Math.min(worked.chaos, ceiling) });
+    raid && !(communitiesFactor(worked) > 0)
+      ? -1
+      : cityChanceFactor(worked, ceiling) * (raid ? communitiesFactor(worked) : 1);
   let best = current;
   let most = kept;
   for (const [i, city] of cities.entries()) {
-    if (i === current || (raid && !(city.communities > 0))) continue;
-    const factor = cityChanceFactor(city);
+    if (i === current || (raid && !(communitiesFactor(city) > 0))) continue;
+    const factor = cityChanceFactor(city) * (raid ? communitiesFactor(city) : 1);
     if (factor > most) {
       best = i;
       most = factor;
@@ -382,9 +780,12 @@ export function bladeburnerDriftStart(
 ): BladeburnerDriftState | null {
   const worked = cities.findIndex((each) => each.name === city);
   if (worked < 0) return null;
-  const copied = cities.map((each) => ({ ...each }));
+  const copied = cities.map(copyCity);
   const here = copied[worked] as BladeburnerDriftCity;
-  if (chaos !== undefined) here.chaos = chaos;
+  if (chaos !== undefined && chaos !== here.chaos) {
+    here.chaos = chaos;
+    delete here.chaosMix;
+  }
   return { cities: copied, worked, ceiling: Math.max(BLADEBURNER_CONSTANTS.chaosThreshold, here.chaos) };
 }
 

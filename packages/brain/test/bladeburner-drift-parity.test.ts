@@ -9,11 +9,16 @@
 //   standard errors of the draws' own spread there.
 // - **The chances after:** at the figures the run left (the estimate set to the truth: the range read a point), each
 //   action's chance read against core's from the city's figures before the run through `driftedChance`.
+// - **The events and the decay over time** (#418's review): ten idle hours of the engine from the six at chaos 30, the
+//   six's communities (never falling: the migrations move them), chaos (each city at least its decay's fall) and
+//   population against core's mean (`bladeburnerEventDrift`), each within four standard deviations of the draws.
 import {
   actionSuccessChance,
+  BLADEBURNER_EVENT_SECONDS,
   BLADEBURNER_LEVELLED_ACTIONS,
   type BladeburnerLevelledAction,
   bladeburnerAttemptDrift,
+  bladeburnerEventDrift,
   bladeburnerPersonOf,
   driftedChance,
   skillExpFor,
@@ -206,3 +211,80 @@ function checkDraw(name: string, attempt: BladeburnerAttempt): void {
       break;
   }
 }
+
+/** Idle hours of the engine's events (#418's review: an engine check of the events and migration over time). */
+const IDLE_HOURS = 10;
+
+test("the engine's events and decay over idle hours against core's mean (#418's review)", async () => {
+  // The six at chaos 30 (over 1.08, where the riots' mean outruns the decay; no clamp at 0 in the window), each its
+  // population and communities as the BitNode starts them, no action: the events' and the decay's alone
+  // (`Bladeburner.ts:1395-1409`, `randomEvent` `:601-699`).
+  const sim = await start({
+    seed: 1,
+    epochMs: Date.UTC(2026, 0, 1),
+    fixture: { kind: "bitnode", n: 6, sourceFiles: { 1: 3 } },
+  });
+  await sim.diagnostics.setHomeRam(128);
+  await sim.diagnostics.gainCombatExp(skillExpFor(160, 1.28));
+  const joined = await runScript(sim, "out(ns.bladeburner.joinBladeburnerDivision());");
+  expect(joined.out).toEqual([true]);
+  for (const city of await sim.diagnostics.bladeburnerCities()) {
+    await sim.diagnostics.setBladeburnerFigures({ city: city.name, chaos: 30 });
+  }
+  const before = await sim.diagnostics.bladeburnerCities();
+  const seconds = IDLE_HOURS * 3600;
+  await sim.advance(seconds * 1000);
+  const after = await sim.diagnostics.bladeburnerCities();
+  const events = seconds / BLADEBURNER_EVENT_SECONDS;
+  const rates = bladeburnerEventDrift(before);
+  const sum = (xs: number[]) => xs.reduce((total, x) => total + x, 0);
+  const rows: string[] = [];
+  // The communities: the events move them (a community's migration, a migration's 5%) and add them (a new one, or one
+  // where there are none), never take one, so the six's total never falls; its rise a count of the new ones, 0.05 an
+  // event (more where a city has none: none here), against core's mean, within 4 of its Poisson's standard deviations.
+  const communities = sum(after.map((city) => city.communities)) - sum(before.map((city) => city.communities));
+  const communitiesMean = sum(rates.map((rate) => rate.communities)) * seconds;
+  expect(communities).toBeGreaterThanOrEqual(0);
+  expect(Math.abs(communities - communitiesMean)).toBeLessThanOrEqual(4 * Math.sqrt(communitiesMean));
+  rows.push(`the communities +${communities} over the six, core's mean +${communitiesMean.toFixed(2)}`);
+  // The chaos: each city's decay 0.0001 a second exactly (no clamp from 30), each riot (chaos + 1) × 1.05–1.20 on top,
+  // so each city at least its decay's fall; the six's rise against core's mean, within 4 standard deviations of the
+  // riots' draws (each event a riot in a city with chance 0.2 / 6, at the chaos read).
+  for (const [i, city] of after.entries()) {
+    const read = before[i] as (typeof before)[number];
+    expect(city.name).toBe(read.name);
+    expect(city.chaos, city.name).toBeGreaterThanOrEqual(read.chaos - 0.0001 * seconds - 1e-9);
+  }
+  const chaos = sum(after.map((city) => city.chaos)) - sum(before.map((city) => city.chaos));
+  const chaosMean = sum(rates.map((rate) => rate.chaos - 0.0001)) * seconds;
+  let riotSquare = 0;
+  for (const city of before) {
+    for (let u = 5; u <= 20; u++) riotSquare += ((city.chaos + 1) * (1 + u / 100) - city.chaos) ** 2 / 16;
+  }
+  const chaosError = Math.sqrt(events * (0.2 / before.length) * riotSquare);
+  expect(Math.abs(chaos - chaosMean)).toBeLessThanOrEqual(4 * chaosError);
+  rows.push(
+    `the chaos ${chaos >= 0 ? "+" : ""}${chaos.toFixed(2)} over the six, core's mean +${chaosMean.toFixed(2)} (± ${chaosError.toFixed(2)})`,
+  );
+  // The population: the migrations move it (their total kept, but for the +100 under 1.5e9, `:597-598`), the growths
+  // and the falls change it; the six's change against core's mean, within 4 standard deviations of the events' draws.
+  const population = sum(after.map((city) => city.population)) - sum(before.map((city) => city.population));
+  const populationMean = sum(rates.map((rate) => rate.population)) * seconds;
+  let shareSquare = 0;
+  const squareOf = (low: number, high: number) => {
+    let total = 0;
+    for (let u = low; u <= high; u++) total += (u / 100) ** 2;
+    return total / (high - low + 1);
+  };
+  // A new community's +10–20% (0.05), new Synthoids' +8–24% (0.2) and fewer Synthoids' −8–20% (0.2).
+  for (const city of before) {
+    shareSquare += city.population ** 2 * (0.05 * squareOf(10, 20) + 0.2 * squareOf(8, 24) + 0.2 * squareOf(8, 20));
+  }
+  const populationError = Math.sqrt((events * shareSquare) / before.length);
+  expect(Math.abs(population - populationMean)).toBeLessThanOrEqual(4 * populationError);
+  rows.push(
+    `the population ${population >= 0 ? "+" : ""}${(population / 1e6).toFixed(1)}m over the six, core's mean ` +
+      `+${(populationMean / 1e6).toFixed(1)}m (± ${(populationError / 1e6).toFixed(1)}m)`,
+  );
+  console.log(`${IDLE_HOURS} h idle (about ${events.toFixed(0)} events): ${rows.join("; ")}`);
+}, 600_000);

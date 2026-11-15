@@ -31,6 +31,7 @@ import {
   BLADEBURNER_CONSTANTS,
   type BladeburnerActionPlan,
   type BladeburnerLevelledAction,
+  bladeburnerDriftHorizon,
   bladeburnerLevelledAction,
   chaosDifficultyFactor,
   chooseBladeburnerAction,
@@ -185,6 +186,8 @@ export interface BladeburnerCityChoice {
   incite: (BladeburnerChaosMeasure & { work: string; countGain: number; unbounded: number }) | null;
   /** The chaos action to run, or null: Diplomacy where it pays, else Incite Violence where it pays. */
   chaosAction: BladeburnerChaosActionName | null;
+  /** The drift's horizon the cities' plans were priced over (#418's review: once a reading), where priced. */
+  horizonSeconds?: number;
 }
 
 /** B2's forecast input with the skills read, as `chooseBladeburnerAction` takes it, the city aside. */
@@ -237,6 +240,7 @@ export function chooseBladeburnerCity(
     plan: forecastIn(each, each.chaos, input.readings, rateInput),
   }));
   const target = input.target;
+  let horizonSeconds: number | null = input.drift?.horizonSeconds ?? null;
   if (target !== undefined && target.rank < target.target) {
     // Under a target (#386), the least time to it, the current city on a tie. Every chance there is the one read times
     // the city's ratio, and a walk's time falls as its chance rises (each success at the lower chance is one at the
@@ -258,7 +262,19 @@ export function chooseBladeburnerCity(
         each === topWithRaid ||
         (each === current && [top, topWithRaid].some((other) => other !== null && ratioOf(other) === ratioOf(each))),
     );
-    for (const each of weighed) each.plan = forecastIn(each);
+    // The drift's horizon (#418's review): once, in the city read, for every city weighed (each then one solve).
+    if (input.drift !== undefined && !((input.drift.horizonSeconds ?? 0) > 0)) {
+      horizonSeconds = bladeburnerDriftHorizon({
+        ...input,
+        city: { ratio: 1, raid: here.communities > 0 },
+        drift: { ...input.drift, city },
+      });
+    }
+    const priced =
+      horizonSeconds === null || input.drift === undefined
+        ? input
+        : { ...input, drift: { ...input.drift, horizonSeconds } };
+    for (const each of weighed) each.plan = forecastIn(each, each.chaos, input.readings, priced);
   }
   // Under a target, the least time to it among the cities weighed; else the most rank a second. The current city on a
   // tie.
@@ -329,5 +345,6 @@ export function chooseBladeburnerCity(
     diplomacy,
     incite,
     chaosAction: diplomacy?.pays ? DIPLOMACY : incite?.pays ? INCITE_VIOLENCE : null,
+    ...(horizonSeconds !== null && horizonSeconds > 0 ? { horizonSeconds } : {}),
   };
 }

@@ -1185,8 +1185,16 @@ export class BladeburnerRule {
         : {
             ...forecast,
             city: { ratio: cityCompetenceRatio(here, there) ?? 0, raid: there.communities > 0 },
-            // The drift from the city chosen (#418), as core's `chooseBladeburnerCity` prices it there.
-            ...(forecast.drift === undefined ? {} : { drift: { ...forecast.drift, city: there.name } }),
+            // The drift from the city chosen (#418), as core's `chooseBladeburnerCity` prices it there: at its horizon.
+            ...(forecast.drift === undefined
+              ? {}
+              : {
+                  drift: {
+                    ...forecast.drift,
+                    city: there.name,
+                    ...(cities.horizonSeconds === undefined ? {} : { horizonSeconds: cities.horizonSeconds }),
+                  },
+                }),
           };
     const resting = this.#resting || plan.work === null;
     const chaosAction = kept ?? cities?.chaosAction ?? null;

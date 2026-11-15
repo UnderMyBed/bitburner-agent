@@ -6,9 +6,10 @@
 // at 128 GB, CyberSec joined; and the rank set to `RANK` through the game's own change, which gives its points (one for
 // each 3, `Bladeburner.ts:1284-1293`).
 // Then: the points spent by the reading after the one that shows them, through the `upgradeBladeburnerSkill` intents'
-// worker; the rule's forecast with the skills over B2's without them, and the forecast of the actions run over what
-// B2's forecast without the skills gives the same game time; the rank measured within its bound of that forecast
-// (section 8's own check); the whole report passing.
+// worker; the rule's forecast with the skills over B2's without them (both under the target and the drift); the
+// forecast of the actions run against every attempt's expected rank given the attempts made, within its error (#418's
+// ruling 2: rank a second over the hour printed beside it, labelled, not a bar); the rank measured within its bound of
+// that forecast (section 8's own check); the whole report passing.
 import {
   BLADEBURNER_CONTRACTS,
   BLADEBURNER_READING_SECONDS,
@@ -30,7 +31,7 @@ const HOUR = 60 * MINUTE;
 /** The rank set: 50 points. */
 const RANK = 150;
 
-test("BN6.1, an hour from a harness join at rank 150: the points spent within a reading, the forecast over B2's; the report passes", async () => {
+test("BN6.1, an hour from a harness join at rank 150: the points spent within a reading, the forecast as the attempts made; the report passes", async () => {
   const fresh = await freshStartOf({
     withDesiredState: true,
     fixture: { kind: "bitnode", n: 6, sourceFiles: SOURCE_FILES },
@@ -97,7 +98,7 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   console.log(section);
   console.log(`virtual: ${((fresh.game.clock.now() - startedAtMs) / MINUTE).toFixed(1)} min since the purchase`);
   const forecasts =
-    /the rule's forecast there: ([\d.]+) rank\/min with the levels read \([^)]*\); ([\d.]+) rank\/min with none \(B2's\)/.exec(
+    /the rule's forecast there: ([\d.]+) rank\/min with the levels read \([^)]*\); ([\d.]+) rank\/min with none \(B2's\); ([\d.]+) rank\/min with none at rank a second \(an hour's\)/.exec(
       section,
     );
   const measured =
@@ -106,25 +107,27 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
     );
   expect(forecasts).not.toBeNull();
   expect(measured).not.toBeNull();
-  const [withSkills, without] = (forecasts ?? []).slice(1).map(Number) as [number, number];
+  const [withSkills, without, withoutNow] = (forecasts ?? []).slice(1).map(Number) as [number, number, number];
   const [rank, forecast, sigma, bound] = (measured ?? []).slice(1).map(Number) as [number, number, number, number];
   // The game time the actions ran over, as the report counts it (gap-report.ts's `formatDuration`).
   const duration = /over (?:(\d+) h )?(?:(\d+) min)? ?(?:(\d+) s)? of game time/.exec(section);
   expect(duration).not.toBeNull();
   const [hours, minutes, seconds] = (duration ?? []).slice(1).map((each) => Number(each ?? 0)) as number[];
   const gameMinutes = 60 * (hours ?? 0) + (minutes ?? 0) + (seconds ?? 0) / 60;
-  const b2 = without * gameMinutes;
+  // Rank a second with none at the chances read over the hour's game minutes: main's measure for an hour (#418's
+  // ruling 2), printed beside the forecast, not a bar. The objective is #386's least expected time to the target, and
+  // the drift prices Raid's chance down over its horizon (its city drained, Diplomacy's time on its chaos), so the plan
+  // to the target is not the hour's most rank (core's walks of the game's draws order the two, check 3).
+  const atRankASecond = withoutNow * gameMinutes;
   console.log(
-    `forecast over a cycle: ${withSkills} rank/min with the skills, ${without} without (B2's); rank ${rank} against ` +
-      `${forecast} forecast of the actions run (σ ${sigma}), its bound ${bound}; B2's forecast over ${gameMinutes} min: ` +
-      `${b2.toFixed(2)}`,
+    `forecast over a cycle: ${withSkills} rank/min with the skills, ${without} without (B2's, under the target and the ` +
+      `drift), ${withoutNow} at rank a second; rank ${rank} against ${forecast} forecast of the actions run (σ ${sigma}), ` +
+      `its bound ${bound}`,
   );
+  // With the skills over without, both under the target and the drift.
   expect(withSkills).toBeGreaterThan(without);
-  // The rank rate up on B2's forecast without the skills, by the forecast of the actions the skills let it run (the
-  // game's estimate at the levels bought). The rank measured is judged against its bound only: once the skills lift
-  // Raid's chance the rule works it (55 rank a success, its σ over the hour about 30), so an hour's rank can't show
-  // the rise apart from luck.
-  expect(forecast).toBeGreaterThan(b2);
+  // The rank measured is judged against its bound only: once the skills lift Raid's chance the rule works it (55 rank a
+  // success, its σ over the hour about 30), so an hour's rank can't show the rise apart from luck.
   expect(rank).toBeGreaterThanOrEqual(bound);
   // The low-variance part on its own (#381's review): Field Analysis and the contracts, from section 8's lines by
   // action, their rank and their forecast's Bernstein bound at the same α (printed). Raid's luck is left to the whole's
@@ -147,9 +150,11 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
       `against ${sum(1).toFixed(2)} forecast (σ ${Math.sqrt(steadyVariance).toFixed(2)}), their bound ${steadyBound.toFixed(2)}`,
   );
   // #417's review: the steady line printed, not asserted (the rule works Raid most of the hour since #415, so the steady
-  // part is Field Analysis's alone). Asserted instead: every attempt's expected rank given the attempts made (the
-  // simulator's log, Raid included: p × gain − (1 − p) × the floored loss, `attemptsSummary`) and Field Analysis's rank
-  // as made (no draw in it), over B2's forecast without the skills over the same game minutes.
+  // part is Field Analysis's alone). Asserted instead (#418's ruling 2): the hour's forecast of the actions run against
+  // every attempt's expected rank given the attempts made (the simulator's log, Raid included: p × gain − (1 − p) × the
+  // floored loss, `attemptsSummary`) and Field Analysis's rank as made (no draw in it), within the forecast's own error
+  // (its σ, the successes' spread about it; tighter than its bound at section 8's α): the luck of the successes out, what
+  // is left is the forecast's chances against the game's own at each attempt.
   const attempts = await attemptsIn(fresh.simulation, 0, fresh.game.clock.now());
   const fieldAnalysis = steady.find((each) => each.name === "Field Analysis")?.figures[0] ?? 0;
   const all = attemptsSummary(attempts, null);
@@ -157,9 +162,20 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   console.log(
     `every attempt expected given the actions: ${expectedAll.toFixed(2)} (${attempts.length} attempts, ` +
       `${all.successes} successes, ${(all.realised + fieldAnalysis).toFixed(2)} realised, Field Analysis's ` +
-      `${fieldAnalysis.toFixed(2)} in both) against B2's forecast without the skills ${b2.toFixed(2)}`,
+      `${fieldAnalysis.toFixed(2)} in both) against the forecast of the actions run ${forecast} (σ ${sigma})`,
   );
-  expect(expectedAll).toBeGreaterThan(b2);
+  // Its parts at the last reading, over the same minutes: the skills' (with them over without, both under the target
+  // and the drift), and the target's and the drift's (B2's without them under the target over rank a second's at the
+  // chances read: the plan to the target priced over its horizon, Raid's chance falling as its city drains and
+  // Diplomacy's time on its chaos, where it works Raid, against the hour's most rank at the chances read).
+  const skillsPart = (withSkills - without) * gameMinutes;
+  const driftPart = (without - withoutNow) * gameMinutes;
+  console.log(
+    `rank a second with none over the hour (main's measure, an hour's rank; not a bar since #418's ruling 2): ` +
+      `${atRankASecond.toFixed(2)} against the forecast of the actions run ${forecast}; at the last reading, the skills' ` +
+      `part ${skillsPart.toFixed(2)} and the target's and the drift's ${driftPart.toFixed(2)} over ${gameMinutes} min`,
+  );
+  expect(Math.abs(expectedAll - forecast)).toBeLessThanOrEqual(sigma);
   expect(section).toContain("  skill points unspent with a level to buy, past 52 s:\n    none");
   expect(failures).toEqual([]);
 }, 240_000);

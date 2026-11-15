@@ -693,11 +693,17 @@ export class BladeburnerActionsFold {
       skills: { read: last.kept.levels, planned: {} },
       ...(last.kept.target === null ? {} : { target: { rank: last.kept.rank, target: last.kept.target } }),
     }).rankPerSecond;
+    // With none at the hour's own horizon (#418's ruling 1): rank a second at the chances read, no target (main's
+    // measure for an hour's rank, the drift over a reading).
+    const withoutNow = chooseBladeburnerAction({
+      ...this.#forecastInput(last.kept),
+      skills: { read: last.kept.levels, planned: {} },
+    }).rankPerSecond;
     const lines = [
       `  the skills (#379): bought over the window: ${bought.length === 0 ? "none" : bought.join(", ")}; at the last ` +
         `reading, ${formatIsoTime(last.kept.atMs)}: ${describeSkillPlan(last.plan, last.kept.levels, last.kept.costMultiplier)}`,
       `    the rule's forecast there: ${perMinute(withSkills)} with the levels read (${levelsText(last.kept.levels)}); ` +
-        `${perMinute(without)} with none (B2's)`,
+        `${perMinute(without)} with none (B2's); ${perMinute(withoutNow)} with none at rank a second (an hour's)`,
     ];
     lines.push(`  skill points unspent with a level to buy, past ${formatDuration(BLADEBURNER_SKILLS_WITHIN_MS)}:`);
     const long = [...this.#unspent, ...(this.#unspentOpen === null ? [] : [this.#unspentOpen])].filter(

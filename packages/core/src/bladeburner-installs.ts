@@ -222,9 +222,11 @@ export interface BlackOpsInstallTiming {
   marginSeconds: number | null;
   /**
    * The hospital's money a game second on each side (#418, the grown estimate's `moneyLostPerSecond`): keeping, at the
-   * money read; installing now, from the $1,000 an install leaves (`PlayerObjectGeneralMethods.ts:79-101`). Null, not
-   * read. Not traded against the time: both sides run to the destroy with no install after, so no money buys anything
-   * on either; it's what A6's next purchases lose (the planner's trade, #359, the owner's).
+   * money read; installing now, from the $1,000 an install leaves (`MONEY_AFTER_INSTALL`, the floor, labelled there).
+   * Null, not read. Not traded against the time (the planner's trade, #359, the owner's): the money is priced where it
+   * buys augmentations, A6's income net of the hospital's bills (the brain's `earnedOf`), so B7's re-plan each 10 min
+   * sees the next install's purchases after them. Labelled: keeping's side never installs in its model (the route to
+   * the destroy without one), optimistic for keeping, as a later install buys less with the bills paid.
    */
   moneyLostPerSecond: { keep: number | null; installNow: number | null };
 }
@@ -278,7 +280,11 @@ function routeSeconds(
   });
 }
 
-/** The money an install leaves (`PlayerObjectGeneralMethods.ts:79-101`; #418: the hospital's bill after it). */
+/**
+ * The money an install leaves (`PlayerObjectGeneralMethods.ts:79-101`; #418: the hospital's bill after it). Labelled
+ * (#418's review): the floor, the money at the install's moment; the route after it earns, so its bills (capped by the
+ * money, `hospitalCostPerFailure`) rise from it: installing now's hospital money a lower bound.
+ */
 export const MONEY_AFTER_INSTALL = 1000;
 
 /**

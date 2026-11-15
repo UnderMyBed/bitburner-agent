@@ -68,26 +68,21 @@ export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
       "a failure loses none, so the window's expected rank (77.9) is a lottery's mean and the estimate's first-passage " +
       "time to it (2.71 h) is long against the fixed window (#411's diagnosis)",
   },
-  "B3's hour at rank 150": {
-    ratio: 0.29,
-    within: false,
-    expected: 0.87,
-    expectedWithin: true,
-    why:
-      "realised: 49 attempts' rank 5.06 against 30.67 expected (rank 150 to 162), the failures' 2.5 lost each past " +
-      "the floor: a lottery's draw",
-  },
+  "B3's hour at rank 150": { ratio: 1.93, within: true, expected: 1.4, expectedWithin: true },
   "B4's hour, its chaos edited": { ratio: 0.61, within: true, expected: 0.75, expectedWithin: true },
   "B5's Typhoon": { ratio: 1.21, within: true, expected: 0.86, expectedWithin: true },
   "B5's climb to Zero": { ratio: 1.06, within: true, expected: 1.19, expectedWithin: true },
   "B6's Daedalus": { ratio: 0.96, within: true, expected: 0.96, expectedWithin: true },
   // BN7's (#411): the same suites at BN7's multipliers.
   "B2's hour from a harness join, BN7": {
-    ratio: 2.99,
+    ratio: 3.03,
     within: false,
-    expected: 1.96,
-    expectedWithin: true,
-    why: "realised: 10 successes in 44 attempts gave 41 of its 45 rank against 31 expected (section 8's own line)",
+    expected: 2.0,
+    expectedWithin: false,
+    why:
+      "realised: 10 successes in 44 attempts gave 41 of its 45 rank against 31 expected (section 8's own line); " +
+      "expected: just past ×2 (×2.00), Raid's attempts from rank 0 in jumps of 55, the estimate's first passage to the " +
+      "expected 35.1 long against the fixed hour (#411's diagnosis)",
   },
   "B6's Daedalus, BN7": { ratio: 0.95, within: true, expected: 0.95, expectedWithin: true },
 };

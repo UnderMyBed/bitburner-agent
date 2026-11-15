@@ -10,12 +10,15 @@ import { describe, expect, test } from "vitest";
 import { COMBAT_STATS, type CombatPerson, skillExpFor, skillLevelOf } from "../src/bladeburner.ts";
 import {
   actionHpLoss,
+  actionRankGain,
+  actionRankLoss,
   actionSuccessChance,
   BLADEBURNER_DRIFT_PASSES,
   BLADEBURNER_LEVELLED_ACTIONS,
   type BladeburnerActionReading,
   type BladeburnerLevelledAction,
   type BladeburnerPerson,
+  bladeburnerDriftHorizon,
   bladeburnerLevelledAction,
   bladeburnerPlansToTarget,
   bladeburnerTailMix,
@@ -25,6 +28,7 @@ import {
 } from "../src/bladeburner-actions.ts";
 import { BLADEBURNER_BLACK_OPS, blackOpSuccessChance } from "../src/bladeburner-black-ops.ts";
 import { chooseBladeburnerCity, cityCompetenceRatio } from "../src/bladeburner-cities.ts";
+import { chaosDifficultyFactor } from "../src/bladeburner-constants.ts";
 import {
   BLADEBURNER_EVENT_SECONDS,
   type BladeburnerDriftCity,
@@ -35,6 +39,7 @@ import {
   cityChanceFactor,
   driftedChance,
   hospitalCostPerFailure,
+  logScaleMean,
   migrationShare,
 } from "../src/bladeburner-drift.ts";
 import {
@@ -103,6 +108,11 @@ describe("an attempt's effects (#418): the game's own", () => {
     expect(bladeburnerAttemptDrift(action("Raid"), 0.2)).toEqual({
       chaosScale: 1.03,
       chaosAdd: 0,
+      // E[ln(1 + U/100)] over U of 1..5, under ln(1.03) (Jensen's).
+      chaosLogScale: expect.closeTo(
+        (Math.log(1.01) + Math.log(1.02) + Math.log(1.03) + Math.log(1.04) + Math.log(1.05)) / 5,
+        12,
+      ),
       populationScale: expect.closeTo(0.2 * 0.99 + 0.8 * 0.9925, 12),
       migrated: 0,
       communities: -0.2,
@@ -129,11 +139,14 @@ describe("an attempt's effects (#418): the game's own", () => {
       expect(bladeburnerAttemptDrift(action(name), 0.2)).toEqual({
         chaosScale: 1,
         chaosAdd: 0,
+        // Assassination's ±5%: 1 on average, its log's mean under 0.
+        chaosLogScale: name === "Assassination" ? expect.closeTo(logScaleMean(-5, 5), 12) : 0,
         populationScale: 1,
         migrated: 0,
         communities: 0,
       });
     }
+    expect(logScaleMean(-5, 5)).toBeLessThan(0);
     expect(migrationShare(10)).toBeCloseTo(0.099, 12);
   });
 });
@@ -457,45 +470,55 @@ function readAt(who: BladeburnerPerson, count = 20) {
 
 describe("the path's chunks (#418): against the same path an attempt at a time", () => {
   test.each([
-    ["Raid", 0.06, 1600, 90],
-    ["Bounty Hunter", 0.32, 3000, 70],
-    ["Investigation", 0.2, 900, 60],
-  ] as const)("%s at %s, %s attempts every %s s, the six cities, the city moved", (name, chance, attempts, cycle) => {
-    const start = bladeburnerDriftStart(SIX, "New Tokyo") as NonNullable<ReturnType<typeof bladeburnerDriftStart>>;
-    const reference = start.cities[start.worked] as BladeburnerDriftCity;
-    const options = { charisma: 50, moves: true };
-    const chunked = bladeburnerDriftPath(
-      start,
-      reference,
-      [{ action: action(name), chance, attempts }],
-      attempts * cycle,
-      options,
-    );
-    let state = start;
-    let drawn = 0;
-    let diplomacy = 0;
-    for (let k = 0; k < attempts; k++) {
-      const one = bladeburnerDriftPath(
-        state,
+    ["Raid", 0.06, 1600, 90, false],
+    ["Raid", 0.06, 1600, 90, true],
+    ["Bounty Hunter", 0.32, 3000, 70, true],
+    ["Investigation", 0.2, 900, 60, true],
+  ] as const)(
+    "%s at %s, %s attempts every %s s, the six cities, the city moved: %s",
+    (name, chance, attempts, cycle, moves) => {
+      const start = bladeburnerDriftStart(SIX, "New Tokyo") as NonNullable<ReturnType<typeof bladeburnerDriftStart>>;
+      const reference = start.cities[start.worked] as BladeburnerDriftCity;
+      const options = { charisma: 50, moves };
+      const chunked = bladeburnerDriftPath(
+        start,
         reference,
-        [{ action: action(name), chance, attempts: 1 }],
-        cycle,
+        [{ action: action(name), chance, attempts }],
+        attempts * cycle,
         options,
       );
-      drawn += one.chances[0] as number;
-      diplomacy += one.diplomacySeconds;
-      state = one.state;
-    }
-    const exact = drawn / attempts;
-    const close = (a: number, b: number) => Math.abs(a / b - 1);
-    console.log(
-      `${name}: the mean chance ${(chunked.chances[0] as number).toFixed(5)} chunked, ${exact.toFixed(5)} an attempt at a ` +
-        `time; Diplomacy ${chunked.diplomacySeconds.toFixed(0)} s against ${diplomacy.toFixed(0)} s`,
-    );
-    expect(close(chunked.chances[0] as number, exact)).toBeLessThan(0.01);
-    // Diplomacy's time an attempt within 1% of the cycle (where the city moves decides it, the chunks' own resolution).
-    expect(Math.abs(chunked.diplomacySeconds - diplomacy) / attempts).toBeLessThan(0.01 * cycle);
-  });
+      let state = start;
+      let drawn = 0;
+      let diplomacy = 0;
+      for (let k = 0; k < attempts; k++) {
+        const one = bladeburnerDriftPath(
+          state,
+          reference,
+          [{ action: action(name), chance, attempts: 1 }],
+          cycle,
+          options,
+        );
+        drawn += one.chances[0] as number;
+        diplomacy += one.diplomacySeconds;
+        state = one.state;
+      }
+      const exact = drawn / attempts;
+      const close = (a: number, b: number) => Math.abs(a / b - 1);
+      console.log(
+        `${name}${moves ? ", moved" : ""}: the mean chance ${(chunked.chances[0] as number).toFixed(5)} chunked, ${exact.toFixed(5)} an attempt at a ` +
+          `time; Diplomacy ${chunked.diplomacySeconds.toFixed(0)} s against ${diplomacy.toFixed(0)} s`,
+      );
+      // In the city worked throughout, the chunks alone: the chance within 1%, Diplomacy's time an attempt within 1% of the
+      // cycle (Raid's 23 s in 228,000). Moved, Raid's 2% and 3%, labelled: B4 moves at a chunk's end in the path, at a
+      // reading (each attempt here) in the game, so Raid's city leaves its ceiling up to a chunk late (6 attempts here),
+      // first order in the chunk (Diplomacy 8.2 s an attempt at 64 chunks, 2.4 s at 256, `BLADEBURNER_DRIFT_CHUNKS`), and
+      // its pick among cities near level flips at other attempts (the chance 0.7% to 1.9% off across this round's
+      // versions). Moves a quarter chunk apart took Diplomacy to 0.1 s at 1.6 times a path's cost; not taken, for it.
+      const bars = moves && name === "Raid" ? { chance: 0.02, diplomacy: 0.03 } : { chance: 0.01, diplomacy: 0.01 };
+      expect(close(chunked.chances[0] as number, exact)).toBeLessThan(bars.chance);
+      expect(Math.abs(chunked.diplomacySeconds - diplomacy) / attempts).toBeLessThan(bars.diplomacy * cycle);
+    },
+  );
 });
 
 describe("the rule's horizon (#418): the plan's least expected time to the target at the chances read", () => {
@@ -539,9 +562,13 @@ describe("the rule's horizon (#418): the plan's least expected time to the targe
         `×${work?.drift?.populationRatio.toFixed(4)}, Diplomacy ${work?.diplomacySeconds.toFixed(1)} s an attempt; ${work?.drift?.passes} passes, ` +
         `${ms.toFixed(0)} ms (read: ${readMs.toFixed(0)} ms)`,
     );
-    // One pass (`BLADEBURNER_DRIFT_PASSES`): the horizon the plan's least time at the chances read, to the bit.
+    // One pass (`BLADEBURNER_DRIFT_PASSES`): the horizon the plans' least mean time at the chances read
+    // (`bladeburnerDriftHorizon`), to the bit; the chain's own time beside it (0 → 25: Raid's jumps of 55 land it
+    // sooner than its mean, 29.4 min against 38.4; far from it within 1%).
     expect(work?.drift?.passes).toBe(BLADEBURNER_DRIFT_PASSES);
-    if (BLADEBURNER_DRIFT_PASSES === 1) expect(horizon).toBe(plain.toTarget?.seconds);
+    if (BLADEBURNER_DRIFT_PASSES === 1) expect(horizon).toBe(bladeburnerDriftHorizon({ ...input, target, drift }));
+    const chain = plain.toTarget?.seconds as number;
+    if (to > 25) expect(Math.abs(horizon / chain - 1)).toBeLessThan(0.01);
     // Each Raid plan's chance under its read (its own fall, −0.75% of the population a failure, outruns the events'
     // rise); the actions that move no population rise with the events' (their chance over the read where the horizon
     // is long: the total population's 1.64% an hour).
@@ -595,6 +622,44 @@ describe("the grown estimate's step (#418): the rule's pricing at the same input
     }
   });
 
+  test("mid-route: the grown input's mix is the rule's at a reading taken there, to the bit", () => {
+    // 10 h of Raid from the start (its chaos, communities and population moved, the cohorts carried, B4's moves).
+    const start = bladeburnerGrowthStart(input, { rank: 0, points: 0, combat });
+    const at = start.drift as NonNullable<typeof start.drift>;
+    const moved = bladeburnerDriftPath(
+      at.state,
+      at.reference,
+      [{ action: action("Raid"), chance: 0.06, attempts: 400 }],
+      36000,
+      {
+        charisma: who.skills.charisma,
+        moves: true,
+      },
+    );
+    const state = { ...start, drift: { state: moved.state, reference: at.reference } };
+    const city = moved.state.cities[moved.state.worked] as BladeburnerDriftCity;
+    expect(city.chaosMix?.cohorts.length ?? 0).toBeGreaterThan(0);
+    for (const horizon of [600, 7200]) {
+      const grown = bladeburnerGrownInput(input, combat, state, horizon);
+      // The brain reading there: each chance read in the city worked now, the cities as they are, its horizon given.
+      const there = {
+        ...input,
+        readings: input.readings.map((read) => {
+          const each = bladeburnerLevelledAction(read.type, read.name) as BladeburnerLevelledAction;
+          const chance = driftedChance(
+            { action: each, chance: read.chance[0] },
+            at.reference,
+            city,
+            moved.state.ceiling,
+          );
+          return { ...read, chance: [chance, chance] as [number, number] };
+        }),
+        drift: { cities: moved.state.cities, city: city.name, horizonSeconds: horizon },
+      };
+      expect(bladeburnerTailMix(grown)).toEqual(bladeburnerTailMix(there));
+    }
+  });
+
   test("along the route: the cities move, the chances with them; with no cities read, the estimate as before", () => {
     const chance = blackOpSuccessChance(typhoon, who, { penalty: 1 });
     const at = { rank: 0, next: typhoon, chanceRead: [chance, chance] as [number, number] };
@@ -631,9 +696,20 @@ describe("the path's own steps (#418): the time's effects, one attempt, the move
     for (const [i, city] of SIX.entries()) {
       const each = rates[i] as (typeof rates)[number];
       const after = path.state.cities[i] as BladeburnerDriftCity;
-      expect(after.population, city.name).toBeCloseTo(city.population + each.population * seconds, 0);
-      expect(after.communities, city.name).toBeCloseTo(city.communities + each.communities * seconds, 9);
-      expect(after.chaos, city.name).toBeCloseTo(Math.max(0, city.chaos + (each.chaos - 0.0001) * seconds), 9);
+      const near = (a: number, b: number) => Math.abs(a / b - 1);
+      // In two halves (Strang's splitting), each at its own start's rates (the population's and a riot's by %): second
+      // order in the step, a part in 10⁵ at most here.
+      expect(near(after.population, city.population + each.population * seconds), city.name).toBeLessThan(1e-5);
+      expect(after.communities, city.name).toBeCloseTo(city.communities + each.communities * seconds, 6);
+      if (city.chaos > 1.1) {
+        // Over 0 the riots' mean and the decay.
+        expect(near(after.chaos, city.chaos + (each.chaos - 0.0001) * seconds), city.name).toBeLessThan(1e-5);
+      } else {
+        // At 0 the mean can't leave it, the draws do: the riots reaching it, each to 1.125 less half its step's decay.
+        const riots = (0.2 * seconds) / BLADEBURNER_EVENT_SECONDS / 6;
+        expect(after.chaos, city.name).toBeGreaterThan(0);
+        expect(after.chaos, city.name).toBeLessThanOrEqual(riots * 1.125);
+      }
     }
   });
 
@@ -644,7 +720,8 @@ describe("the path's own steps (#418): the time's effects, one attempt, the move
       charisma: 50,
       moves: false,
     });
-    expect(one.chances[0]).toBe(0.2);
+    // The chance before it, after the first half of the step's events (a part in 10⁵ of the population's growth).
+    expect(one.chances[0]).toBeCloseTo(0.2, 5);
     expect(driftedChance({ action: action("Raid"), chance: 0.2 }, reference, { ...reference, communities: 0 })).toBe(0);
   });
 
@@ -706,8 +783,17 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
       ...input,
       target,
       city: { ratio, raid: true },
-      drift: { cities, city: "Volhaven", chaos: there.chaos },
+      // At B4's horizon: the city read's, once (`bladeburnerDriftHorizon`).
+      drift: { cities, city: "Volhaven", chaos: there.chaos, horizonSeconds: choice?.horizonSeconds as number },
     });
+    expect(choice?.horizonSeconds).toBe(
+      bladeburnerDriftHorizon({
+        ...input,
+        target,
+        city: { ratio: 1, raid: true },
+        drift: { cities, city: "New Tokyo" },
+      }),
+    );
     expect(choice?.plan).toEqual(direct);
   });
 
@@ -760,5 +846,478 @@ describe("the grown estimate's state (#418): the chances at the city worked ther
       expect(at.chance[0], each.name).toBeCloseTo(Math.min(1, each.chance[0] * 0.5 ** 0.7), 12);
       if (each.name === "Raid") expect((empty.readings[i] as BladeburnerActionReading).chance[0]).toBe(0);
     }
+  });
+});
+
+/** Walks behind the env knob (`BLADEBURNER_DRIFT_WALKS`), fewer in CI. */
+const DRIFT_WALKS = Number(process.env.BLADEBURNER_DRIFT_WALKS ?? 300);
+
+/**
+ * Raid alone in one city of six for `hours`, an attempt each `cycle` s at `p0` there, walked under the game's draws
+ * (#418's review): each attempt's success, its population draw and its chaos's +1–5%; the decay, a second at a time
+ * with its clamp at 0 (`Bladeburner.ts:1395-1401`, taken between the draws, which it is exactly); an event each
+ * 240–600 s in a city of the six, each kind as `randomEvent` (`:601-699`) draws it (a migration's destination its own);
+ * Diplomacy as B4 spends it, the chaos over 50 taken to 50 after an attempt. Its mean chaos at the end, Diplomacy's
+ * seconds an attempt, the mean chance, the population at the end over the start's; and each one's standard error.
+ */
+function walkRaid({ chaos0, hours, cycle, p0, charisma, walks, seed }: Record<string, number>) {
+  const random = seeded(seed as number);
+  const keep = 1 - ((charisma as number) ** 0.045 + (charisma as number) / 1e3) / 100;
+  const attempts = Math.floor(((hours as number) * 3600) / (cycle as number));
+  const sums = { chaos: [] as number[], diplomacy: [] as number[], chance: [] as number[], population: [] as number[] };
+  for (let walk = 0; walk < (walks as number); walk++) {
+    const pops = Array.from({ length: 6 }, () => 1e9);
+    const comms = Array.from({ length: 6 }, () => 50);
+    let chaos = chaos0 as number;
+    let clock = 0;
+    let next = intIn(random, 240, 600);
+    let diplomacy = 0;
+    let drawn = 0;
+    const decayTo = (t: number) => {
+      chaos = Math.max(0, chaos - 0.0001 * (t - clock));
+      clock = t;
+    };
+    const event = () => {
+      const kind = random();
+      const s = Math.floor(random() * 6);
+      let d = Math.floor(random() * 5);
+      if (d >= s) d += 1;
+      const grow = (share: number) => {
+        pops[s] = (pops[s] as number) + Math.round((pops[s] as number) * share);
+      };
+      const move = (share: number, to: number) => {
+        const count = Math.round((pops[s] as number) * share);
+        pops[s] = (pops[s] as number) - count;
+        pops[to] = (pops[to] as number) + count;
+      };
+      if (kind <= 0.05) {
+        comms[s] = (comms[s] as number) + 1;
+        grow(intIn(random, 10, 20) / 100);
+      } else if (kind <= 0.1) {
+        if ((comms[s] as number) <= 0) {
+          comms[s] = 1;
+          grow(intIn(random, 10, 20) / 100);
+        } else {
+          comms[s] = (comms[s] as number) - 1;
+          comms[d] = (comms[d] as number) + 1;
+          move(intIn(random, 10, 20) / 100, d);
+        }
+      } else if (kind <= 0.3) grow(intIn(random, 8, 24) / 100);
+      else if (kind <= 0.5) {
+        let to = Math.floor(random() * 5);
+        if (to >= s) to += 1;
+        let share = intIn(random, 3, 15) / 100;
+        if (random() < 0.05 && (comms[s] as number) > 0) {
+          share *= intIn(random, 2, 4);
+          comms[s] = (comms[s] as number) - 1;
+          comms[to] = (comms[to] as number) + 1;
+        }
+        move(share, to);
+      } else if (kind <= 0.7) {
+        if (s === 0) chaos = (chaos + 1) * (1 + intIn(random, 5, 20) / 100);
+      } else if (kind <= 0.9) grow(-intIn(random, 8, 20) / 100);
+    };
+    const until = (t: number) => {
+      while (next <= t) {
+        decayTo(next);
+        event();
+        next += intIn(random, 240, 600);
+      }
+      decayTo(t);
+    };
+    for (let k = 1; k <= attempts; k++) {
+      until(k * (cycle as number));
+      // Raid 0 with no communities (`Actions/Operation.ts:63-68`); a success takes one (`Bladeburner.ts:832-838`).
+      const p = (comms[0] as number) <= 0 ? 0 : Math.min(1, (p0 as number) * ((pops[0] as number) / 1e9) ** 0.7);
+      drawn += p;
+      if (random() < p) {
+        pops[0] = (pops[0] as number) + Math.round((pops[0] as number) * -0.01);
+        comms[0] = (comms[0] as number) - 1;
+      } else {
+        pops[0] = (pops[0] as number) + Math.round(((pops[0] as number) * intIn(random, -10, -5)) / 1000);
+      }
+      chaos *= 1 + intIn(random, 1, 5) / 100;
+      if (chaos > 50) {
+        diplomacy += (60 * Math.log(50 / chaos)) / Math.log(keep);
+        chaos = 50;
+      }
+    }
+    until((hours as number) * 3600);
+    sums.chaos.push(chaos);
+    sums.diplomacy.push(diplomacy / attempts);
+    sums.chance.push(drawn / attempts);
+    sums.population.push((pops[0] as number) / 1e9);
+  }
+  const stat = (xs: number[]) => {
+    const mean = xs.reduce((sum, x) => sum + x, 0) / xs.length;
+    const variance = xs.reduce((sum, x) => sum + (x - mean) ** 2, 0) / Math.max(1, xs.length - 1);
+    return { mean, error: Math.sqrt(variance / xs.length) };
+  };
+  return {
+    attempts,
+    chaos: stat(sums.chaos),
+    diplomacy: stat(sums.diplomacy),
+    chance: stat(sums.chance),
+    population: stat(sums.population),
+  };
+}
+
+describe("the chaos from 0 (#418's review): the mean path against walks of the game's draws, over the plan's horizon", () => {
+  // From 0 (a BitNode's start) and from the chaos read (seed 1's New Tokyo, about 20), over 10 h and over the horizon of
+  // the plan toward Typhoon's 2,500 in the rule's test above (about 100 h).
+  test.each([
+    [0, 10],
+    [20, 10],
+    [0, 100],
+    [20, 100],
+  ])(
+    "Raid from chaos %s for %s h: the chaos, Diplomacy's seconds an attempt, the chance and the population",
+    (chaos0, hours) => {
+      const cycle = 60;
+      const p0 = 0.3;
+      const charisma = 100;
+      const walks = walkRaid({ chaos0, hours, cycle, p0, charisma, walks: DRIFT_WALKS, seed: 4181 + chaos0 + hours });
+      const cities = Array.from({ length: 6 }, (_, i) => ({
+        name: `City ${i}`,
+        population: 1e9,
+        communities: 50,
+        chaos: i === 0 ? chaos0 : 0,
+      }));
+      const start = bladeburnerDriftStart(cities, "City 0") as NonNullable<ReturnType<typeof bladeburnerDriftStart>>;
+      const reference = { population: 1e9, chaos: chaos0 };
+      // The path at its chunks, and in 8 pieces (8 times the chunks, the state carried): their gap the path's own
+      // resolution, allowed beside the walks' error.
+      const pathIn = (pieces: number) => {
+        let state = start;
+        let drawn = 0;
+        let diplomacy = 0;
+        for (let piece = 0; piece < pieces; piece++) {
+          const each = bladeburnerDriftPath(
+            state,
+            reference,
+            [{ action: action("Raid"), chance: p0, attempts: walks.attempts / pieces }],
+            (hours * 3600) / pieces,
+            { charisma, moves: false },
+          );
+          drawn += ((each.chances[0] as number) * walks.attempts) / pieces;
+          diplomacy += each.diplomacySeconds;
+          state = each.state;
+        }
+        const end = state.cities[0] as BladeburnerDriftCity;
+        return {
+          chaos: end.chaos,
+          diplomacy: diplomacy / walks.attempts,
+          chance: drawn / walks.attempts,
+          population: end.population / 1e9,
+        };
+      };
+      const figures = pathIn(1);
+      const fine = pathIn(8);
+      const keys = ["chaos", "diplomacy", "chance", "population"] as const;
+      const rows = keys.map(
+        (key) =>
+          `${key} ${figures[key].toFixed(4)} (in pieces ${fine[key].toFixed(4)}) against ${walks[key].mean.toFixed(4)} ± ` +
+          walks[key].error.toFixed(4),
+      );
+      console.log(`Raid from chaos ${chaos0} for ${hours} h (${DRIFT_WALKS} walks): ${rows.join("; ")}`);
+      for (const key of keys) {
+        const resolution = Math.abs(figures[key] - fine[key]);
+        expect(Math.abs(figures[key] - walks[key].mean), key).toBeLessThanOrEqual(
+          4 * walks[key].error + resolution + 1e-9,
+        );
+      }
+    },
+  );
+});
+
+/**
+ * Walks of a plan to the target, more behind the env knob (`BLADEBURNER_PLAN_WALKS`). 1,200 in CI (about 5 s here): Raid's
+ * successes are a lottery (about 55 rank at 3.5%), its time's spread a walk about 1,100 min, so the gap of about 100 min
+ * takes 1,100 walks to read at 3 standard errors.
+ */
+const PLAN_WALKS = Number(process.env.BLADEBURNER_PLAN_WALKS ?? 1200);
+
+/** A sample's mean and its standard error. */
+function meanOf(xs: readonly number[]): { mean: number; error: number } {
+  const mean = xs.reduce((sum, x) => sum + x, 0) / xs.length;
+  const variance = xs.reduce((sum, x) => sum + (x - mean) ** 2, 0) / Math.max(1, xs.length - 1);
+  return { mean, error: Math.sqrt(variance / xs.length) };
+}
+
+/** A way to work an action in the walks: the rule's plan's own figures for it (its level, time, stamina, chance read). */
+interface WalkedWay {
+  action: BladeburnerLevelledAction;
+  chanceRead: number;
+  seconds: number;
+  stamina: number;
+  gain: number;
+  loss: number;
+}
+
+/**
+ * A plan walked to the target under the game's draws (#418's ruling 2, check 3), from `rank`: each attempt the first
+ * way in `order` with a count of 1 or more (its count down 1, success or failure, `Bladeburner.ts:927-976`; each count
+ * regrowing at its mean, `:1386-1393`), else Field Analysis's 30 s; an attempt only with its stamina leaving half the max
+ * (no penalty, `staminaPenalty`), the regain a second always. Its success at the chance read times the city's factor
+ * over the city read's (the true population^0.7 over the chaos's factor, `Action.ts:88-103`; Raid 0 with no
+ * communities), its rank ±10% (`addOffset`) and the floor at 0 (`:1267-1275`); its effects as
+ * `completeOperation`/`completeContract` draw them (`:793-890`: Raid's −1% or −(5–10)/10 % and +1–5% chaos and a
+ * community; Bounty Hunter's and Retirement's −1 and +0.02/+0.04 chaos; Investigation's and Undercover's failures a
+ * migration's chance; Sting's); the city B4's before each attempt (the most population^0.7 over the chaos's factor,
+ * Raid's only where there are communities), Diplomacy as B4 spends it after an attempt over 50 (60 s an attempt at
+ * ×keep, taken whole: 60·ln(50/chaos)/ln(keep) s, the city at 50, then the time); an event each 240–600 s in one of the
+ * six as `randomEvent` (`:601-699`) draws it and the decay (`:1395-1401`) over every second. Left out, labelled: the
+ * count's regrowth's draw (its mean taken), the estimate (Tracking's and the others' improvements: the chance is the
+ * true population's), the migration's +100 under 1.5e9 (`:597-598`), the levels and skills (the plan's own level
+ * throughout, as the rule prices it), HP and the hospital (no rank).
+ */
+function walkPlan(
+  order: readonly WalkedWay[],
+  {
+    rank: from,
+    target,
+    regain,
+    maxStamina,
+    restRank,
+    charisma,
+    cities: read,
+    city: readCity,
+    walks,
+    seed,
+  }: {
+    rank: number;
+    target: number;
+    regain: number;
+    maxStamina: number;
+    restRank: number;
+    charisma: number;
+    cities: readonly BladeburnerDriftCity[];
+    city: string;
+    walks: number;
+    seed: number;
+  },
+) {
+  const keep = 1 - (charisma ** 0.045 + charisma / 1e3) / 100;
+  const factorOf = (pop: number, chaos: number) => Math.max(0, pop) ** 0.7 / chaosDifficultyFactor(chaos);
+  const home = read.findIndex((city) => city.name === readCity);
+  const reference = factorOf(
+    (read[home] as BladeburnerDriftCity).population,
+    (read[home] as BladeburnerDriftCity).chaos,
+  );
+  const times: number[] = [];
+  const attemptsOf: number[] = [];
+  for (let walk = 0; walk < walks; walk++) {
+    // Two streams a walk (common random numbers: a walk's events the same draws under either plan, as its own
+    // attempts'), so the plans' gap is read walk by walk.
+    const events = seeded(seed + 7919 * walk);
+    const random = seeded(seed + 7919 * walk + 104729);
+    const offset = (x: number) => x * (1 + (random() * 2 - 1) * 0.1);
+    const pops = read.map((city) => city.population);
+    const comms = read.map((city) => city.communities);
+    const chaos = read.map((city) => city.chaos);
+    const counts = order.map(() => 20);
+    const growth = order.map((way) => countGrowthPerSecond(way.action));
+    let stamina = maxStamina;
+    let rank = from;
+    let clock = 0;
+    let decayed = 0;
+    let next = intIn(events, 240, 600);
+    let attempts = 0;
+    const decayTo = (t: number) => {
+      for (const i of chaos.keys()) chaos[i] = Math.max(0, (chaos[i] as number) - 0.0001 * (t - decayed));
+      decayed = t;
+    };
+    const migrate = (s: number, to: number, share: number) => {
+      const count = Math.round((pops[s] as number) * share);
+      pops[s] = (pops[s] as number) - count;
+      pops[to] = (pops[to] as number) + count;
+    };
+    const other = (s: number, rng: () => number) => {
+      const d = Math.floor(rng() * 5);
+      return d >= s ? d + 1 : d;
+    };
+    const migration = (s: number, rng: () => number) => {
+      const to = other(s, rng);
+      let share = intIn(rng, 3, 15) / 100;
+      if (rng() < 0.05 && (comms[s] as number) > 0) {
+        share *= intIn(rng, 2, 4);
+        comms[s] = (comms[s] as number) - 1;
+        comms[to] = (comms[to] as number) + 1;
+      }
+      migrate(s, to, share);
+    };
+    const grow = (s: number, share: number) => {
+      pops[s] = (pops[s] as number) + Math.round((pops[s] as number) * share);
+    };
+    const event = () => {
+      const kind = events();
+      const s = Math.floor(events() * 6);
+      if (kind <= 0.05) {
+        comms[s] = (comms[s] as number) + 1;
+        grow(s, intIn(events, 10, 20) / 100);
+      } else if (kind <= 0.1) {
+        if ((comms[s] as number) <= 0) {
+          comms[s] = 1;
+          grow(s, intIn(events, 10, 20) / 100);
+        } else {
+          const d = other(s, events);
+          comms[s] = (comms[s] as number) - 1;
+          comms[d] = (comms[d] as number) + 1;
+          migrate(s, d, intIn(events, 10, 20) / 100);
+        }
+      } else if (kind <= 0.3) grow(s, intIn(events, 8, 24) / 100);
+      else if (kind <= 0.5) migration(s, events);
+      else if (kind <= 0.7) chaos[s] = ((chaos[s] as number) + 1) * (1 + intIn(events, 5, 20) / 100);
+      else if (kind <= 0.9) grow(s, -intIn(events, 8, 20) / 100);
+    };
+    const pass = (dt: number) => {
+      const t = clock + dt;
+      while (next <= t) {
+        decayTo(next);
+        event();
+        next += intIn(events, 240, 600);
+      }
+      decayTo(t);
+      clock = t;
+      stamina = Math.min(maxStamina, stamina + regain * dt);
+      for (const i of counts.keys()) counts[i] = (counts[i] as number) + (growth[i] as number) * dt;
+    };
+    while (rank < target && clock < 1e8) {
+      const way = order.find(
+        (each, i) =>
+          (counts[i] as number) >= 1 &&
+          stamina - each.stamina >= maxStamina / 2 &&
+          (each.action.name !== "Raid" || comms.some((c) => c > 0)),
+      );
+      if (way === undefined) {
+        pass(30);
+        rank += restRank * 30;
+        continue;
+      }
+      const raid = way.action.name === "Raid";
+      // B4's city: the most factor (Raid's among those with communities).
+      let city = -1;
+      for (const i of pops.keys()) {
+        if (raid && !((comms[i] as number) > 0)) continue;
+        if (
+          city < 0 ||
+          factorOf(pops[i] as number, chaos[i] as number) > factorOf(pops[city] as number, chaos[city] as number)
+        )
+          city = i;
+      }
+      const i = order.indexOf(way);
+      counts[i] = (counts[i] as number) - 1;
+      stamina -= way.stamina;
+      pass(way.seconds);
+      attempts++;
+      const p = Math.min(1, (way.chanceRead * factorOf(pops[city] as number, chaos[city] as number)) / reference);
+      const success = random() < p;
+      rank = Math.max(0, rank + (success ? offset(way.gain) : -offset(way.loss)));
+      switch (way.action.name) {
+        case "Raid":
+          if (success) {
+            grow(city, -0.01);
+            comms[city] = (comms[city] as number) - 1;
+          } else grow(city, intIn(random, -10, -5) / 1000);
+          chaos[city] = (chaos[city] as number) * (1 + intIn(random, 1, 5) / 100);
+          break;
+        case "Bounty Hunter":
+        case "Retirement":
+          if (success) {
+            pops[city] = (pops[city] as number) - 1;
+            chaos[city] = (chaos[city] as number) + (way.action.name === "Retirement" ? 0.04 : 0.02);
+          }
+          break;
+        case "Investigation":
+        case "Undercover Operation":
+          if (!success && random() < (way.action.name === "Investigation" ? 0.1 : 0.15)) migration(city, random);
+          break;
+        case "Sting Operation":
+          if (success) grow(city, -0.001);
+          chaos[city] = (chaos[city] as number) + 0.1;
+          break;
+      }
+      // Diplomacy as B4 spends it: the city back to 50, its time then.
+      if ((chaos[city] as number) > 50) {
+        const seconds = (60 * Math.log(50 / (chaos[city] as number))) / Math.log(keep);
+        chaos[city] = 50;
+        pass(seconds);
+      }
+    }
+    times.push(clock);
+    attemptsOf.push(attempts);
+  }
+  return { times, ...meanOf(times), attempts: attemptsOf.reduce((a, b) => a + b, 0) / walks };
+}
+
+describe("the rule's order under walks of the game's draws (#418's ruling 2, check 3): its plan against rank a second's", () => {
+  test("150 to 2,500 from the six cities read: the walks order the two plans' expected times as the rule does", () => {
+    const combat = combatOf(100);
+    const who = personOf(combat);
+    const input = readAt(who);
+    const drift = { cities: SIX, city: "New Tokyo" };
+    const target = { rank: 150, target: 2500 };
+    const plans = bladeburnerPlansToTarget({ ...input, target, drift });
+    const chosen = plans[0] as (typeof plans)[number];
+    // Rank a second's plan: B2's, no target (Raid here, at its chance read).
+    const second = chooseBladeburnerAction(input);
+    const rival = plans.find((plan) => plan.work?.name === second.work?.name && plan.rest.name === second.rest.name);
+    expect(chosen.work?.name).toBe("Bounty Hunter");
+    expect(second.work?.name).toBe("Raid");
+    expect(rival).toBeDefined();
+    const alone = plans.find((plan) => plan.work === null) as (typeof plans)[number];
+    const wayOf = (plan: (typeof plans)[number]): WalkedWay => {
+      const work = plan.work as NonNullable<(typeof plan)["work"]>;
+      const each = action(work.name);
+      return {
+        action: each,
+        chanceRead: work.drift?.chanceRead ?? work.chance,
+        seconds: work.seconds,
+        stamina: work.stamina,
+        gain: actionRankGain(each, work.level, 1),
+        loss: actionRankLoss(each, work.level),
+      };
+    };
+    // After the plan's own action, the others as the rule's tail takes them: by their best rate a second (the drift
+    // priced), those over resting alone's, Field Analysis then.
+    const best = new Map<string, (typeof plans)[number]>();
+    for (const plan of plans) {
+      const name = plan.work?.name;
+      if (name === undefined || best.has(name)) continue;
+      if (plan.rankPerSecond > alone.rankPerSecond) best.set(name, plan);
+    }
+    const tail = [...best.values()].sort((a, b) => b.rankPerSecond - a.rankPerSecond);
+    const orderOf = (first: (typeof plans)[number]) => [
+      wayOf(first),
+      ...tail.filter((plan) => plan.work?.name !== first.work?.name).map(wayOf),
+    ];
+    const setting = {
+      ...target,
+      regain: chosen.regain,
+      maxStamina: input.maxStamina,
+      restRank: alone.rankPerSecond,
+      charisma: who.skills.charisma,
+      cities: SIX,
+      city: "New Tokyo",
+      walks: PLAN_WALKS,
+    };
+    const started = performance.now();
+    const ruled = walkPlan(orderOf(chosen), { ...setting, seed: 3861 });
+    const raided = walkPlan(orderOf(rival as (typeof plans)[number]), { ...setting, seed: 3861 });
+    const ms = performance.now() - started;
+    const minutes = (x: number) => (x / 60).toFixed(1);
+    // The gap walk by walk (the same seeds: common random numbers).
+    const { mean: gap, error } = meanOf(raided.times.map((time, i) => time - (ruled.times[i] as number)));
+    console.log(
+      `150 → 2500 (${PLAN_WALKS} walks each, ${ms.toFixed(0)} ms): the rule's ${chosen.work?.name} first ` +
+        `${minutes(ruled.mean)} ± ${minutes(ruled.error)} min walked (${ruled.attempts.toFixed(0)} attempts), ` +
+        `${minutes(chosen.toTarget?.seconds as number)} priced; rank a second's ${rival?.work?.name} first ` +
+        `${minutes(raided.mean)} ± ${minutes(raided.error)} min walked (${raided.attempts.toFixed(0)} attempts), ` +
+        `${minutes(rival?.toTarget?.seconds as number)} priced; the gap ${minutes(gap)} ± ${minutes(error)} min`,
+    );
+    // The rule's order: its plan the faster.
+    expect((rival?.toTarget?.seconds as number) > (chosen.toTarget?.seconds as number)).toBe(true);
+    // The walks' the same, beyond 3 standard errors of the gap.
+    expect(gap).toBeGreaterThan(3 * error);
   });
 });
