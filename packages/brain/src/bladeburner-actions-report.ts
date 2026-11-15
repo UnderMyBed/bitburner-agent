@@ -14,7 +14,10 @@
 //   each stretch's end, the attempt cut short there (`Bladeburner.ts:186-188`: starting another loses the progress)
 //   that the forecast counts in part. The low end is the game's lowest chance (`Actions/Action.ts:144-167`: never above
 //   the real one), so a rank under the bound is the rule or the formulas wrong, not luck. Rank lost below 0 isn't
-//   (`:1271-1274`): it only lifts the rank measured.
+//   (`:1271-1274`): it only lifts the rank measured. Since #415 the rules choose at the true population's chance (the
+//   brain's `bladeburnerRuleInputOf`), and the forecast judged takes it where pop/popEst is recovered (the chance the
+//   game draws against: exact, so the bound is Bernstein's own); where it isn't, the low end as read, not the rules'
+//   fallback (its spread mean is optimistic at an undercount, which could fail a right rule): so it errs low there.
 // - **By action** (#381's review): each action's own forecast, measured rank and bound, as the whole's (its own
 //   Bernstein margin at the same α, its own cuts), with its attempts (a contract's or operation's count's fall, its mean
 //   growth added back) and successes (the rank over a success's gain and a failure's loss): estimates, shown, not
@@ -36,10 +39,18 @@
 //   $100k) with the HP at 0 or under (`Hospital/Hospital.ts:4-17`, `Constants.ts:47`), so at least
 //   min(10% of the money, max × $100k), the money the smaller of the two readings' (a purchase between them doesn't
 //   raise it). Two visits between readings count as one; none across a gap or an install, which refills the HP
-//   (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:135`).
+//   (`PersonObjects/Player/PlayerObjectGeneralMethods.ts:135`). **Since #417's review** that check alone was blind: a
+//   failure doing at least the max HP hospitalises and refills at once (`Bladeburner.ts:983-991`, `takeDamage` then
+//   `hospitalize`, `PlayerObjectGeneralMethods.ts:265-290`), so no reading sees the HP under its max (Raid's ~386
+//   against 21 HP: about 33 visits an hour shown as none). Now also: the money, the game's own
+//   (`getMoneySources().sinceInstall.hospitalization`, the slow snapshot's, `loseMoney(cost, "hospitalization")`),
+//   its rise summed between the slow snapshots of a cycle from the first reading in the division (any cause; in the
+//   division the actions'); and the visits at least, one per failure whose least damage (90% of its mean, the ±10%)
+//   reaches the max HP, its failures from the counts' fall and the rank (the lines by action's estimates).
 // - **The focus** (#377's review): A5's faction work waits all the actions' time, the rests' too, Field Analysis's rank
 //   all it gains then; the time and that rank are shown, the trade the planner's.
-// - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings): its cycle's rank a
+// - **The rule's forecast** (core's `chooseBladeburnerAction` on the first and last readings, at the brain's input,
+//   #415's: each chance at the true population; the stuck-resting and the points-unspent checks too): its cycle's rank a
 //   second, shown beside the rank measured over the readings; not judged, as a window cuts the cycle anywhere. Under
 //   the reading's current-rank target (#386, core's `bladeburnerRankTarget`), the plan the brain chooses, the least
 //   expected time to it, and that time; the stuck-resting check takes that plan's rest too.
@@ -64,6 +75,7 @@ import {
   BLADEBURNER_REST_SECONDS,
   BLADEBURNER_TRAINING,
   type BladeburnerActionPlan,
+  type BladeburnerActionReading,
   type BladeburnerForecastInput,
   type BladeburnerLevelledAction,
   type BladeburnerPerson,
@@ -96,7 +108,8 @@ import {
 import {
   type BladeburnerActionId,
   type BladeburnerActionsReading,
-  bladeburnerSpeedOf,
+  type BladeburnerRuleInput,
+  bladeburnerRuleInputOf,
   describeSkillPlan,
   describeToTarget,
 } from "./bladeburner.ts";
@@ -158,6 +171,13 @@ interface Kept {
   target: number | null;
   /** B2's forecast, shared with the reading's other folds (#392: core's `memoizedBladeburnerChoice`). */
   choose: typeof chooseBladeburnerAction;
+  /** The rules' input, as the brain's (#415: each chance at the true population, `bladeburnerRuleInputOf`). */
+  rule: BladeburnerRuleInput;
+  /**
+   * The readings the forecast judged takes (#415): priced at the true population where pop/popEst is recovered (the
+   * chance the game draws against, exact), else as read (the low end, a bound from below).
+   */
+  judged: readonly BladeburnerActionReading[];
 }
 
 /** The action under way at `kept`, as the forecast takes it: an attempt's figures, or a rest's rank a second. */
@@ -238,7 +258,7 @@ function runningOf(kept: Kept): Running | null {
     };
   }
   const action = bladeburnerLevelledAction(current.type, current.name);
-  const read = kept.reading.actions.find((each) => each.type === current.type && each.name === current.name);
+  const read = kept.judged.find((each) => each.type === current.type && each.name === current.name);
   if (action === null || read === undefined)
     return { name: current.name, action: current.name, resting: false, rate: 0, cut: 0, attempt: null };
   const seconds = actionSeconds(action, read.level, kept.person, kept.mults);
@@ -326,6 +346,10 @@ export class BladeburnerActionsFold {
   #switches = 0;
   #stretches = 0;
   #hpLost = 0;
+  /** The failures whose least damage reaches the max HP (#417's review): each a visit, at once. */
+  #hospitalised = 0;
+  /** The slow snapshots' hospital money since the install (#417's review), each with its time and cycle. */
+  readonly #slowMoney: { atMs: number; lastAugReset: number | null; spent: number }[] = [];
   #gameSeconds = 0;
   readonly #byAction = new Map<string, number>();
   /** Each action's own figures (#381's review), by its name. */
@@ -370,6 +394,7 @@ export class BladeburnerActionsFold {
     const levels = reading.skills?.levels ?? {};
     const factions = (data.player as { factions?: unknown } | undefined)?.factions;
     const factionJoined = Array.isArray(factions) && factions.includes(BLADEBURNER_FACTION);
+    const rule = bladeburnerRuleInputOf(reading, person, rankMultiplier);
     const kept: Kept = {
       atMs,
       rank,
@@ -389,6 +414,8 @@ export class BladeburnerActionsFold {
         blackOpRank: reading.blackOp == null ? null : (bladeburnerBlackOp(reading.blackOp.name)?.rank ?? null),
       }),
       choose,
+      rule,
+      judged: rule.ratio === null ? reading.actions : rule.input.readings,
     };
     this.#readings += 1;
     const plan = this.#plan(kept);
@@ -494,6 +521,37 @@ export class BladeburnerActionsFold {
     return found;
   }
 
+  /**
+   * A slow snapshot's hospital money (#417's review): `moneySources.hospitalization` since the install (a loss, so
+   * negative). Its fall between two slow snapshots of a cycle, both within the readings in the division, is the money
+   * the hospital took meanwhile (`hospital`; the run report adds the slow snapshots before the mediums).
+   */
+  addSlowMoney(atMs: number, lastAugReset: number | null, hospitalization: number | null): void {
+    if (hospitalization !== null) this.#slowMoney.push({ atMs, lastAugReset, spent: -hospitalization });
+  }
+
+  /** The game's hospital money over the window, and the slow snapshots it's between (#417's review); null, none. */
+  hospital(): { money: number; fromMs: number; toMs: number; visitsAtLeast: number } | null {
+    const first = this.#first;
+    const last = this.#last;
+    if (first === null || last === null) return null;
+    const points = this.#slowMoney
+      .filter((each) => each.atMs >= first.atMs && each.atMs <= last.atMs)
+      .sort((a, b) => a.atMs - b.atMs);
+    let money = 0;
+    let fromMs: number | null = null;
+    let toMs: number | null = null;
+    for (let index = 1; index < points.length; index++) {
+      const a = points[index - 1] as (typeof points)[number];
+      const b = points[index] as (typeof points)[number];
+      if (a.lastAugReset !== b.lastAugReset) continue;
+      money += Math.max(0, b.spent - a.spent);
+      fromMs ??= a.atMs;
+      toMs = b.atMs;
+    }
+    return fromMs === null || toMs === null ? null : { money, fromMs, toMs, visitsAtLeast: this.#hospitalised };
+  }
+
   /** An attempt cut short (a switch, a stretch's end): the whole's allowance and its action's. */
   #cut(running: Running | null): void {
     this.#allowance += running?.cut ?? 0;
@@ -534,8 +592,11 @@ export class BladeburnerActionsFold {
     const after = kept.reading.actions.find(id);
     if (before === undefined || after === undefined) return;
     const fell = Math.max(0, before.count - after.count + countGrowthPerSecond(levelled) * seconds);
+    const successes = Math.min(fell, Math.max(0, (rank + fell * attempt.loss) / (attempt.gain + attempt.loss)));
     each.attempts += fell;
-    each.successes += Math.min(fell, Math.max(0, (rank + fell * attempt.loss) / (attempt.gain + attempt.loss)));
+    each.successes += successes;
+    // Each failure whose least damage reaches the max HP: a visit (#417's review).
+    if (previous.hp !== null && 0.9 * attempt.hpLoss >= previous.hp.max) this.#hospitalised += fell - successes;
   }
 
   /** Stuck resting: the plan has work and a rest is under way; each stretch's bound from its first reading. */
@@ -602,15 +663,9 @@ export class BladeburnerActionsFold {
     };
   }
 
+  /** The rules' input at `kept`, as the brain's (#415: each chance at the true population, `bladeburnerRuleInputOf`). */
   #forecastInput(kept: Kept): BladeburnerForecastInput {
-    return {
-      readings: kept.reading.actions,
-      person: kept.person,
-      stamina: kept.reading.stamina,
-      maxStamina: kept.reading.maxStamina,
-      rankMultiplier: kept.rankMultiplier,
-      speed: bladeburnerSpeedOf(kept.reading.bonusSeconds),
-    };
+    return kept.rule.input;
   }
 
   /** The rule's plan at `kept`: under its target (#386), the least time to it, as the brain chooses. */
@@ -728,9 +783,17 @@ export class BladeburnerActionsFold {
     }
     const bills = this.#visits.reduce((total, each) => total + each.leastBill, 0);
     const maxHp = last.hp?.max;
+    const hospital = this.hospital();
+    const dollars = (money: number) => `$${Math.round(money).toLocaleString("en-US")}`;
     lines.push(
-      `    the hospital (HP isn't in the rule's choice: money against rank is the planner's): ${this.#visits.length} ` +
-        `visit${this.#visits.length === 1 ? "" : "s"} seen, at least $${Math.round(bills).toLocaleString("en-US")}; ` +
+      `    the hospital (HP isn't in the rule's choice: money against rank is the planner's): ` +
+        (hospital === null
+          ? "its money unread (no two slow snapshots with it in the division); "
+          : `${dollars(hospital.money)} by the game's money sources from ${formatIsoTime(hospital.fromMs)} to ` +
+            `${formatIsoTime(hospital.toMs)}; at least ${Math.round(hospital.visitsAtLeast)} visits by the failures ` +
+            "whose damage reaches the max HP; ") +
+        `${this.#visits.length} visit${this.#visits.length === 1 ? "" : "s"} seen, at least ` +
+        `${dollars(bills)}; ` +
         `the failures' HP ${this.#hpLost.toFixed(1)} forecast` +
         (isNumber(maxHp) && maxHp > 0 ? `, about ${(this.#hpLost / maxHp).toFixed(1)} visits at ${maxHp} HP` : ""),
     );

@@ -223,17 +223,15 @@ export function knownBitNodes(): number[] {
  *
  * Both read through a range (#411's ruling 4): the grown estimate prices each contract's and operation's chance at the
  * true population, recovered from the next Black Op's range read (core's `bladeburnerPricedInput`), so the figures
- * above, at the true population, are the reasons'. Read through an undercount (the estimate 0.6× the truth) and seed 1's
- * overcount (1.42×), only B3's spending moves them, its rule at the low end as the brain runs it (a follow-up's): BN6
- * 94.3 h and 108.7 h at combat 100 as is, 63.5 h and 60.2 h with the shop; BN7 177.4 h and 370.5 h, with the shop
- * 102.1 h and 98.0 h (core's bladeburner-growth.test.ts). BN7's 370.5 h is that spending alone: with the skills off it
- * is the truth's figure (the test's), and #414's review measured 191.1 h with them spent at the expected chance. All
- * past the bar.
+ * above, at the true population, are the reasons'. Since #415 B3's rule spends the points at those chances too, as the
+ * brain runs it, so read through an undercount (the estimate 0.6× the truth) or seed 1's overcount (1.42×) the figures
+ * are the truth's to 1e-4 (core's bladeburner-growth.test.ts; under #411's low-end spending they moved, BN7's 183.7 h to
+ * 370.5 h at the overcount). So BN6 67.7 h at best and BN7 108.9 h, both past the bar (54.2 h): unplayable.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [
     6,
-    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#408)",
+    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#415: 67.7 h at best, the bar 54.2 h)",
   ],
   [
     7,

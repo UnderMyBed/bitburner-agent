@@ -73,7 +73,7 @@ import {
   winRouteOf,
   worldDaemonRequiredLevel,
 } from "@bitburner-agent/core";
-import { bladeburnerSnapshotOf, bladeburnerSpeedOf } from "./bladeburner.ts";
+import { bladeburnerRuleInputOf, bladeburnerSnapshotOf, bladeburnerSpeedOf } from "./bladeburner.ts";
 import { BLADEBURNER_RANK_ALPHA, BLADEBURNER_REST_SLACK_MS } from "./bladeburner-actions-report.ts";
 
 /** The last Black Op's rank: Operation Daedalus's 400,000 (`data/BlackOperations.ts:704-735`). */
@@ -150,7 +150,10 @@ export function blackOpsRouteOf({
    * install's time (`lastAugReset`, #409's review: an install solves it again); absent, solved each call (the report's).
    */
   grownMemo?: { memo: GrownEstimateMemo; nowMs: number; lastAugReset: number | null };
-  /** The Bladeburner rule's plan (its view's), for the climb's bound; absent, the forecast's best by rank a second. */
+  /**
+   * The Bladeburner rule's plan (its view's), for the climb's bound; absent, the forecast's best by rank a second, at
+   * the rule's input (#415: each chance at the true population, `bladeburnerRuleInputOf`).
+   */
   plan?: BladeburnerActionPlan | null;
   mediumData: MediumSnapshotData | null;
   bitNode: number;
@@ -242,7 +245,8 @@ export function blackOpsRouteOf({
     const rebuild = rate > 0 ? blackOpRankLoss(op) / rate : 0;
     const attempt = blackOpSeconds(op, input.person, mults);
     rankStallMs = 2 * (rest + attempt + rebuild) * 1000 + BLADEBURNER_REST_SLACK_MS;
-    const climbing = plan ?? chooseBladeburnerAction(input);
+    const climbing =
+      plan ?? chooseBladeburnerAction(bladeburnerRuleInputOf(actions, input.person, input.rankMultiplier).input);
     const work = climbing.work;
     // The climb's mean (#400's round 2): the plan's own rate where under ρ (the LP's mix can outrun the one plan run).
     const climbRate = Math.min(rate, climbing.rankPerSecond);

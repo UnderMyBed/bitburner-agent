@@ -36,11 +36,13 @@
  *   at the true population, the chance the game draws against, the true population over its estimate recovered from the
  *   next Black Op's range read (core's `populationRatioOfBlackOpRange`: one end its formula, the other that × the
  *   ratio); where it can't be, the mean over the estimate's own spread at a start (`actionChanceOverSpread`, labelled
- *   there, either way). Each Black Op's at its formula (it doesn't depend on the population). B2's rule, B3's spending
- *   (above) and B6's flat estimate keep the low end, a follow-up's: on seed 1's New Tokyo (its estimate 1.42× the
- *   truth) Raid's 0.026 low end against 0.051 drawn. Labelled: past the reading, a chance scaled by the competence's
- *   rise is clipped at 1 (`bladeburnerGrownInput`), exact at the true chance; at the spread's mean, min(1, E × rise) is
- *   over E[min(1, chance × rise)] past the cap (Jensen), optimistic there.
+ *   there, either way). Each Black Op's at its formula (it doesn't depend on the population). Since #415 B2's rule and
+ *   B3's spending choose at these chances too (the brain's rule input is this pricing), so the points along the route
+ *   are spent by the rule at the estimate's own chances, as the brain spends them; B6's flat estimate and B5's Black Op
+ *   check keep the low end (on seed 1's New Tokyo, its estimate 1.42× the truth, Raid's 0.026 low end against 0.051
+ *   drawn). Labelled: past the reading, a chance scaled by the competence's rise is clipped at 1
+ *   (`bladeburnerGrownInput`), exact at the true chance; at the spread's mean, min(1, E × rise) is over E[min(1,
+ *   chance × rise)] past the cap (Jensen), optimistic there.
  * - **Its check** (core's bladeburner-growth.test.ts): a seeded walk of the game's attempts (each success drawn at the
  *   game's formula at the walk's own state, its experience, levels and points the game's, the points spent by B3's
  *   rule as they cover a level): combat 100 from rank 0 to Operation Titan done, within 1% (0.76%); the whole route
@@ -200,22 +202,31 @@ export function bladeburnerGrownInput(
 }
 
 /**
- * The input the grown estimate prices (#411, the coordinator's ruling 4): each contract's and operation's chance at the
- * true population (a point), pop/popEst recovered from the next Black Op's range read `chanceRead` against its formula
- * at the reading (its stamina's penalty in; core's `populationRatioOfBlackOpRange`, `actionChanceAtRatio`); where it
- * can't be (no range read, or clipped), each at its mean over the estimate's spread (`actionChanceOverSpread`).
- * `ratio`: the one recovered, or null.
+ * The input the grown estimate prices (#411, the coordinator's ruling 4), and since #415 the one B2's and B3's rules
+ * choose at (the brain's `bladeburnerRuleInputOf`): each contract's and operation's chance at the true population (a
+ * point), pop/popEst recovered from the next Black Op's range read `chanceRead` against its formula at the reading
+ * (its stamina's penalty in; core's `populationRatioOfBlackOpRange`, `actionChanceAtRatio`); where it can't be (no
+ * Black Op read, `next` null: all 21 done or an older Agent's; or clipped), each at its mean over the estimate's spread
+ * (`actionChanceOverSpread`, its bias labelled there). `ratio`: the one recovered, or null.
  */
 export function bladeburnerPricedInput<T extends Omit<BladeburnerActionInput, "target">>(
   input: T,
-  { next, chanceRead }: { next: BladeburnerBlackOp; chanceRead: readonly [number, number] },
+  {
+    next,
+    chanceRead,
+  }: { next: BladeburnerBlackOp; chanceRead: readonly [number, number] } | { next: null; chanceRead: null },
 ): { input: T; ratio: number | null } {
   const penalty = input.maxStamina > 0 ? staminaPenalty(input.stamina, input.maxStamina) : 0;
-  const formula = blackOpSuccessChance(next, input.person, {
-    penalty,
-    skills: bladeburnerSkillMultsOf(input.skills?.read ?? {}),
-  });
-  const ratio = populationRatioOfBlackOpRange(chanceRead, formula);
+  const ratio =
+    next === null
+      ? null
+      : populationRatioOfBlackOpRange(
+          chanceRead,
+          blackOpSuccessChance(next, input.person, {
+            penalty,
+            skills: bladeburnerSkillMultsOf(input.skills?.read ?? {}),
+          }),
+        );
   const readings = input.readings.map((read) => {
     const at = ratio === null ? null : actionChanceAtRatio(read.chance, ratio);
     const chance = at ?? actionChanceOverSpread(read.chance);
@@ -342,13 +353,12 @@ export function blackOpsRouteGrownEstimate(
     }
     return { ...at, exp, successes };
   };
-  // The points unspent at a state, spent by B3's rule there.
-  // The points spent as B3's rule spends them (#411): its forecast at the low end read, as the brain runs it, not at the
-  // estimate's pricing (at the expected chances the success skills look worth less to the actions, and the rule would
-  // be credited purchases it doesn't make).
+  // The points unspent at a state, spent by B3's rule there, as the brain runs it: since #415 at the estimate's own
+  // pricing, the true population's chances (the brain's rule input is `bladeburnerPricedInput`'s too), so the estimate
+  // credits exactly the purchases the rule makes (#411's low-end exception gone with the rule's low end).
   const spend = (at: BladeburnerGrowthState): BladeburnerGrowthState => {
     if (!grow.skills || !(at.points > 0)) return at;
-    const plan = chooseBladeburnerSkills(bladeburnerGrownInput(read, combat, at), {
+    const plan = chooseBladeburnerSkills(bladeburnerGrownInput(input, combat, at), {
       levels: at.levels,
       points: at.points,
       costMultiplier,

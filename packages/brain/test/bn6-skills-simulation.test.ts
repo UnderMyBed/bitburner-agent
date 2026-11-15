@@ -20,7 +20,7 @@ import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-acti
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.ts";
+import { attemptsIn, attemptsSummary, expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -111,9 +111,9 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   // the rise apart from luck.
   expect(forecast).toBeGreaterThan(b2);
   expect(rank).toBeGreaterThanOrEqual(bound);
-  // The low-variance part judged on its own (#381's review): Field Analysis and the contracts, their rank against their
-  // forecast's Bernstein bound at the same α, from section 8's lines by action. Raid's luck (0 of 5 at its 5.5% low end
-  // is chance 0.75) is left to the whole's bound.
+  // The low-variance part on its own (#381's review): Field Analysis and the contracts, from section 8's lines by
+  // action, their rank and their forecast's Bernstein bound at the same α (printed). Raid's luck is left to the whole's
+  // bound.
   const byAction = [
     ...section.matchAll(
       /\n {6}([^:\n]+): about \d+ attempts, \d+ successes; (-?[\d.]+) measured against (-?[\d.]+) forecast \(σ ([\d.]+), at most ([\d.]+) under an attempt's mean, cuts ([\d.]+)\)/g,
@@ -131,8 +131,20 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
     `Field Analysis and the contracts (${steady.map((each) => each.name).join(", ")}): ${sum(0).toFixed(2)} measured ` +
       `against ${sum(1).toFixed(2)} forecast (σ ${Math.sqrt(steadyVariance).toFixed(2)}), their bound ${steadyBound.toFixed(2)}`,
   );
-  expect(steadyBound).toBeGreaterThan(0);
-  expect(sum(0)).toBeGreaterThanOrEqual(steadyBound);
+  // #417's review: the steady line printed, not asserted (the rule works Raid most of the hour since #415, so the steady
+  // part is Field Analysis's alone). Asserted instead: every attempt's expected rank given the attempts made (the
+  // simulator's log, Raid included: p × gain − (1 − p) × the floored loss, `attemptsSummary`) and Field Analysis's rank
+  // as made (no draw in it), over B2's forecast without the skills over the same game minutes.
+  const attempts = await attemptsIn(fresh.simulation, 0, fresh.game.clock.now());
+  const fieldAnalysis = steady.find((each) => each.name === "Field Analysis")?.figures[0] ?? 0;
+  const all = attemptsSummary(attempts, null);
+  const expectedAll = all.expected + fieldAnalysis;
+  console.log(
+    `every attempt expected given the actions: ${expectedAll.toFixed(2)} (${attempts.length} attempts, ` +
+      `${all.successes} successes, ${(all.realised + fieldAnalysis).toFixed(2)} realised, Field Analysis's ` +
+      `${fieldAnalysis.toFixed(2)} in both) against B2's forecast without the skills ${b2.toFixed(2)}`,
+  );
+  expect(expectedAll).toBeGreaterThan(b2);
   expect(section).toContain("  skill points unspent with a level to buy, past 52 s:\n    none");
   expect(failures).toEqual([]);
 }, 240_000);

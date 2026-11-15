@@ -19,6 +19,8 @@ import {
   type BladeburnerActionReading,
   type BladeburnerPerson,
   type BladeburnerSkillLevels,
+  blackOpSuccessChance,
+  bladeburnerPricedInput,
   bladeburnerSkillMultsOf,
   CONTROL_PROTOCOL_VERSION,
   checkBladeburnerBlackOp,
@@ -30,7 +32,12 @@ import {
   type SnapshotTier,
 } from "@bitburner-agent/core";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { BLADEBURNER_ACTIONS_HOLD, BladeburnerRule, bladeburnerSnapshotOf } from "../src/bladeburner.ts";
+import {
+  BLADEBURNER_ACTIONS_HOLD,
+  BladeburnerRule,
+  bladeburnerSnapshotOf,
+  describeBlackOpCheck,
+} from "../src/bladeburner.ts";
 import { BladeburnerFold } from "../src/bladeburner-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { TelemetryStore } from "../src/telemetry-store.ts";
@@ -444,6 +451,39 @@ describe("the run report's Black Ops (#392)", () => {
     expect(text).toContain(`${DUE}\n    none`);
     // The Black Op's end listed as its own, not other work.
     expect(text).toContain(`: ${TYPHOON.name}, done (its one attempt made: the game stops a Black Op either way)`);
+  });
+
+  test("the check replayed as the brain makes it (#415): its B2 and B3 at the true population read", () => {
+    // An overcount (pop/popEst 1/1.42) read from Zero's range: its formula the high end, × the ratio the low.
+    const formula = blackOpSuccessChance(ZERO, PERSON, { penalty: 1 });
+    const ratio = 1 / 1.42;
+    const zeroRead = { name: ZERO.name, chance: [formula * ratio, formula] as [number, number] };
+    const { text } = fold(run([{ rank: 2551, blackOp: zeroRead }]));
+    const probe = reading({ rank: 2551, levels: null, blackOp: zeroRead });
+    const input = {
+      readings: probe.actions,
+      person: PERSON,
+      stamina: probe.stamina,
+      maxStamina: probe.maxStamina,
+      rankMultiplier: 1,
+      speed: 1,
+      skills: { read: {} },
+    };
+    const checkAt = (at: typeof input) =>
+      describeBlackOpCheck(
+        checkBladeburnerBlackOp(at, {
+          op: ZERO,
+          rank: 2551,
+          chance: zeroRead.chance,
+          skills: null,
+          forecastUnmet: true,
+        }),
+      );
+    const priced = bladeburnerPricedInput(input, { next: ZERO, chanceRead: zeroRead.chance });
+    expect(priced.ratio).toBeCloseTo(ratio, 12);
+    expect(text).toContain(`(rank 2551.0): ${checkAt(priced.input)}`);
+    // Not the low end's: the rebuild there is at other chances.
+    expect(checkAt(priced.input)).not.toBe(checkAt(input));
   });
 
   test("due with work under way past 22 s fails; within it, or resting, or waiting, it passes", () => {

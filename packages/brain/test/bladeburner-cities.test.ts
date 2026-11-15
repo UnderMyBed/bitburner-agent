@@ -17,6 +17,7 @@ import {
   type BladeburnerActionReading,
   type BladeburnerCityReading,
   type BladeburnerPerson,
+  bladeburnerPricedInput,
   CONTROL_PROTOCOL_VERSION,
   chooseBladeburnerAction,
   chooseBladeburnerCity,
@@ -183,11 +184,19 @@ const COUNTS_OUT = { Raid: 0.5 };
 const strongOut = (options: ReadingOptions = {}) =>
   medium(reading({ counts: COUNTS_OUT, who: STRONG, ...options }), { who: STRONG });
 
+/**
+ * The rules' input with no Black Op read (#415: these readings are a B4 Agent's): the population not recovered, each
+ * chance the fallback's, its mean over the estimate's spread (core's `bladeburnerPricedInput`), as the brain prices it.
+ */
+function spread<T extends Parameters<typeof bladeburnerPricedInput>[0]>(input: T): T {
+  return bladeburnerPricedInput(input, { next: null, chanceRead: null }).input;
+}
+
 /** Core's choice on a reading, as the rule takes it. */
 const choiceOf = (options: ReadingOptions = {}) => {
   const read = reading(options);
   return chooseBladeburnerCity(
-    {
+    spread({
       readings: read.actions,
       person: PERSON,
       stamina: read.stamina,
@@ -195,7 +204,7 @@ const choiceOf = (options: ReadingOptions = {}) => {
       rankMultiplier: 1,
       speed: 1,
       skills: { read: {} },
-    },
+    }),
     { city: read.city as string, cities: read.cities as BladeburnerCityReading[] },
   );
 };
@@ -213,7 +222,7 @@ describe("the rule (#383)", () => {
     expect(rule.acting()).toBe(true);
     expect(rule.view().actions?.cities).toEqual(choiceOf());
     expect(rule.view().line).toContain(`; ${describeCityChoice(choiceOf() as never, "Sector-12")}`);
-    expect(rule.view().line).toContain("; in Sector-12 (chaos 0.00, 0.30 rank/min: the most of the six)");
+    expect(rule.view().line).toContain("; in Sector-12 (chaos 0.00, 0.31 rank/min: the most of the six)");
   });
 
   test("an older Agent's reading (no cities): B2's work, the state's city null, so the Agent reads them", () => {
@@ -237,7 +246,7 @@ describe("the rule (#383)", () => {
       city: "Aevum",
     });
     expect(rule.view().line).toContain(
-      "; in Aevum (chaos 0.00, 0.30 rank/min: the most of the six, moving from Sector-12 (chaos 80.00, ",
+      "; in Aevum (chaos 0.00, 0.31 rank/min: the most of the six, moving from Sector-12 (chaos 80.00, ",
     );
     // Read in Aevum: kept there.
     expect(decide(rule, medium(reading({ all, city: "Aevum" }))).state?.city).toBe("Aevum");
@@ -275,14 +284,16 @@ describe("the rule (#383)", () => {
     expect(rule.view().line).toContain("; Incite Violence pays: the counts out for Raid level 1 (");
     expect(rule.view().line).toContain(" the chaos 0.00 → 20.00 cost ");
     const forty = decide(rule, strongOut({ all: cities(40) })).state?.action;
-    const b2 = chooseBladeburnerAction({
-      readings: reading({ counts: COUNTS_OUT, who: STRONG }).actions,
-      person: STRONG,
-      stamina: MAX_STAMINA,
-      maxStamina: MAX_STAMINA,
-      rankMultiplier: 1,
-      speed: 1,
-    }).work;
+    const b2 = chooseBladeburnerAction(
+      spread({
+        readings: reading({ counts: COUNTS_OUT, who: STRONG }).actions,
+        person: STRONG,
+        stamina: MAX_STAMINA,
+        maxStamina: MAX_STAMINA,
+        rankMultiplier: 1,
+        speed: 1,
+      }),
+    ).work;
     expect(forty).toEqual({ type: b2?.type, name: b2?.name, level: 1 });
     expect(forty).not.toEqual(INCITE);
     // At combat 100, Bounty Hunter out: its counts aren't worth the 60 s.

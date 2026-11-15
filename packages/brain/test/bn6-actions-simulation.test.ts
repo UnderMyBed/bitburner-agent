@@ -8,17 +8,21 @@
 // - CyberSec joined (#377's review), so A5 has faction work to hold for the actions.
 // Then: the plan's work and rest by the worker, A5's faction work held for them; home's batches leaving the worker's
 // RAM (#377's review); the stamina under ½ max rested back to the max; no stop at stamina 0; and (#386) under the
-// faction's 25 all 60 minutes, each minute's plan the least expected time to it of every plan the rule weighs (core's
+// current-rank target all 60 minutes (the faction's 25, then Typhoon's 2,500), each minute's plan the least expected
+// time to it of every plan the rule weighs (core's
 // `bladeburnerPlansToTarget`, none ruled out). That runs the same chain on the same plans, so it guards the pruning and
 // the brain's inputs, not the chain: the independent evidence is core's simulated walks
-// (packages/core/test/bladeburner-targets.test.ts). The steady part's rank (Field Analysis and the contracts) within
-// its own Bernstein bound at section 8's α, as B3's hour (#381's review), which can't fail here (Raid ran 44 of the
-// 60 minutes, so the steady forecast is too small for its bound to bite); the whole's within its bound; the report.
+// (packages/core/test/bladeburner-targets.test.ts). The steady part (Field Analysis and the contracts) on the expected
+// measure given the attempts made, over 0 (#415's ruling: since #415 the rule works Raid at its true chance most of the
+// hour, so a Bernstein bound on the steady part's one realised draw can't bite; it's printed, not asserted); the
+// whole's within its bound; the report.
 // The hour isn't asked to reach 25 (#386's amendment): at rank 0 a failure loses nothing, so the least expected time
 // can be Raid's lottery, whose hour can end anywhere.
 import {
+  actionHpLoss,
   BLADEBURNER_CONTRACTS,
   type BladeburnerActionPlan,
+  bladeburnerLevelledAction,
   bladeburnerPlansToTarget,
   type MediumSnapshotData,
   skillExpFor,
@@ -29,7 +33,7 @@ import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-acti
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
 import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/fresh-start.ts";
-import { expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.ts";
+import { attemptsIn, expectGrownHindcast, grownHindcastIn, steadyExpected } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
@@ -40,7 +44,7 @@ const HOUR = 60 * MINUTE;
 const planName = (plan: BladeburnerActionPlan) =>
   `${plan.work === null ? "resting alone" : `${plan.work.name} level ${plan.work.level}`} with ${plan.rest.name}`;
 
-test("BN6.1, an hour from a harness join: each plan the least time to 25, the steady part within its bound; the report passes", async () => {
+test("BN6.1, an hour from a harness join: each plan the least time to its target, the steady part's expectation over 0; the report passes", async () => {
   const fresh = await freshStartOf({
     withDesiredState: true,
     fixture: { kind: "bitnode", n: 6, sourceFiles: SOURCE_FILES },
@@ -119,7 +123,7 @@ test("BN6.1, an hour from a harness join: each plan the least time to 25, the st
     `under the target at ${underTarget} of 60 minutes, each the least time of every plan; chosen: ` +
       [...chosen].map(([name, minutes]) => `${name} ${minutes}`).join(", "),
   );
-  // Under the faction's 25 the whole hour (#390's review): the check ran at every minute.
+  // Under a current-rank target the whole hour (#390's review): the check ran at every minute.
   expect(underTarget).toBe(60);
   // Worked to under ½ max, then rested.
   expect(rested).toBe(true);
@@ -132,6 +136,38 @@ test("BN6.1, an hour from a harness join: each plan the least time to 25, the st
   console.log(section);
   console.log(`virtual: ${((fresh.game.clock.now() - startedAtMs) / MINUTE).toFixed(1)} min of actions`);
   expect(fresh.game.clock.now() - startedAtMs).toBeGreaterThanOrEqual(HOUR);
+  // The hospital (#417's review): each Raid failure (its damage about 386 against 21 HP) a visit at once, refilled
+  // before any reading, so the money is the game's own. Against the simulator's Raid failures over the same span: each
+  // bill min(10% of the money then, the damage × $100k) (`Hospital/Hospital.ts:4-17`), so at least the least money's
+  // 10% or 90% of the mean damage's, and at most the most money's 10% a failure of any action.
+  const hospital =
+    /the hospital \([^)]*\): \$([\d,]+) by the game's money sources from (\S+) to (\S+); at least (\d+) visits/.exec(
+      section,
+    );
+  expect(hospital, "the hospital's money").not.toBeNull();
+  const [money, fromIso, toIso, visits] = (hospital ?? []).slice(1) as [string, string, string, string];
+  const spent = Number(money.replaceAll(",", ""));
+  const span = await attemptsIn(fresh.simulation, Date.parse(fromIso), Date.parse(toIso));
+  const failed = span.filter((each) => !each.success);
+  const raids = failed.filter((each) => each.name === "Raid");
+  const monies = fresh.data.store
+    .snapshots({ environment: "E1" })
+    .filter((each) => each.tier === "medium" && each.receivedAtMs >= Date.parse(fromIso) - 10_000)
+    .filter((each) => each.receivedAtMs <= Date.parse(toIso))
+    .map((each) => (each.data as MediumSnapshotData).player?.money)
+    .filter((each): each is number => typeof each === "number");
+  const raid = bladeburnerLevelledAction("Operations", "Raid");
+  if (raid === null) throw new Error("no Raid");
+  const leastBill = Math.min(0.1 * Math.min(...monies), 0.9 * actionHpLoss(raid, 1) * 100e3);
+  console.log(
+    `the hospital: $${spent.toLocaleString("en-US")} from ${fromIso} to ${toIso}, at least ${visits} visits by the ` +
+      `report; the simulator's failures there: ${raids.length} Raid, ${failed.length} in all; the money ` +
+      `$${Math.round(Math.min(...monies)).toLocaleString("en-US")} to $${Math.round(Math.max(...monies)).toLocaleString("en-US")}`,
+  );
+  expect(raids.length).toBeGreaterThan(0);
+  expect(spent).toBeGreaterThanOrEqual(raids.length * leastBill);
+  expect(spent).toBeLessThanOrEqual(failed.length * 0.1 * Math.max(...monies));
+  expect(Number(visits)).toBeGreaterThan(0);
   const measured =
     /rank from the actions run: (-?[\d.]+) measured against (-?[\d.]+) forecast \(σ ([\d.]+)\), its bound (-?[\d.]+)/.exec(
       section,
@@ -140,8 +176,8 @@ test("BN6.1, an hour from a harness join: each plan the least time to 25, the st
   const [rank, forecast, sigma, bound] = (measured ?? []).slice(1).map(Number) as [number, number, number, number];
   console.log(`rank ${rank} against the forecast ${forecast} (σ ${sigma}), its bound ${bound}`);
   expect(rank).toBeGreaterThanOrEqual(bound);
-  // The steady part on its own (#386, as #381's review): Field Analysis and the contracts, their rank against their
-  // forecast's Bernstein bound at the same α, from section 8's lines by action.
+  // The steady part on its own (#386, as #381's review): Field Analysis and the contracts, from section 8's lines by
+  // action, their rank and their forecast's Bernstein bound at the same α (printed).
   const byAction = [
     ...section.matchAll(
       /\n {6}([^:\n]+): about \d+ attempts, \d+ successes; (-?[\d.]+) measured against (-?[\d.]+) forecast \(σ ([\d.]+), at most ([\d.]+) under an attempt's mean, cuts ([\d.]+)\)/g,
@@ -160,7 +196,17 @@ test("BN6.1, an hour from a harness join: each plan the least time to 25, the st
       `against ${sum(1).toFixed(2)} forecast (σ ${Math.sqrt(steadyVariance).toFixed(2)}), their bound ` +
       `${steadyBound.toFixed(2)} at α ${BLADEBURNER_RANK_ALPHA}`,
   );
-  expect(sum(0)).toBeGreaterThanOrEqual(steadyBound);
+  // #415's ruling: the steady part asserted on the expected measure given the attempts made (`steadyExpected`), over 0;
+  // the realised and its Bernstein bound printed beside it, not asserted.
+  const steadyMeasure = await steadyExpected(
+    fresh.simulation,
+    steady.find((each) => each.name === "Field Analysis")?.figures[0] ?? 0,
+  );
+  console.log(
+    `the steady part, expected given the actions: ${steadyMeasure.expected.toFixed(2)} (${steadyMeasure.attempts} ` +
+      `contract attempts; ${steadyMeasure.realised.toFixed(2)} realised)`,
+  );
+  expect(steadyMeasure.expected).toBeGreaterThan(0);
   expect(section).toContain("  an action stopped at stamina 0 at any reading:\n    none\n");
   expect(section).toContain("  the rank from the actions run below its forecast's bound:\n    none");
   expect(failures).toEqual([]);

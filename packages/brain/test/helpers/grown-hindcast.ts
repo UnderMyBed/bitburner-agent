@@ -19,6 +19,7 @@
 //     rebuilds in the window (their rank's is in the expected rise of no row here).
 import {
   BLACK_OPERATIONS,
+  BLADEBURNER_CONTRACTS,
   blackOpsRouteGrownEstimate,
   bladeburnerPricedInput,
   chooseBladeburnerAction,
@@ -55,40 +56,29 @@ export interface GrownHindcastRow {
  * asserts its own sides (`expectGrownHindcast`), so the share asserted from this table is the suites'.
  */
 export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
+  // Since #415 the rules choose at the true population (Raid at its drawn chance from rank 0): every row re-measured.
   "B2's hour from a harness join": {
-    ratio: 0.46,
+    ratio: 2.65,
     within: false,
-    expected: 2.38,
+    expected: 2.66,
     expectedWithin: false,
     why:
-      "realised: no Raid success in 23 attempts at rank 0; expected out: those attempts' chances give 71.6 rank against " +
-      "5.1 realised, in jumps of 55 at rank 0 where a failure loses none, so the expected rank in the window is a " +
-      "lottery's mean and the estimate's first-passage time to it is long against the fixed window (#411's diagnosis)",
+      "both out: 36 Raid attempts from rank 0 (3 successes for 81 of its 84 rank), in jumps of 55 where a failure " +
+      "loses none, so the window's expected rank (84.1) is a lottery's mean and the estimate's first-passage time to " +
+      "it (2.64 h) is long against the fixed window (#411's diagnosis)",
   },
-  "B3's hour at rank 150": { ratio: 0.92, within: true, expected: 0.79, expectedWithin: true },
-  "B4's hour, its chaos edited": {
-    ratio: 2.15,
-    within: false,
-    expected: 0.84,
-    expectedWithin: true,
-    why: "realised: one Raid success in 12 attempts gave 54 of its 68 rank (σ 35, section 8's own line)",
-  },
-  "B5's Typhoon": {
-    ratio: 2.01,
-    within: false,
-    expected: 0.97,
-    expectedWithin: true,
-    why: "realised: Typhoon done at its first attempt, its chance 0.48",
-  },
-  "B5's climb to Zero": { ratio: 0.99, within: true, expected: 0.99, expectedWithin: true },
+  "B3's hour at rank 150": { ratio: 0.52, within: true, expected: 1.46, expectedWithin: true },
+  "B4's hour, its chaos edited": { ratio: 0.7, within: true, expected: 0.83, expectedWithin: true },
+  "B5's Typhoon": { ratio: 1.22, within: true, expected: 0.86, expectedWithin: true },
+  "B5's climb to Zero": { ratio: 1.05, within: true, expected: 1.18, expectedWithin: true },
   "B6's Daedalus": { ratio: 0.96, within: true, expected: 0.96, expectedWithin: true },
   // BN7's (#411): the same suites at BN7's multipliers.
   "B2's hour from a harness join, BN7": {
-    ratio: 2.66,
+    ratio: 2.72,
     within: false,
-    expected: 1.5,
+    expected: 1.78,
     expectedWithin: true,
-    why: "realised: two Raid successes in 15 attempts gave 36 of its 44 rank (σ 22, section 8's own line)",
+    why: "realised: two Raid successes in 15 attempts gave 36 of its 45 rank (σ 31, section 8's own line)",
   },
   "B6's Daedalus, BN7": { ratio: 0.95, within: true, expected: 0.95, expectedWithin: true },
 };
@@ -164,6 +154,26 @@ export function attemptsSummary(attempts: readonly BladeburnerAttempt[], blackOp
     chances,
     blackOps,
     successes: attempts.filter((attempt) => attempt.success).length,
+  };
+}
+
+/**
+ * A suite's steady part on the expected measure (#415's ruling, as #411's ruling 1 for the hindcasts): the contracts'
+ * attempts in the simulator's log each at p × gain − (1 − p) × E[the floored loss] (`attemptExpectedRank`), and Field
+ * Analysis's rank as made (`fieldAnalysis`, section 8's: it has no draw). Once the rule works Raid at its true chance,
+ * an hour's steady part is small, and a Bernstein bound on its one realised draw says little; its expectation given the
+ * attempts made is the rule's and the formulas' to get right. The realised beside it, for the line.
+ */
+export async function steadyExpected(simulation: Simulation, fieldAnalysis: number) {
+  const contracts = new Set(BLADEBURNER_CONTRACTS.map((contract) => contract.name));
+  const attempts = (await simulation.diagnostics.bladeburnerAttempts(0)).filter((attempt) =>
+    contracts.has(attempt.name),
+  );
+  const summary = attemptsSummary(attempts, null);
+  return {
+    attempts: attempts.length,
+    expected: summary.expected + fieldAnalysis,
+    realised: summary.realised + fieldAnalysis,
   };
 }
 

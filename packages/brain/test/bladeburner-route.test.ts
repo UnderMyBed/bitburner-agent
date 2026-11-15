@@ -350,6 +350,19 @@ describe("the route's grown estimate in the brain (#408)", () => {
     expect(view.grown?.populationRatio).toBeCloseTo(1 / 1.42, 12);
     expect(view.grown?.seconds).toBe(grownWith(truth));
     expect(view.grown?.seconds).not.toBe(grownWith(low));
+    // The climb's plan where none is given (#415): the rule's at the true population, as the brain chooses it.
+    const climbWith = (plan: ReturnType<typeof chooseBladeburnerAction>) =>
+      blackOpsRouteOf({
+        mediumData: data,
+        bitNode: 6,
+        ownedSF: SF,
+        rankPerSecond: 2,
+        expPerSecond: 1e4,
+        soFarMs: 10 * 3_600_000,
+        plan,
+      }).climbRise;
+    expect(view.climbRise).toBe(climbWith(chooseBladeburnerAction(bladeburnerPricedInput(input, at).input)));
+    expect(view.climbRise).not.toBe(climbWith(chooseBladeburnerAction(input)));
   });
 
   test("the planner's: core's grown estimate on the reading (B6's first time to its rank), chosen over B6's", () => {

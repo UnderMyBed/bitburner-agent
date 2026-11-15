@@ -38,8 +38,10 @@
 //   didn't price; past it at the first sighting, no rebuild: B2's actions, and the report fails it). Left out, and labelled: an install the brain didn't see
 //   the cycle before of (none to rebuild to: the actions rebuild the stats), and hacking and charisma (reset too).
 // - The actions (B2, #375), once the reading has them: core's `chooseBladeburnerAction`, the contract or operation and
-//   its level with the most rank a game second over a cycle of work and rest, from the game's estimate's low end at
-//   each one's level, within the counts, and the rest with it (Field Analysis, the Regeneration Chamber or Training).
+//   its level with the most rank a game second over a cycle of work and rest, within the counts, and the rest with it
+//   (Field Analysis, the Regeneration Chamber or Training). Since #415 at the chance the game draws against, each range
+//   priced at the true population, pop/popEst recovered from the next Black Op's range (`bladeburnerRuleInputOf`, the
+//   grown estimate's pricing; the fallback the mean over the estimate's spread), not the range's low end.
 //   Worked while the stamina is at least ½ max; below, rested, back to work at the max (core's
 //   `bladeburnerResting`). Sent as the worker's `action`. The focus is held for it: A5's faction work waits
 //   (./factions.ts's `heldFor`), as any work stops the action (`Bladeburner/Bladeburner.ts:178-180`, `:1356-1368`).
@@ -54,7 +56,8 @@
 //   so Cyber's Edge is worth its duty cycle; Overclock to its max 90), until no level the points left cover gains. Sent
 //   at once as `upgradeBladeburnerSkill` intents, one a skill to the level planned, not gated (a skill can't be lost),
 //   so the points are spent within a reading of coming. Bought with the owner's work on the dashboard too: they stop no
-//   work. The forecast reads the levels too (core's: the time, the regain and the success skills in the range read).
+//   work. The forecast reads the levels too (core's: the time, the regain and the success skills in the range read),
+//   at B2's chances (#415: the true population's, as B2 chooses and the grown estimate spends the points).
 // - The cities and the chaos (B4, #383), once the reading has the six (`bladeburner-city.js`, which the state's `city`
 //   asks for: null before the first): core's `chooseBladeburnerCity`, B2's forecast in each city by its population
 //   estimate and chaos, the city with the most rank a second sent as the state's `city` (free, and it stops nothing:
@@ -68,7 +71,9 @@
 // - The Black Ops (B5, #392), once the reading has the next: its rank is the rule's current-rank target (core's
 //   `bladeburnerRankTarget`, #386's least expected time to it, once the faction is joined). At it, core's
 //   `checkBladeburnerBlackOp` decides: the expected time to it done attempting now (each failure's rank loss rebuilt)
-//   against waiting for the skill points the next level needs (a one-stage look-ahead). Run when it says so and the
+//   against waiting for the skill points the next level needs (a one-stage look-ahead): its rebuilds and skills B2's and
+//   B3's at the true population (#415), the Black Op's own chance its range's low end still, labelled (B5's: under an
+//   overcount pop/popEst × its formula, so its chance errs low there). Run when it says so and the
 //   stamina isn't resting (the work or rest choice at ½ max, B2's, so its chance has no penalty), in place of B2's
 //   order and B4's chaos action (a chaos action under way is kept to its 60 s's end first); sent as the worker's
 //   `action`, `Black Operations`, which the game stops after its one attempt (`Bladeburner.ts:1083`). One under way is
@@ -96,12 +101,14 @@ import {
   type BladeburnerChaosActionName,
   type BladeburnerCityChoice,
   type BladeburnerCityReading,
+  type BladeburnerPerson,
   type BladeburnerReading,
   type BladeburnerSkillLevels,
   type BladeburnerSkillPlan,
   type BladeburnerState,
   bladeburnerBlackOp,
   bladeburnerPersonOf,
+  bladeburnerPricedInput,
   bladeburnerRankMultiplierOf,
   bladeburnerRankTarget,
   bladeburnerRebuildSeconds,
@@ -494,6 +501,51 @@ export function bladeburnerSpeedOf(bonusSeconds: number): number {
   return bonusSeconds >= most ? most : 1;
 }
 
+/** B2's and B3's input at a reading (#415): the forecast's figures, each chance priced, and pop/popEst (null: not). */
+export interface BladeburnerRuleInput {
+  input: Omit<BladeburnerActionInput, "target"> & { skills: { read: BladeburnerSkillLevels } };
+  ratio: number | null;
+}
+
+/**
+ * B2's and B3's input from the worker's reading (#415, after #411's ruling 4): each contract's and operation's range
+ * priced at the true population (core's `bladeburnerPricedInput`, the grown estimate's own): pop/popEst recovered from
+ * the next Black Op's range read, one end its formula (`Actions/BlackOperation.ts:55-61`, `Actions/Action.ts:145-166`),
+ * so each chance is the one the game draws against; where it can't be (no Black Op read, or its scaled end clipped at
+ * 1), the mean over the estimate's own spread at a start (`City.ts:19-23`), labelled there (optimistic at an
+ * undercount, pessimistic at an overcount): the expected chance, not the low end. Labelled, #415's decision on the bn6
+ * sims' figures (seed 1, the ratio forced unrecovered, each hour's rank expected given the attempts made): B2's hour
+ * 78.0 at the spread's mean against 75.9 at the low end (84.1 recovered), B3's 239.5 against 182.5 (227.1). Every
+ * replay of the rules (the run report's, the route's) takes this too, so it chooses as the brain chose.
+ */
+export function bladeburnerRuleInputOf(
+  reading: BladeburnerActionsReading,
+  person: BladeburnerPerson,
+  rankMultiplier: number,
+): BladeburnerRuleInput {
+  const input = {
+    readings: reading.actions,
+    person,
+    stamina: reading.stamina,
+    maxStamina: reading.maxStamina,
+    rankMultiplier,
+    speed: bladeburnerSpeedOf(reading.bonusSeconds),
+    skills: { read: reading.skills?.levels ?? {} },
+  };
+  const read = reading.blackOp;
+  const next = read == null ? null : bladeburnerBlackOp(read.name);
+  return next === null || read == null
+    ? bladeburnerPricedInput(input, { next: null, chanceRead: null })
+    : bladeburnerPricedInput(input, { next, chanceRead: read.chance });
+}
+
+/** The chance the rule chose at (#415), in words: "at the true population (pop/popEst 1.420)", or the fallback's. */
+export function describeRuleChance(ratio: number | null): string {
+  return ratio === null
+    ? "over the estimate's spread: the population not recovered"
+    : `at the true population (pop/popEst ${ratio.toFixed(3)})`;
+}
+
 /** Home's RAM, from the medium snapshot's servers, or null. */
 export function homeMaxRamOf(mediumData: MediumSnapshotData | null): number | null {
   const home = mediumData?.servers?.find((server) => server.hostname === "home");
@@ -535,8 +587,13 @@ export interface BladeburnerView {
     resting: boolean;
     cities?: BladeburnerCityChoice | null;
     kept?: BladeburnerChaosActionName | null;
-    /** What the plan was chosen from (#386): the forecast's input in the city chosen, its target with it. */
+    /**
+     * What the plan was chosen from (#386): the forecast's input in the city chosen, its target with it, its chances
+     * priced at the true population (#415, `bladeburnerRuleInputOf`).
+     */
     input?: BladeburnerActionInput;
+    /** pop/popEst the chances were priced at (#415), or null: over the estimate's spread. */
+    ratio?: number | null;
     /**
      * The next Black Op (#392): core's check on it (null: none read, or all done), and whether the order is it (`run`:
      * sent by the check; `kept`: under way, kept to its end).
@@ -558,6 +615,8 @@ export function describeActionPlan(
   resting: boolean,
   stamina: number,
   max: number,
+  /** pop/popEst the chances were priced at (#415), or null: over the estimate's spread. */
+  ratio: number | null,
 ): string {
   const work = plan.work;
   const staminaText = `stamina ${stamina.toFixed(1)} / ${max.toFixed(1)}`;
@@ -569,7 +628,7 @@ export function describeActionPlan(
     );
   }
   const working =
-    `${work.name} level ${work.level} (${(work.chance * 100).toFixed(1)}% at the estimate's low end, ` +
+    `${work.name} level ${work.level} (${(work.chance * 100).toFixed(1)}% ${describeRuleChance(ratio)}, ` +
     `${perMinute(work.rankPerSecond)} worked)`;
   return (
     `${resting ? `resting with ${plan.rest.name} for ${working}` : `${working}, resting with ${plan.rest.name}`}; ` +
@@ -1020,17 +1079,12 @@ export class BladeburnerRule {
       return { plan: null, intents: [], text: null };
     }
     const { levels, points } = reading.skills;
-    const plan = chooseBladeburnerSkills(
-      {
-        readings: reading.actions,
-        person,
-        stamina: reading.stamina,
-        maxStamina: reading.maxStamina,
-        rankMultiplier,
-        speed: bladeburnerSpeedOf(reading.bonusSeconds),
-      },
-      { levels, points, costMultiplier },
-    );
+    // At the chances the game draws against (#415), as B2's rule chooses and the grown estimate spends.
+    const plan = chooseBladeburnerSkills(bladeburnerRuleInputOf(reading, person, rankMultiplier).input, {
+      levels,
+      points,
+      costMultiplier,
+    });
     const intents = plan.buys.map((buy) => upgradeBladeburnerSkillIntent(buy.skill, buy.to));
     return { plan, intents, text: describeSkillPlan(plan, levels, costMultiplier) };
   }
@@ -1069,15 +1123,8 @@ export class BladeburnerRule {
     }
     const { stamina, maxStamina } = reading;
     this.#resting = bladeburnerResting({ stamina, maxStamina, wasResting: this.#resting });
-    const base = {
-      readings: reading.actions,
-      person,
-      stamina,
-      maxStamina,
-      rankMultiplier,
-      speed: bladeburnerSpeedOf(reading.bonusSeconds),
-      skills: { read: reading.skills?.levels ?? {} },
-    };
+    // At the chances the game draws against (#415): the true population, recovered from the next Black Op's range.
+    const { input: base, ratio } = bladeburnerRuleInputOf(reading, person, rankMultiplier);
     const forecast = { ...base, ...(target === null || rank === null ? {} : { target: { rank, target } }) };
     const cities =
       readCity === null || reading.cities === null
@@ -1147,7 +1194,7 @@ export class BladeburnerRule {
             : "";
     const text =
       then +
-      describeActionPlan(plan, resting, stamina, maxStamina) +
+      describeActionPlan(plan, resting, stamina, maxStamina, ratio) +
       (cities === null || readCity === null ? "" : `; ${describeCityChoice(cities, readCity)}`) +
       (next === null ? "; all 21 Black Ops done" : check === null ? "" : `; ${describeBlackOpCheck(check)}`);
     // The rule chose the chaos action under way again at its run's first reading (#385's review): kept to that run's end.
@@ -1156,7 +1203,7 @@ export class BladeburnerRule {
       since.keptRun = this.#chaosRunOf(reading, nowMs);
     }
     const blackOp = check === null ? null : { check, order: blackOpOrder };
-    return { sent: { plan, order, resting, cities, kept, input, blackOp }, text, city };
+    return { sent: { plan, order, resting, cities, kept, input, ratio, blackOp }, text, city };
   }
 
   /**

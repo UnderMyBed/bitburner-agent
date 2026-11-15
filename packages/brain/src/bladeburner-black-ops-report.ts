@@ -16,7 +16,6 @@
 import {
   BLADEBURNER_BLACK_OPS,
   type BladeburnerBlackOpCheck,
-  type BladeburnerForecastInput,
   bladeburnerBlackOp,
   bladeburnerPersonOf,
   bladeburnerRankMultiplierOf,
@@ -25,7 +24,12 @@ import {
   chooseBladeburnerAction,
   type MediumSnapshotData,
 } from "@bitburner-agent/core";
-import { type BladeburnerActionsReading, bladeburnerSpeedOf, describeBlackOpCheck } from "./bladeburner.ts";
+import {
+  type BladeburnerActionsReading,
+  type BladeburnerRuleInput,
+  bladeburnerRuleInputOf,
+  describeBlackOpCheck,
+} from "./bladeburner.ts";
 import { BLADEBURNER_GAP_MS } from "./bladeburner-actions-report.ts";
 import { BLADEBURNER_MOVE_WITHIN_MS } from "./bladeburner-cities-report.ts";
 import { formatDuration, formatIsoTime } from "./gap-report.ts";
@@ -43,7 +47,7 @@ interface Kept {
   atMs: number;
   rank: number;
   reading: BladeburnerActionsReading;
-  input: BladeburnerForecastInput & { skills: { read: Record<string, number> } };
+  input: BladeburnerRuleInput["input"];
   costMultiplier: number;
   lastAugReset: number | null;
 }
@@ -81,15 +85,8 @@ export class BladeburnerBlackOpsFold {
       atMs,
       rank,
       reading,
-      input: {
-        readings: reading.actions,
-        person,
-        stamina: reading.stamina,
-        maxStamina: reading.maxStamina,
-        rankMultiplier,
-        speed: bladeburnerSpeedOf(reading.bonusSeconds),
-        skills: { read: reading.skills?.levels ?? {} },
-      },
+      // As the brain's (#415): each chance at the true population.
+      input: bladeburnerRuleInputOf(reading, person, rankMultiplier).input,
       costMultiplier,
       lastAugReset,
     };
