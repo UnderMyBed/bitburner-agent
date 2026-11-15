@@ -38,6 +38,8 @@ import { attemptsIn, attemptsSummary, expectGrownHindcast, grownHindcastIn } fro
 const freshStartOf = useFreshStarts();
 /** What the levels' check reads of a reading's actions (#425's review, row 4). */
 type BladeburnerActionReadingLike = { name: string; level: number };
+/** Core's label on the attempt under way's time left after a mid-attempt level change (`underWay`): 4.5% at most. */
+const UNDER_WAY_LEVEL_BOUND = 0.045;
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -231,33 +233,44 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
     // The time left is the level read's seconds less those done (#425's review, row 4): the game fixes an attempt's
     // time at its start (`Bladeburner.ts:186-188`) and no NS call returns it, so where the level changed mid-attempt
     // the time left is off by the two levels' times' ratio, difficultyFac^Δ (`Action.ts:105-122`, before its ⌈⌉): its
-    // share of an attempt measured here, over every pair of readings within one attempt.
+    // share of an attempt measured here, each reading within an attempt against that attempt's first reading (#425's
+    // re-review: two changes in one attempt counted whole), and held to core's label (`underWay`: at most 4.5%).
+    type Read = { current?: { name?: string } | null; actions?: BladeburnerActionReadingLike[] };
+    const levelIn = (read: Read | undefined, name: string) => read?.actions?.find((each) => each.name === name)?.level;
     let within = 0;
     let changed = 0;
     let most = 0;
+    let start = 0;
     for (let i = 0; i + 1 < reads.length; i++) {
-      const before = actionsOf[i] as { current?: { name?: string } | null; actions?: BladeburnerActionReadingLike[] };
-      const after = actionsOf[i + 1] as {
-        current?: { name?: string } | null;
-        actions?: BladeburnerActionReadingLike[];
-      };
+      const before = actionsOf[i] as Read | undefined;
+      const after = actionsOf[i + 1] as Read | undefined;
       const doneBefore = (raw[i]?.progress as { secondsDone?: number } | null | undefined)?.secondsDone;
       const doneAfter = (raw[i + 1]?.progress as { secondsDone?: number } | null | undefined)?.secondsDone;
       const name = after?.current?.name;
       const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === name);
-      if (action === undefined || before?.current?.name !== name) continue;
-      if (doneBefore === undefined || doneAfter === undefined || !(doneAfter > doneBefore)) continue;
+      const same =
+        action !== undefined &&
+        before?.current?.name === name &&
+        doneBefore !== undefined &&
+        doneAfter !== undefined &&
+        doneAfter > doneBefore;
+      if (!same || action === undefined || name === undefined) {
+        // A new attempt (or none) from the next reading on: that one is its first.
+        start = i + 1;
+        continue;
+      }
       within += 1;
-      const levelOf = (read: typeof before) => read?.actions?.find((each) => each.name === name)?.level ?? 0;
-      const delta = levelOf(after) - levelOf(before);
+      const delta = (levelIn(after, name) ?? 0) - (levelIn(actionsOf[start] as Read | undefined, name) ?? 0);
       if (delta === 0) continue;
       changed += 1;
       most = Math.max(most, Math.abs(action.difficultyFac ** delta - 1));
     }
     console.log(
-      `the time left's level (#425's review, row 4): ${changed} of ${within} readings within one attempt had its level ` +
-        `changed, the time left off by at most ${(100 * most).toFixed(1)}% of an attempt there`,
+      `the time left's level (#425's review, row 4): ${changed} of ${within} readings within one attempt at another ` +
+        `level than its first reading's, the time left off by at most ${(100 * most).toFixed(1)}% of an attempt there`,
     );
+    expect(within).toBeGreaterThan(0);
+    expect(most).toBeLessThanOrEqual(UNDER_WAY_LEVEL_BOUND);
   }
   const firstIncite = mediums.findIndex((each) => {
     const read = bladeburnerSnapshotOf(each.data).reading;

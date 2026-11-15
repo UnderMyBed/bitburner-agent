@@ -1225,8 +1225,8 @@ function planCandidates(
      * 218-227`), so each plan of that action's first attempt is the time left of it, the level read's seconds less those
      * done; another action's starts again at 0 (`Bladeburner.ts:187`). None: nothing under way, or not read. Labelled
      * (#425's review): no NS call returns the started attempt's own time, so where the level changed mid-attempt the
-     * time left is off by the two levels' ratio (difficultyFac^Δ): in bn6-skills' hour 20 of 175 readings within an
-     * attempt, at most 4.5% of an attempt.
+     * time left is off by the two levels' ratio (difficultyFac^Δ): in bn6-skills' hour 24 of 175 readings within an
+     * attempt at another level than its first reading's, at most 4.5% of an attempt (asserted there).
      */
     underWay?: { name: string; level: number; secondsDone: number };
   },

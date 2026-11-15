@@ -60,8 +60,9 @@ export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
   // Since #418 each chance is priced over the plan's horizon (the cities' drift, Diplomacy's time): every row again.
   // Since #421 (each plan's own step over its chain's attempts; the attempt under way at its time left) every row
   // re-measured: only B2's BN6 realised changes side, and by luck (ruling 5 on #421): its expected moved further out
-  // (×2.65 at 13564b5, ×2.89 here) and its realised in only because the hour drew 7 Raid successes in 48 for 36.4 rank
-  // (10 in 45 for 61.4 at 13564b5). Rows read as measured on their fixed seeds.
+  // (×2.65 at 13564b5, measured by PR #425's same-session run of main, against its committed ×2.73; ×2.89 here) and
+  // its realised in only because the hour drew 7 Raid successes in 48 for 36.4 rank (10 in 45 for 61.4 at 13564b5).
+  // Rows read as measured on their fixed seeds.
   "B2's hour from a harness join": {
     ratio: 0.74,
     within: true,

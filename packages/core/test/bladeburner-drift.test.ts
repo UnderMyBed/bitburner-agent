@@ -947,7 +947,7 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
     // the second's attempt. Under way with its seconds done, the second's first attempt costs only its time left, so its
     // time from the reading is its walk's less those seconds, to the bit: kept while those seconds pass the gap, cut once
     // the gap passes them. The gap made (#425's review: Raid and Bounty Hunter, each the other's next-best, tie exactly):
-    // an action that isn't the leader's next-best (Retirement here), its chance raised until its plan is behind the best
+    // an action that isn't the leader's next-best (Tracking here), its chance raised until its plan is behind the best
     // by half its attempt (bisected), its plans otherwise the rule's.
     const drift = { cities: SIX, city: "New Tokyo" };
     const target = { rank: 150, target: 2500 };
@@ -1857,7 +1857,11 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
       `check 3's plans: ${chosen.work?.name} first, bias ${minutes(biasOf(chosen, ruled))} min; ` +
         `${rival?.work?.name} first, bias ${minutes(biasOf(rival as (typeof plans)[number], raided))} min`,
     );
-    const verdict = checkThreeVerdict({ gap, error, pick: chosen.work?.name ?? null });
+    const verdict = checkThreeVerdict({
+      gap,
+      error,
+      pick: chosen.work === null ? null : { name: chosen.work.name, level: chosen.work.level, rest: chosen.rest.name },
+    });
     console.log(
       `check 3 (#421's ruling 6): ${verdict.kind}; the walks' gap ${minutes(gap)} min (3× its error ` +
         `${minutes(3 * error)}); the rule's loss ${minutes(verdict.loss)} min against the pin ` +
@@ -1868,17 +1872,26 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
 });
 
 /**
- * Main's pick at check 3's reading (#421's ruling 6): Bounty Hunter first, as 13564b5's check 3 measured it ("the rule's
- * Bounty Hunter first … 5,475.8 priced", 1,200 walks, seed 3861; the issue's own figures). Main's chooser isn't in this
- * tree to run, so cited.
+ * Main's pick at check 3's reading (#421's ruling 6): Bounty Hunter level 1, resting with Field Analysis, priced
+ * 5,475.8 min. Its name is asserted by 13564b5's own check 3 (`13564b5:packages/core/test/bladeburner-drift.test.ts:
+ * 1408`); its level and rest as 13564b5's chooser gives them on this reading (`bladeburnerPlansToTarget`'s first, run
+ * on 13564b5's core for #425's re-review). Main's chooser isn't in this tree to run, so cited.
  */
-const CHECK_THREE_MAIN_PICK = "Bounty Hunter";
+const CHECK_THREE_MAIN_PICK: CheckThreePick = { name: "Bounty Hunter", level: 1, rest: "Field Analysis" };
+
+/** A plan as check 3's verdict compares picks: its action, level and rest. */
+interface CheckThreePick {
+  name: string;
+  level: number;
+  rest: string;
+}
 
 /**
- * The chain's known loss at check 3's reading (#421's ruling 6): the walks, following the rule's own chain, put Raid
- * first 50.7 min ahead of the rule's Bounty Hunter first (4,755.6 ± 17.6 against 4,806.3 ± 17.9 min, its gap's error
- * 6.0), both priced 5,470.8. #424 is the fix: the chain's stamina reserve (the first stretch shorter than its cycle
- * prices) and its one tail rate after whatever the earlier stretches left (Raid's drain lowering the tail's chances).
+ * The chain's known loss at check 3's reading (#421's ruling 6): measured at e416bfc (this test, 1,200 walks a plan,
+ * seed 3861), the walks, following the rule's own chain, put Raid first 50.7 min ahead of the rule's Bounty Hunter
+ * first (4,755.6 ± 17.6 against 4,806.3 ± 17.9 min, its gap's error 6.0), both priced 5,470.8. #424 is the fix: the
+ * chain's stamina reserve (the first stretch shorter than its cycle prices) and its one tail rate after whatever the
+ * earlier stretches left (Raid's drain lowering the tail's chances).
  */
 const CHECK_THREE_KNOWN_LOSS = 50.7 * 60;
 
@@ -1898,15 +1911,18 @@ function checkThreeVerdict({
 }: {
   gap: number;
   error: number;
-  pick: string | null;
-  mainPick?: string;
+  pick: CheckThreePick | null;
+  mainPick?: CheckThreePick;
   knownLoss?: number;
 }): { pass: boolean; kind: string; loss: number; pin: number } {
   const loss = Math.max(0, -gap);
   const pin = knownLoss + 3 * error;
   if (gap > 3 * error) return { pass: true, kind: "ordered (#418's bar)", loss, pin };
-  if (pick !== mainPick) {
-    return { pass: false, kind: `the rule's pick ${pick} first, not main's ${mainPick} first`, loss, pin };
+  const words = (each: CheckThreePick | null) =>
+    each === null ? "none" : `${each.name} level ${each.level} with ${each.rest}`;
+  // The action, its level and its rest (#425's re-review, row 7).
+  if (pick?.name !== mainPick.name || pick.level !== mainPick.level || pick.rest !== mainPick.rest) {
+    return { pass: false, kind: `the rule's pick ${words(pick)}, not main's ${words(mainPick)}`, loss, pin };
   }
   const pass = loss <= pin;
   return {
@@ -1919,22 +1935,30 @@ function checkThreeVerdict({
 
 describe("check 3's verdict (#421's ruling 6): by hand", () => {
   test("ordered beyond 3 errors; else main's pick and the loss within the known one's pin, or it fails", () => {
+    const main = CHECK_THREE_MAIN_PICK;
     // (a) Ordered: the walks' gap past 3 errors, the rule's way.
-    expect(checkThreeVerdict({ gap: 300, error: 10, pick: "Raid" })).toMatchObject({
+    expect(checkThreeVerdict({ gap: 300, error: 10, pick: { ...main, name: "Raid" } })).toMatchObject({
       pass: true,
       kind: "ordered (#418's bar)",
     });
     // The other way past 3 errors: not ordered, so (b), and a loss past the pin fails.
-    expect(checkThreeVerdict({ gap: -300 * 60, error: 10, pick: "Bounty Hunter" }).pass).toBe(false);
+    expect(checkThreeVerdict({ gap: -300 * 60, error: 10, pick: main }).pass).toBe(false);
     // (b) Check 3's figures: 50.7 ± 6.0 min the other way, main's pick: the pin 50.7 + 18.0 = 68.7 min.
-    const pinned = checkThreeVerdict({ gap: -50.7 * 60, error: 6 * 60, pick: "Bounty Hunter" });
+    const pinned = checkThreeVerdict({ gap: -50.7 * 60, error: 6 * 60, pick: main });
     expect(pinned.pin).toBeCloseTo(68.7 * 60, 9);
     expect(pinned).toMatchObject({ pass: true, loss: 50.7 * 60 });
     // A loss inside the pin only by its 3 errors: 60 min against 50.7 + 18.0.
-    expect(checkThreeVerdict({ gap: -60 * 60, error: 6 * 60, pick: "Bounty Hunter" }).pass).toBe(true);
+    expect(checkThreeVerdict({ gap: -60 * 60, error: 6 * 60, pick: main }).pass).toBe(true);
     // Past the pin: 70 min.
-    expect(checkThreeVerdict({ gap: -70 * 60, error: 6 * 60, pick: "Bounty Hunter" }).pass).toBe(false);
-    // Another pick than main's: this PR's change, it fails whatever the loss.
-    expect(checkThreeVerdict({ gap: -10 * 60, error: 6 * 60, pick: "Raid" }).pass).toBe(false);
+    expect(checkThreeVerdict({ gap: -70 * 60, error: 6 * 60, pick: main }).pass).toBe(false);
+    // Another pick than main's (its action, its level or its rest): this PR's change, it fails whatever the loss.
+    for (const other of [
+      { ...main, name: "Raid" },
+      { ...main, level: 2 },
+      { ...main, rest: "Hyperbolic Regeneration Chamber" },
+      null,
+    ]) {
+      expect(checkThreeVerdict({ gap: -10 * 60, error: 6 * 60, pick: other }).pass, JSON.stringify(other)).toBe(false);
+    }
   });
 });
