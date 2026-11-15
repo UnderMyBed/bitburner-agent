@@ -35,7 +35,7 @@ import {
   maxStaminaOf,
 } from "../src/bladeburner-actions.ts";
 import { chaosDifficultyFactor } from "../src/bladeburner-constants.ts";
-import type { BladeburnerDriftCity } from "../src/bladeburner-drift.ts";
+import { type BladeburnerDriftCity, cityChanceFactor, driftedChance } from "../src/bladeburner-drift.ts";
 
 function seeded(seed: number): () => number {
   let state = seed >>> 0;
@@ -1512,7 +1512,7 @@ function spreadRunFrom(cities: readonly BladeburnerDriftCity[], horizon: number,
       for (let i = 0; i < 6; i++) {
         const f = factorOf(pops[i] as number, chaos[i] as number);
         (popMeans[g] as Float64Array)[i] += (pops[i] as number) / walks;
-        (chaosMeans[g] as Float64Array)[i] += Math.min(50, chaos[i] as number) / walks;
+        (chaosMeans[g] as Float64Array)[i] += (chaos[i] as number) / walks;
         if (f > best) best = f;
       }
       (most[g] as Float64Array)[walk] = best;
@@ -1588,6 +1588,221 @@ describe("#423 ruling 2, item 5: the grown estimate's factor shared by time", ()
             `3√(σ² sum) ${bar.toFixed(4)}: ${Math.abs(a.mean - b.mean) <= bar ? "passes" : "FAILS"}`,
         );
       }
+    }
+  }, 600_000);
+});
+
+// ---- #423 ruling 3, item 5 again: against walks of the grown route itself (its attempts at its times, its drain) ----
+
+interface RoutePart {
+  name: string;
+  chance: number;
+  perSecond: number;
+}
+type RouteStep =
+  | {
+      kind: "climb";
+      seconds: number;
+      dt: number;
+      parts: RoutePart[];
+      state: { cities: BladeburnerDriftCity[]; worked: number; ceiling: number };
+      reference: BladeburnerDriftCity;
+    }
+  | { kind: "blackop"; name: string; seconds: number; span: number; works: { dt: number; parts: RoutePart[] }[] };
+
+/** Ruling 3, item 3: the actions whose attempts move a share of a city's population or migrate people. */
+const DRAINS = new Set(["Raid", "Sting Operation", "Stealth Retirement Operation", "Investigation", "Undercover Operation"]);
+
+describe("#423 ruling 3: the grown estimate against walks of its own route", () => {
+  test("bn6-skills' first reading's route: at 9.9, 40.2 and 97.0 h, the drawn chance against the factor × max E and the mean path", async () => {
+    const { readFileSync } = await import("node:fs");
+    const file =
+      process.env.R423_ROUTE ??
+      "C:/Users/Matt/AppData/Local/Temp/claude/f9d10e1727648ecd/8fa44f8b-3eb6-48ce-9496-c91c002b8eb4/scratchpad/m4/423/grown-route.json";
+    const { steps, start } = JSON.parse(readFileSync(file, "utf8")) as {
+      steps: RouteStep[];
+      start: { readings: { name: string; chance: [number, number] }[] };
+    };
+    type Climb = Extract<RouteStep, { kind: "climb" }>;
+    const climbs = steps.filter((s) => s.kind === "climb") as Climb[];
+    const first = climbs[0] as Climb;
+    const reference = first.reference;
+    const ref = cityChanceFactor(reference);
+    const readCities = first.state.cities;
+    const pickAt = (hours: number) =>
+      climbs.reduce((best, each) =>
+        Math.abs(each.seconds / 3600 - hours) < Math.abs(best.seconds / 3600 - hours) ? each : best,
+      );
+    const states = [pickAt(9.9), pickAt(40.2), pickAt(97.0)];
+    const lastStep = steps[steps.length - 1] as RouteStep;
+    const routeEnd = lastStep.seconds + (lastStep.kind === "climb" ? lastStep.dt : lastStep.span);
+    const end = process.env.R423_ROUTE_FULL === "1" ? routeEnd : Math.max(...states.map((s) => s.seconds + s.dt));
+    const names = start.readings.map((r) => r.name);
+    const workedOf = (step: Climb) => step.state.cities[step.state.worked] as BladeburnerDriftCity;
+    // Each chance's competence part at a step: its chance there over the mean path's worked city's factor (the
+    // reading's chance where the step's mix doesn't work it, or its chance is at 1).
+    const competenceAt = (step: Climb, name: string) => {
+      const part = step.parts.find((p) => p.name === name);
+      const read = (start.readings.find((r) => r.name === name) as { chance: [number, number] }).chance[0];
+      if (part === undefined || part.chance >= 1) return read;
+      const factor = driftedChance({ action: action(name), chance: 1 }, reference, workedOf(step), step.state.ceiling);
+      return factor > 0 && factor < 1 ? part.chance / factor : read;
+    };
+    // The route's attempts in time order to `end`: each climb step's parts evenly over it; a Black Op's expected
+    // rebuilds back to back from its start (its own attempts move no city), then nothing to its span's end.
+    const attempts: { t: number; name: string; c: number }[] = [];
+    let climbAt: Climb = first;
+    for (const step of steps) {
+      if (step.seconds > end) break;
+      if (step.kind === "climb") {
+        climbAt = step;
+        for (const part of step.parts) {
+          const n = Math.round(part.perSecond * step.dt);
+          const c = competenceAt(step, part.name);
+          for (let j = 0; j < n; j++) attempts.push({ t: step.seconds + ((j + 0.5) * step.dt) / n, name: part.name, c });
+        }
+      } else {
+        let t = step.seconds;
+        for (const work of step.works) {
+          for (const part of work.parts) {
+            const n = Math.round(part.perSecond * work.dt);
+            const c = competenceAt(climbAt, part.name);
+            for (let j = 0; j < n; j++) attempts.push({ t: t + ((j + 0.5) * work.dt) / n, name: part.name, c });
+          }
+          t += work.dt;
+        }
+      }
+    }
+    attempts.sort((a, b) => a.t - b.t);
+    const drainingAttempts = (to: number) => attempts.filter((a) => a.t <= to && DRAINS.has(a.name)).length;
+    // Probe times: 16 in each state's step.
+    const probes = states.flatMap((state, k) =>
+      Array.from({ length: 16 }, (_, j) => ({ t: state.seconds + ((j + 0.5) * state.dt) / 16, k })),
+    );
+    const WALKS = Number(process.env.R423_ROUTE_WALKS ?? 500);
+    // Each walk's mean chance per state and action at B4's pick there.
+    const drawn = states.map(() => new Map(names.map((name) => [name, [] as number[]])));
+    const t0 = performance.now();
+    for (let walk = 0; walk < WALKS; walk++) {
+      const events = seeded(5100001 + 7919 * walk);
+      const random = seeded(5100001 + 7919 * walk + 104729);
+      const pops = readCities.map((city) => city.population);
+      const comms = readCities.map((city) => city.communities);
+      const chaos = readCities.map((city) => city.chaos);
+      let decayed = 0;
+      let next = intIn(events, 240, 600);
+      const decayTo = (to: number) => {
+        for (const i of chaos.keys()) chaos[i] = Math.max(0, (chaos[i] as number) - 0.0001 * (to - decayed));
+        decayed = to;
+      };
+      const pass = (t: number) => {
+        while (next <= t) {
+          decayTo(next);
+          eventsOn(pops, comms, chaos, events);
+          next += intIn(events, 240, 600);
+        }
+        decayTo(t);
+      };
+      const sums = states.map(() => new Map(names.map((name) => [name, 0])));
+      let a = 0;
+      for (const probe of probes) {
+        while (a < attempts.length && (attempts[a] as { t: number }).t <= probe.t) {
+          const each = attempts[a] as { t: number; name: string; c: number };
+          pass(each.t);
+          const city = pick(each.name === "Raid", pops, comms, chaos);
+          if (city >= 0) {
+            const p = Math.min(1, (each.c * factorOf(pops[city] as number, chaos[city] as number)) / ref);
+            attemptOn(each.name, random() < p, city, pops, comms, chaos, random);
+          }
+          a++;
+        }
+        pass(probe.t);
+        const step = states[probe.k] as Climb;
+        const sum = sums[probe.k] as Map<string, number>;
+        for (const name of names) {
+          const city = pick(name === "Raid", pops, comms, chaos);
+          const c = competenceAt(step, name);
+          const p = city < 0 ? 0 : Math.min(1, (c * factorOf(pops[city] as number, chaos[city] as number)) / ref);
+          sum.set(name, (sum.get(name) as number) + p / 16);
+        }
+      }
+      // The rest of the route (its cost, the full route's), each attempt as above.
+      for (; a < attempts.length; a++) {
+        const each = attempts[a] as { t: number; name: string; c: number };
+        pass(each.t);
+        const city = pick(each.name === "Raid", pops, comms, chaos);
+        if (city >= 0) {
+          const p = Math.min(1, (each.c * factorOf(pops[city] as number, chaos[city] as number)) / ref);
+          attemptOn(each.name, random() < p, city, pops, comms, chaos, random);
+        }
+      }
+      pass(end);
+      for (const [k, sum] of sums.entries()) {
+        for (const [name, p] of sum) (drawn[k] as Map<string, number[]>).get(name)?.push(p);
+      }
+    }
+    const walkMs = performance.now() - t0;
+    // The reading's run (events only, the chaos as drawn), 5 on seeds apart from each other and from the walks'.
+    const G = Math.ceil(end / 900);
+    const r0 = performance.now();
+    const runs = Array.from({ length: 5 }, (_, r) => spreadRunFrom(readCities, end, 500, 71000001 + 2000003 * r, G));
+    const runMs = (performance.now() - r0) / 5;
+    // The factor at t: E[min(1, c·max f)] over min(1, c·max E), max E the most city factor at the run's mean figures,
+    // the chaos as drawn on both sides.
+    const factorRun = (run: SpreadRun, c: number, t: number) => {
+      const g = Math.max(0, Math.min(run.G, Math.round((t / run.horizon) * run.G)));
+      const xs = run.most[g] as Float64Array;
+      let e = 0;
+      for (const x of xs) e += Math.min(1, (c * x) / ref);
+      e /= xs.length;
+      let maxE = 0;
+      for (let i = 0; i < 6; i++) {
+        maxE = Math.max(
+          maxE,
+          factorOf((run.popMeans[g] as Float64Array)[i] as number, (run.chaosMeans[g] as Float64Array)[i] as number),
+        );
+      }
+      return e / Math.min(1, (c * maxE) / ref);
+    };
+    console.log(
+      `R423 route walks: ${WALKS} walks, ${attempts.length} route attempts to ${(end / 3600).toFixed(1)} h, ${walkMs.toFixed(0)} ms; ` +
+        `the reading's run of 500 to ${(end / 3600).toFixed(1)} h ${runMs.toFixed(0)} ms`,
+    );
+    for (const [k, state] of states.entries()) {
+      const nextClimb = climbs[climbs.indexOf(state) + 1] ?? state;
+      const rows: string[] = [];
+      for (const name of names) {
+        const c = competenceAt(state, name);
+        const meanAt = (st: Climb) =>
+          driftedChance({ action: action(name), chance: c }, reference, workedOf(st), st.state.ceiling);
+        const meanPath = (meanAt(state) + meanAt(nextClimb)) / 2;
+        const shared = runs.map((run) => {
+          let s = 0;
+          for (let j = 0; j < 16; j++) s += factorRun(run, c, state.seconds + ((j + 0.5) * state.dt) / 16);
+          return Math.min(1, (meanPath * s) / 16);
+        });
+        const sh = meanOf(shared);
+        const sdRun = sh.error * Math.sqrt(5);
+        const w = meanOf((drawn[k] as Map<string, number[]>).get(name) as number[]);
+        const barA = 3 * Math.sqrt(w.error ** 2 + sdRun ** 2);
+        const barB = 3 * w.error;
+        const okA = Math.abs(sh.mean - w.mean) <= barA;
+        const okB = Math.abs(meanPath - w.mean) <= barB;
+        rows.push(
+          `${name}${DRAINS.has(name) ? " (drains)" : ""}: walked ${w.mean.toFixed(4)} ± ${w.error.toFixed(4)}; ` +
+            `factor × max E ${sh.mean.toFixed(4)} (sd a run ${sdRun.toFixed(4)}) ${okA ? "passes" : "FAILS"} ` +
+            `(|Δ| ${Math.abs(sh.mean - w.mean).toFixed(4)}, bar ${barA.toFixed(4)}); mean path ${meanPath.toFixed(4)} ` +
+            `${okB ? "passes" : "FAILS"} (|Δ| ${Math.abs(meanPath - w.mean).toFixed(4)}, bar ${barB.toFixed(4)})`,
+        );
+      }
+      const city = workedOf(state);
+      console.log(
+        `R423 state at ${(state.seconds / 3600).toFixed(1)} h (step ${(state.dt / 3600).toFixed(2)} h; the route's draining ` +
+          `attempts to it ${drainingAttempts(state.seconds)}; mean path worked ${city.name}, pop ` +
+          `${(city.population / 1e9).toFixed(3)}e9, chaos ${city.chaos.toFixed(1)} held at ${state.state.ceiling}; the six's ` +
+          `chaos ${state.state.cities.map((each) => each.chaos.toFixed(0)).join("/")}, pops ` +
+          `${state.state.cities.map((each) => (each.population / 1e9).toFixed(2)).join("/")}):\n  ${rows.join("\n  ")}`,
+      );
     }
   }, 600_000);
 });
