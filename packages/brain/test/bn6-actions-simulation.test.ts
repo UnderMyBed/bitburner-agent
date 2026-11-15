@@ -128,7 +128,16 @@ test("BN6.1, an hour from a harness join: each plan the least time to its target
   const endCities = await fresh.simulation.diagnostics.bladeburnerCities();
   console.log(
     `the cities after the hour against the drift's prediction (#418):
-` + expectCitiesAsPredicted(startCities, endCities, hourAttempts, startedAtMs, fresh.game.clock.now(), charisma),
+` +
+      expectCitiesAsPredicted(
+        startCities,
+        endCities,
+        hourAttempts,
+        startedAtMs,
+        fresh.game.clock.now(),
+        charisma,
+        await fresh.simulation.diagnostics.bladeburnerGeneralActions(0),
+      ),
   );
   console.log(fresh.controller().bladeburnerView().line);
   console.log(`under way: ${[...seen].join(", ")}; the stamina's lowest ${(100 * lowest).toFixed(0)}% of the max`);

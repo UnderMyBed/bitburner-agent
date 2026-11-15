@@ -1,5 +1,6 @@
 import type {
   BladeburnerAttempt,
+  BladeburnerGeneralAction,
   GameAugmentationCost,
   GameData,
   GameDiagnostics,
@@ -112,6 +113,8 @@ export interface EngineApi {
   homePeak(): HomePeak;
   /** Every Bladeburner attempt since the game booted, from `from` on (#411), each as the game drew it. */
   bladeburnerAttempts(from: number): BladeburnerAttempt[];
+  /** Every general Bladeburner action the player completed since boot, from `from` on (#420). */
+  bladeburnerGeneralActions(from: number): BladeburnerGeneralAction[];
   /** Every city's true population, estimate, communities and chaos (#418), as they stand. */
   bladeburnerCities(): { name: string; population: number; estimate: number; communities: number; chaos: number }[];
   /** The game-side fields of the game diagnostics (the host adds `bootMs`). */
@@ -198,6 +201,7 @@ const API_FUNCTIONS = {
   saveJson: true,
   homePeak: true,
   bladeburnerAttempts: true,
+  bladeburnerGeneralActions: true,
   bladeburnerCities: true,
   gameDiagnostics: true,
   installPageGlobals: true,

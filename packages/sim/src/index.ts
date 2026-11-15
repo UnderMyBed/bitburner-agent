@@ -34,6 +34,7 @@ export {
 export {
   type BitNodeFixture,
   type BladeburnerAttempt,
+  type BladeburnerGeneralAction,
   type ComparisonOp,
   type EventPage,
   type Fixture,

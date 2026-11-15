@@ -23,6 +23,7 @@ import { RpcClient } from "./rpc.ts";
 export type {
   BitNodeFixture,
   BladeburnerAttempt,
+  BladeburnerGeneralAction,
   ComparisonOp,
   EventPage,
   Fixture,
@@ -233,6 +234,11 @@ export class Simulation {
      * outcome, the mean rank of a success and of a failure, and the rank before and after. Only observed.
      */
     bladeburnerAttempts: (from = 0) => this.rpc.call("diagnostics.bladeburnerAttempts", { from }),
+    /**
+     * Every general Bladeburner action the player has completed since boot, from index `from` on (#420): its name, the
+     * city it completed in and when. Only observed.
+     */
+    bladeburnerGeneralActions: (from = 0) => this.rpc.call("diagnostics.bladeburnerGeneralActions", { from }),
     /** Every city's true population, estimate, communities and chaos (#418), as they stand. Only observed. */
     bladeburnerCities: () => this.rpc.call("diagnostics.bladeburnerCities", {}),
     random: (count: number) => this.rpc.call("diagnostics.random", { count }),

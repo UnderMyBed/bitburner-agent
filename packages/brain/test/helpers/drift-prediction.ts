@@ -8,8 +8,10 @@ import {
   type BladeburnerDriftState,
   bladeburnerAttemptDrift,
   bladeburnerDriftPath,
+  chaosAfterIncite,
+  INCITE_VIOLENCE,
 } from "@bitburner-agent/core";
-import type { BladeburnerAttempt } from "@bitburner-agent/sim";
+import type { BladeburnerAttempt, BladeburnerGeneralAction } from "@bitburner-agent/sim";
 import { expect } from "vitest";
 
 /** E[U²] for U uniform over the integers a..b, over 100: its mean's square and its variance ((n² − 1)/12). */
@@ -111,6 +113,11 @@ export function predictCities(
   fromMs: number,
   untilMs: number,
   charisma: number,
+  /**
+   * The general actions completed (#420's ruling 3, the simulator's `bladeburnerGeneralActions`): each Incite Violence
+   * raises every city's chaos by core's `chaosAfterIncite` (`Bladeburner.ts:1231-1235`), each cohort's.
+   */
+  general: readonly BladeburnerGeneralAction[] = [],
 ): PredictedCity[] {
   let state: BladeburnerDriftState = {
     cities: start.map((city) => ({ ...city })),
@@ -130,7 +137,37 @@ export function predictCities(
     const reference = state.cities[state.worked] as BladeburnerDriftCity;
     state = bladeburnerDriftPath(state, reference, [], seconds, { charisma, moves: false }).state;
   };
-  for (const attempt of [...attempts].sort((a, b) => a.atMs - b.atMs)) {
+  // Incite Violence (#420's ruling 3): every city's chaos, each cohort's (the share at 0 one at `chaosAfterIncite(0)`),
+  // its spread through the map's slope at the mean (deterministic: no variance of its own).
+  const incite = () => {
+    for (const [i, city] of state.cities.entries()) {
+      const cohorts = city.chaosMix?.cohorts ?? (city.chaos > 0 ? [{ mass: 1, chaos: city.chaos }] : []);
+      const zero = city.chaosMix?.zero ?? (city.chaos > 0 ? 0 : 1);
+      const moved = [
+        ...(zero > 0 ? [{ mass: zero, chaos: chaosAfterIncite(0) }] : []),
+        ...cohorts.map((cohort) => ({ mass: cohort.mass, chaos: chaosAfterIncite(cohort.chaos) })),
+      ];
+      const mean = moved.reduce((sum, cohort) => sum + cohort.mass * cohort.chaos, 0);
+      const slope = (chaosAfterIncite(city.chaos + 1e-3) - chaosAfterIncite(city.chaos)) / 1e-3;
+      const sum = variance[i] as { population: number; chaos: number };
+      sum.chaos *= slope * slope;
+      state.cities[i] = { ...city, chaos: mean, chaosMix: { zero: 0, cohorts: moved } };
+    }
+  };
+  const incites = general.filter((each) => each.name === INCITE_VIOLENCE && each.atMs > fromMs && each.atMs <= untilMs);
+  const events: ({ kind: "attempt"; atMs: number; attempt: BladeburnerAttempt } | { kind: "incite"; atMs: number })[] =
+    [
+      ...attempts.map((attempt) => ({ kind: "attempt" as const, atMs: attempt.atMs, attempt })),
+      ...incites.map((each) => ({ kind: "incite" as const, atMs: each.atMs })),
+    ].sort((a, b) => a.atMs - b.atMs);
+  for (const event of events) {
+    if (event.kind === "incite") {
+      pass((event.atMs - at) / 1000);
+      at = event.atMs;
+      incite();
+      continue;
+    }
+    const attempt = event.attempt;
     if (attempt.atMs <= fromMs || attempt.atMs > untilMs) continue;
     const action = actionOf(attempt.name);
     pass((attempt.atMs - at) / 1000);
@@ -170,8 +207,11 @@ export function expectCitiesAsPredicted(
   fromMs: number,
   untilMs: number,
   charisma: number,
+  /** The general actions completed (#420): Incite Violence's chaos applied (`predictCities`). */
+  general: readonly BladeburnerGeneralAction[] = [],
 ): string {
-  const predicted = predictCities(start, attempts, fromMs, untilMs, charisma);
+  const predicted = predictCities(start, attempts, fromMs, untilMs, charisma, general);
+  const incites = general.filter((each) => each.name === INCITE_VIOLENCE && each.atMs > fromMs && each.atMs <= untilMs);
   const rows: string[] = [];
   for (const city of end) {
     const at = predicted.find((each) => each.name === city.name) as PredictedCity;
@@ -183,12 +223,18 @@ export function expectCitiesAsPredicted(
         `${((4 * at.populationSpread) / 1e6).toFixed(1)}m)`,
     );
   }
+  rows.push(
+    `Incite Violence ${incites.length} time${incites.length === 1 ? "" : "s"} in the window, its chaos applied ` +
+      "(core's chaosAfterIncite, every city)",
+  );
   // Every city's row first, so a failure shows them all.
-  console.log(rows.join("\n"));
+  const said = rows.join("\n");
   for (const city of end) {
     const at = predicted.find((each) => each.name === city.name) as PredictedCity;
-    expect(Math.abs(city.chaos - at.chaos), `${city.name}'s chaos`).toBeLessThanOrEqual(4 * at.chaosSpread + 1e-6);
-    expect(Math.abs(city.population - at.population), `${city.name}'s population`).toBeLessThanOrEqual(
+    expect(Math.abs(city.chaos - at.chaos), `${city.name}'s chaos\n${said}`).toBeLessThanOrEqual(
+      4 * at.chaosSpread + 1e-6,
+    );
+    expect(Math.abs(city.population - at.population), `${city.name}'s population\n${said}`).toBeLessThanOrEqual(
       4 * at.populationSpread + 1,
     );
   }

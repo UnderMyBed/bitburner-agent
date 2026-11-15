@@ -1190,6 +1190,9 @@ function walkPlan(
   );
   const times: number[] = [];
   const attemptsOf: number[] = [];
+  // The plan's own action (`order[0]`), over every walk (#420's ruling 3, item 4: the priced time's terms against
+  // the walks'): its attempts, their chances summed, the time worked on them, and Diplomacy's after them.
+  const first = { attempts: 0, chance: 0, atMean: 0, seconds: 0, diplomacy: 0 };
   for (let walk = 0; walk < walks; walk++) {
     // Two streams a walk (common random numbers: a walk's events the same draws under either plan, as its own
     // attempts'), so the plans' gap is read walk by walk.
@@ -1297,6 +1300,17 @@ function walkPlan(
       pass(way.seconds);
       attempts++;
       const p = Math.min(1, (way.chanceRead * factorOf(pops[city] as number, chaos[city] as number)) / reference);
+      if (way === order[0]) {
+        first.attempts += 1;
+        first.chance += p;
+        first.seconds += way.seconds;
+        // At the six's mean population and chaos (those with communities for Raid): the mean path's city, where the
+        // six alike stay alike, against B4's pick of the best of six that the events spread apart.
+        const pool = [...pops.keys()].filter((k) => !raid || (comms[k] as number) > 0);
+        const meanPop = pool.reduce((sum, k) => sum + (pops[k] as number), 0) / pool.length;
+        const meanChaos = pool.reduce((sum, k) => sum + (chaos[k] as number), 0) / pool.length;
+        first.atMean += Math.min(1, (way.chanceRead * factorOf(meanPop, meanChaos)) / reference);
+      }
       const success = random() < p;
       rank = Math.max(0, rank + (success ? offset(way.gain) : -offset(way.loss)));
       switch (way.action.name) {
@@ -1327,13 +1341,25 @@ function walkPlan(
       if ((chaos[city] as number) > 50) {
         const seconds = (60 * Math.log(50 / (chaos[city] as number))) / Math.log(keep);
         chaos[city] = 50;
+        if (way === order[0]) first.diplomacy += seconds;
         pass(seconds);
       }
     }
     times.push(clock);
     attemptsOf.push(attempts);
   }
-  return { times, ...meanOf(times), attempts: attemptsOf.reduce((a, b) => a + b, 0) / walks };
+  return {
+    times,
+    ...meanOf(times),
+    attempts: attemptsOf.reduce((a, b) => a + b, 0) / walks,
+    first: {
+      attempts: first.attempts / walks,
+      chance: first.attempts > 0 ? first.chance / first.attempts : 0,
+      atMean: first.attempts > 0 ? first.atMean / first.attempts : 0,
+      diplomacy: first.attempts > 0 ? first.diplomacy / first.attempts : 0,
+      share: first.seconds / walks,
+    },
+  };
 }
 
 describe("the rule's order under walks of the game's draws (#418's ruling 2, check 3): its plan against rank a second's", () => {
@@ -1404,6 +1430,33 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
         `${(100 * (1 - (rival?.toTarget?.seconds as number) / raided.mean)).toFixed(1)}% (its path's B4 and the ` +
         `walks' both by each city's true figure, measured each reading, #420)`,
     );
+    // The priced time's terms against the walks' (#420's ruling 3, item 4): the plan's own action's mean chance and
+    // Diplomacy's seconds an attempt, priced and walked; and each plan's time priced at the walks' mean chance (its
+    // reading's chance there, the chain as the rule's, no drift), which says how much of the gap that term is.
+    const termsOf = (plan: (typeof plans)[number], walked: ReturnType<typeof walkPlan>) => {
+      const work = plan.work as NonNullable<(typeof plan)["work"]>;
+      const factor = walked.first.chance / (work.drift?.chanceRead ?? work.chance);
+      const atWalked = bladeburnerPlansToTarget({
+        ...input,
+        target,
+        readings: input.readings.map((read) =>
+          read.name === work.name
+            ? { ...read, chance: [read.chance[0] * factor, read.chance[1] * factor] as [number, number] }
+            : read,
+        ),
+      }).find(
+        (each) => each.work?.name === work.name && each.work.level === work.level && each.rest.name === plan.rest.name,
+      );
+      return (
+        `${work.name}: priced its chance ${work.chance.toFixed(4)} over ${(work.drift?.attempts ?? 0).toFixed(0)} attempts ` +
+        `and Diplomacy ${work.diplomacySeconds.toFixed(1)} s an attempt; walked ${walked.first.chance.toFixed(4)} ` +
+        `(${walked.first.atMean.toFixed(4)} at the six's mean) over ` +
+        `${walked.first.attempts.toFixed(0)} and ${walked.first.diplomacy.toFixed(1)} s; priced at the walked chance ` +
+        `${minutes(atWalked?.toTarget?.seconds as number)} min (walked ${minutes(walked.mean)}, priced ` +
+        `${minutes(plan.toTarget?.seconds as number)})`
+      );
+    };
+    console.log(`the terms (#420): ${termsOf(chosen, ruled)}; ${termsOf(rival as (typeof plans)[number], raided)}`);
     // The rule's order: its plan the faster.
     expect((rival?.toTarget?.seconds as number) > (chosen.toTarget?.seconds as number)).toBe(true);
     // The walks' the same, beyond 3 standard errors of the gap.

@@ -21,7 +21,11 @@
 //   the rule's own figures at the reading (core's `chooseBladeburnerCity`'s gain = cost, bisected), and every city
 //   set halfway between 50 and it: weighed and not paying. A run only on a decision's paying measure (the measure
 //   follows each reading's stamina and figures).
-// The whole report passing, its chaos check among it.
+// The whole report passing, its chaos check among it. Since #420 each city is priced at its own measured truth (the
+// round over the six): the first move goes to New Tokyo by its measured truth (its estimate 1.6 times it). Its moves in
+// this run: wanted at 00:01:10 from Sector-12 (Field Analysis under way, no run kept: 22 s) and at 00:18:40 from Aevum
+// to New Tokyo, every city at 50.2 (Diplomacy's run under way, kept to its end by #385's rule with 50 s of its 60 s
+// left then: the bound 22 + 50 = 72 s, by #420's ruling 3), the move made 40 s on.
 import {
   BLADEBURNER_CHAOS_ACTION_SECONDS,
   BLADEBURNER_CITIES,

@@ -759,9 +759,32 @@ describe("the run report's cities (#383)", () => {
     const late = stayed([0, 10_000, BLADEBURNER_MOVE_WITHIN_MS + 1]);
     expect(late.failures).toHaveLength(1);
     expect(late.failures[0]).toContain(
-      "(Sector-12's chaos 80.00 at its start, a move to Aevum, within two readings and an Agent round; the rule's choice: ",
+      `(Sector-12's chaos 80.00 at its start, a move to Aevum, wanted at ${new Date(T0).toISOString()}, within two ` +
+        "readings and an Agent round; the rule's choice: ",
     );
     expect(late.failures[0]).toContain(`, past its bound ${formatDuration(BLADEBURNER_MOVE_WITHIN_MS)} (`);
+  });
+
+  test("a move wanted with Diplomacy under way (#420's ruling 3): its bound the kept run's time left and 22 s", () => {
+    const all = cities(0, { "Sector-12": { chaos: 80 } });
+    // Diplomacy under way from 0 (its first reading), the move first wanted at 20 s: 40 s of its 60 s run left then.
+    const held = (offsets: number[]) =>
+      fold(
+        at(offsets, (offsetMs) =>
+          offsetMs < 20_000
+            ? { all: cities(0), current: DIPLOMACY_UNDER_WAY, found: DIPLOMACY_UNDER_WAY }
+            : { all, current: DIPLOMACY_UNDER_WAY, found: DIPLOMACY_UNDER_WAY },
+        ),
+      );
+    const boundMs = BLADEBURNER_MOVE_WITHIN_MS + 40_000;
+    expect(held(every10s(0, 20_000 + boundMs)).failures).toEqual([]);
+    const late = held(every10s(0, 20_000 + boundMs + 1));
+    expect(late.failures).toHaveLength(1);
+    expect(late.failures[0]).toContain(
+      `a move to Aevum, wanted at ${new Date(T0 + 20_000).toISOString()}, within two readings and an Agent round ` +
+        "after the Diplomacy run under way, kept to its end (#385): 40 s of its 60 s left then;",
+    );
+    expect(late.failures[0]).toContain(`, past its bound ${formatDuration(boundMs)} (`);
   });
 
   test("the round (#420): each city's measure over the window, the last in full; a reading without it fails", () => {

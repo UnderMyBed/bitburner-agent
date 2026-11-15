@@ -11,7 +11,9 @@
 //   - **Diplomacy paying:** twice the rule's own Diplomacy estimate (core's `diplomaciesTo50` of 60 s each, at the
 //     stretch's first reading) and `BLADEBURNER_CHAOS_SLACK_MS`. Real time against the game's seconds: bonus time only
 //     shortens Diplomacy (`Bladeburner.ts:1376-1380`), so the bound errs long.
-//   - **A move to another city** (#385's review): `BLADEBURNER_MOVE_WITHIN_MS`, a few readings, as a move takes one.
+//   - **A move to another city** (#385's review): `BLADEBURNER_MOVE_WITHIN_MS`, a few readings, as a move takes one;
+//     with a chaos action under way at the reading that first wants it (#420's ruling 3), plus that run's game seconds
+//     left then, by the rule's own clock: #385's rule keeps the run to its end with the city held, so the move waits.
 //   A stretch whose wanted fix changes kind ends, and the next begins with its own bound. Idle (the owner's work, or a
 //   stop) isn't the rule's; a gap in the readings or an install ends the stretch, as stuck resting's.
 // - Left out, and labelled: the random events (`:601-699`), seen only as the figures they move.
@@ -94,6 +96,8 @@ export class BladeburnerCitiesFold {
   #lastMeasures: BladeburnerCityMeasure[] | null = null;
   readonly #roundFailed: { fromMs: number; toMs: number; detail: string }[] = [];
   #roundOpen: { fromMs: number; toMs: number; detail: string } | null = null;
+  /** The chaos action under way (#385) since its first reading under way, as the rule's `#keptChaosAction` counts it. */
+  #chaosSince: { name: string; atMs: number; bonusSeconds: number } | null = null;
 
   /** A medium snapshot in the division with B4's reading (its `city` and `cities`), in BN6 or BN7 (`bitNode`). */
   add(
@@ -135,6 +139,15 @@ export class BladeburnerCitiesFold {
             choose,
           );
     const kept: Kept = { atMs, city, reading, lastAugReset, choice };
+    // The chaos action under way since its first reading so (#385's rule's own clock: the controller's time and the
+    // bonus time then), for a move's wait on the run it keeps (#420's ruling 3).
+    const now = reading.current;
+    const chaosName =
+      now?.type === "General" && (now.name === DIPLOMACY || now.name === INCITE_VIOLENCE) ? now.name : null;
+    if (chaosName === null) this.#chaosSince = null;
+    else if (this.#chaosSince?.name !== chaosName) {
+      this.#chaosSince = { name: chaosName, atMs, bonusSeconds: reading.bonusSeconds };
+    }
     this.#readings += 1;
     if (this.#first === null) this.#first = kept;
     const previous = this.#last;
@@ -206,19 +219,39 @@ export class BladeburnerCitiesFold {
     }
     const attempts = diplomaciesTo50(here?.chaos ?? 0, charisma);
     const estimateMs = attempts * BLADEBURNER_CHAOS_ACTION_SECONDS * 1000;
+    // A move wanted with a chaos action under way waits for the run #385's rule keeps (the city held with it): its
+    // remaining game seconds at the reading that first wants the move, by the rule's own clock.
+    const keptMs = kind === "move" ? this.#keptRunLeftMs(kept) : 0;
     const why =
       kind === "move"
-        ? `a move to ${choice?.city}, within two readings and an Agent round`
+        ? `a move to ${choice?.city}, wanted at ${formatIsoTime(kept.atMs)}, within two readings and an Agent round` +
+          (keptMs > 0
+            ? ` after the ${this.#chaosSince?.name} run under way, kept to its end (#385): ${formatDuration(keptMs)} ` +
+              `of its 60 s left then`
+            : "")
         : `the rule's Diplomacy estimate ${attempts} × 60 s = ${formatDuration(estimateMs)}`;
     this.#leftOpen = {
       kind,
       fromMs: kept.atMs,
       toMs: kept.atMs,
-      boundMs: kind === "move" ? BLADEBURNER_MOVE_WITHIN_MS : 2 * estimateMs + BLADEBURNER_CHAOS_SLACK_MS,
+      boundMs: kind === "move" ? BLADEBURNER_MOVE_WITHIN_MS + keptMs : 2 * estimateMs + BLADEBURNER_CHAOS_SLACK_MS,
       detail:
         `${kept.city}'s chaos ${(here?.chaos ?? 0).toFixed(2)} at its start, ${why}; the rule's choice: ` +
         (choice === null ? "none" : describeCityChoice(choice, kept.city)),
     };
+  }
+
+  /**
+   * The run under way's game seconds left at `kept` (#420's ruling 3), in ms: a chaos action's runs are 60 game seconds
+   * from its first reading under way, the bonus time spent since counted (the rule's `#chaosRunOf`), so 60 less the
+   * run's elapsed; 0 with none under way. Taken as real time: bonus time only shortens it, so the bound errs long.
+   */
+  #keptRunLeftMs(kept: Kept): number {
+    const since = this.#chaosSince;
+    if (since === null) return 0;
+    const gameSeconds = (kept.atMs - since.atMs) / 1000 + since.bonusSeconds - kept.reading.bonusSeconds;
+    const run = BLADEBURNER_CHAOS_ACTION_SECONDS;
+    return (run - (((gameSeconds % run) + run) % run)) * 1000;
   }
 
   /** The cities' lines, its failures added to `failures`; one line without a reading with them. */

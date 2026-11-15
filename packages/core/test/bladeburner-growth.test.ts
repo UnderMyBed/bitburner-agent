@@ -995,6 +995,8 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
   const CASES = [6, 7]
     .flatMap((bitNode) => [100, 300].map((combat) => ({ bitNode, combat })))
     .filter(({ bitNode, combat }) => FULL || (bitNode === 6 && combat === 100));
+  /** Each case's figures as solved above (#420's order check takes the CI case's from here). */
+  const solved = new Map<string, { keep: number; install: number | null; choice: string }>();
   test.each(CASES)("BN$bitNode, combat $combat, read at the truth: as is and with the shop", ({ bitNode, combat }) => {
     const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
     const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
@@ -1030,5 +1032,39 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
     // Unplayable either way: past the bar as is and with the shop.
     expect(shop.keepSeconds).toBeGreaterThan(BAR_SECONDS);
     expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+    solved.set(`${bitNode} ${combat}`, {
+      keep: shop.keepSeconds,
+      install: shop.installNowSeconds,
+      choice: shop.choice,
+    });
+  });
+
+  test("the same figures after other solves (#420's ruling 3): no state carried between them", () => {
+    // The CI case as the test above solved it, then BN7 at combat 300 (its own drift paths and solves, kept in core's
+    // caches), then the CI case again: to the bit. Alone and in this whole file it gives 155.5 h as is and 113.6 h
+    // installing, on d4fc1e5 too; the 152.4 h and 115.6 h #418 stated were measured before its round 4 (moved Raid an
+    // attempt at a time in the rule and in the grown estimate), not another order's.
+    const caseOf = (bitNode: number, combat: number) => {
+      const { combat: figures, input: read, at } = startAt(combat);
+      const input = {
+        ...read,
+        rankMultiplier: bladeburnerRankMultiplierOf(bitNode) as number,
+        drift: { cities: SIX, city: "Sector-12" },
+      };
+      const timing = blackOpsInstallTiming({
+        input,
+        at,
+        combat: figures,
+        gain: bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null)),
+        installable: true,
+        growth: { costMultiplier: bladeburnerSkillCostMultiplierOf(bitNode) as number },
+      });
+      return { keep: timing.keepSeconds, install: timing.installNowSeconds, choice: timing.choice };
+    };
+    const first = solved.get("6 100") ?? caseOf(6, 100);
+    caseOf(7, 300);
+    expect(caseOf(6, 100)).toEqual(first);
+    expect(first.keep / HOUR).toBeCloseTo(155.5, 1);
+    expect((first.install as number) / HOUR).toBeCloseTo(113.6, 1);
   });
 });
