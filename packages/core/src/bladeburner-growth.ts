@@ -305,7 +305,8 @@ export function bladeburnerPricedInput<T extends Omit<BladeburnerActionInput, "t
  * rule's `BLADEBURNER_DRIFT_CHUNKS` over the whole horizon; a city worked throughout converges in its chunks (core's
  * test). Raid with B4's moves is followed an attempt at a time here too (`BLADEBURNER_DRIFT_EXACT_RAID`, #418's ruling
  * 4: its chunks don't converge, B4's pick between near-tied homes flipping with the step; that flipping is #420), so
- * the estimate's Raid is the rule's.
+ * the estimate's Raid is the rule's: at no measured cost (bn6-install 18.0 s here, 18.5 s with 16 chunks for it; core's
+ * route 177.1 h either way).
  */
 export const BLADEBURNER_GROWTH_DRIFT_CHUNKS = 16;
 
