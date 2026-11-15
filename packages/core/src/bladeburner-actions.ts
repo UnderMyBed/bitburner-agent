@@ -906,27 +906,56 @@ function fluidSeconds(input: BladeburnerActionInput, { rank, target }: { rank: n
     each.attempts !== undefined && Number.isFinite(each.attempts) ? { ...bare(each), attempts: each.attempts } : null;
   // A plan's own chain (#386's): its count, then its next-best by the mean (another action's, with its own count, where
   // it beats the tail straight away), then the tail; its floor and its jumps in.
-  const chainOf = (index: number) => {
+  // Each next-best's step made once, so its own count's solve is kept for every plan it follows (`boundedNext`'s).
+  const nexts = new Map<number, BladeburnerRankStep>();
+  const nextOf = (second: number) => {
+    let next = nexts.get(second);
+    if (next === undefined) {
+      const nextStep = (candidates[second] as PlanCandidate).step as BladeburnerRankStep;
+      const bounded = counted(nextStep);
+      next = bounded === null ? bare(nextStep) : { ...bounded, tailRate };
+      nexts.set(second, next);
+    }
+    return next;
+  };
+  // A sequence's fastest rise a second (Wald's, as the rule's bound): a step's chance × gain + rest over its seconds.
+  const riseOf = (each: BladeburnerRankStep) => (each.chance * each.gain + each.rest) / each.seconds;
+  // The plan's sequence, and Wald's bound on its time: the distance at its fastest piece's rise.
+  const sequenceOf = (index: number) => {
     const fastest = candidates[index] as PlanCandidate;
-    const step = fastest.step;
-    if (step === null) return means[index] as number;
+    const step = fastest.step as BladeburnerRankStep;
     const own = counted(step);
-    if (own === null) return bladeburnerSecondsToRank(bare(step), rank, target);
+    if (own === null) return bare(step);
     let second = -1;
     for (const [i, candidate] of candidates.entries()) {
       if (candidate.step === null || candidate.name === fastest.name || !((means[i] as number) < tailOnly)) continue;
       if (second < 0 || (means[i] as number) < (means[second] as number)) second = i;
     }
-    const nextStep = second < 0 ? null : (candidates[second] as PlanCandidate).step;
-    if (nextStep === null) return bladeburnerSecondsToRank({ ...own, tailRate }, rank, target);
-    const bounded = counted(nextStep);
-    const next = bounded === null ? bare(nextStep) : { ...bounded, tailRate };
-    return bladeburnerSecondsToRank({ ...own, next }, rank, target);
+    return second < 0 ? { ...own, tailRate } : { ...own, next: nextOf(second) };
+  };
+  const boundOf = (sequence: BladeburnerRankStep) => {
+    let most = Math.max(0, tailRate);
+    for (let each: BladeburnerRankStep | undefined = sequence; each !== undefined; each = each.next) {
+      most = Math.max(most, riseOf(each), each.next === undefined ? (each.tailRate ?? 0) : 0);
+    }
+    return most > 0 ? distance / most : Number.POSITIVE_INFINITY;
   };
   // The least of every plan's chain (the mean leaves out the floor, from rank 0 a failure loses nothing, so the
-  // fastest by it is not always the fastest by the chain).
+  // fastest by it is not always the fastest by the chain), by their means first, those Wald's bound rules out skipped.
   let least = Number.POSITIVE_INFINITY;
-  for (const [i, mean] of means.entries()) if (Number.isFinite(mean)) least = Math.min(least, chainOf(i));
+  const order = means
+    .map((mean, i) => ({ mean, i }))
+    .filter((each) => Number.isFinite(each.mean))
+    .sort((x, y) => x.mean - y.mean || x.i - y.i);
+  for (const { i } of order) {
+    if ((candidates[i] as PlanCandidate).step === null) {
+      least = Math.min(least, means[i] as number);
+      continue;
+    }
+    const sequence = sequenceOf(i);
+    if (!(boundOf(sequence) < least)) continue;
+    least = Math.min(least, bladeburnerSecondsToRank(sequence, rank, target));
+  }
   return least;
 }
 

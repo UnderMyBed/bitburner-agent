@@ -61,9 +61,13 @@ function diplomacyMarginOf(
   there: CityFigures,
   chaos: number,
 ): number {
+  // B4's rate a second at each chaos (#418): no target, so no horizon (the decision's input carries B4's, for its plan
+  // under the target).
+  const { horizonSeconds: _horizon, ...drift } = input.drift ?? { cities: [], city: "" };
   const rate = (at: number) =>
     chooseBladeburnerAction({
       ...input,
+      ...(input.drift === undefined ? {} : { drift }),
       city: {
         ratio: cityCompetenceRatio(here, { population: there.population, chaos: at }) ?? 0,
         raid: there.communities > 0,
