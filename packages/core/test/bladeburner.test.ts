@@ -447,7 +447,9 @@ describe("the worker", () => {
   });
 
   test("the city worker (#383, #420's round, #421's progress): 36.6 GB, under the reading worker's, among the home workers", () => {
-    // 1.6 + 7 × 4 (the five city calls, `getActionEstimatedSuccessChance`, `getActionCurrentLevel`) + 2 (`getNextBlackOp`).
+    // 1.6 + 8 × 4 (the five city calls, `getActionEstimatedSuccessChance`, `getActionCurrentLevel`, #421's
+    // `getActionCurrentTime`) + 2 (`getNextBlackOp`) + 1 (#421's `getCurrentAction`).
+    expect(BLADEBURNER_CITY_WORKER_RAM_GB).toBeCloseTo(1.6 + 8 * 4 + 2 + 1, 9);
     expect(BLADEBURNER_CITY_WORKER_RAM_GB).toBe(36.6);
     expect(BLADEBURNER_CITY_WORKER_RAM_GB).toBeLessThan(BLADEBURNER_WORKER_RAM_GB);
     expect(bladeburnerWorkerFileNames()).toContain(BLADEBURNER_CITY_WORKER_NAME);

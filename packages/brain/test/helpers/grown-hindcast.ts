@@ -59,15 +59,16 @@ export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
   // Since #415 the rules choose at the true population (Raid at its drawn chance from rank 0): every row re-measured.
   // Since #418 each chance is priced over the plan's horizon (the cities' drift, Diplomacy's time): every row again.
   // Since #421 (each plan's own step over its chain's attempts; the attempt under way at its time left) every row
-  // re-measured: only B2's BN6 realised changes side, inside ×2 on the hour's own draw (7 Raid successes in 48), a flip
-  // toward "within" (the coordinator's ruling 2 on #421); B3's back out as on 13564b5 (ruling 4: the regrowth out).
+  // re-measured: only B2's BN6 realised changes side, and by luck (ruling 5 on #421): its expected moved further out
+  // (×2.65 at 13564b5, ×2.89 here) and its realised in only because the hour drew 7 Raid successes in 48 for 36.4 rank
+  // (10 in 45 for 61.4 at 13564b5). Rows read as measured on their fixed seeds.
   "B2's hour from a harness join": {
     ratio: 0.74,
     within: true,
     expected: 2.89,
     expectedWithin: false,
     why:
-      "expected out: Raid's attempts from rank 0 (7 successes in 48 attempts for 35.3 of its 36 rank), in jumps of 55 " +
+      "realised in by luck, expected out: Raid's attempts from rank 0 (7 successes in 48 attempts for 35.3 of its 36 rank), in jumps of 55 " +
       "where a failure loses none, so the window's expected rank (86.4) is a lottery's mean and the estimate's " +
       "first-passage time to it (2.87 h) is long against the fixed window (#411's diagnosis)",
   },

@@ -943,20 +943,18 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
   });
 
   test("#421's ruling 3: the attempt under way priced at its time left; a near tie kept mid-attempt", () => {
-    // Check 3's reading: the best plan and the next-best of another action, their priced times apart by less than the
-    // second's attempt. Under way with its seconds done, the second's first attempt costs only its time left, so its
-    // time from the reading is its walk's less those seconds, to the bit, and the rule keeps it; none done, as before.
-    // A near tie made (bn6-skills' first reading had three within 0.04 h): the second action's chance raised until its
-    // plan is behind the best by half its attempt (bisected), its plans otherwise the rule's.
+    // Check 3's reading: the best plan and the best of another action, their priced times apart by a positive gap under
+    // the second's attempt. Under way with its seconds done, the second's first attempt costs only its time left, so its
+    // time from the reading is its walk's less those seconds, to the bit: kept while those seconds pass the gap, cut once
+    // the gap passes them. The gap made (#425's review: Raid and Bounty Hunter, each the other's next-best, tie exactly):
+    // an action that isn't the leader's next-best (Retirement here), its chance raised until its plan is behind the best
+    // by half its attempt (bisected), its plans otherwise the rule's.
     const drift = { cities: SIX, city: "New Tokyo" };
     const target = { rank: 150, target: 2500 };
     const base = readAt(who);
     const first = bladeburnerPlansToTarget({ ...base, target, drift });
     const leader = first[0] as (typeof first)[number];
-    const second = first.find((plan) => plan.work !== null && plan.work.name !== leader.work?.name);
-    if (second?.work == null) throw new Error("no second action");
-    const name = second.work.name;
-    const inputAt = (factor: number) => ({
+    const inputAt = (name: string, factor: number) => ({
       ...base,
       readings: base.readings.map((read) =>
         read.name === name
@@ -964,28 +962,60 @@ describe("the rule's figures (#418): the attempts' bound, the city's drift, the 
           : read,
       ),
     });
-    const gapAt = (factor: number) => {
-      const plans = bladeburnerPlansToTarget({ ...inputAt(factor), target, drift });
+    const gapAt = (name: string, factor: number) => {
+      const plans = bladeburnerPlansToTarget({ ...inputAt(name, factor), target, drift });
       const mine = plans.find((plan) => plan.work?.name === name && plan.work.level === 1) as (typeof plans)[number];
       const others = plans.find((plan) => plan.work?.name !== name) as (typeof plans)[number];
       return { plans, mine, gap: (mine.toTarget?.seconds as number) - (others.toTarget?.seconds as number) };
     };
-    let low = 1;
-    let high = 4;
-    for (let i = 0; i < 50; i++) {
-      const middle = (low + high) / 2;
-      const { mine, gap } = gapAt(middle);
-      if (gap > (mine.work?.seconds as number) / 2) low = middle;
-      else high = middle;
+    // The actions after the leader's pair, in the rule's order: the first whose chance can bring it within its attempt.
+    const names = [
+      ...new Set(
+        first
+          .map((plan) => plan.work?.name)
+          .filter((name): name is string => name !== undefined && name !== leader.work?.name)
+          .filter((name) => name !== leader.toTarget?.next?.name),
+      ),
+    ];
+    let made: { name: string; factor: number } | null = null;
+    for (const name of names) {
+      const read = base.readings.find((each) => each.name === name) as BladeburnerActionReading;
+      let low = 1;
+      let high = 1 / read.chance[0];
+      for (let i = 0; i < 50; i++) {
+        const middle = (low + high) / 2;
+        const { mine, gap } = gapAt(name, middle);
+        if (gap > (mine.work?.seconds as number) / 2) low = middle;
+        else high = middle;
+      }
+      const { mine, gap } = gapAt(name, low);
+      if (gap > 0 && gap < (mine.work?.seconds as number)) {
+        made = { name, factor: low };
+        break;
+      }
     }
-    const { plans, mine: rival } = gapAt(low);
-    const input = inputAt(low);
+    if (made === null) throw new Error("no action brought within an attempt of the best");
+    const name = made.name;
+    const { plans, mine: rival } = gapAt(name, made.factor);
+    const input = inputAt(name, made.factor);
     if (rival.work === null) throw new Error("no rival plan");
     const best = plans[0] as (typeof plans)[number];
     expect(best.work?.name).not.toBe(name);
     const gap = (rival.toTarget?.seconds as number) - (best.toTarget?.seconds as number);
-    const done = Math.min(rival.work.seconds, gap + (rival.work.seconds - gap) / 2);
+    // A positive gap, under the attempt: a near tie, not an exact one.
+    expect(gap).toBeGreaterThan(0);
+    expect(gap).toBeLessThan(rival.work.seconds);
+    const done = gap + (rival.work.seconds - gap) / 2;
     const underWay = { name: rival.work.name, level: 1, secondsDone: done };
+    // Fewer seconds done than the gap: its time left still the longer, so cut to the best.
+    const early = { ...underWay, secondsDone: gap / 2 };
+    const cut = bladeburnerPlansToTarget({ ...input, target, drift, underWay: early });
+    expect(
+      cut.find(
+        (plan) => plan.work?.name === rival.work?.name && plan.work?.level === 1 && plan.rest.name === rival.rest.name,
+      )?.toTarget?.seconds,
+    ).toBe((rival.toTarget?.seconds as number) - gap / 2);
+    expect(chooseBladeburnerAction({ ...input, target, drift, underWay: early }).work?.name).toBe(best.work?.name);
     const kept = bladeburnerPlansToTarget({ ...input, target, drift, underWay });
     const same = (plan: (typeof plans)[number]) =>
       plan.work?.name === rival.work?.name && plan.work?.level === 1 && plan.rest.name === rival.rest.name;
@@ -1729,9 +1759,18 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
       city: "New Tokyo",
       walks: PLAN_WALKS,
     };
+    // The held-out plan (#421's ruling 5): the rule's best-ranked after the two judged, by its own priced order, taken
+    // before any walk: the first plan in `plans` (sorted by the priced time) of an action neither of them works.
+    const third = plans.find(
+      (plan) => plan.work !== null && plan.work.name !== chosen.work?.name && plan.work.name !== rival?.work?.name,
+    ) as (typeof plans)[number];
+    expect(third?.work).not.toBeNull();
     const started = performance.now();
     const ruled = walkPlan(policyOf(chosen), { ...setting, seed: 3861 });
     const raided = walkPlan(policyOf(rival as (typeof plans)[number]), { ...setting, seed: 3861 });
+    const thirdStarted = performance.now();
+    const held = walkPlan(policyOf(third), { ...setting, seed: 3861 });
+    const thirdMs = performance.now() - thirdStarted;
     console.log(
       `the policy (#421's term 2): ${chosen.work?.name} first, then ${chosen.toTarget?.next?.name ?? "the tail"}; ` +
         `${rival?.work?.name} first, then ${rival?.toTarget?.next?.name ?? "the tail"}; the tail's mix at ` +
@@ -1815,83 +1854,148 @@ describe("the rule's order under walks of the game's draws (#418's ruling 2, che
       );
     };
     console.log(`the terms (#420): ${termsOf(chosen, ruled)}; ${termsOf(rival as (typeof plans)[number], raided)}`);
-    // The rule's order: its plan the least (#421's ruling 4: here the two tie at 5,470.8 min, the first in the game's
-    // order chosen, #386).
+    // The rule's order: the estimate's least is the rule's pick (`plans` sorted, `chosen` the first); an equal price is
+    // the rule's free choice, the first in the game's order (#406; here the two tie at 5,470.8 min, #421's ruling 4).
     expect(rival?.toTarget?.seconds as number).toBeGreaterThanOrEqual(chosen.toTarget?.seconds as number);
-    // The walks' the same beyond 3 standard errors of the gap, or a tie at the model's resolution (#421's ruling 2).
-    const verdict = checkThreeVerdict({
-      gap,
-      error,
-      chosenBias: (chosen.toTarget?.seconds as number) - ruled.mean,
-      rivalBias: (rival?.toTarget?.seconds as number) - raided.mean,
+    // The walks' the same beyond 3 standard errors of the gap, or a tie at the model's resolution measured on pairs
+    // held out from the pair judged (#421's ruling 5): each plan's bias, priced less walked; each held-out pair's
+    // difference of biases and the walks' error of its gap.
+    const walkedPlans = [
+      { label: `${chosen.work?.name} first`, plan: chosen, walked: ruled },
+      { label: `${rival?.work?.name} first`, plan: rival as (typeof plans)[number], walked: raided },
+      { label: `${third.work?.name} first`, plan: third, walked: held },
+    ].map((each) => ({ ...each, bias: (each.plan.toTarget?.seconds as number) - each.walked.mean }));
+    const heldOut = heldOutPairs(walkedPlans.length, [0, 1]).map(([i, j]) => {
+      const a = walkedPlans[i] as (typeof walkedPlans)[number];
+      const b = walkedPlans[j] as (typeof walkedPlans)[number];
+      return {
+        label: `${a.label} and ${b.label}`,
+        biasDifference: a.bias - b.bias,
+        gapError: meanOf(b.walked.times.map((time, k) => time - (a.walked.times[k] as number))).error,
+      };
     });
+    const verdict = checkThreeVerdict({ gap, error, heldOut });
     console.log(
-      `check 3 (#421's ruling 2): ${verdict.kind}; the walks' gap ${minutes(gap)} min (3× its error ` +
-        `${minutes(3 * error)}); the chain's error of the difference ${minutes(verdict.resolution)} min (the priced ` +
-        `less walked ${minutes(verdict.chosenBias)} and ${minutes(verdict.rivalBias)}); the rule's loss ` +
-        `${minutes(verdict.loss)} min`,
+      `check 3's plans (#421's ruling 5; the third by the rule's rank, taken before the walks, ${thirdMs.toFixed(0)} ms ` +
+        `for its ${PLAN_WALKS} walks): ` +
+        walkedPlans
+          .map(
+            (each) =>
+              `${each.label} ${minutes(each.plan.toTarget?.seconds as number)} priced, ${minutes(each.walked.mean)} ` +
+              `± ${minutes(each.walked.error)} walked, bias ${minutes(each.bias)}`,
+          )
+          .join("; ") +
+        `; the held-out pairs: ${heldOut.map((pair) => `${pair.label} ${minutes(pair.biasDifference)} ± ${minutes(pair.gapError)}`).join(", ")}`,
+    );
+    console.log(
+      `check 3 (#421's ruling 5): ${verdict.kind}; the walks' gap ${minutes(gap)} min (3× its error ` +
+        `${minutes(3 * error)}); the held-out error of the difference ${minutes(verdict.resolution)} min ` +
+        `(${verdict.by}); the rule's loss ${minutes(verdict.loss)} min`,
     );
     expect(verdict.pass, verdict.kind).toBe(true);
-  });
+    // A hang guard (#418's ruling 6), with the held-out plan's walks (#421's ruling 5): its CI time at two plans, 13.1 s
+    // (PR #425's run 43724265600, dbc4913), × the three plans' local time over the two's (9.0 s against 6.2), × the
+    // largest same-code swing over ruling 6's runs, 3.743.
+  }, 71_000);
 });
 
 /**
- * Check 3's verdict (#421's ruling 2: at the model's resolution). The chain's error of the plans' difference is
- * |(priced − walked) of the rule's plan − (priced − walked) of the rival| + 3 × the walks' error of the gap (`error`):
- * the chain's own miss of their difference, measured, and the walks' resolution. It passes where the walks order the
- * plans as the rule does beyond 3 errors (`gap`: the rival's walked time less the rule's plan's, walk by walk), or
- * where the rule's loss (the walks' gap the other way, max(0, −gap)) is at most that error: a tie at the model's
- * resolution, the rule's free choice (#406). A loss past it fails.
+ * The pairs of `count` walked plans held out from the pair judged (#421's ruling 5): every pair but `judged` itself,
+ * whose error of the difference would hold the gap being judged (ruling 2's, which couldn't fail).
+ */
+function heldOutPairs(count: number, judged: readonly [number, number]): [number, number][] {
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < count; i++) {
+    for (let j = i + 1; j < count; j++) {
+      if ((i === judged[0] && j === judged[1]) || (i === judged[1] && j === judged[0])) continue;
+      pairs.push([i, j]);
+    }
+  }
+  return pairs;
+}
+
+/**
+ * Check 3's verdict (#421's rulings 2 and 5: at the model's resolution, measured on held-out pairs). The chain's error
+ * of a difference is the largest over the pairs held out from the one judged (`heldOutPairs`) of |bias_i − bias_j|
+ * (each bias the plan's priced time less its walked) + 3 × the walks' error of that pair's gap: the chain's own miss of
+ * a difference between plans it prices, measured where it isn't the difference being judged. It passes where the walks
+ * order the judged plans as the rule does beyond 3 errors (`gap`: the rival's walked time less the rule's plan's, walk
+ * by walk), or where the rule's loss (the walks' gap the other way, max(0, −gap)) is at most that error: a tie at the
+ * model's resolution, the rule's free choice (#406). A loss past it, or no held-out pair to measure it on, fails.
  */
 function checkThreeVerdict({
   gap,
   error,
-  chosenBias,
-  rivalBias,
+  heldOut,
 }: {
   gap: number;
   error: number;
-  chosenBias: number;
-  rivalBias: number;
-}): {
-  pass: boolean;
-  kind: string;
-  resolution: number;
-  loss: number;
-  chosenBias: number;
-  rivalBias: number;
-} {
-  const resolution = Math.abs(chosenBias - rivalBias) + 3 * error;
+  heldOut: readonly { label: string; biasDifference: number; gapError: number }[];
+}): { pass: boolean; kind: string; resolution: number; loss: number; by: string } {
+  let resolution = 0;
+  let by = "no held-out pair";
+  for (const pair of heldOut) {
+    const each = Math.abs(pair.biasDifference) + 3 * pair.gapError;
+    if (each > resolution) {
+      resolution = each;
+      by = pair.label;
+    }
+  }
   const loss = Math.max(0, -gap);
-  if (gap > 3 * error) return { pass: true, kind: "ordered", resolution, loss, chosenBias, rivalBias };
-  const pass = loss <= resolution;
+  if (gap > 3 * error) return { pass: true, kind: "ordered", resolution, loss, by };
+  const pass = heldOut.length > 0 && loss <= resolution;
   return {
     pass,
     kind: pass ? "a tie at the model's resolution" : "the rule's loss past the model's resolution",
     resolution,
     loss,
-    chosenBias,
-    rivalBias,
+    by,
   };
 }
 
-describe("check 3's verdict (#421's ruling 2): by hand", () => {
-  test("ordered beyond 3 errors; a tie within the chain's error of the difference; a loss past it fails", () => {
+describe("check 3's verdict (#421's rulings 2 and 5): by hand", () => {
+  test("the held-out pairs: every pair but the one judged", () => {
+    expect(heldOutPairs(3, [0, 1])).toEqual([
+      [0, 2],
+      [1, 2],
+    ]);
+    expect(heldOutPairs(4, [1, 0])).toEqual([
+      [0, 2],
+      [0, 3],
+      [1, 2],
+      [1, 3],
+      [2, 3],
+    ]);
+    expect(heldOutPairs(2, [0, 1])).toEqual([]);
+  });
+
+  test("ordered beyond 3 errors; a tie within the held-out error of the difference; a loss past it fails", () => {
+    const pair = (biasDifference: number, gapError = 6) => ({ label: "held out", biasDifference, gapError });
     // Ordered: the walks' gap past 3 errors, the rule's way.
-    expect(checkThreeVerdict({ gap: 300, error: 10, chosenBias: 600, rivalBias: 700 })).toMatchObject({
+    expect(checkThreeVerdict({ gap: 300, error: 10, heldOut: [pair(5)] })).toMatchObject({
       pass: true,
       kind: "ordered",
     });
-    // check 3's figures: 50.7 ± 6.0 min the other way, the biases 660.0 and 712.7 min: 70.7 min, a tie.
-    const tie = checkThreeVerdict({ gap: -50.7, error: 6, chosenBias: 660, rivalBias: 712.7 });
-    expect(tie.resolution).toBeCloseTo(70.7, 9);
+    // A loss of 50.7 ± 6.0 min against a held-out difference of 40 ± 5: 55 min, a tie; of 30 ± 5: 45 min, it fails.
+    const tie = checkThreeVerdict({ gap: -50.7, error: 6, heldOut: [pair(-40, 5), pair(10, 5)] });
+    expect(tie.resolution).toBeCloseTo(55, 9);
     expect(tie).toMatchObject({ pass: true, loss: 50.7 });
-    // The same loss with the biases alike: past 3 errors (18), it fails.
-    expect(checkThreeVerdict({ gap: -50.7, error: 6, chosenBias: 660, rivalBias: 660 }).pass).toBe(false);
-    // The rule's way but within its error: no loss, a tie.
-    expect(checkThreeVerdict({ gap: 10, error: 6, chosenBias: 660, rivalBias: 660 })).toMatchObject({
-      pass: true,
-      loss: 0,
+    expect(checkThreeVerdict({ gap: -50.7, error: 6, heldOut: [pair(30, 5)] }).pass).toBe(false);
+    // Check 3's figures (#421's ruling 5): biases 664.4, 715.2 and 672.3 min (Bounty Hunter, Raid and Retirement
+    // first), the held-out gaps' errors 2.8 and 5.8 min: 42.9 + 17.4 = 60.3 min against the loss of 50.7, a tie.
+    const today = checkThreeVerdict({
+      gap: -50.7,
+      error: 6,
+      heldOut: [
+        { label: "Bounty Hunter first and Retirement first", biasDifference: 664.4 - 672.3, gapError: 2.8 },
+        { label: "Raid first and Retirement first", biasDifference: 715.2 - 672.3, gapError: 5.8 },
+      ],
     });
+    expect(today.resolution).toBeCloseTo(715.2 - 672.3 + 3 * 5.8, 9);
+    expect(today).toMatchObject({ pass: true, by: "Raid first and Retirement first" });
+    // No held-out pair: no resolution to tie within.
+    expect(checkThreeVerdict({ gap: -1, error: 6, heldOut: [] }).pass).toBe(false);
+    // The rule's way but within its error: no loss, a tie.
+    expect(checkThreeVerdict({ gap: 10, error: 6, heldOut: [pair(0)] })).toMatchObject({ pass: true, loss: 0 });
   });
 });

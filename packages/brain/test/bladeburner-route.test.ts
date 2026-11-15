@@ -505,9 +505,9 @@ describe("#408's hindcasts (#409's review, #411): the BN6 and BN7 suites' share 
       "B2's hour from a harness join",
     ]);
     expect(GROWN_HINDCASTS["B2's hour from a harness join"]?.why).toContain("first-passage");
-    // The realised share (#421): 6 of 8 within ×2; out, B3's hour and BN7's B2 hour, each a lottery's draw. B2's BN6
-    // hour in since #421 (its realised ×0.74: 7 Raid successes in 48 against 10 in 45, its expected given the actions
-    // 85.3 against 76.4: the hour's draw, not the estimate; a flip toward "within", ruling 2 on #421).
+    // The realised share as measured (#421's ruling 5): 6 of 8 within ×2; out, B3's hour and BN7's B2 hour, each a
+    // lottery's draw. B2's BN6 hour in since #421 by luck (its realised ×0.74: 7 Raid successes in 48 against 10 in 45;
+    // its expected further out, ×2.65 → ×2.89).
     expect(realised.length).toBe(6);
     expect(rows.filter(([, row]) => !row.within).map(([label]) => label)).toEqual([
       "B3's hour at rank 150",

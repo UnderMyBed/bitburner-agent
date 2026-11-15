@@ -1223,7 +1223,10 @@ function planCandidates(
      * The contract or operation under way (#421's ruling 3): its name, the level read and its seconds done. Its started
      * attempt's time is fixed (`Bladeburner.ts:186-188`) and a level set keeps it (`NetscriptFunctions/Bladeburner.ts:
      * 218-227`), so each plan of that action's first attempt is the time left of it, the level read's seconds less those
-     * done; another action's starts again at 0 (`Bladeburner.ts:187`). None: nothing under way, or not read.
+     * done; another action's starts again at 0 (`Bladeburner.ts:187`). None: nothing under way, or not read. Labelled
+     * (#425's review): no NS call returns the started attempt's own time, so where the level changed mid-attempt the
+     * time left is off by the two levels' ratio (difficultyFac^Δ): in bn6-skills' hour 20 of 175 readings within an
+     * attempt, at most 4.5% of an attempt.
      */
     underWay?: { name: string; level: number; secondsDone: number };
   },
