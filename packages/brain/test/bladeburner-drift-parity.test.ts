@@ -15,6 +15,8 @@
 //   six's communities (never falling: the migrations move them), chaos (each city at least its decay's fall) and
 //   population against core's mean (`bladeburnerEventDrift`), each within four standard deviations of the draws.
 import {
+  actionRankGain,
+  actionRankLoss,
   actionSuccessChance,
   BLADEBURNER_EVENT_SECONDS,
   BLADEBURNER_LEVELLED_ACTIONS,
@@ -310,6 +312,11 @@ const ROUTE_MIX = [
   { name: "Bounty Hunter", type: "Contracts", perSecond: 0.00784 },
   { name: "Raid", type: "Operations", perSecond: 0.004375 },
 ];
+/**
+ * That route's first step as its mean path priced it (#423's ruling 8): its rate a second (the rest's share in it) and
+ * each part's chance there (level 1), the step whose re-pricing the check's engine runs measure.
+ */
+const ROUTE_STEP = { rate: 0.015532163208108138, chances: { "Bounty Hunter": 0.40618485434151774, Raid: 0.08658713756103607 } };
 /** The engine's seeds (each a run of the hour), and the replays of each run's attempts. */
 const ROUTE_SEEDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 const ROUTE_REPLAYS = 1000;
@@ -325,6 +332,7 @@ test("a grown route's opening hour (#423): the engine's six after it within 4 sd
   const begin = { cities: ROUTE_SIX, worked: 0, ceiling: 50 };
   const rows: string[] = [];
   const zs = new Map<string, number[]>();
+  const ratios: number[] = [];
   let worst = 0;
   for (const seed of ROUTE_SEEDS) {
     const sim = await routeEngine(seed);
@@ -437,7 +445,26 @@ ns.bladeburner.startAction(${JSON.stringify(type)}, ${JSON.stringify(name)});`,
       total((out) => out.chaos),
     );
     zOf("the successes", made.filter((a) => a.success).length, successes);
-    rows.push(`seed ${seed}: ${made.length} attempts; past 2.5 sd: ${far.join(", ") || "none"}`);
+    // The step's re-priced rate over its mean path's at this run's drawn chances (#423's ruling 8: the range of the
+    // first-order re-pricing this check measures): each part's chance the route's times the run's city factor over the
+    // reference's at each of its attempts, rate' = rate + Σ x·(p̄ − p)·(gain + loss).
+    let repriced = ROUTE_STEP.rate;
+    for (const { name, perSecond } of ROUTE_MIX) {
+      const each = action(name);
+      const p = ROUTE_STEP.chances[name as keyof typeof ROUTE_STEP.chances];
+      const mine = made.filter((attempt) => attempt.name === name);
+      const drawn =
+        mine.reduce((sum, attempt) => {
+          const city = { name: attempt.city, population: attempt.population, communities: attempt.communities, chaos: attempt.chaos };
+          return sum + driftedChance({ action: each, chance: p }, reference, city, 50);
+        }, 0) / Math.max(1, mine.length);
+      repriced += perSecond * (drawn - p) * (actionRankGain(each, 1, 1) + actionRankLoss(each, 1));
+    }
+    ratios.push(repriced / ROUTE_STEP.rate);
+    rows.push(
+      `seed ${seed}: ${made.length} attempts, the step's rate ×${(repriced / ROUTE_STEP.rate).toFixed(4)}; past 2.5 sd: ` +
+        `${far.join(", ") || "none"}`,
+    );
   }
   // Each population and the successes within 4 sd of the replays (their draws' own spread) at every seed, and every
   // figure's mean z over the seeds within 4 standard errors of such a mean. The six's chaos and communities by that mean
@@ -447,7 +474,7 @@ ns.bladeburner.startAction(${JSON.stringify(type)}, ${JSON.stringify(name)});`,
   const off = [...zs].filter(([, xs]) => Math.abs(meanZ(xs)) > bound);
   console.log(
     `a grown route's opening hour, ${ROUTE_SEEDS.length} engine runs against ${ROUTE_REPLAYS} replays each: ` +
-      `${rows.join("; ")}; the worst |z| ${worst.toFixed(2)}; the mean z past ${bound.toFixed(2)}: ` +
+      `${rows.join("; ")}; the step's rate ratios ${Math.min(...ratios).toFixed(4)} to ${Math.max(...ratios).toFixed(4)}; the worst |z| ${worst.toFixed(2)}; the mean z past ${bound.toFixed(2)}: ` +
       `${off.map(([label, xs]) => `${label} ${meanZ(xs).toFixed(2)}`).join(", ") || "none"}`,
   );
   expect(worst).toBeLessThanOrEqual(4);

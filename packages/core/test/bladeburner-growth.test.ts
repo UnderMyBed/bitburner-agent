@@ -1130,6 +1130,40 @@ describe("the playability under the route's replays (#423): the gate's figures, 
     );
   };
 
+  // R423 TEMP: the math functions' results to every bit, to compare machines.
+  test("R423 MATH", () => {
+    const random = seeded(4239);
+    const bits = new Float64Array(1);
+    const words = new BigUint64Array(bits.buffer);
+    const fns: [string, (x: number, y: number) => number][] = [
+      ["pow", (x, y) => x ** y],
+      ["pow0.7", (x) => (x * 1e9) ** 0.7],
+      ["exp", (x) => Math.exp(x * 20 - 10)],
+      ["log", (x) => Math.log(x * 1e9 + 1e-9)],
+      ["log1p", (x) => Math.log1p(x * 2 - 0.99)],
+      ["expm1", (x) => Math.expm1(x * 2 - 1)],
+      ["sqrt", (x) => Math.sqrt(x * 1e6)],
+      ["log10", (x) => Math.log10(x * 1e9 + 1)],
+      ["log2", (x) => Math.log2(x * 1e9 + 1)],
+      ["cbrt", (x) => Math.cbrt(x * 1e6)],
+      ["sin", (x) => Math.sin(x * 100)],
+      ["cos", (x) => Math.cos(x * 100)],
+      ["atan", (x) => Math.atan(x * 100 - 50)],
+      ["tanh", (x) => Math.tanh(x * 10 - 5)],
+    ];
+    const rows: string[] = [];
+    const inputs = Array.from({ length: 200_000 }, () => [random(), random() * 4] as const);
+    for (const [name, fn] of fns) {
+      let digest = 0n;
+      for (const [x, y] of inputs) {
+        bits[0] = fn(x, y);
+        digest = (digest * 1000003n + (words[0] as bigint)) & 0xffffffffffffffffn;
+      }
+      rows.push(`${name} ${digest.toString(16)}`);
+    }
+    console.log(`R423MATH ${rows.join("; ")}`);
+  });
+
   // R423 TEMP: the figures to every digit, to compare machines.
   test("R423 DIGEST", () => {
     for (const bitNode of [6, 7]) {
