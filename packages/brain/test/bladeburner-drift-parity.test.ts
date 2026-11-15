@@ -316,7 +316,10 @@ const ROUTE_MIX = [
  * That route's first step as its mean path priced it (#423's ruling 8): its rate a second (the rest's share in it) and
  * each part's chance there (level 1), the step whose re-pricing the check's engine runs measure.
  */
-const ROUTE_STEP = { rate: 0.015532163208108138, chances: { "Bounty Hunter": 0.40618485434151774, Raid: 0.08658713756103607 } };
+const ROUTE_STEP = {
+  rate: 0.015532163208108138,
+  chances: { "Bounty Hunter": 0.40618485434151774, Raid: 0.08658713756103607 },
+};
 /** The engine's seeds (each a run of the hour), and the replays of each run's attempts. */
 const ROUTE_SEEDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 const ROUTE_REPLAYS = 1000;
@@ -455,7 +458,12 @@ ns.bladeburner.startAction(${JSON.stringify(type)}, ${JSON.stringify(name)});`,
       const mine = made.filter((attempt) => attempt.name === name);
       const drawn =
         mine.reduce((sum, attempt) => {
-          const city = { name: attempt.city, population: attempt.population, communities: attempt.communities, chaos: attempt.chaos };
+          const city = {
+            name: attempt.city,
+            population: attempt.population,
+            communities: attempt.communities,
+            chaos: attempt.chaos,
+          };
           return sum + driftedChance({ action: each, chance: p }, reference, city, 50);
         }, 0) / Math.max(1, mine.length);
       repriced += perSecond * (drawn - p) * (actionRankGain(each, 1, 1) + actionRankLoss(each, 1));
