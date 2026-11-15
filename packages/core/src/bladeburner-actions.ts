@@ -53,6 +53,7 @@
 import { BLADEBURNER_CONSTANTS, chaosDifficultyFactor } from "./bladeburner-constants.ts";
 import {
   type BladeburnerDriftCity,
+  type BladeburnerDriftResult,
   bladeburnerDriftCurveAt,
   bladeburnerDriftPath,
   bladeburnerDriftStart,
@@ -972,6 +973,16 @@ function fluidSeconds(input: BladeburnerActionInput, { rank, target }: { rank: n
  */
 export const BLADEBURNER_DRIFT_PASSES = 1;
 
+/**
+ * Each action's drift path over a horizon, kept by its figures (#418's ruling 4): a reading's solves (B4's cities, the
+ * route's, the report's folds) share it; its curve is read only. The oldest dropped first past a reading's few.
+ */
+const DRIFT_CURVES = new Map<
+  string,
+  { chance: number; curve: BladeburnerDriftResult["curve"]; chaos: number; populationRatio: number }
+>();
+const DRIFT_CURVES_KEPT = 256;
+
 /** The rule's solves under a target with the drift kept (#418): the run report replays the brain's readings. */
 const DRIFTED_SOLVES = new Map<string, BladeburnerActionPlan[]>();
 /** The most kept, the oldest dropped first: a reading's few cities and the report's replays of them. */
@@ -1193,18 +1204,25 @@ function planCandidates({
    */
   const driftCurve = (action: BladeburnerLevelledAction, chance: number, attempts: number) => {
     if (driftStart === null || reference === undefined || !(attempts > 0) || !(horizon > 0)) return null;
+    // Kept by its figures (#418's ruling 4: the drift once a reading and city, every solve of the reading sharing it).
+    const key = JSON.stringify([driftStart, action.name, chance, attempts, horizon, at.skills.charisma, drift?.chunks]);
+    const known = DRIFT_CURVES.get(key);
+    if (known !== undefined) return known;
     const path = bladeburnerDriftPath(driftStart, reference, [{ action, chance, attempts }], horizon, {
       charisma: at.skills.charisma,
       moves: true,
       ...(drift?.chunks === undefined ? {} : { chunks: drift.chunks }),
     });
     const end = path.state.cities[path.state.worked] as BladeburnerDriftCity;
-    return {
+    const priced = {
       chance,
       curve: path.curve,
       chaos: end.chaos,
       populationRatio: reference.population > 0 ? end.population / reference.population : 1,
     };
+    DRIFT_CURVES.set(key, priced);
+    if (DRIFT_CURVES.size > DRIFT_CURVES_KEPT) DRIFT_CURVES.delete(DRIFT_CURVES.keys().next().value as string);
+    return priced;
   };
   for (const read of readings) {
     const action = bladeburnerLevelledAction(read.type, read.name);

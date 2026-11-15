@@ -523,10 +523,22 @@ export interface BladeburnerDriftPart {
 
 /**
  * The chunks a path is followed in at most: past it, each a share of the attempts (`bladeburnerDriftPath`). 256: in one
- * city the chunks are exact to a part in 10⁴ against attempts one at a time; with B4's moves at the chunks' ends,
- * Diplomacy's time off by 2.4 s an attempt over Raid's 1600 (8.2 s at 64, first order), its chance by 1.2%.
+ * city the chunks are exact to a part in 10⁴ against attempts one at a time (they converge: Raid's mean chance 0.01591,
+ * 0.01589, 0.01589, 0.01589 and 0.01588 at 100, 256, 512, 1,024 and 1,600 chunks of its 1,600 attempts).
  */
 export const BLADEBURNER_DRIFT_CHUNKS = 256;
+
+/**
+ * Raid with B4's moves is followed an attempt at a time (#418's ruling 4). Its chunks don't converge: Raid drains the
+ * city it works, B4 moves to the next with the most factor, and the city left keeps its chaos (Diplomacy holds only the
+ * one worked) while the riots raise it, so the path settles in one of two homes of near-equal factor (Volhaven's or
+ * Ishima's here), which by the step: of 1,600 attempts, Volhaven worked 37%, 45%, 18%, 44% and 18% at 256, 512, 800,
+ * 1,024 and 1,600 chunks, hundreds of switches each, the mean chance 1.15%, 4.3%, 0.1%, 3.6% and 0 off the attempt at a
+ * time (core's test, the path's chunks). A bifurcation in B4's argmax, not the splitting's order or the clamp's
+ * cohorts (a city worked throughout converges, above). An attempt at a time is the brain's own resolution (B4 reads
+ * each 10 s, an attempt each minute or more): 4 times a path's cost (5.7 ms against 1.4).
+ */
+export const BLADEBURNER_DRIFT_EXACT_RAID = true;
 
 /**
  * An action's chance on the path (#418): its chance at `reference` times the worked city's factor over the reference's
@@ -589,17 +601,22 @@ export function bladeburnerDriftPath(
   {
     charisma,
     moves,
-    chunks: mostChunks = BLADEBURNER_DRIFT_CHUNKS,
+    chunks: given,
   }: {
     charisma: number;
     moves: boolean;
-    /** The chunks at most (`BLADEBURNER_DRIFT_CHUNKS`; the grown estimate's steps fewer, its own). */
+    /**
+     * The chunks at most: absent, `BLADEBURNER_DRIFT_CHUNKS`, or an attempt at a time for Raid with the moves
+     * (`BLADEBURNER_DRIFT_EXACT_RAID`); the grown estimate's steps fewer, its own.
+     */
     chunks?: number;
   },
 ): BladeburnerDriftResult {
   const cities = start.cities.map(copyCity);
   let worked = start.worked;
   const most = Math.max(0, ...parts.map((part) => part.attempts));
+  const exact = BLADEBURNER_DRIFT_EXACT_RAID && moves && parts.some((part) => part.action.name === "Raid");
+  const mostChunks = given ?? (exact ? Number.POSITIVE_INFINITY : BLADEBURNER_DRIFT_CHUNKS);
   const chunks = Math.max(1, Math.min(mostChunks, Math.ceil(most)));
   const dt = Math.max(0, seconds) / chunks;
   const successes = parts.map(() => 0);

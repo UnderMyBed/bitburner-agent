@@ -508,17 +508,63 @@ describe("the path's chunks (#418): against the same path an attempt at a time",
         `${name}${moves ? ", moved" : ""}: the mean chance ${(chunked.chances[0] as number).toFixed(5)} chunked, ${exact.toFixed(5)} an attempt at a ` +
           `time; Diplomacy ${chunked.diplomacySeconds.toFixed(0)} s against ${diplomacy.toFixed(0)} s`,
       );
-      // In the city worked throughout, the chunks alone: the chance within 1%, Diplomacy's time an attempt within 1% of the
-      // cycle (Raid's 23 s in 228,000). Moved, Raid's 2% and 3%, labelled: B4 moves at a chunk's end in the path, at a
-      // reading (each attempt here) in the game, so Raid's city leaves its ceiling up to a chunk late (6 attempts here),
-      // first order in the chunk (Diplomacy 8.2 s an attempt at 64 chunks, 2.4 s at 256, `BLADEBURNER_DRIFT_CHUNKS`), and
-      // its pick among cities near level flips at other attempts (the chance 0.7% to 1.9% off across this round's
-      // versions). Moves a quarter chunk apart took Diplomacy to 0.1 s at 1.6 times a path's cost; not taken, for it.
-      const bars = moves && name === "Raid" ? { chance: 0.02, diplomacy: 0.03 } : { chance: 0.01, diplomacy: 0.01 };
-      expect(close(chunked.chances[0] as number, exact)).toBeLessThan(bars.chance);
-      expect(Math.abs(chunked.diplomacySeconds - diplomacy) / attempts).toBeLessThan(bars.diplomacy * cycle);
+      // The chance within 1%, Diplomacy's time an attempt within 1% of the cycle (in one city, the chunks alone: Raid's
+      // 23 s in 228,000). Moved Raid is followed an attempt at a time (`BLADEBURNER_DRIFT_EXACT_RAID`, the next test).
+      expect(close(chunked.chances[0] as number, exact)).toBeLessThan(0.01);
+      expect(Math.abs(chunked.diplomacySeconds - diplomacy) / attempts).toBeLessThan(0.01 * cycle);
     },
   );
+
+  test("moved Raid in chunks doesn't converge (#418's ruling 4): B4's pick between two homes flips with the step", () => {
+    // Its 1,600 attempts in N chunks of a path each (the same scheme as N chunks of one), against the attempt at a time.
+    const start = bladeburnerDriftStart(SIX, "New Tokyo") as NonNullable<ReturnType<typeof bladeburnerDriftStart>>;
+    const reference = start.cities[start.worked] as BladeburnerDriftCity;
+    const attempts = 1600;
+    const cycle = 90;
+    const run = (pieces: number, moves: boolean) => {
+      let state = start;
+      let drawn = 0;
+      let switches = 0;
+      const worked = new Map<string, number>();
+      for (let k = 0; k < pieces; k++) {
+        const one = bladeburnerDriftPath(
+          state,
+          reference,
+          [{ action: action("Raid"), chance: 0.06, attempts: attempts / pieces }],
+          (attempts * cycle) / pieces,
+          { charisma: 50, moves, chunks: 1 },
+        );
+        const name = (state.cities[state.worked] as BladeburnerDriftCity).name;
+        worked.set(name, (worked.get(name) ?? 0) + 1 / pieces);
+        drawn += ((one.chances[0] as number) * attempts) / pieces;
+        if (one.state.worked !== state.worked) switches += 1;
+        state = one.state;
+      }
+      return { chance: drawn / attempts, switches, volhaven: worked.get("Volhaven") ?? 0 };
+    };
+    const exact = run(attempts, true);
+    const rows = [256, 512, 800, 1024].map((pieces) => ({ pieces, ...run(pieces, true) }));
+    console.log(
+      `moved Raid, the attempt at a time: chance ${exact.chance.toFixed(5)}, Volhaven ${(100 * exact.volhaven).toFixed(1)}% ` +
+        `of the attempts, ${exact.switches} switches; ` +
+        rows
+          .map(
+            (row) =>
+              `${row.pieces} chunks: ${(100 * Math.abs(row.chance / exact.chance - 1)).toFixed(2)}% off, Volhaven ` +
+              `${(100 * row.volhaven).toFixed(1)}%, ${row.switches} switches`,
+          )
+          .join("; "),
+    );
+    // Hundreds of switches: Raid drains the city it works, B4 moves, the city left's chaos rises unheld.
+    expect(exact.switches).toBeGreaterThan(100);
+    // The error doesn't fall with the step: at 512 chunks more than at 256, and the home's share swings by over 20 points.
+    const at = (pieces: number) => rows.find((row) => row.pieces === pieces) as (typeof rows)[number];
+    expect(Math.abs(at(512).chance / exact.chance - 1)).toBeGreaterThan(Math.abs(at(256).chance / exact.chance - 1));
+    expect(Math.max(...rows.map((row) => row.volhaven)) - Math.min(...rows.map((row) => row.volhaven))).toBeGreaterThan(0.2);
+    // In one city the same scheme converges: within a part in 10³ at 256 chunks.
+    const fixed = run(attempts, false);
+    expect(Math.abs(run(256, false).chance / fixed.chance - 1)).toBeLessThan(1e-3);
+  });
 });
 
 describe("the rule's horizon (#418): the plan's least expected time to the target at the chances read", () => {

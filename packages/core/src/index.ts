@@ -384,6 +384,7 @@ export {
 export {
   BLADEBURNER_CHAOS_COHORTS,
   BLADEBURNER_DRIFT_CHUNKS,
+  BLADEBURNER_DRIFT_EXACT_RAID,
   BLADEBURNER_EVENT_SECONDS,
   type BladeburnerAttemptDrift,
   type BladeburnerChaosMix,
