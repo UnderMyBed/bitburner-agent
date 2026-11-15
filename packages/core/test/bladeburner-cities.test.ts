@@ -413,6 +413,31 @@ describe("the rule's choice (#383): the city, Diplomacy and Incite Violence by B
     expect(chooseBladeburnerCity(input(strong, zero), { city: "Sector-12", cities: zero })?.incite).toBeNull();
   });
 
+  test("Incite Violence under a target (#421's ruling 3): Raid's count binding, the chain's regrowth priced; it pays", () => {
+    // Raid out of count under Typhoon's 2,500: the city and the plan by the chain (each next-best's count regrown over
+    // the first's stretch, #421's ruling 1), Incite by rank a second as before (its measure is the counts' rate, the
+    // target aside, labelled): the same figures, paying.
+    const strong = person(300);
+    const counts = { Raid: 0.5 };
+    const zero = cities();
+    const targeted = chooseBladeburnerCity(
+      { ...input(strong, zero, { counts }), target: { rank: 150, target: 2500 } },
+      { city: "Sector-12", cities: zero },
+    );
+    const plain = chooseBladeburnerCity(input(strong, zero, { counts }), { city: "Sector-12", cities: zero });
+    expect(targeted?.plan.toTarget).toBeDefined();
+    expect(targeted?.incite).toEqual(plain?.incite);
+    expect(targeted?.incite?.work).toBe("Raid level 1");
+    expect(targeted?.incite?.pays).toBe(true);
+    expect(targeted?.chaosAction).toBe(INCITE_VIOLENCE);
+    // Its count regrown: with the counts unbounded, none weighed (the rate with every count unbounded is the rate now).
+    const regrown = chooseBladeburnerCity(
+      { ...input(strong, zero, { counts: { Raid: 1e6 } }), target: { rank: 150, target: 2500 } },
+      { city: "Sector-12", cities: zero },
+    );
+    expect(regrown?.incite).toBeNull();
+  });
+
   test("Incite Violence at combat 100, Bounty Hunter out: it doesn't pay, its counts worth less than its 60 s", () => {
     // Bounty Hunter's cycle barely beats Field Analysis's (0.30 against 0.20 rank a minute): 1.5 more attempts gain
     // less than the 60 s of Field Analysis forgone, even every count out.
