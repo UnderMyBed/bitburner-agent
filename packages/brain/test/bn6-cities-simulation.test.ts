@@ -371,5 +371,6 @@ test("BN6.1, an hour from a harness join: Sector-12's chaos at 80, moved; every 
       "estimate and 10 min, or a move's 22 s:\n    none",
   );
   expect(failures).toEqual([]);
-  // #418's ruling 5: 1.5 × the worst CI time seen, 106 s (PR #419's run 43681970864).
-}, 159_000);
+  // A hang guard (#418's ruling 6): its fastest completed CI time, 68.7 s (PR #419's run 43684859936, db48800), × the
+  // largest same-code swing over those runs, 3.743 (augmentations.test 58.8 s against 15.7 s).
+}, 258_000);

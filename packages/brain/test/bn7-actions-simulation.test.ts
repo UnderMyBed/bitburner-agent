@@ -160,5 +160,6 @@ test("BN7.1, an hour from a harness join at BN7's multipliers: each plan the lea
   expect(section).toContain("  an action stopped at stamina 0 at any reading:\n    none\n");
   expect(section).toContain("  the rank from the actions run below its forecast's bound:\n    none");
   expect(failures).toEqual([]);
-  // #418's ruling 5: 1.5 × its CI time at the exact path, 220.4 s completed (PR #419's run 43684859936, db48800).
-}, 331_000);
+  // A hang guard (#418's ruling 6): its fastest completed CI time, 215.5 s (PR #419's run 43691969641, 6288e96), × the
+  // largest same-code swing over those runs, 3.743 (augmentations.test 58.8 s against 15.7 s).
+}, 807_000);

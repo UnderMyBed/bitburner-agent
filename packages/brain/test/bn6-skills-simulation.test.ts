@@ -117,7 +117,12 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
       forecastOf += judged * attempt.gain - (1 - judged) * attempt.loss;
       weight += judged * (attempt.gain + attempt.loss);
       const previous = mine[k - 1];
-      if (previous !== undefined) moved += (attempt.gain + attempt.loss) * Math.abs(attempt.chance - previous.chance);
+      if (previous !== undefined) {
+        // The bound's premise (#418's ruling 6): the reading judged is at or after the previous attempt, so the chance
+        // moves from it to the draw by no more than an attempt's.
+        expect(reading.atMs, `${attempt.name}'s reading before its attempt ${k}`).toBeGreaterThanOrEqual(previous.atMs);
+        moved += (attempt.gain + attempt.loss) * Math.abs(attempt.chance - previous.chance);
+      }
       if (!reading.recovered) spread += (attempt.gain + attempt.loss) * (attempt.range[1] - attempt.range[0]);
     }
     const expected = attemptsSummary(mine, null).expected;
@@ -234,5 +239,6 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   );
   expect(section).toContain("  skill points unspent with a level to buy, past 52 s:\n    none");
   expect(failures).toEqual([]);
-  // #418's ruling 5: 1.5 × the worst CI time seen, 113 s (PR #419's run 43681970864).
-}, 170_000);
+  // A hang guard (#418's ruling 6): its fastest completed CI time, 78.5 s (PR #419's run 43684859936, db48800), × the
+  // largest same-code swing over those runs, 3.743 (augmentations.test 58.8 s against 15.7 s).
+}, 294_000);
