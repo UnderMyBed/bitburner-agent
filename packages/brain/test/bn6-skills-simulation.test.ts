@@ -12,15 +12,22 @@
 // that forecast (section 8's own check); the whole report passing.
 import {
   BLADEBURNER_CONTRACTS,
+  BLADEBURNER_LEVELLED_ACTIONS,
   BLADEBURNER_READING_SECONDS,
   bladeburnerPersonOf,
+  bladeburnerPlansToTarget,
   bladeburnerRankMultiplierOf,
   chooseBladeburnerCity,
   type MediumSnapshotData,
   skillExpFor,
 } from "@bitburner-agent/core";
 import { expect, test } from "vitest";
-import { bladeburnerMeasuredCitiesOf, bladeburnerRuleInputOf, bladeburnerSnapshotOf } from "../src/bladeburner.ts";
+import {
+  bladeburnerMeasuredCitiesOf,
+  bladeburnerRuleInputOf,
+  bladeburnerSnapshotOf,
+  bladeburnerUnderWayOf,
+} from "../src/bladeburner.ts";
 import { BLADEBURNER_RANK_ALPHA, bernsteinMargin } from "../src/bladeburner-actions-report.ts";
 import { runReport } from "../src/run-report.ts";
 import { EPOCH_MS } from "./helpers/agent-in-simulation.ts";
@@ -29,6 +36,10 @@ import { ownerRunsOnHome, useFreshStarts, withoutSimEffectors } from "./helpers/
 import { attemptsIn, attemptsSummary, expectGrownHindcast, grownHindcastIn } from "./helpers/grown-hindcast.ts";
 
 const freshStartOf = useFreshStarts();
+/** What the levels' check reads of a reading's actions (#425's review, row 4). */
+type BladeburnerActionReadingLike = { name: string; level: number };
+/** Core's label on the attempt under way's time left after a mid-attempt level change (`underWay`): 4.5% at most. */
+const UNDER_WAY_LEVEL_BOUND = 0.045;
 const SOURCE_FILES = { 1: 3, 2: 3, 4: 3, 5: 1 };
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -61,6 +72,29 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   const plan = fresh.controller().bladeburnerView().skills;
   if (plan == null) throw new Error("no skills' plan");
   console.log(fresh.controller().bladeburnerView().line);
+  // #421's ruling 2, item 4: the rule's priced time to Typhoon's 2,500 at this first reading, each action's best plan
+  // (core's `bladeburnerPlansToTarget` on the brain's own input, in the city read), printed: the objective's figures.
+  {
+    const data = fresh.medium() as MediumSnapshotData;
+    const read = bladeburnerSnapshotOf(data).reading;
+    const person = bladeburnerPersonOf(data.player);
+    if (read.kind !== "read" || read.actions === null || person === null) throw new Error("no first reading");
+    const rule = bladeburnerRuleInputOf(read.actions, person, bladeburnerRankMultiplierOf(6) as number, data.player);
+    const plans = bladeburnerPlansToTarget({ ...rule.input, target: { rank: RANK, target: 2500 } });
+    const best = new Map<string, (typeof plans)[number]>();
+    for (const each of plans) {
+      const name = each.work === null ? "resting alone" : `${each.work.name} ${each.work.level}`;
+      if (!best.has(name)) best.set(name, each);
+    }
+    console.log(
+      `the first reading's plans to rank 2500 (#421's ruling 2), each action's best: ` +
+        [...best.entries()]
+          .map(
+            ([name, each]) => `${name} with ${each.rest.name} ${((each.toTarget?.seconds ?? 0) / 3600).toFixed(2)} h`,
+          )
+          .join("; "),
+    );
+  }
   expect(plan.buys.length).toBeGreaterThan(0);
   expect(plan.spent).toBeGreaterThan(RANK / 3 - 5);
   // Spent by the next reading.
@@ -152,11 +186,92 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   // events' mean between; within 4 standard deviations of the draws' spread), and the attempts' own effects alone.
   // Incite Violence (#420's ruling 3): since #420 the rule sends it in this hour (Raid's count binding in the city it
   // measures best); why, by its own figures at the reading before the first under way (core's `chooseBladeburnerCity`
-  // on the brain's input there, the cities measured by the round), its measure paying.
+  // on the brain's input there, the cities measured by the round), its measure paying. (#421's ruling 1's regrown
+  // counts turned it, Raid's count never binding; ruling 4 moved them to #424.)
   const mediums = fresh.data.store
     .snapshots({ environment: "E1" })
     .filter((each) => each.tier === "medium")
     .sort((a, b) => a.receivedAtMs - b.receivedAtMs);
+  const reads = mediums.filter((each) => bladeburnerSnapshotOf(each.data).reading.kind === "read");
+  {
+    const raw = reads.map(
+      (each) => (each.data as { bladeburner?: { progress?: unknown; current?: unknown } }).bladeburner,
+    );
+    const withProgress = raw.filter((each) => each?.progress !== undefined).length;
+    const actionsOf = reads.map((each) => (bladeburnerSnapshotOf(each.data).reading as { actions?: unknown }).actions);
+    const underWays = actionsOf.map((each) =>
+      each == null ? null : bladeburnerUnderWayOf(each as Parameters<typeof bladeburnerUnderWayOf>[0]),
+    );
+    // #421's ruling 3: the progress read at nearly every reading, and each attempt the rule cut mid-way priced so: at the
+    // reading before the cut, its plan's time to the target (its first attempt at its time left) against the plan the
+    // rule went to, which must be the less, by the rule's own figures (core's `bladeburnerPlansToTarget` on its input).
+    expect(withProgress).toBeGreaterThan(reads.length / 2);
+    expect(underWays.some((each) => each !== null)).toBe(true);
+    const cuts: { gap: number; done: number }[] = [];
+    for (let i = 0; i + 1 < reads.length; i++) {
+      const from = raw[i]?.current as { name?: string } | null | undefined;
+      const to = raw[i + 1]?.current as { name?: string } | null | undefined;
+      const done = (raw[i + 1]?.progress as { secondsDone?: number } | null | undefined)?.secondsDone ?? 0;
+      const levelled = (name?: string) => BLADEBURNER_LEVELLED_ACTIONS.some((each) => each.name === name);
+      if (!levelled(from?.name) || !levelled(to?.name) || from?.name === to?.name || !(done > 0)) continue;
+      const data = reads[i]?.data as MediumSnapshotData;
+      const read = bladeburnerSnapshotOf(data).reading;
+      const person = bladeburnerPersonOf(data.player);
+      if (read.kind !== "read" || read.actions === null || person === null) throw new Error("no reading before a cut");
+      const rule = bladeburnerRuleInputOf(read.actions, person, bladeburnerRankMultiplierOf(6) as number, data.player);
+      const plans = bladeburnerPlansToTarget({ ...rule.input, target: { rank: read.rank ?? 0, target: 2500 } });
+      const timeOf = (name?: string) => plans.find((plan) => plan.work?.name === name)?.toTarget?.seconds as number;
+      cuts.push({ gap: timeOf(from?.name) - timeOf(to?.name), done });
+    }
+    const least = cuts.reduce((a, b) => (b.gap < a.gap ? b : a), { gap: Number.POSITIVE_INFINITY, done: 0 });
+    console.log(
+      `the attempt under way (#421's ruling 3): ${withProgress} of ${reads.length} readings with its progress; ` +
+        `${cuts.length} attempts cut mid-way, the plan cut to ahead of continuing (at its time left) by ` +
+        `${least.gap.toFixed(1)} s at least (that attempt ${least.done} s done)`,
+    );
+    for (const cut of cuts) expect(cut.gap).toBeGreaterThan(0);
+    // The time left is the level read's seconds less those done (#425's review, row 4): the game fixes an attempt's
+    // time at its start (`Bladeburner.ts:186-188`) and no NS call returns it, so where the level changed mid-attempt
+    // the time left is off by the two levels' times' ratio, difficultyFac^Δ (`Action.ts:105-122`, before its ⌈⌉): its
+    // share of an attempt measured here, each reading within an attempt against that attempt's first reading (#425's
+    // re-review: two changes in one attempt counted whole), and held to core's label (`underWay`: at most 4.5%).
+    type Read = { current?: { name?: string } | null; actions?: BladeburnerActionReadingLike[] };
+    const levelIn = (read: Read | undefined, name: string) => read?.actions?.find((each) => each.name === name)?.level;
+    let within = 0;
+    let changed = 0;
+    let most = 0;
+    let start = 0;
+    for (let i = 0; i + 1 < reads.length; i++) {
+      const before = actionsOf[i] as Read | undefined;
+      const after = actionsOf[i + 1] as Read | undefined;
+      const doneBefore = (raw[i]?.progress as { secondsDone?: number } | null | undefined)?.secondsDone;
+      const doneAfter = (raw[i + 1]?.progress as { secondsDone?: number } | null | undefined)?.secondsDone;
+      const name = after?.current?.name;
+      const action = BLADEBURNER_LEVELLED_ACTIONS.find((each) => each.name === name);
+      const same =
+        action !== undefined &&
+        before?.current?.name === name &&
+        doneBefore !== undefined &&
+        doneAfter !== undefined &&
+        doneAfter > doneBefore;
+      if (!same || action === undefined || name === undefined) {
+        // A new attempt (or none) from the next reading on: that one is its first.
+        start = i + 1;
+        continue;
+      }
+      within += 1;
+      const delta = (levelIn(after, name) ?? 0) - (levelIn(actionsOf[start] as Read | undefined, name) ?? 0);
+      if (delta === 0) continue;
+      changed += 1;
+      most = Math.max(most, Math.abs(action.difficultyFac ** delta - 1));
+    }
+    console.log(
+      `the time left's level (#425's review, row 4): ${changed} of ${within} readings within one attempt at another ` +
+        `level than its first reading's, the time left off by at most ${(100 * most).toFixed(1)}% of an attempt there`,
+    );
+    expect(within).toBeGreaterThan(0);
+    expect(most).toBeLessThanOrEqual(UNDER_WAY_LEVEL_BOUND);
+  }
   const firstIncite = mediums.findIndex((each) => {
     const read = bladeburnerSnapshotOf(each.data).reading;
     return read.kind === "read" && read.actions?.current?.name === "Incite Violence";

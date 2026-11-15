@@ -19,13 +19,15 @@
 // set here, and waits for each to exit (`run-worker.ts`): they never hold home's RAM at once.
 // RAM (`Netscript/RamCostGenerator.ts:335`, `:339`, `:348`, `:354`, `:366-370`): 4 GB each for
 // `getCityEstimatedPopulation`, `getCityCommunities`, `getCityChaos`, `getCity`, `switchCity`,
-// `getActionEstimatedSuccessChance` and `getActionCurrentLevel`, 2 GB for `getNextBlackOp`, nothing for
-// `inBladeburner`: 31.6 GB with the script's 1.6, under the reading worker's 50.6, so B1's RAM gate (core's
+// `getActionEstimatedSuccessChance`, `getActionCurrentLevel` and (#421) `getActionCurrentTime`, 2 GB for
+// `getNextBlackOp`, 1 GB for `getCurrentAction` (#421: the action under way's progress, `:345`, `:347`), nothing for
+// `inBladeburner`: 36.6 GB with the script's 1.6, under the reading worker's 50.6, so B1's RAM gate (core's
 // `bladeburnerWorkerFits`) covers it.
 import {
   BLACK_OPERATIONS,
   BLADEBURNER_CITIES,
   BLADEBURNER_LEVELLED_ACTIONS,
+  type BladeburnerActionProgress,
   type BladeburnerCitiesRound,
   type BladeburnerCityWorkerReading,
   isBladeburnerCity,
@@ -101,5 +103,16 @@ export function bladeburnerCityReading(ns: NS, city: string | null): Bladeburner
     chaos: ns.bladeburner.getCityChaos(name as CityName),
   }));
   const round = bladeburnerCitiesRound(ns, problems);
-  return { city: ns.bladeburner.getCity(), cities, problems, round };
+  return { city: ns.bladeburner.getCity(), cities, problems, round, progress: bladeburnerActionProgress(ns) };
+}
+
+/**
+ * The action under way and its seconds done (#421's ruling 3): `getCurrentAction` and `getActionCurrentTime`
+ * (`NetscriptFunctions/Bladeburner.ts:131-137`, ms there), null idle. Read after the round, which switches the city
+ * only (no action stopped, `:316-321`), in the same synchronous run.
+ */
+export function bladeburnerActionProgress(ns: NS): BladeburnerActionProgress | null {
+  const current = ns.bladeburner.getCurrentAction();
+  if (current === null) return null;
+  return { type: current.type, name: current.name, secondsDone: ns.bladeburner.getActionCurrentTime() / 1000 };
 }

@@ -434,6 +434,8 @@ function cityStandIn({
   refuses = null as string | null,
   next = "Operation Typhoon" as string | null,
   throwsIn = null as string | null,
+  underWay = { type: "Contracts", name: "Tracking" } as { type: string; name: string } | null,
+  doneMs = 12_500,
 } = {}) {
   const calls: string[] = [];
   const ranges: { city: string; name: string; afterTick: boolean }[] = [];
@@ -457,6 +459,9 @@ function cityStandIn({
       getCityChaos: (name: string) => (name === at ? 7 : 0),
       getNextBlackOp: () => (next === null ? null : { name: next, rank: 2500 }),
       getActionCurrentLevel: () => 2,
+      // The action under way and its ms done (#421), as `NetscriptFunctions/Bladeburner.ts:131-137` gives them.
+      getCurrentAction: () => underWay,
+      getActionCurrentTime: () => (underWay === null ? 0 : doneMs),
       getActionEstimatedSuccessChance: (type: string, name: string) => {
         // `Actions/Action.ts:193`'s throw (a competence NaN), in one city.
         if (at === throwsIn) throw new Error("Competence calculated as NaN in Action.getSuccessChance()");
@@ -507,6 +512,15 @@ test("bladeburner-city.js (#383): moved unless there, then the six read; null mo
   const out = cityStandIn({ inDivision: false });
   expect(bladeburnerCityReading(out.ns, "Aevum")).toEqual({ city: null, cities: [], problems: [] });
   expect(out.calls).toEqual([]);
+});
+
+test("bladeburner-city.js's progress (#421's ruling 3): the action under way and its seconds done; null idle", () => {
+  expect(bladeburnerCityReading(cityStandIn().ns, null).progress).toEqual({
+    type: "Contracts",
+    name: "Tracking",
+    secondsDone: 12.5,
+  });
+  expect(bladeburnerCityReading(cityStandIn({ underWay: null }).ns, null).progress).toBeNull();
 });
 
 test("bladeburner-city.js's round (#420): each city's own ranges, then back; synchronous; a refusal, no round", () => {

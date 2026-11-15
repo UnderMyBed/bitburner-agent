@@ -246,6 +246,7 @@ export {
   BLADEBURNER_WORKER_NAME,
   BLADEBURNER_WORKER_RAM_GB,
   type BladeburnerActionOrder,
+  type BladeburnerActionProgress,
   type BladeburnerCitiesRound,
   type BladeburnerCityRound,
   type BladeburnerCityWorkerReading,

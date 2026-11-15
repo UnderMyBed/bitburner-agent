@@ -96,6 +96,7 @@ import {
   type BladeburnerActionInput,
   type BladeburnerActionOrder,
   type BladeburnerActionPlan,
+  type BladeburnerActionProgress,
   type BladeburnerActionReading,
   type BladeburnerBlackOpCheck,
   type BladeburnerBlackOpReading,
@@ -367,6 +368,20 @@ export interface BladeburnerActionsReading {
   blackOp?: BladeburnerBlackOpReading | null;
   /** The round over the six (#420): each city's own ranges; null where it failed, undefined from an older Agent. */
   round?: BladeburnerCitiesRound | null;
+  /** The action under way's progress (#421's ruling 3): null idle, undefined from an older Agent. */
+  progress?: BladeburnerActionProgress | null;
+}
+
+/** The progress of a reading (#421): undefined with none (an older Agent), false with one not as it should be. */
+function progressReadingOf(reading: Partial<BladeburnerReading>): BladeburnerActionProgress | null | undefined | false {
+  const { progress } = reading;
+  if (progress === undefined) return undefined;
+  if (progress === null) return null;
+  const { type, name, secondsDone } = (typeof progress === "object" ? progress : {}) as Partial<
+    Record<string, unknown>
+  >;
+  if (typeof type !== "string" || typeof name !== "string" || !isNumber(secondsDone) || secondsDone < 0) return false;
+  return { type, name, secondsDone };
 }
 
 const isRange = (value: unknown): value is [number, number] =>
@@ -487,7 +502,10 @@ function actionsReadingOf(reading: Partial<BladeburnerReading>): BladeburnerActi
   const cities = citiesReadingOf(reading);
   const blackOp = blackOpReadingOf(reading);
   const round = roundReadingOf(reading);
-  if (skills === undefined || cities === undefined || blackOp === false || round === false) return undefined;
+  const progress = progressReadingOf(reading);
+  if (skills === undefined || cities === undefined || blackOp === false || round === false || progress === false) {
+    return undefined;
+  }
   return {
     stamina,
     maxStamina,
@@ -499,6 +517,7 @@ function actionsReadingOf(reading: Partial<BladeburnerReading>): BladeburnerActi
     ...cities,
     ...(blackOp === undefined ? {} : { blackOp }),
     ...(round === undefined ? {} : { round }),
+    ...(progress === undefined ? {} : { progress }),
   };
 }
 
@@ -526,6 +545,7 @@ export function bladeburnerSnapshotOf(mediumData: unknown): BladeburnerSnapshot 
       joined,
       reading: {
         kind: "unread",
+        // (Since #421 also the action's progress, the message as before.)
         problem: "the Bladeburner reading's stamina, actions, skills, cities, Black Op or round aren't figures",
       },
     };
@@ -641,6 +661,7 @@ export function bladeburnerRuleInputOf(
 ): BladeburnerRuleInput {
   const hospital = bladeburnerHospitalOf(player);
   const drift = bladeburnerMeasuredDriftOf(reading, person);
+  const underWay = bladeburnerUnderWayOf(reading);
   const input = {
     readings: reading.actions,
     person,
@@ -653,12 +674,32 @@ export function bladeburnerRuleInputOf(
     // (#422's round 2) at the city read's measured pop/popEst (core's `bladeburnerPricedInput`).
     ...(drift === null ? {} : { drift }),
     ...(hospital === null ? {} : { hospital }),
+    // The attempt under way (#421's ruling 3): continuing it costs only its time left.
+    ...(underWay === null ? {} : { underWay }),
   };
   const read = reading.blackOp;
   const next = read == null ? null : bladeburnerBlackOp(read.name);
   return next === null || read == null
     ? bladeburnerPricedInput(input, { next: null, chanceRead: null })
     : bladeburnerPricedInput(input, { next, chanceRead: read.chance });
+}
+
+/**
+ * The contract or operation under way and its seconds done (#421's ruling 3), at the level the reading has it, or
+ * null: none read (an older Agent), idle, or a general action or Black Op. The progress is read by the city worker just
+ * before the reading worker acts (core's `BladeburnerActionProgress`), so it counts only where the action under way after
+ * the reading worker acted (`current`) is the same one. Labelled: an attempt that completed between the two workers
+ * (a second or so of game time against an attempt's minute or more) would be counted at the last one's progress.
+ */
+export function bladeburnerUnderWayOf(
+  reading: BladeburnerActionsReading,
+): { name: string; level: number; secondsDone: number } | null {
+  const { progress, current } = reading;
+  if (progress == null || current === null || current.type !== progress.type || current.name !== progress.name) {
+    return null;
+  }
+  const action = reading.actions.find((each) => each.type === progress.type && each.name === progress.name);
+  return action === undefined ? null : { name: action.name, level: action.level, secondsDone: progress.secondsDone };
 }
 
 /** The max HP and the money of the medium snapshot's player (#418), or null where either isn't a figure. */

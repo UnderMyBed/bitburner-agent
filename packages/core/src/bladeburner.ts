@@ -106,13 +106,14 @@ export const BLADEBURNER_SKILL_WORKER_RAM_GB = 9.6;
  * script, and 4 GB each for `getCityEstimatedPopulation`, `getCityCommunities`, `getCityChaos`, `getCity` and
  * `switchCity` (`Netscript/RamCostGenerator.ts:366-370`); and since #420 the round over the six (each city's own
  * ranges and each action's level), 4 GB each for `getActionEstimatedSuccessChance` (`:348`) and `getActionCurrentLevel`
- * (`:354`), and 2 GB for `getNextBlackOp` (`:339`): 31.6 GB. The Agent runs it just before `bladeburner.js`, waiting for
+ * (`:354`), and 2 GB for `getNextBlackOp` (`:339`); and since #421 the action under way's progress, 1 GB for
+ * `getCurrentAction` (`:345`) and 4 GB for `getActionCurrentTime` (`:347`): 36.6 GB. The Agent runs it just before `bladeburner.js`, waiting for
  * each to exit (ingame's `run-worker.ts`), so they never hold home's RAM at once: under `BLADEBURNER_WORKER_RAM_GB`, it
  * fits wherever B1's gate lets that one run, and home keeps nothing more for it (#383). In `bladeburner.js` instead,
  * the reading would be 72.6 GB (the city calls and `getNextBlackOp` its own): 65.9 + 72.6 = 138.5 GB at SF4.3, past a
  * 128 GB home.
  */
-export const BLADEBURNER_CITY_WORKER_RAM_GB = 31.6;
+export const BLADEBURNER_CITY_WORKER_RAM_GB = 36.6;
 /**
  * An action the brain asks `bladeburner.js` to run (#375): its type and name as the NS API has them, and its level;
  * or (#392) the next Black Op, `Black Operations` (`Bladeburner/Enums.ts:5`), at no level.
@@ -167,6 +168,21 @@ export interface BladeburnerCityWorkerReading {
   cities: BladeburnerCityReading[];
   problems: string[];
   round?: BladeburnerCitiesRound | null;
+  /** The action under way's progress (#421's ruling 3), null idle; absent from an older Agent. */
+  progress?: BladeburnerActionProgress | null;
+}
+
+/**
+ * The action under way and its progress (#421's ruling 3), read by `bladeburner-city.js` before the reading worker
+ * runs: `getCurrentAction` and `getActionCurrentTime` (its seconds done, `min(actionTimeCurrent +
+ * actionTimeOverflow, actionTimeToComplete)`, `NetscriptFunctions/Bladeburner.ts:131-137`, in ms there). An attempt's
+ * time is fixed when it starts (`Bladeburner.ts:186-188`), and a switch of action starts it again at 0, so continuing
+ * it costs only its time left.
+ */
+export interface BladeburnerActionProgress {
+  type: string;
+  name: string;
+  secondsDone: number;
 }
 
 /**
@@ -195,6 +211,8 @@ export interface BladeburnerReading {
   cities?: BladeburnerCityReading[];
   /** The round over the six (#420, `bladeburner-city.js`'s; absent from an older Agent), null where it failed. */
   round?: BladeburnerCitiesRound | null;
+  /** The action under way's progress before the reading worker acted (#421, `bladeburner-city.js`'s), null idle. */
+  progress?: BladeburnerActionProgress | null;
   /** B5's (#392, absent from a B4 Agent): the next Black Op in order and the game's range for it, or null: all done. */
   blackOp?: BladeburnerBlackOpReading | null;
 }

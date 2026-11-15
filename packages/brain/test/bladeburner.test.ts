@@ -26,6 +26,7 @@ import {
   BLADEBURNER_TRAINING_HELD_EVENT_KIND,
   BladeburnerRule,
   bladeburnerSnapshotOf,
+  bladeburnerUnderWayOf,
   type GymWork,
   JOIN_BLADEBURNER_INTENT,
   travelIntent,
@@ -761,6 +762,54 @@ describe("the run report's section 8 (#367)", () => {
     ]);
     expect(text).toContain(
       `  problems the Bladeburner worker reported, as first seen:\n    ${iso(T0)}: the game didn't take the player\n`,
+    );
+  });
+});
+
+describe("the attempt under way (#421's ruling 3): its progress from the reading", () => {
+  const TRACKING = { type: "Contracts", name: "Tracking" };
+  const mediumWith = (bladeburner: Record<string, unknown>) => ({
+    inBladeburner: true,
+    bladeburner: {
+      rank: 10,
+      problems: [],
+      stamina: 40,
+      maxStamina: 40,
+      bonusSeconds: 0,
+      found: TRACKING,
+      current: TRACKING,
+      actions: [
+        { type: "Contracts", name: "Tracking", level: 3, maxLevel: 4, count: 10, chance: [0.5, 0.5] },
+        { type: "Contracts", name: "Bounty Hunter", level: 1, maxLevel: 1, count: 10, chance: [0.4, 0.4] },
+      ],
+      ...bladeburner,
+    },
+  });
+  const actionsOf = (bladeburner: Record<string, unknown>) => {
+    const read = bladeburnerSnapshotOf(mediumWith(bladeburner)).reading;
+    if (read.kind !== "read" || read.actions === null) throw new Error(`not read: ${JSON.stringify(read)}`);
+    return read.actions;
+  };
+
+  test("the action under way after the worker acted, at its level read, with its seconds done; else none", () => {
+    expect(bladeburnerUnderWayOf(actionsOf({ progress: { ...TRACKING, secondsDone: 12.5 } }))).toEqual({
+      name: "Tracking",
+      level: 3,
+      secondsDone: 12.5,
+    });
+    // Another started by the worker since (the progress was the old one's), idle, or none read (an older Agent).
+    const other = { type: "Contracts", name: "Bounty Hunter" };
+    expect(
+      bladeburnerUnderWayOf(actionsOf({ current: other, progress: { ...TRACKING, secondsDone: 12.5 } })),
+    ).toBeNull();
+    expect(bladeburnerUnderWayOf(actionsOf({ progress: null }))).toBeNull();
+    expect(bladeburnerUnderWayOf(actionsOf({}))).toBeNull();
+    // A general action under way: not a contract's or an operation's.
+    const field = { type: "General", name: "Field Analysis" };
+    expect(bladeburnerUnderWayOf(actionsOf({ current: field, progress: { ...field, secondsDone: 5 } }))).toBeNull();
+    // Not a figure: the reading unread.
+    expect(bladeburnerSnapshotOf(mediumWith({ progress: { ...TRACKING, secondsDone: -1 } })).reading.kind).toBe(
+      "unread",
     );
   });
 });
