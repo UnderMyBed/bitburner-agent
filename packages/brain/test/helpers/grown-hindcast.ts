@@ -69,7 +69,7 @@ export const GROWN_HINDCASTS: Readonly<Record<string, GrownHindcastRow>> = {
       "time to it (2.71 h) is long against the fixed window (#411's diagnosis)",
   },
   "B3's hour at rank 150": { ratio: 1.93, within: true, expected: 1.4, expectedWithin: true },
-  "B4's hour, its chaos edited": { ratio: 0.61, within: true, expected: 0.75, expectedWithin: true },
+  "B4's hour, its chaos edited": { ratio: 0.61, within: true, expected: 0.76, expectedWithin: true },
   "B5's Typhoon": { ratio: 1.21, within: true, expected: 0.86, expectedWithin: true },
   "B5's climb to Zero": { ratio: 1.06, within: true, expected: 1.19, expectedWithin: true },
   "B6's Daedalus": { ratio: 0.96, within: true, expected: 0.96, expectedWithin: true },

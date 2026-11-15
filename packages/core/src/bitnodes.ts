@@ -230,20 +230,21 @@ export function knownBitNodes(): number[] {
  *
  * Since #418 the grown estimate carries the six cities (./bladeburner-drift.ts): the actions' chaos and population, the
  * random events' mean, Diplomacy's time holding the chaos worked at 50, B4's city chosen again. At the same states,
- * the six cities each at the tests' 1e9, 50 communities and no chaos: BN6 117.6 h at combat 100 and 106.9 h at 300 as
- * is, the shop 73.9 h at 100 (installed) and keeping's 106.9 h at 300; BN7 223.4 h and 202.8 h as is, the shop 153.7 h
- * and 194.6 h (installed). The rise is the riots' (the chaos's mean outruns the decay over 1.08 in every city not
- * worked, so the brain stays in the one its Diplomacy holds) and the city's population drained there. So BN6 73.9 h at
- * best (×1.36 the bar) and BN7 153.7 h (×2.84): unplayable.
+ * the six cities each at the tests' 1e9, 50 communities and no chaos: BN6 152.4 h at combat 100 and 136.7 h at 300 as
+ * is, the shop 115.6 h at 100 (installed) and keeping's 136.7 h at 300; BN7 218.8 h and 206.6 h as is, the shop 179.8 h
+ * at 100 (installed) and keeping's 206.6 h at 300 (#418's review: the chaos from 0, the riots' way out of the clamp,
+ * and Raid's communities near 0 priced). The rise is the riots' (the chaos's mean outruns the decay over 1.08 in every city not
+ * worked, so the brain stays in the one its Diplomacy holds) and the city's population drained there. So BN6 115.6 h at
+ * best (×2.13 the bar) and BN7 179.8 h (×3.32): unplayable.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [
     6,
-    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#418: 73.9 h at best, the bar 54.2 h)",
+    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#418: 115.6 h at best, the bar 54.2 h)",
   ],
   [
     7,
-    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#418: 153.7 h at best, the bar 54.2 h)",
+    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#418: 179.8 h at best, the bar 54.2 h)",
   ],
 ]);
 /** Why BN7 is skipped (#367, #398, #411): the Black Ops' grown estimate at its multipliers past the bar, the shop in. */
