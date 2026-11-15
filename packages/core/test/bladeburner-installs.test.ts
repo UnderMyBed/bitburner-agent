@@ -21,6 +21,7 @@ import { blackOpsRouteGrownEstimate } from "../src/bladeburner-growth.ts";
 import {
   blackOpsInstallTiming,
   bladeburnerAugmentationValues,
+  bladeburnerComparedFigures,
   bladeburnerInstallGain,
   bladeburnerPersonAfterInstall,
   bladeburnerRebuildSeconds,
@@ -505,5 +506,44 @@ describe("bn6-install's reading (#411): an undercount, EsperTech and the shop ea
     expect(esper.choice).toBe("install");
     expect(shopLead).toBeGreaterThan(shop.marginSeconds as number);
     expect(shop.choice).toBe("install");
+  });
+});
+
+describe("B7's two figures by one method (#423's ruling 7, its review row 2): the replays' only where both used them", () => {
+  const replays = (over: { used?: boolean; seed?: number; count?: number } = {}) => ({
+    count: over.count ?? 200,
+    seed: over.seed ?? 7,
+    times: [],
+    seconds: 0,
+    error: 0,
+    fallbackSteps: 0,
+    replaysWithFallback: 0,
+    leastRatios: [],
+    meanPathRebuilds: 0,
+    used: over.used ?? true,
+    declined: over.used === false ? "3 of 200 replays needed the rate's fallback, past 1%" : null,
+  });
+  // Each figure's `seconds` the replays' where used (else the mean path's), `meanPathSeconds` the mean path's.
+  const keep = { seconds: 60, meanPathSeconds: 100, replays: replays() };
+  const other = { seconds: 50, meanPathSeconds: 90, replays: replays() };
+
+  test("both used on one seed series and count: the replays' figures", () => {
+    expect(bladeburnerComparedFigures(keep, other)).toEqual({ keep: 60, other: 50, method: "replays" });
+  });
+
+  test("one used, the other declined (either side): both the mean path's, not a replay against a mean path", () => {
+    const declined = { seconds: 90, meanPathSeconds: 90, replays: replays({ used: false }) };
+    expect(bladeburnerComparedFigures(keep, declined)).toEqual({ keep: 100, other: 90, method: "mean path" });
+    expect(bladeburnerComparedFigures(declined, other)).toEqual({ keep: 90, other: 90, method: "mean path" });
+  });
+
+  test("both used but on other seed series or counts, or one without replays: the mean path's", () => {
+    const seed = { ...other, replays: replays({ seed: 8 }) };
+    const count = { ...other, replays: replays({ count: 100 }) };
+    const none = { seconds: 90, meanPathSeconds: 90, replays: null };
+    for (const each of [seed, count, none])
+      expect(bladeburnerComparedFigures(keep, each)).toEqual({ keep: 100, other: 90, method: "mean path" });
+    // A figure from before #423 (no `meanPathSeconds`): its `seconds`.
+    expect(bladeburnerComparedFigures({ seconds: 80 }, none)).toEqual({ keep: 80, other: 90, method: "mean path" });
   });
 });

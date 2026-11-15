@@ -57,6 +57,7 @@ import {
   bladeburnerPersonOf,
   bladeburnerPricedInput,
   bladeburnerRankMultiplierOf,
+  bladeburnerReplaySeedOf,
   bladeburnerSkillCostMultiplierOf,
   bladeburnerSkillMultsOf,
   type ClimbAttempts,
@@ -247,7 +248,13 @@ export function blackOpsRouteOf({
                     target: { rank, target: op.rank },
                   }).toTarget?.seconds ?? null),
           },
-          { combat, costMultiplier, points: actions?.skills?.points ?? 0 },
+          {
+            combat,
+            costMultiplier,
+            points: actions?.skills?.points ?? 0,
+            // #423: the route's replays on a seed series from the refresh's game time (reproducible, apart each refresh).
+            ...(grownMemo === undefined ? {} : { replaySeed: bladeburnerReplaySeedOf(grownMemo.nowMs) }),
+          },
         );
   const grownKept =
     done === BLACK_OPS_COUNT

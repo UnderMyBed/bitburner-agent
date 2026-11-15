@@ -40,7 +40,7 @@
  * each chance's mean over the spread is under the chance at the mean path's population, (pop)^0.7 concave), and the
  * estimate's own drift (the brain recovers pop/popEst at each reading, #411's ruling 4).
  */
-import type { BladeburnerLevelledAction } from "./bladeburner-actions.ts";
+import { type BladeburnerLevelledAction, bladeburnerRaidHasCommunity } from "./bladeburner-actions.ts";
 import { BLADEBURNER_CONSTANTS, chaosDifficultyFactor } from "./bladeburner-constants.ts";
 
 /** One attempt's mean effects on the city it runs in (#418): its chaos, its true population and its communities. */
@@ -272,7 +272,7 @@ function poisson(mean: number, most: number): number[] {
 
 /** P(at least one community): Raid's factor (`Actions/Operation.ts:63-68`), from the distribution where carried. */
 function communitiesFactor(city: BladeburnerDriftCity): number {
-  if (city.communitiesMix === undefined) return city.communities > 0 ? 1 : 0;
+  if (city.communitiesMix === undefined) return bladeburnerRaidHasCommunity(city.communities) ? 1 : 0;
   const { low, probs } = city.communitiesMix;
   return low > 0 ? 1 : 1 - (probs[0] ?? 0);
 }
@@ -667,7 +667,7 @@ export function bladeburnerDriftPath(
     const half = cities.map((_, i) => (i === worked ? dt / 2 : 0));
     if (dt > 0) applyEvents(cities, half, { index: worked, ceiling: start.ceiling });
     // B4's order: the city first (the most chance factor, its chaos as it is), then Diplomacy there, to its ceiling.
-    if (moves) worked = mostFactor(cities, worked, raidAlone, start.ceiling);
+    if (moves) worked = bladeburnerMostFactorCity(cities, worked, raidAlone, start.ceiling);
     const here = cities[worked] as BladeburnerDriftCity;
     if (here.chaos > 0 && keep > 0 && keep < 1) {
       const mix = mixOf(here);
@@ -777,7 +777,12 @@ function applyAttempts(
  * so the path doesn't hang on its chunks; the current one on a tie. With `raid`, of those with communities (B4's "the
  * most with Raid there"), the current one where none has.
  */
-function mostFactor(cities: readonly BladeburnerDriftCity[], current: number, raid: boolean, ceiling: number): number {
+export function bladeburnerMostFactorCity(
+  cities: readonly BladeburnerDriftCity[],
+  current: number,
+  raid: boolean,
+  ceiling: number,
+): number {
   const worked = cities[current] as BladeburnerDriftCity;
   const kept =
     raid && !(communitiesFactor(worked) > 0)

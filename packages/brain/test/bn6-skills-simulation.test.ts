@@ -17,6 +17,7 @@ import {
   bladeburnerPersonOf,
   bladeburnerPlansToTarget,
   bladeburnerRankMultiplierOf,
+  bladeburnerReplaySeedOf,
   chooseBladeburnerCity,
   type MediumSnapshotData,
   skillExpFor,
@@ -402,6 +403,10 @@ test("BN6.1, an hour from a harness join at rank 150: the points spent within a 
   );
   expect(section).toContain("  skill points unspent with a level to buy, past 52 s:\n    none");
   expect(failures).toEqual([]);
+  // #423: the planner's grown route replayed on the seed series from its refresh's game time.
+  const blackOps = fresh.controller().worldDaemonView().path?.blackOps;
+  expect(blackOps?.grownAtMs).toEqual(expect.any(Number));
+  expect(blackOps?.grown?.replays?.seed).toBe(bladeburnerReplaySeedOf(blackOps?.grownAtMs as number));
   // A hang guard (#418's ruling 6): its fastest completed CI time, 78.5 s (PR #419's run 43684859936, db48800), × the
   // largest same-code swing over those runs, 3.743 (augmentations.test 58.8 s against 15.7 s).
 }, 294_000);

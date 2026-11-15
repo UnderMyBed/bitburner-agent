@@ -545,6 +545,25 @@ function aboutSeconds(seconds: number): string {
   return seconds > 1e9 ? `${(seconds / 3600).toPrecision(3)} h` : `about ${describeEta(seconds)}`;
 }
 
+/**
+ * #423: the grown figure's replays in words: " (± its standard error; its route replayed n times under the game's
+ * draws, first-order; the mean path's …)", or nothing without them (no cities read, or figures before #423).
+ */
+function replayedWords(grown: {
+  meanPathSeconds?: number;
+  secondsError?: number;
+  replays?: { count: number; replaysWithFallback: number; used: boolean; declined: string | null } | null;
+}): string {
+  const { replays, meanPathSeconds, secondsError } = grown;
+  if (replays == null || meanPathSeconds === undefined) return "";
+  // The gate (#423's ruling 7): the mean path's figure where the replays declined, and why.
+  if (!replays.used) return ` (the mean path's: its ${replays.count} replays declined, #423: ${replays.declined})`;
+  return (
+    ` (± ${((secondsError ?? 0) / 3600).toFixed(1)} h: its route replayed ${replays.count} times under the game's draws ` +
+    `and re-priced, first-order, #423; the mean path's ${aboutSeconds(meanPathSeconds)})`
+  );
+}
+
 /** The Black Ops' route in words (#398): the dashboard's and the run report's lines. */
 export function describeBlackOpsRoute(view: BlackOpsRouteView | null): string[] {
   const off =
@@ -588,7 +607,7 @@ export function describeBlackOpsRoute(view: BlackOpsRouteView | null): string[] 
     "the planner (#398): the Black Ops' " +
     (grown === null || grown.steps.length === 0
       ? flat
-      : `${aboutSeconds(grown.seconds)} with the competence's growth (#408: the skills from the rank, the stats from ` +
+      : `${aboutSeconds(grown.seconds)}${replayedWords(grown)} with the competence's growth (#408: the skills from the rank, the stats from ` +
         `the actions, the levels from the successes; the last one at ${(100 * (grown.steps.at(-1)?.chance ?? 0)).toFixed(1)}%; ` +
         // #411: the chances at the true population, recovered from the Black Op's range, or the fallback (#414).
         (grown.populationRatio === null

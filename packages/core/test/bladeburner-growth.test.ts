@@ -41,6 +41,7 @@ import {
   BLADEBURNER_GROWTH_LEAST_STEP,
   type BladeburnerGrowthState,
   blackOpsRouteGrownEstimate,
+  blackOpsRouteTimelineOf,
   bladeburnerGrownInput,
   bladeburnerGrowthStart,
   bladeburnerPricedInput,
@@ -55,6 +56,14 @@ import {
   bladeburnerRebuildSeconds,
   NO_INSTALL_GAIN,
 } from "../src/bladeburner-installs.ts";
+import {
+  BLADEBURNER_REPLAY_LEAST_RATIO,
+  BLADEBURNER_REPLAY_MOST_RATIO,
+  BLADEBURNER_ROUTE_REPLAYS,
+  bladeburnerReplayDeclined,
+  bladeburnerReplayRoute,
+  bladeburnerReplaySeedOf,
+} from "../src/bladeburner-replays.ts";
 import { blackOpsRouteEstimate } from "../src/bladeburner-route.ts";
 import {
   BLADEBURNER_SKILL_NAMES,
@@ -660,7 +669,9 @@ describe("the grown estimate against a seeded walk of the game's attempts (#408)
     // the whole route 2.8% long) errs long.
     expect(estimate).toBeGreaterThan(mean - 4 * standardError);
     expect(Math.abs(off)).toBeLessThan(0.03);
-  }, 60_000);
+    // Its fastest CI time × the largest same-code CI swing, 3.743 (#418's ruling 6; #423's review row 5): 17.5 s on CI
+    // run 43768474882, so 66 s.
+  }, 66_000);
 
   test.runIf(process.env.BLADEBURNER_GROWTH_WALK_FULL === "1")(
     "the whole route to Daedalus done, at combat 100 (BLADEBURNER_GROWTH_WALK_FULL=1)",
@@ -997,52 +1008,58 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
     .filter(({ bitNode, combat }) => FULL || (bitNode === 6 && combat === 100));
   /** Each case's figures as solved above (#420's order check takes the CI case's from here). */
   const solved = new Map<string, { keep: number; install: number | null; choice: string }>();
-  test.each(CASES)("BN$bitNode, combat $combat, read at the truth: as is and with the shop", ({ bitNode, combat }) => {
-    const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
-    const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
-    const { combat: figures, input: read, at } = startAt(combat);
-    const plain = { ...read, rankMultiplier };
-    const input = { ...plain, drift: { cities: SIX, city: "Sector-12" } };
-    const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
-    const started = performance.now();
-    const shop = blackOpsInstallTiming({
-      input,
-      at,
-      combat: figures,
-      gain,
-      installable: true,
-      growth: { costMultiplier },
-    });
-    const ms = performance.now() - started;
-    const before = blackOpsInstallTiming({
-      input: plain,
-      at,
-      combat: figures,
-      gain,
-      installable: true,
-      growth: { costMultiplier },
-    });
-    const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
-    const beforeSeconds = before.choice === "install" ? (before.installNowSeconds as number) : before.keepSeconds;
-    console.log(
-      `BN${bitNode} combat ${combat}, the truth, with the drift: as is ${(shop.keepSeconds / HOUR).toFixed(1)} h, the ` +
-        `shop ${shop.choice} ${(shopSeconds / HOUR).toFixed(1)} h (without it: ${(before.keepSeconds / HOUR).toFixed(1)} ` +
-        `h and ${before.choice} ${(beforeSeconds / HOUR).toFixed(1)} h; ${ms.toFixed(0)} ms)`,
-    );
-    // Unplayable either way: past the bar as is and with the shop.
-    expect(shop.keepSeconds).toBeGreaterThan(BAR_SECONDS);
-    expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
-    solved.set(`${bitNode} ${combat}`, {
-      keep: shop.keepSeconds,
-      install: shop.installNowSeconds,
-      choice: shop.choice,
-    });
-  });
+  test.each(CASES)(
+    "BN$bitNode, combat $combat, read at the truth: as is and with the shop",
+    ({ bitNode, combat }) => {
+      const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+      const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+      const { combat: figures, input: read, at } = startAt(combat);
+      const plain = { ...read, rankMultiplier };
+      const input = { ...plain, drift: { cities: SIX, city: "Sector-12" } };
+      const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
+      const started = performance.now();
+      const shop = blackOpsInstallTiming({
+        input,
+        at,
+        combat: figures,
+        gain,
+        installable: true,
+        growth: { costMultiplier },
+      });
+      const ms = performance.now() - started;
+      const before = blackOpsInstallTiming({
+        input: plain,
+        at,
+        combat: figures,
+        gain,
+        installable: true,
+        growth: { costMultiplier },
+      });
+      const shopSeconds = shop.choice === "install" ? (shop.installNowSeconds as number) : shop.keepSeconds;
+      const beforeSeconds = before.choice === "install" ? (before.installNowSeconds as number) : before.keepSeconds;
+      console.log(
+        `BN${bitNode} combat ${combat}, the truth, with the drift: as is ${(shop.keepSeconds / HOUR).toFixed(1)} h, the ` +
+          `shop ${shop.choice} ${(shopSeconds / HOUR).toFixed(1)} h (without it: ${(before.keepSeconds / HOUR).toFixed(1)} ` +
+          `h and ${before.choice} ${(beforeSeconds / HOUR).toFixed(1)} h; ${ms.toFixed(0)} ms)`,
+      );
+      // Unplayable either way: past the bar as is and with the shop.
+      expect(shop.keepSeconds).toBeGreaterThan(BAR_SECONDS);
+      expect(shopSeconds).toBeGreaterThan(BAR_SECONDS);
+      solved.set(`${bitNode} ${combat}`, {
+        keep: shop.keepSeconds,
+        install: shop.installNowSeconds,
+        choice: shop.choice,
+      });
+      // Its fastest CI time × the largest same-code CI swing, 3.743 (#418's ruling 6; #423's review row 5): 22.3 s on
+      // CI run 43768474882, so 84 s.
+    },
+    84_000,
+  );
 
   test("the same figures after other solves (#420's ruling 3): no state carried between them", () => {
     // The CI case as the test above solved it, then BN7 at combat 300 (its own drift paths and solves, kept in core's
-    // caches), then the CI case again: to the bit. Alone and in this whole file it gives 155.5 h as is and 113.6 h
-    // installing, on d4fc1e5 too; the 152.4 h and 115.6 h #418 stated were measured before its round 4 (moved Raid an
+    // caches), then the CI case again: to the bit. Alone and in this whole file it gave 155.5 h as is and 113.6 h
+    // installing by the mean path (#423 below), on d4fc1e5 too; the 152.4 h and 115.6 h #418 stated were measured before its round 4 (moved Raid an
     // attempt at a time in the rule and in the grown estimate), not another order's.
     const caseOf = (bitNode: number, combat: number) => {
       const { combat: figures, input: read, at } = startAt(combat);
@@ -1064,7 +1081,196 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
     const first = solved.get("6 100") ?? caseOf(6, 100);
     caseOf(7, 300);
     expect(caseOf(6, 100)).toEqual(first);
-    expect(first.keep / HOUR).toBeCloseTo(155.5, 1);
-    expect((first.install as number) / HOUR).toBeCloseTo(113.6, 1);
-  });
+    // Since #423 (its rulings 7, 10 and 11): both sides' replays pass the gate (on all 10 seed series, below), so their
+    // figures, first-order: 118.5 h as is and 76.8 h installing (the mean path's 155.5 h and 113.6 h), on the default seed
+    // series (the first of the 10, ruling 11), a solve's own; each within 3 of its replays' standard errors (1.25 h and
+    // 0.63 h), not to the digit (the machines' `**`).
+    expect(Math.abs(first.keep / HOUR - 118.5)).toBeLessThanOrEqual(3 * 1.25);
+    expect(Math.abs((first.install as number) / HOUR - 76.8)).toBeLessThanOrEqual(3 * 0.63);
+    // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 28.1 s on CI run 43768474882, so 106 s.
+  }, 106_000);
 });
+
+describe("the playability under the route's replays (#423): the gate's figures, both sides of B7 by one method", () => {
+  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
+  const SIX = ["Aevum", "Chongqing", "Sector-12", "New Tokyo", "Ishima", "Volhaven"].map((name) => ({ name, ...CITY }));
+  /** BN`bitNode` at combat 100 with the six read: keep's route, the shop's after it, and B7's timing on them. */
+  const solve = (bitNode: number) => {
+    const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+    const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+    const { combat: figures, input: read, at, who } = startAt(100);
+    const input = { ...read, rankMultiplier, drift: { cities: SIX, city: "Sector-12" } };
+    const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
+    const keep = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier });
+    const after = blackOpsRouteGrownEstimate({ ...input, forecast: bladeburnerPersonAfterInstall(who, gain) }, at, {
+      combat: combatAfter(figures, gain),
+      costMultiplier,
+    });
+    const timing = blackOpsInstallTiming({
+      input,
+      at,
+      combat: figures,
+      gain,
+      installable: true,
+      growth: { costMultiplier },
+    });
+    // #406's step error, the mean path's own (an eighth of the step, no replays).
+    const fine = {
+      fraction: BLADEBURNER_GROWTH_FRACTION / 8,
+      leastStep: BLADEBURNER_GROWTH_LEAST_STEP / 8,
+      replays: 0,
+    };
+    const keep8 = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier, ...fine }).seconds;
+    const after8 = blackOpsRouteGrownEstimate({ ...input, forecast: bladeburnerPersonAfterInstall(who, gain) }, at, {
+      combat: combatAfter(figures, gain),
+      costMultiplier,
+      ...fine,
+    }).seconds;
+    const step = Math.abs(
+      (keep.meanPathSeconds as number) -
+        (timing.rebuildSeconds + (after.meanPathSeconds as number)) -
+        (keep8 - (timing.rebuildSeconds + after8)),
+    );
+    return { keep, after, timing, step };
+  };
+  const line = (label: string, route: ReturnType<typeof blackOpsRouteGrownEstimate>) => {
+    const r = route.replays;
+    return (
+      `${label} ${(route.seconds / HOUR).toFixed(1)} h (the mean path's ${((route.meanPathSeconds ?? 0) / HOUR).toFixed(1)} h; ` +
+      `the replays ${(((r?.seconds ?? 0) as number) / HOUR).toFixed(1)} ± ${(((r?.error ?? 0) as number) / HOUR).toFixed(1)} h, ` +
+      `${r?.replaysWithFallback} of ${r?.count} at the fallback: ${r?.used ? "used" : `declined, ${r?.declined}`})`
+    );
+  };
+
+  test("BN6, combat 100: both sides pass, so the replays; B7's margin the step's error and 3 of the paired replays'", () => {
+    const { keep, after, timing, step } = solve(6);
+    for (const route of [keep, after]) {
+      const r = route.replays as NonNullable<typeof route.replays>;
+      expect(r.used).toBe(true);
+      expect(r.replaysWithFallback).toBeLessThanOrEqual(0.01 * r.count);
+      // Every replay counted, the fallback's steps at the mean path's rate (none dropped).
+      expect(r.times).toHaveLength(BLADEBURNER_ROUTE_REPLAYS);
+      expect(r.times.every((x) => Number.isFinite(x))).toBe(true);
+      expect(route.seconds).toBe(r.seconds);
+      // The path's last point the figure: the replays' re-priced path.
+      expect(route.path.at(-1)?.seconds).toBeCloseTo(route.seconds, 3);
+    }
+    expect(timing.method).toBe("replays");
+    expect(timing.keepSeconds).toBe(keep.seconds);
+    expect(timing.afterSeconds).toBe(after.seconds);
+    // The paired error (one seed series both sides): the shared draws cancel.
+    const diffs = (keep.replays?.times ?? []).map((x, i) => x - ((after.replays?.times ?? [])[i] as number));
+    const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+    const paired = Math.sqrt(diffs.reduce((a, b) => a + (b - mean) ** 2, 0) / (diffs.length - 1) / diffs.length);
+    expect(timing.replaysErrorSeconds).toBeCloseTo(paired, 6);
+    expect(timing.marginSeconds as number).toBeCloseTo(step + 3 * paired, 6);
+    const unpaired = Math.sqrt((keep.secondsError ?? 0) ** 2 + (after.secondsError ?? 0) ** 2);
+    console.log(
+      `BN6 combat 100: ${line("keep", keep)}; ${line("after the shop", after)}; B7 by the replays: install now ` +
+        `${((timing.installNowSeconds as number) / HOUR).toFixed(1)} h against keep ${(timing.keepSeconds / HOUR).toFixed(1)} h, ` +
+        `the margin ${(step / 60).toFixed(1)} min of step + 3 × ${(paired / 60).toFixed(1)} min paired (unpaired it would be ` +
+        `${(unpaired / 60).toFixed(1)} min): ${timing.choice}`,
+    );
+    expect(timing.choice).toBe("install");
+    // Re-stated (#423's rulings 7, 10 and 11): 76.8 h at best, first-order, still past the bar (×1.42); within 3 of its
+    // error.
+    expect(Math.abs((timing.installNowSeconds as number) - 76.8 * HOUR)).toBeLessThanOrEqual(
+      3 * (after.secondsError ?? 0),
+    );
+    expect(timing.installNowSeconds as number).toBeGreaterThan(BAR_SECONDS);
+    // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 33.9 s on CI run 43768474882, so 128 s.
+  }, 128_000);
+
+  test("BN7, combat 100: keep declines (the fallback), so both sides the mean path's; the shop's route by its mean path", () => {
+    const { keep, after, timing } = solve(7);
+    // Its figures said before the assertions (a failure shows them).
+    console.log(`BN7 combat 100, before the checks: ${line("keep", keep)}; ${line("after the shop", after)}`);
+    const kept = keep.replays as NonNullable<typeof keep.replays>;
+    expect(kept.used).toBe(false);
+    expect(kept.declined).toMatch(/replays needed the rate's fallback, past 1%$/);
+    // Declined: the mean path's figure and path, its replays still all counted.
+    expect(keep.seconds).toBe(keep.meanPathSeconds);
+    expect(keep.secondsError).toBe(0);
+    expect(keep.path.at(-1)?.seconds).toBe(keep.meanPathSeconds);
+    expect(kept.times).toHaveLength(BLADEBURNER_ROUTE_REPLAYS);
+    expect(kept.times.every((x) => Number.isFinite(x))).toBe(true);
+    // One method both sides: the mean path's (a replay figure against keep's mean path would lean to installing).
+    expect(timing.method).toBe("mean path");
+    expect(timing.keepSeconds).toBe(keep.meanPathSeconds);
+    expect(timing.afterSeconds).toBe(after.meanPathSeconds);
+    expect(timing.replaysErrorSeconds).toBe(0);
+    console.log(
+      `BN7 combat 100: ${line("keep", keep)}; ${line("after the shop", after)}; B7 by the mean path on both sides: ` +
+        `install now ${((timing.installNowSeconds as number) / HOUR).toFixed(1)} h against keep ` +
+        `${(timing.keepSeconds / HOUR).toFixed(1)} h: ${timing.choice}`,
+    );
+    // Re-stated (#423's rulings 10 and 12a): the shop's route's replays decline on Linux CI on all 10 series and pass 9
+    // of 10 on Windows (below), unstable across seed series and machines, so its figure is the mean path's, 182.6 h at
+    // best, past the bar.
+    expect((timing.rebuildSeconds + (after.meanPathSeconds as number)) / HOUR).toBeCloseTo(182.6, 1);
+    expect(timing.rebuildSeconds + (after.meanPathSeconds as number)).toBeGreaterThan(BAR_SECONDS);
+    // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 33.9 s on CI run 43768474882, so 127 s.
+  }, 127_000);
+
+  test("the gate on 10 seed series (#423's rulings 8, 10 and 11): BN6's best and keep pass on all, BN7's keep on none", () => {
+    // Each route's mean path once, its timeline replayed on the seed series of a refresh at the suites' epoch and the 9
+    // after it. Asserted only where the verdict holds on all 10 (here and on CI): BN6's two pass, BN7's keep declines.
+    // BN7's best declines on Linux CI on all 10 series and passes 9 of 10 on Windows (#423's ruling 12a: one step's
+    // ratio on the most bound, 5e-8 past it on Linux by ruling 9's `**` drift), so it is said, not asserted: "unstable
+    // across seed series and machines".
+    const rows: string[] = [];
+    const passes = new Map<string, number>();
+    for (const bitNode of [6, 7]) {
+      const { keep, after } = solveRoutes(bitNode);
+      for (const [label, route] of [
+        ["keep", keep],
+        ["best", after],
+      ] as const) {
+        const timeline = blackOpsRouteTimelineOf(route);
+        if (timeline === null) throw new Error("no timeline");
+        const verdicts: string[] = [];
+        let used = 0;
+        for (let k = 0; k < 10; k++) {
+          const seed = bladeburnerReplaySeedOf(Date.UTC(2026, 0, 1) + k * BLACK_OPS_GROWN_REFRESH_MS_HERE);
+          const r = bladeburnerReplayRoute(timeline, { seed });
+          const declined = bladeburnerReplayDeclined(r);
+          if (declined === null) used++;
+          verdicts.push(
+            declined === null
+              ? `${(r.seconds / HOUR).toFixed(1)}±${(r.error / HOUR).toFixed(1)} (${r.replaysWithFallback} at the fallback)`
+              : `declined (${r.replaysWithFallback} at the fallback, ${((100 * r.error) / r.seconds).toFixed(1)}%)`,
+          );
+        }
+        passes.set(`${bitNode} ${label}`, used);
+        rows.push(`BN${bitNode} ${label}: ${used}/10 [${verdicts.join(" ")}]`);
+      }
+    }
+    console.log(
+      `the gate on 10 seed series (a climb step's ratio within ×${BLADEBURNER_REPLAY_LEAST_RATIO} to ×${BLADEBURNER_REPLAY_MOST_RATIO}):\n${rows.join("\n")}`,
+    );
+    expect(passes.get("6 keep")).toBe(10);
+    expect(passes.get("6 best")).toBe(10);
+    expect(passes.get("7 keep")).toBe(0);
+    // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 89.0 s on CI run 43768474882, so 334 s.
+  }, 334_000);
+});
+
+/** `BLACK_OPS_GROWN_REFRESH_MS` (the brain's 10-minute refresh, ./bladeburner-route.ts): the seed series' spacing. */
+const BLACK_OPS_GROWN_REFRESH_MS_HERE = 10 * 60_000;
+
+/** BN`bitNode` at combat 100 with the six read: keep's grown route and the shop's after it (#423's series). */
+function solveRoutes(bitNode: number) {
+  const SIX = ["Aevum", "Chongqing", "Sector-12", "New Tokyo", "Ishima", "Volhaven"].map((name) => ({ name, ...CITY }));
+  const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+  const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+  const { combat: figures, input: read, at, who } = startAt(100);
+  const input = { ...read, rankMultiplier, drift: { cities: SIX, city: "Sector-12" } };
+  const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
+  return {
+    keep: blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier }),
+    after: blackOpsRouteGrownEstimate({ ...input, forecast: bladeburnerPersonAfterInstall(who, gain) }, at, {
+      combat: combatAfter(figures, gain),
+      costMultiplier,
+    }),
+  };
+}

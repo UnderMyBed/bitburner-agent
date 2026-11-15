@@ -222,6 +222,15 @@ export interface BlackOpsInstallTiming {
    */
   marginSeconds: number | null;
   /**
+   * #423: the standard error of keep − install now over the routes' replays, paired on their one seed series (0 without
+   * replays): 3 of it in `marginSeconds`. And each side's own standard error, the figures' (the planner's).
+   */
+  replaysErrorSeconds: number;
+  /** #423's ruling 7: the method both sides used (`bladeburnerComparedFigures`). */
+  method: "replays" | "mean path";
+  keepErrorSeconds: number;
+  afterErrorSeconds: number;
+  /**
    * The hospital's money a game second on each side (#418, the grown estimate's `moneyLostPerSecond`): keeping, at the
    * money read; installing now, from the $1,000 an install leaves (`MONEY_AFTER_INSTALL`, the floor, labelled there).
    * Null, not read. Not traded against the time (the planner's trade, #359, the owner's): the money is priced where it
@@ -236,6 +245,8 @@ export interface BlackOpsInstallTiming {
 export interface BlackOpsGrowthAt {
   costMultiplier: number;
   points?: number;
+  /** The route's replays' seed series (#423): the brain's from the refresh's game time; both sides of B7 share it. */
+  replaySeed?: number;
 }
 
 /**
@@ -277,8 +288,44 @@ function routeSeconds(
     combat,
     costMultiplier: growth.costMultiplier,
     points: growth.points ?? 0,
-    ...(fine ? { fraction: BLADEBURNER_GROWTH_FRACTION / 8, leastStep: BLADEBURNER_GROWTH_LEAST_STEP / 8 } : {}),
+    ...(growth.replaySeed === undefined ? {} : { replaySeed: growth.replaySeed }),
+    // The eighth of the step measures the mean path's integration (#406), so its own figures alone (#423).
+    ...(fine
+      ? { fraction: BLADEBURNER_GROWTH_FRACTION / 8, leastStep: BLADEBURNER_GROWTH_LEAST_STEP / 8, replays: 0 }
+      : {}),
   });
+}
+
+/**
+ * Two grown figures compared by one method (#423's ruling 7): their replays' where both passed the gate on one seed
+ * series (with the same count), else both the mean path's.
+ */
+export function bladeburnerComparedFigures(
+  keep: Pick<BlackOpsGrownTime, "seconds" | "meanPathSeconds" | "replays">,
+  other: Pick<BlackOpsGrownTime, "seconds" | "meanPathSeconds" | "replays">,
+): { keep: number; other: number; method: "replays" | "mean path" } {
+  const a = keep.replays;
+  const b = other.replays;
+  const both = a != null && b != null && a.used && b.used && a.seed === b.seed && a.count === b.count;
+  if (both) return { keep: keep.seconds, other: other.seconds, method: "replays" };
+  return {
+    keep: keep.meanPathSeconds ?? keep.seconds,
+    other: other.meanPathSeconds ?? other.seconds,
+    method: "mean path",
+  };
+}
+
+/**
+ * The standard error of the paired difference a − b over two routes' replays on one seed series (#423): 0 without both,
+ * or with their counts apart.
+ */
+function pairedError(a: readonly number[] | undefined, b: readonly number[] | undefined): number {
+  if (a === undefined || b === undefined || a.length !== b.length || a.length < 2) return 0;
+  const diffs = a.map((x, i) => x - (b[i] as number));
+  if (!diffs.every((x) => Number.isFinite(x))) return 0;
+  const mean = diffs.reduce((sum, x) => sum + x, 0) / diffs.length;
+  const variance = diffs.reduce((sum, x) => sum + (x - mean) ** 2, 0) / (diffs.length - 1);
+  return Math.sqrt(variance / diffs.length);
 }
 
 /**
@@ -336,16 +383,25 @@ export function blackOpsInstallTiming({
     );
   const afterAt = (fine: boolean) => afterRoute(fine).seconds;
   const kept = keepRoute(false);
-  const keepSeconds = finish + kept.seconds;
   const after = afterRoute(false);
-  const afterSeconds = after.seconds;
+  // #423's ruling 7: both sides by one method. The replays' figures only where both passed the gate on the one seed
+  // series; else both the mean path's (a replay figure against a pessimistic mean path would lean toward installing).
+  const { keep: keptSeconds, other: afterRouteSeconds, method } = bladeburnerComparedFigures(kept, after);
+  const keepSeconds = finish + keptSeconds;
+  const afterSeconds = afterRouteSeconds;
   const installNowSeconds = installable ? rebuildSeconds + afterSeconds : null;
   // #406's rule: the difference's error at the step, measured against an eighth of it where installing leads (keeping
   // never: no error to beat). A difference never at the eighth (an error of Infinity, or NaN) keeps.
+  // #423: the step's error on the mean path's figures (the eighth's are its own), and the replays' error of the
+  // difference: both sides replayed on one seed series, so the draws they share cancel in the pairs; 3 standard errors
+  // of the paired difference (`replaysErrorSeconds`) added to the step's.
   let marginSeconds: number | null = null;
+  const replaysErrorSeconds = method === "replays" ? pairedError(kept.replays?.times, after.replays?.times) : 0;
   if (installNowSeconds !== null && installNowSeconds < keepSeconds) {
+    const keepMean = finish + (kept.meanPathSeconds ?? kept.seconds);
+    const installMean = rebuildSeconds + (after.meanPathSeconds ?? after.seconds);
     marginSeconds = Number.isFinite(keepSeconds)
-      ? Math.abs(keepSeconds - installNowSeconds - (keepAt(true) - (rebuildSeconds + afterAt(true))))
+      ? Math.abs(keepMean - installMean - (keepAt(true) - (rebuildSeconds + afterAt(true)))) + 3 * replaysErrorSeconds
       : 0;
   }
   const choice =
@@ -360,6 +416,10 @@ export function blackOpsInstallTiming({
     choice,
     gain,
     marginSeconds,
+    method,
+    replaysErrorSeconds,
+    keepErrorSeconds: method === "replays" ? (kept.secondsError ?? 0) : 0,
+    afterErrorSeconds: method === "replays" ? (after.secondsError ?? 0) : 0,
     moneyLostPerSecond: {
       keep: kept.moneyLostPerSecond ?? null,
       installNow: installable ? (after.moneyLostPerSecond ?? null) : null,
@@ -393,10 +453,11 @@ export function bladeburnerAugmentationValues({
       combatAt(combat, combat.skills, gain),
       growth,
       bladeburnerPersonAfterInstall(input.person, gain),
-    ).seconds;
+    );
   const now = after(NO_INSTALL_GAIN);
-  return augmentations.map((augmentation) => ({
-    augmentation,
-    savedSeconds: now - after(bladeburnerInstallGain(0, [augmentation])),
-  }));
+  // #423's ruling 7: each difference by one method on both sides (`bladeburnerComparedFigures`).
+  return augmentations.map((augmentation) => {
+    const { keep, other } = bladeburnerComparedFigures(now, after(bladeburnerInstallGain(0, [augmentation])));
+    return { augmentation, savedSeconds: keep - other };
+  });
 }

@@ -689,6 +689,24 @@ describe("the controller (#398)", () => {
       ms: (route?.estimate?.seconds as number) * 1000,
       grown: false,
     });
+    // #423's review row 7: the replays' standard error only where the gate used them; none where it declined.
+    const routed = route as NonNullable<typeof route>;
+    const grown = vindictus as NonNullable<typeof vindictus>;
+    const replays = {
+      count: 200,
+      seed: 1,
+      times: [],
+      seconds: 3600,
+      error: 360,
+      fallbackSteps: 0,
+      replaysWithFallback: 0,
+      leastRatios: [],
+      meanPathRebuilds: 0,
+    };
+    const declined = { ...grown, secondsError: 0, replays: { ...replays, used: false, declined: "the error 10%" } };
+    expect(destroyBlackOpsOf({ ...routed, grown: declined })).not.toHaveProperty("errorMs");
+    const used = { ...grown, secondsError: 36, replays: { ...replays, used: true, declined: null } };
+    expect(destroyBlackOpsOf({ ...routed, grown: used })?.errorMs).toBe(36_000);
   });
 
   test("nothing in other BitNodes: BN4 and BN5 with the same reading read no route, and ask no destroy", () => {
