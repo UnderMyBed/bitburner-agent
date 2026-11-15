@@ -669,7 +669,9 @@ describe("the grown estimate against a seeded walk of the game's attempts (#408)
     // the whole route 2.8% long) errs long.
     expect(estimate).toBeGreaterThan(mean - 4 * standardError);
     expect(Math.abs(off)).toBeLessThan(0.03);
-  }, 60_000);
+    // Its CI time × the largest same-code CI swing, 3.743 (#418's ruling 6; #423's review row 5): 31.1 s on CI run
+    // 43767386157, so 117 s.
+  }, 117_000);
 
   test.runIf(process.env.BLADEBURNER_GROWTH_WALK_FULL === "1")(
     "the whole route to Daedalus done, at combat 100 (BLADEBURNER_GROWTH_WALK_FULL=1)",
@@ -1048,10 +1050,10 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
         install: shop.installNowSeconds,
         choice: shop.choice,
       });
-      // #423: the routes' replays (about a second each) take the CI case to 9.4 s here (6.4 s on 61e0b1f); × the largest
-      // same-code CI swing, 3.743 (#418's ruling 6), 35 s, past the 30 s default: twice that.
+      // Its CI time × the largest same-code CI swing, 3.743 (#418's ruling 6; #423's review row 5): 31.0 s on CI run
+      // 43767386157, so 116 s.
     },
-    70_000,
+    116_000,
   );
 
   test("the same figures after other solves (#420's ruling 3): no state carried between them", () => {
@@ -1085,8 +1087,8 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
     // 0.63 h), not to the digit (the machines' `**`).
     expect(Math.abs(first.keep / HOUR - 118.5)).toBeLessThanOrEqual(3 * 1.25);
     expect(Math.abs((first.install as number) / HOUR - 76.8)).toBeLessThanOrEqual(3 * 0.63);
-    // #423: 12.4 s here with the replays (6.5 s on 61e0b1f); × 3.743 (#418's ruling 6), 46 s: twice that.
-  }, 93_000);
+    // Its CI time × 3.743 (#418's ruling 6; #423's review row 5): 37.0 s on CI run 43767386157, so 139 s.
+  }, 139_000);
 });
 
 describe("the playability under the route's replays (#423): the gate's figures, both sides of B7 by one method", () => {
@@ -1176,7 +1178,8 @@ describe("the playability under the route's replays (#423): the gate's figures, 
       3 * (after.secondsError ?? 0),
     );
     expect(timing.installNowSeconds as number).toBeGreaterThan(BAR_SECONDS);
-  }, 120_000);
+    // Its CI time × 3.743 (#418's ruling 6; #423's review row 5): 45.2 s on CI run 43767386157, so 170 s.
+  }, 170_000);
 
   test("BN7, combat 100: keep declines (the fallback), so both sides the mean path's; the shop's route by its mean path", () => {
     const { keep, after, timing } = solve(7);
@@ -1205,9 +1208,10 @@ describe("the playability under the route's replays (#423): the gate's figures, 
     // its figure is the mean path's, 182.6 h at best (its first-order 125 h unmeasured until #426), past the bar.
     expect((timing.rebuildSeconds + (after.meanPathSeconds as number)) / HOUR).toBeCloseTo(182.6, 1);
     expect(timing.rebuildSeconds + (after.meanPathSeconds as number)).toBeGreaterThan(BAR_SECONDS);
-  }, 120_000);
+    // Its CI time × 3.743 (#418's ruling 6; #423's review row 5): 53.2 s on CI run 43767386157, so 200 s.
+  }, 200_000);
 
-  test("the gate on 10 seed series (#423's rulings 8 and 10): BN6's best and keep pass on all, BN7's keep on none", () => {
+  test("the gate on 10 seed series (#423's rulings 8, 10 and 11): BN6's best and keep pass on all, BN7's keep on none", () => {
     // Each route's mean path once, its timeline replayed on the seed series of a refresh at the suites' epoch and the 9
     // after it. Asserted only where the verdict holds on all 10 (here and on CI): BN6's two pass, BN7's keep declines.
     // BN7's best splits (9 of 10 at rulings 10 and 11), so it is said, not asserted: "unstable across seed series".
@@ -1244,7 +1248,8 @@ describe("the playability under the route's replays (#423): the gate's figures, 
     expect(passes.get("6 keep")).toBe(10);
     expect(passes.get("6 best")).toBe(10);
     expect(passes.get("7 keep")).toBe(0);
-  }, 600_000);
+    // Its CI time × 3.743 (#418's ruling 6; #423's review row 5): 140.9 s on CI run 43767386157, so 528 s.
+  }, 528_000);
 });
 
 /** `BLACK_OPS_GROWN_REFRESH_MS` (the brain's 10-minute refresh, ./bladeburner-route.ts): the seed series' spacing. */
