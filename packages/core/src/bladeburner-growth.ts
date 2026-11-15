@@ -123,6 +123,7 @@ import {
   type BladeburnerRoutePart,
   type BladeburnerRouteReplays,
   type BladeburnerRouteTimeline,
+  bladeburnerReplayDeclined,
   bladeburnerReplayRoute,
 } from "./bladeburner-replays.ts";
 import { type BladeburnerSkillLevels, bladeburnerSkillMultsOf } from "./bladeburner-skills.ts";
@@ -389,8 +390,14 @@ export interface BlackOpsGrownTime {
     count: number;
     seed: number;
     times: number[];
+    /** The replays' own mean and standard error, used or not. */
+    seconds: number;
+    error: number;
     fallbackSteps: number;
     replaysWithFallback: number;
+    /** The gate's verdict (#423's ruling 7, `bladeburnerReplayDeclined`): used, or declined and why (the mean path's). */
+    used: boolean;
+    declined: string | null;
   } | null;
 }
 
@@ -694,8 +701,12 @@ export function blackOpsRouteGrownEstimate(
   // the path's points and each Black Op's terms their means over the replays; the mean path's kept beside.
   const meanPathSeconds = seconds;
   let replayed: BladeburnerRouteReplays | null = null;
+  let declined: string | null = null;
   if (timeline !== null && replays > 0 && Number.isFinite(seconds) && steps.length > 0) {
     replayed = bladeburnerReplayRoute(timeline, { replays, seed: replaySeed });
+    declined = bladeburnerReplayDeclined(replayed);
+  }
+  if (replayed !== null && declined === null) {
     const each = replayed.segmentSeconds;
     const cumulative: number[] = [];
     let sum = 0;
@@ -717,7 +728,7 @@ export function blackOpsRouteGrownEstimate(
     steps,
     seconds,
     meanPathSeconds,
-    secondsError: replayed?.error ?? 0,
+    secondsError: replayed !== null && declined === null ? replayed.error : 0,
     replays:
       replayed === null
         ? null
@@ -725,8 +736,12 @@ export function blackOpsRouteGrownEstimate(
             count: replayed.replays,
             seed: replayed.seed,
             times: replayed.times,
+            seconds: replayed.seconds,
+            error: replayed.error,
             fallbackSteps: replayed.fallbackSteps,
             replaysWithFallback: replayed.replaysWithFallback,
+            used: declined === null,
+            declined,
           },
     rate: rateNow,
     path,

@@ -247,7 +247,13 @@ export function grownHindcast(
     `#408's hindcast, ${label}: rank ${at.rank.toFixed(0)} to ${to === "next done" ? `${at.next.name} done` : target.toFixed(0)} ` +
     `measured in ${(measuredMs / HOUR).toFixed(2)} h; the grown estimate ${hours(estimate)} (its growth's tail ` +
     `${hours(tail)}, B5's stock ${hours(stock)}${to === "next done" ? `, the attempts ${hours(attemptsSeconds)}` : ""}): ` +
-    `×${ratio.toFixed(2)} realised; expected given the actions (${expectedWords}): ×${expected.toFixed(2)}`;
+    `×${ratio.toFixed(2)} realised; expected given the actions (${expectedWords}): ×${expected.toFixed(2)}; ` +
+    // #423: whether the estimate's route replays were used (the gate), or the mean path's.
+    (grown.replays == null
+      ? "no replays (no cities read)"
+      : grown.replays.used
+        ? `its route's ${grown.replays.count} replays used (the mean path's ${hours(grown.meanPathSeconds ?? null)})`
+        : `the mean path's: its replays declined, ${grown.replays.declined}`);
   return {
     label,
     measuredMs,

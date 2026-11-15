@@ -67,6 +67,33 @@ export function bladeburnerReplaySeedOf(gameMs: number): number {
  */
 export const BLADEBURNER_ROUTE_REPLAYS = 200;
 
+/**
+ * The gate on a refresh's replays (#423's ruling 7): the first-order re-pricing holds only where the route's mix stays
+ * workable at the drawn chances. Where it leans on an operation whose drawn chance collapses (Assassination's and
+ * Raid's in BN7's keep route: 48 of 200 replays with a step at a rate of 0 or under, the figure 308.0 ± 15.6 h against
+ * the mean path's 218.6), holding the mix drives a step's rate to 0 or near it and the figure blows up. So the figure is
+ * used only with (a) at most 1% of the replays needing the fallback (ruling 6, item 3) and (b) its relative standard
+ * error within the 200 replays' design error, 3.9% (the larger end of `BLADEBURNER_ROUTE_REPLAYS`' derivation above);
+ * else the mean path's, labelled. Re-choosing each replay's mix at its drawn chances is #426.
+ */
+export const BLADEBURNER_REPLAY_MOST_FALLBACK = 0.01;
+export const BLADEBURNER_REPLAY_MOST_ERROR = 0.039;
+
+/** The gate's verdict on replays (see above): null, used; else why the mean path's figure is used instead. */
+export function bladeburnerReplayDeclined(
+  replays: Pick<BladeburnerRouteReplays, "replays" | "replaysWithFallback" | "seconds" | "error">,
+): string | null {
+  const share = replays.replays > 0 ? replays.replaysWithFallback / replays.replays : 1;
+  if (share > BLADEBURNER_REPLAY_MOST_FALLBACK) {
+    return `${replays.replaysWithFallback} of ${replays.replays} replays needed the rate's fallback, past 1%`;
+  }
+  const relative = replays.seconds > 0 && Number.isFinite(replays.seconds) ? replays.error / replays.seconds : Infinity;
+  if (!(relative <= BLADEBURNER_REPLAY_MOST_ERROR)) {
+    return `the replays' standard error ${(100 * relative).toFixed(1)}%, past the design's 3.9%`;
+  }
+  return null;
+}
+
 /** A share of a population, rounded as `clampInteger` (`utils/helpers/clampNumber.ts`). */
 function share(population: number, percent: number): number {
   return Math.round((population * percent) / 100);
@@ -246,6 +273,77 @@ export interface BladeburnerRouteReplays {
   replaysWithFallback: number;
 }
 
+/** An attempt of a replay: its time, action, its chance's competence at the reference, and the mean path's cities. */
+export interface BladeburnerReplayAttempt {
+  at: number;
+  action: BladeburnerLevelledAction;
+  competence: number;
+  /** The mean path's state its chance was priced at: its Diplomacy ceiling (and its chaos, for the probe's). */
+  state: BladeburnerDriftState;
+}
+
+/**
+ * One replay of `attempts` (in time order) from `start`'s cities to `end` (the last attempt's time absent): the events
+ * from seed `seed`, the attempts' draws from `seed` + 104729; B4's pick by the true figures (core's
+ * `bladeburnerMostFactorCity`), Diplomacy taking it to its ceiling (its time the route's), the chance by core's
+ * `driftedChance` there, the attempt's effects. Each attempt's chance drawn, the successes and the cities at the end.
+ * `meanChaos` (a probe's): B4 and the chance read each city's chaos as the mean path carries it.
+ */
+export function bladeburnerReplayAttempts(
+  start: BladeburnerDriftState,
+  reference: BladeburnerDriftCity,
+  attempts: readonly BladeburnerReplayAttempt[],
+  { seed, end, meanChaos = false }: { seed: number; end?: number; meanChaos?: boolean },
+): { chances: Float64Array; successes: number; cities: BladeburnerDriftCity[] } {
+  const events = bladeburnerSeeded(seed);
+  const random = bladeburnerSeeded(seed + 104729);
+  const cities: BladeburnerDriftCity[] = start.cities.map((city) => ({
+    name: city.name,
+    population: city.population,
+    communities: Math.round(city.communities),
+    chaos: city.chaos,
+  }));
+  let worked = start.worked;
+  let decayed = 0;
+  let next = bladeburnerEventIntervalDraw(events);
+  const pass = (t: number) => {
+    // The events, each at its own time, and the decay between (`:1395-1401`), at least 0.
+    while (next <= t) {
+      for (const city of cities) city.chaos = Math.max(0, city.chaos - 0.0001 * (next - decayed));
+      decayed = next;
+      bladeburnerEventDraw(cities, events);
+      next += bladeburnerEventIntervalDraw(events);
+    }
+    for (const city of cities) city.chaos = Math.max(0, city.chaos - 0.0001 * (t - decayed));
+    decayed = t;
+  };
+  const chances = new Float64Array(attempts.length);
+  let successes = 0;
+  for (const [k, attempt] of attempts.entries()) {
+    pass(attempt.at);
+    const { state } = attempt;
+    const seen = meanChaos
+      ? cities.map((city, i) => ({ ...city, chaos: (state.cities[i] as BladeburnerDriftCity).chaos }))
+      : cities;
+    // B4's pick by the true figures, then Diplomacy taking it to its ceiling.
+    worked = bladeburnerMostFactorCity(seen, worked, attempt.action.name === "Raid", state.ceiling);
+    const city = cities[worked] as BladeburnerDriftCity;
+    city.chaos = Math.min(city.chaos, state.ceiling);
+    const p = driftedChance(
+      { action: attempt.action, chance: attempt.competence },
+      reference,
+      seen === cities ? city : (seen[worked] as BladeburnerDriftCity),
+      state.ceiling,
+    );
+    chances[k] = p;
+    const success = random() < p;
+    if (success) successes++;
+    bladeburnerAttemptDraw(cities, worked, attempt.action, success, random);
+  }
+  if (end !== undefined) pass(end);
+  return { chances, successes, cities };
+}
+
 /**
  * The route replayed `replays` times from the seed series `seed` (replay r's events from seed + 7919·r, its attempts'
  * draws from seed + 7919·r + 104729) and re-priced (see above). Each attempt's chance: its chance's competence at the
@@ -302,52 +400,23 @@ export function bladeburnerReplayRoute(
   const times: number[] = [];
   let fallbackSteps = 0;
   let replaysWithFallback = 0;
+  const attempts: BladeburnerReplayAttempt[] = order.map((i) => ({
+    at: at[i] as number,
+    action: (parts[keys[i] as number] as { part: BladeburnerRoutePart }).part.action,
+    competence: competence[i] as number,
+    state: states[i] as BladeburnerDriftState,
+  }));
   for (let replay = 0; replay < replays; replay++) {
     sums.fill(0);
     counts.fill(0);
-    const events = bladeburnerSeeded(seed + 7919 * replay);
-    const random = bladeburnerSeeded(seed + 7919 * replay + 104729);
-    const cities: BladeburnerDriftCity[] = timeline.start.cities.map((city) => ({
-      name: city.name,
-      population: city.population,
-      communities: Math.round(city.communities),
-      chaos: city.chaos,
-    }));
-    let worked = timeline.start.worked;
-    let decayed = 0;
-    let next = bladeburnerEventIntervalDraw(events);
-    const decayTo = (t: number) => {
-      // The decay (`:1395-1401`), at least 0.
-      for (const city of cities) city.chaos = Math.max(0, city.chaos - 0.0001 * (t - decayed));
-      decayed = t;
-    };
-    for (const i of order) {
-      const t = at[i] as number;
-      while (next <= t) {
-        decayTo(next);
-        bladeburnerEventDraw(cities, events);
-        next += bladeburnerEventIntervalDraw(events);
-      }
-      decayTo(t);
+    const { chances } = bladeburnerReplayAttempts(timeline.start, reference, attempts, {
+      seed: seed + 7919 * replay,
+      meanChaos,
+    });
+    for (const [k, i] of order.entries()) {
       const key = keys[i] as number;
-      const { part } = parts[key] as { part: BladeburnerRoutePart };
-      const state = states[i] as BladeburnerDriftState;
-      const seen = meanChaos
-        ? cities.map((city, k) => ({ ...city, chaos: (state.cities[k] as BladeburnerDriftCity).chaos }))
-        : cities;
-      // B4's pick by the true figures, then Diplomacy taking it to its ceiling (its time the route's).
-      worked = bladeburnerMostFactorCity(seen, worked, part.action.name === "Raid", state.ceiling);
-      const city = cities[worked] as BladeburnerDriftCity;
-      city.chaos = Math.min(city.chaos, Math.max(state.ceiling, 0));
-      const p = driftedChance(
-        { action: part.action, chance: competence[i] as number },
-        reference,
-        seen === cities ? city : (seen[worked] as BladeburnerDriftCity),
-        state.ceiling,
-      );
-      sums[key] = (sums[key] as number) + p;
+      sums[key] = (sums[key] as number) + (chances[k] as number);
       counts[key] = (counts[key] as number) + 1;
-      bladeburnerAttemptDraw(cities, worked, part.action, random() < p, random);
     }
     // The re-pricing at the replay's chances.
     const drawn = (key: number) => {

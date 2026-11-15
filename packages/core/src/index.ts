@@ -442,7 +442,10 @@ export {
   successesOfMaxLevel,
 } from "./bladeburner-growth.ts";
 export {
+  BLADEBURNER_REPLAY_MOST_ERROR,
+  BLADEBURNER_REPLAY_MOST_FALLBACK,
   BLADEBURNER_ROUTE_REPLAYS,
+  type BladeburnerReplayAttempt,
   type BladeburnerRoutePart,
   type BladeburnerRouteReplays,
   type BladeburnerRouteSegment,
@@ -450,6 +453,8 @@ export {
   bladeburnerAttemptDraw,
   bladeburnerEventDraw,
   bladeburnerEventIntervalDraw,
+  bladeburnerReplayAttempts,
+  bladeburnerReplayDeclined,
   bladeburnerReplayRoute,
   bladeburnerReplaySeedOf,
   bladeburnerSeeded,
@@ -461,6 +466,7 @@ export {
   type BladeburnerInstallGain,
   type BladeburnerRebuild,
   blackOpsInstallTiming,
+  bladeburnerComparedFigures,
   bladeburnerAugmentationValues,
   bladeburnerInstallGain,
   bladeburnerPersonAfterInstall,

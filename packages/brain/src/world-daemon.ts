@@ -552,10 +552,12 @@ function aboutSeconds(seconds: number): string {
 function replayedWords(grown: {
   meanPathSeconds?: number;
   secondsError?: number;
-  replays?: { count: number; replaysWithFallback: number } | null;
+  replays?: { count: number; replaysWithFallback: number; used: boolean; declined: string | null } | null;
 }): string {
   const { replays, meanPathSeconds, secondsError } = grown;
   if (replays == null || meanPathSeconds === undefined) return "";
+  // The gate (#423's ruling 7): the mean path's figure where the replays declined, and why.
+  if (!replays.used) return ` (the mean path's: its ${replays.count} replays declined, #423: ${replays.declined})`;
   return (
     ` (± ${((secondsError ?? 0) / 3600).toFixed(1)} h: its route replayed ${replays.count} times under the game's draws ` +
     `and re-priced, first-order, #423; the mean path's ${aboutSeconds(meanPathSeconds)})`

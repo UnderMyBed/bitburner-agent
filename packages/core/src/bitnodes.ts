@@ -238,15 +238,22 @@ export function knownBitNodes(): number[] {
  * chaos's mean outruns the decay over 1.08 in every city not worked, so the brain stays in the one its Diplomacy
  * holds) and the city's population drained there. So BN6 113.6 h at best (×2.10 the bar) and BN7 182.6 h (×3.37):
  * unplayable.
+ *
+ * Since #423 the grown estimate's route is replayed 200 times under the game's draws and re-priced, first-order (core's
+ * ./bladeburner-replays.ts): the mean path carries each city's chaos at its mean, which rules out cities the draws
+ * leave workable (the chance convex in the chaos). Where the replays pass the gate (at most 1% at the rate's fallback,
+ * the error within 3.9%): BN6 68.9 h at best (the shop, combat 100: ×1.27 the bar; keeping's 98.8 h), and BN7's shop
+ * route 116.3 h (×2.15; keeping's replays decline, 48 of 200 at the fallback, so B7 compares the two by the mean path's
+ * 218.6 h and 182.6 h). Both past the bar: unplayable, nearer.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [
     6,
-    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#418: 113.6 h at best, the bar 54.2 h)",
+    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#423: 68.9 h at best, first-order, the bar 54.2 h)",
   ],
   [
     7,
-    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#418: 182.6 h at best, the bar 54.2 h)",
+    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#423: 116.3 h at best, first-order, the bar 54.2 h)",
   ],
 ]);
 /** Why BN7 is skipped (#367, #398, #411): the Black Ops' grown estimate at its multipliers past the bar, the shop in. */

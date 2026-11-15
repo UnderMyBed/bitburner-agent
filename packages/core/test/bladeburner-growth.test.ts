@@ -55,6 +55,7 @@ import {
   bladeburnerRebuildSeconds,
   NO_INSTALL_GAIN,
 } from "../src/bladeburner-installs.ts";
+import { BLADEBURNER_ROUTE_REPLAYS } from "../src/bladeburner-replays.ts";
 import { blackOpsRouteEstimate } from "../src/bladeburner-route.ts";
 import {
   BLADEBURNER_SKILL_NAMES,
@@ -1041,8 +1042,8 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
 
   test("the same figures after other solves (#420's ruling 3): no state carried between them", () => {
     // The CI case as the test above solved it, then BN7 at combat 300 (its own drift paths and solves, kept in core's
-    // caches), then the CI case again: to the bit. Alone and in this whole file it gives 155.5 h as is and 113.6 h
-    // installing, on d4fc1e5 too; the 152.4 h and 115.6 h #418 stated were measured before its round 4 (moved Raid an
+    // caches), then the CI case again: to the bit. Alone and in this whole file it gave 155.5 h as is and 113.6 h
+    // installing by the mean path (#423 below), on d4fc1e5 too; the 152.4 h and 115.6 h #418 stated were measured before its round 4 (moved Raid an
     // attempt at a time in the rule and in the grown estimate), not another order's.
     const caseOf = (bitNode: number, combat: number) => {
       const { combat: figures, input: read, at } = startAt(combat);
@@ -1064,7 +1065,112 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
     const first = solved.get("6 100") ?? caseOf(6, 100);
     caseOf(7, 300);
     expect(caseOf(6, 100)).toEqual(first);
-    expect(first.keep / HOUR).toBeCloseTo(155.5, 1);
-    expect((first.install as number) / HOUR).toBeCloseTo(113.6, 1);
+    // Since #423 (its ruling 7): both sides' replays pass the gate, so their figures, first-order: 98.8 h as is and
+    // 68.9 h installing (the mean path's 155.5 h and 113.6 h); the replays on the default seed series, a solve's own.
+    expect(first.keep / HOUR).toBeCloseTo(98.8, 1);
+    expect((first.install as number) / HOUR).toBeCloseTo(68.9, 1);
   });
+});
+
+describe("the playability under the route's replays (#423): the gate's figures, both sides of B7 by one method", () => {
+  const BAR_SECONDS = 2 * (27 * 3600 + 5 * 60);
+  const SIX = ["Aevum", "Chongqing", "Sector-12", "New Tokyo", "Ishima", "Volhaven"].map((name) => ({ name, ...CITY }));
+  /** BN`bitNode` at combat 100 with the six read: keep's route, the shop's after it, and B7's timing on them. */
+  const solve = (bitNode: number) => {
+    const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+    const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+    const { combat: figures, input: read, at, who } = startAt(100);
+    const input = { ...read, rankMultiplier, drift: { cities: SIX, city: "Sector-12" } };
+    const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
+    const keep = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier });
+    const after = blackOpsRouteGrownEstimate({ ...input, forecast: bladeburnerPersonAfterInstall(who, gain) }, at, {
+      combat: combatAfter(figures, gain),
+      costMultiplier,
+    });
+    const timing = blackOpsInstallTiming({ input, at, combat: figures, gain, installable: true, growth: { costMultiplier } });
+    // #406's step error, the mean path's own (an eighth of the step, no replays).
+    const fine = { fraction: BLADEBURNER_GROWTH_FRACTION / 8, leastStep: BLADEBURNER_GROWTH_LEAST_STEP / 8, replays: 0 };
+    const keep8 = blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier, ...fine }).seconds;
+    const after8 = blackOpsRouteGrownEstimate({ ...input, forecast: bladeburnerPersonAfterInstall(who, gain) }, at, {
+      combat: combatAfter(figures, gain),
+      costMultiplier,
+      ...fine,
+    }).seconds;
+    const step = Math.abs(
+      (keep.meanPathSeconds as number) -
+        (timing.rebuildSeconds + (after.meanPathSeconds as number)) -
+        (keep8 - (timing.rebuildSeconds + after8)),
+    );
+    return { keep, after, timing, step };
+  };
+  const line = (label: string, route: ReturnType<typeof blackOpsRouteGrownEstimate>) => {
+    const r = route.replays;
+    return (
+      `${label} ${(route.seconds / HOUR).toFixed(1)} h (the mean path's ${((route.meanPathSeconds ?? 0) / HOUR).toFixed(1)} h; ` +
+      `the replays ${(((r?.seconds ?? 0) as number) / HOUR).toFixed(1)} ± ${(((r?.error ?? 0) as number) / HOUR).toFixed(1)} h, ` +
+      `${r?.replaysWithFallback} of ${r?.count} at the fallback: ${r?.used ? "used" : `declined, ${r?.declined}`})`
+    );
+  };
+
+  test("BN6, combat 100: both sides pass, so the replays; B7's margin the step's error and 3 of the paired replays'", () => {
+    const { keep, after, timing, step } = solve(6);
+    for (const route of [keep, after]) {
+      const r = route.replays as NonNullable<typeof route.replays>;
+      expect(r.used).toBe(true);
+      expect(r.replaysWithFallback).toBeLessThanOrEqual(0.01 * r.count);
+      // Every replay counted, the fallback's steps at the mean path's rate (none dropped).
+      expect(r.times).toHaveLength(BLADEBURNER_ROUTE_REPLAYS);
+      expect(r.times.every((x) => Number.isFinite(x))).toBe(true);
+      expect(route.seconds).toBe(r.seconds);
+      // The path's last point the figure: the replays' re-priced path.
+      expect(route.path.at(-1)?.seconds).toBeCloseTo(route.seconds, 3);
+    }
+    expect(timing.method).toBe("replays");
+    expect(timing.keepSeconds).toBe(keep.seconds);
+    expect(timing.afterSeconds).toBe(after.seconds);
+    // The paired error (one seed series both sides): the shared draws cancel.
+    const diffs = (keep.replays?.times ?? []).map((x, i) => x - ((after.replays?.times ?? [])[i] as number));
+    const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+    const paired = Math.sqrt(diffs.reduce((a, b) => a + (b - mean) ** 2, 0) / (diffs.length - 1) / diffs.length);
+    expect(timing.replaysErrorSeconds).toBeCloseTo(paired, 6);
+    expect(timing.marginSeconds as number).toBeCloseTo(step + 3 * paired, 6);
+    const unpaired = Math.sqrt((keep.secondsError ?? 0) ** 2 + (after.secondsError ?? 0) ** 2);
+    console.log(
+      `BN6 combat 100: ${line("keep", keep)}; ${line("after the shop", after)}; B7 by the replays: install now ` +
+        `${((timing.installNowSeconds as number) / HOUR).toFixed(1)} h against keep ${(timing.keepSeconds / HOUR).toFixed(1)} h, ` +
+        `the margin ${(step / 60).toFixed(1)} min of step + 3 × ${(paired / 60).toFixed(1)} min paired (unpaired it would be ` +
+        `${(unpaired / 60).toFixed(1)} min): ${timing.choice}`,
+    );
+    expect(timing.choice).toBe("install");
+    // Re-stated (#423's ruling 7): 68.9 h at best, first-order, still past the bar (×1.27).
+    expect((timing.installNowSeconds as number) / HOUR).toBeCloseTo(68.9, 1);
+    expect(timing.installNowSeconds as number).toBeGreaterThan(BAR_SECONDS);
+  }, 120_000);
+
+  test("BN7, combat 100: keep declines (the fallback), so both sides the mean path's; the shop's route alone the replays'", () => {
+    const { keep, after, timing } = solve(7);
+    const kept = keep.replays as NonNullable<typeof keep.replays>;
+    expect(kept.used).toBe(false);
+    expect(kept.declined).toMatch(/replays needed the rate's fallback, past 1%$/);
+    // Declined: the mean path's figure and path, its replays still all counted.
+    expect(keep.seconds).toBe(keep.meanPathSeconds);
+    expect(keep.secondsError).toBe(0);
+    expect(keep.path.at(-1)?.seconds).toBe(keep.meanPathSeconds);
+    expect(kept.times).toHaveLength(BLADEBURNER_ROUTE_REPLAYS);
+    expect(kept.times.every((x) => Number.isFinite(x))).toBe(true);
+    expect(after.replays?.used).toBe(true);
+    // One method both sides: the mean path's (a replay figure against keep's mean path would lean to installing).
+    expect(timing.method).toBe("mean path");
+    expect(timing.keepSeconds).toBe(keep.meanPathSeconds);
+    expect(timing.afterSeconds).toBe(after.meanPathSeconds);
+    expect(timing.replaysErrorSeconds).toBe(0);
+    console.log(
+      `BN7 combat 100: ${line("keep", keep)}; ${line("after the shop", after)}; B7 by the mean path on both sides: ` +
+        `install now ${((timing.installNowSeconds as number) / HOUR).toFixed(1)} h against keep ` +
+        `${(timing.keepSeconds / HOUR).toFixed(1)} h: ${timing.choice}`,
+    );
+    // Re-stated (#423's ruling 7): the shop's route 116.3 h at best by its replays (first-order, past the bar).
+    expect((timing.rebuildSeconds + after.seconds) / HOUR).toBeCloseTo(116.3, 1);
+    expect(timing.rebuildSeconds + after.seconds).toBeGreaterThan(BAR_SECONDS);
+  }, 120_000);
 });
