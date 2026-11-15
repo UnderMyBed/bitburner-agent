@@ -55,7 +55,11 @@ import {
   bladeburnerRebuildSeconds,
   NO_INSTALL_GAIN,
 } from "../src/bladeburner-installs.ts";
-import { BLADEBURNER_ROUTE_REPLAYS } from "../src/bladeburner-replays.ts";
+import {
+  BLADEBURNER_REPLAY_LEAST_RATIO,
+  BLADEBURNER_ROUTE_REPLAYS,
+  bladeburnerReplaySeedOf,
+} from "../src/bladeburner-replays.ts";
 import { blackOpsRouteEstimate } from "../src/bladeburner-route.ts";
 import {
   BLADEBURNER_SKILL_NAMES,
@@ -1129,6 +1133,48 @@ describe("the playability under the route's replays (#423): the gate's figures, 
       `${r?.replaysWithFallback} of ${r?.count} at the fallback: ${r?.used ? "used" : `declined, ${r?.declined}`})`
     );
   };
+
+  // R423 TEMP: the gate on 10 seed series, the rule before ruling 8 and its.
+  test("R423 SERIES", () => {
+    const rows: string[] = [];
+    for (const bitNode of [6, 7]) {
+      const rankMultiplier = bladeburnerRankMultiplierOf(bitNode) as number;
+      const costMultiplier = bladeburnerSkillCostMultiplierOf(bitNode) as number;
+      const { combat: figures, input: read, at, who } = startAt(100);
+      const input = { ...read, rankMultiplier, drift: { cities: SIX, city: "Sector-12" } };
+      const gain = bladeburnerInstallGain(0, augmentationsSoldBy("Bladeburners", bitNode, null));
+      const forecast = { ...input, forecast: bladeburnerPersonAfterInstall(who, gain) };
+      for (const [label, solve] of [
+        ["keep", (o: object) => blackOpsRouteGrownEstimate(input, at, { combat: figures, costMultiplier, ...o })],
+        ["best", (o: object) => blackOpsRouteGrownEstimate(forecast, at, { combat: combatAfter(figures, gain), costMultiplier, ...o })],
+      ] as const) {
+        const verdicts: Record<string, string[]> = { old: [], now: [] };
+        let least = Number.POSITIVE_INFINITY;
+        for (let k = 0; k < 10; k++) {
+          const replaySeed = bladeburnerReplaySeedOf(Date.UTC(2026, 0, 1) + k * 600_000);
+          for (const [rule, ratio] of [
+            ["old", 0],
+            ["now", BLADEBURNER_REPLAY_LEAST_RATIO],
+          ] as const) {
+            const r = solve({ replaySeed, replayLeastRatio: ratio });
+            const rep = r.replays as NonNullable<typeof r.replays>;
+            least = Math.min(least, ...rep.leastRatios);
+            (verdicts[rule] as string[]).push(
+              rep.used
+                ? `${(rep.seconds / HOUR).toFixed(1)}±${(rep.error / HOUR).toFixed(1)}`
+                : `x(${rep.replaysWithFallback}f, ${((100 * rep.error) / rep.seconds).toFixed(1)}%)`,
+            );
+          }
+        }
+        const passes = (rule: string) => (verdicts[rule] as string[]).filter((v) => !v.startsWith("x")).length;
+        rows.push(
+          `BN${bitNode} ${label}: before ruling 8 ${passes("old")}/10 [${verdicts.old?.join(" ")}]; now ${passes("now")}/10 ` +
+            `[${verdicts.now?.join(" ")}]; the least step ratio ${least.toFixed(4)}`,
+        );
+      }
+    }
+    console.log(`R423SERIES\n${rows.join("\n")}`);
+  }, 900_000);
 
   // R423 TEMP: the math functions' results to every bit, to compare machines.
   test("R423 MATH", () => {

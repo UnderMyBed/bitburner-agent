@@ -457,6 +457,7 @@ export {
   trainingExpPerSecond,
 } from "./bladeburner-installs.ts";
 export {
+  BLADEBURNER_REPLAY_LEAST_RATIO,
   BLADEBURNER_REPLAY_MOST_ERROR,
   BLADEBURNER_REPLAY_MOST_FALLBACK,
   BLADEBURNER_ROUTE_REPLAYS,

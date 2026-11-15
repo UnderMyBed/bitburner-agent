@@ -73,6 +73,16 @@ export const BLADEBURNER_ROUTE_REPLAYS = 200;
  * else the mean path's, labelled. Re-choosing each replay's mix at its drawn chances is #426.
  */
 export const BLADEBURNER_REPLAY_MOST_FALLBACK = 0.01;
+
+/**
+ * The least re-priced step rate, over the mean path's for that step, the first-order re-pricing is measured at (#423's
+ * ruling 8, #389: no unmeasured extrapolation): the engine check (the brain's bladeburner-drift-parity.test.ts, a grown
+ * route's opening hour in 10 engine runs, each within 4 sd of the replays) re-prices that route's first step at each
+ * run's drawn chances between ×0.9323 and ×1.0895 of its mean path's rate. Below the lowest a step is unmeasured, so a
+ * replay with one counts as a fallback (its rate the mean path's there), as one at 0 or under. The check covers
+ * nothing lower: the low end is the lowest it covered.
+ */
+export const BLADEBURNER_REPLAY_LEAST_RATIO = 0.9323;
 export const BLADEBURNER_REPLAY_MOST_ERROR = 0.039;
 
 /** The gate's verdict on replays (see above): null, used; else why the mean path's figure is used instead. */
@@ -267,6 +277,8 @@ export interface BladeburnerRouteReplays {
   /** Steps whose re-priced rate fell to 0 or under (the mean path's rate there), and the replays with any. */
   fallbackSteps: number;
   replaysWithFallback: number;
+  /** Each replay's least ratio of a step's re-priced rate to its mean path's (before any fallback). */
+  leastRatios: number[];
 }
 
 /** An attempt of a replay: its time, action, its chance's competence at the reference, and the mean path's cities. */
@@ -352,7 +364,8 @@ export function bladeburnerReplayRoute(
     replays = BLADEBURNER_ROUTE_REPLAYS,
     seed,
     meanChaos = false,
-  }: { replays?: number; seed: number; meanChaos?: boolean },
+    leastRatio = BLADEBURNER_REPLAY_LEAST_RATIO,
+  }: { replays?: number; seed: number; meanChaos?: boolean; leastRatio?: number },
 ): BladeburnerRouteReplays {
   const { reference, segments } = timeline;
   // Each part's key, its gain + loss, and the attempts in time order (shared by every replay).
@@ -406,6 +419,7 @@ export function bladeburnerReplayRoute(
   const times: number[] = [];
   let fallbackSteps = 0;
   let replaysWithFallback = 0;
+  const leastRatios: number[] = [];
   const attempts: BladeburnerReplayAttempt[] = order.map((i) => ({
     at: at[i] as number,
     action: (parts[keys[i] as number] as { part: BladeburnerRoutePart }).part.action,
@@ -433,13 +447,15 @@ export function bladeburnerReplayRoute(
     let key = 0;
     let total = 0;
     let fell = 0;
+    let least = Number.POSITIVE_INFINITY;
     const repriced = (rate: number, these: readonly BladeburnerRoutePart[]) => {
       let next = rate;
       for (const part of these) {
         next += part.perSecond * (drawn(key) - part.chance) * (parts[key] as { plus: number }).plus;
         key++;
       }
-      if (next > 0) return next;
+      if (rate > 0) least = Math.min(least, next / rate);
+      if (next > 0 && next >= leastRatio * rate) return next;
       fell++;
       return rate;
     };
@@ -456,6 +472,7 @@ export function bladeburnerReplayRoute(
     fallbackSteps += fell;
     if (fell > 0) replaysWithFallback++;
     times.push(total);
+    leastRatios.push(least);
   }
   const mean = times.reduce((sum, x) => sum + x, 0) / Math.max(1, times.length);
   const variance = times.reduce((sum, x) => sum + (x - mean) ** 2, 0) / Math.max(1, times.length - 1);
@@ -468,5 +485,6 @@ export function bladeburnerReplayRoute(
     seed,
     fallbackSteps,
     replaysWithFallback,
+    leastRatios,
   };
 }

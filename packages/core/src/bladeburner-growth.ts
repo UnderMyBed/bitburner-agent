@@ -395,6 +395,8 @@ export interface BlackOpsGrownTime {
     error: number;
     fallbackSteps: number;
     replaysWithFallback: number;
+    /** Each replay's least step rate over its mean path's (#423's ruling 8). */
+    leastRatios: number[];
     /** The gate's verdict (#423's ruling 7, `bladeburnerReplayDeclined`): used, or declined and why (the mean path's). */
     used: boolean;
     declined: string | null;
@@ -436,6 +438,7 @@ export function blackOpsRouteGrownEstimate(
     leastStep = BLADEBURNER_GROWTH_LEAST_STEP,
     replays = BLADEBURNER_ROUTE_REPLAYS,
     replaySeed = BLADEBURNER_REPLAY_DEFAULT_SEED,
+    replayLeastRatio,
   }: {
     combat: CombatPerson;
     points?: number;
@@ -450,6 +453,8 @@ export function blackOpsRouteGrownEstimate(
     replays?: number;
     /** Their seed series: the brain's from the refresh's game time (`bladeburnerReplaySeedOf`). */
     replaySeed?: number;
+    /** The least step rate ratio measured (`BLADEBURNER_REPLAY_LEAST_RATIO` absent; 0, the rule before #423's ruling 8). */
+    replayLeastRatio?: number;
   },
 ): BlackOpsGrownTime {
   // #411: each contract's and operation's chance at the true population, recovered from the next one's range read.
@@ -703,7 +708,11 @@ export function blackOpsRouteGrownEstimate(
   let replayed: BladeburnerRouteReplays | null = null;
   let declined: string | null = null;
   if (timeline !== null && replays > 0 && Number.isFinite(seconds) && steps.length > 0) {
-    replayed = bladeburnerReplayRoute(timeline, { replays, seed: replaySeed });
+    replayed = bladeburnerReplayRoute(timeline, {
+      replays,
+      seed: replaySeed,
+      ...(replayLeastRatio === undefined ? {} : { leastRatio: replayLeastRatio }),
+    });
     declined = bladeburnerReplayDeclined(replayed);
   }
   if (replayed !== null && declined === null) {
@@ -743,6 +752,7 @@ export function blackOpsRouteGrownEstimate(
             error: replayed.error,
             fallbackSteps: replayed.fallbackSteps,
             replaysWithFallback: replayed.replaysWithFallback,
+            leastRatios: replayed.leastRatios,
             used: declined === null,
             declined,
           },
