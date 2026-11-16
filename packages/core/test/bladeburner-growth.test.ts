@@ -1058,8 +1058,8 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
 
   test("the same figures after other solves (#420's ruling 3): no state carried between them", () => {
     // The CI case as the test above solved it, then BN7 at combat 300 (its own drift paths and solves, kept in core's
-    // caches), then the CI case again: to the bit. Alone and in this whole file it gave 155.5 h as is and 113.6 h
-    // installing by the mean path (#423 below), on d4fc1e5 too; the 152.4 h and 115.6 h #418 stated were measured before its round 4 (moved Raid an
+    // caches), then the CI case again: to the bit. Alone and in this whole file it gave 116.1 h as is and 78.3 h
+    // installing by the mean path (#428; 155.5 h and 113.6 h before it, #423 below, on d4fc1e5 too); the 152.4 h and 115.6 h #418 stated were measured before its round 4 (moved Raid an
     // attempt at a time in the rule and in the grown estimate), not another order's.
     const caseOf = (bitNode: number, combat: number) => {
       const { combat: figures, input: read, at } = startAt(combat);
@@ -1081,12 +1081,9 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
     const first = solved.get("6 100") ?? caseOf(6, 100);
     caseOf(7, 300);
     expect(caseOf(6, 100)).toEqual(first);
-    // Since #423 (its rulings 7, 10 and 11): both sides' replays pass the gate (on all 10 seed series, below), so their
-    // figures, first-order: 118.5 h as is and 76.8 h installing (the mean path's 155.5 h and 113.6 h), on the default seed
-    // series (the first of the 10, ruling 11), a solve's own; each within 3 of its replays' standard errors (1.25 h and
-    // 0.63 h), not to the digit (the machines' `**`).
-    expect(Math.abs(first.keep / HOUR - 118.5)).toBeLessThanOrEqual(3 * 1.25);
-    expect(Math.abs((first.install as number) / HOUR - 76.8)).toBeLessThanOrEqual(3 * 0.63);
+    // Since #428 (its ruling 2): keeping's replays are unstable across seed series (5 of 10 pass, below), so which
+    // method B7 takes on the default series isn't asserted; it installs by either (the BN6 case below).
+    expect(first.choice).toBe("install");
     // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 28.1 s on CI run 43768474882, so 106 s.
   }, 106_000);
 });
@@ -1142,47 +1139,58 @@ describe("the playability under the route's replays (#423): the gate's figures, 
     );
   };
 
-  test("BN6, combat 100: both sides pass, so the replays; B7's margin the step's error and 3 of the paired replays'", () => {
+  test("BN6, combat 100: the shop's route passes on its replays; keep's unstable across seed series; B7 installs", () => {
     const { keep, after, timing, step } = solve(6);
-    for (const route of [keep, after]) {
-      const r = route.replays as NonNullable<typeof route.replays>;
-      expect(r.used).toBe(true);
-      expect(r.replaysWithFallback).toBeLessThanOrEqual(0.01 * r.count);
-      // Every replay counted, the fallback's steps at the mean path's rate (none dropped).
-      expect(r.times).toHaveLength(BLADEBURNER_ROUTE_REPLAYS);
-      expect(r.times.every((x) => Number.isFinite(x))).toBe(true);
-      expect(route.seconds).toBe(r.seconds);
-      // The path's last point the figure: the replays' re-priced path.
-      expect(route.path.at(-1)?.seconds).toBeCloseTo(route.seconds, 3);
+    // The shop's route (the best case) passes on all 10 seed series on both machines (the gate's test, below), so on
+    // this one: its replays' figure, first-order.
+    const r = after.replays as NonNullable<typeof after.replays>;
+    expect(r.used).toBe(true);
+    expect(r.replaysWithFallback).toBeLessThanOrEqual(0.01 * r.count);
+    // Every replay counted, the fallback's steps at the mean path's rate (none dropped).
+    expect(r.times).toHaveLength(BLADEBURNER_ROUTE_REPLAYS);
+    expect(r.times.every((x) => Number.isFinite(x))).toBe(true);
+    expect(after.seconds).toBe(r.seconds);
+    // The path's last point the figure: the replays' re-priced path.
+    expect(after.path.at(-1)?.seconds).toBeCloseTo(after.seconds, 3);
+    // Keeping's passes on 5 of the 10 series, the same 5 on both machines (#428's ruling 2: unstable across seed series),
+    // so its verdict here, and B7's method with it, are said, not asserted; each method's own figures hold.
+    const best = timing.rebuildSeconds + after.seconds;
+    if (timing.method === "replays") {
+      expect(timing.keepSeconds).toBe(keep.seconds);
+      expect(timing.afterSeconds).toBe(after.seconds);
+      // The paired error (one seed series both sides): the shared draws cancel.
+      const diffs = (keep.replays?.times ?? []).map((x, i) => x - ((after.replays?.times ?? [])[i] as number));
+      const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+      const paired = Math.sqrt(diffs.reduce((a, b) => a + (b - mean) ** 2, 0) / (diffs.length - 1) / diffs.length);
+      expect(timing.replaysErrorSeconds).toBeCloseTo(paired, 6);
+      expect(timing.marginSeconds as number).toBeCloseTo(step + 3 * paired, 6);
+    } else {
+      // One method both sides: the mean path's (a replay figure against keep's mean path would lean to installing).
+      expect(timing.method).toBe("mean path");
+      expect(timing.keepSeconds).toBe(keep.meanPathSeconds);
+      expect(timing.afterSeconds).toBe(after.meanPathSeconds);
     }
-    expect(timing.method).toBe("replays");
-    expect(timing.keepSeconds).toBe(keep.seconds);
-    expect(timing.afterSeconds).toBe(after.seconds);
-    // The paired error (one seed series both sides): the shared draws cancel.
-    const diffs = (keep.replays?.times ?? []).map((x, i) => x - ((after.replays?.times ?? [])[i] as number));
-    const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
-    const paired = Math.sqrt(diffs.reduce((a, b) => a + (b - mean) ** 2, 0) / (diffs.length - 1) / diffs.length);
-    expect(timing.replaysErrorSeconds).toBeCloseTo(paired, 6);
-    expect(timing.marginSeconds as number).toBeCloseTo(step + 3 * paired, 6);
-    const unpaired = Math.sqrt((keep.secondsError ?? 0) ** 2 + (after.secondsError ?? 0) ** 2);
     console.log(
-      `BN6 combat 100: ${line("keep", keep)}; ${line("after the shop", after)}; B7 by the replays: install now ` +
-        `${((timing.installNowSeconds as number) / HOUR).toFixed(1)} h against keep ${(timing.keepSeconds / HOUR).toFixed(1)} h, ` +
-        `the margin ${(step / 60).toFixed(1)} min of step + 3 × ${(paired / 60).toFixed(1)} min paired (unpaired it would be ` +
-        `${(unpaired / 60).toFixed(1)} min): ${timing.choice}`,
+      `BN6 combat 100: ${line("keep", keep)}; ${line("after the shop", after)}; B7 by the ${timing.method}: install now ` +
+        `${((timing.installNowSeconds as number) / HOUR).toFixed(2)} h against keep ${(timing.keepSeconds / HOUR).toFixed(2)} h, ` +
+        `the margin ${(((timing.marginSeconds ?? 0) as number) / 60).toFixed(1)} min (the step's ${(step / 60).toFixed(1)} min): ` +
+        `${timing.choice}; the best case on its replays ${(best / HOUR).toFixed(2)} ± ${((after.secondsError ?? 0) / HOUR).toFixed(2)} h ` +
+        `(the install's rebuild ${(timing.rebuildSeconds / HOUR).toFixed(2)} h)`,
     );
+    // Installing either way: by the replays where keeping's pass, by the mean path where they decline (116.1 h against
+    // 78.3 h on the first series, #428).
     expect(timing.choice).toBe("install");
-    // Re-stated (#423's rulings 7, 10 and 11): 76.8 h at best, first-order, still past the bar (×1.42); within 3 of its
-    // error.
-    expect(Math.abs((timing.installNowSeconds as number) - 76.8 * HOUR)).toBeLessThanOrEqual(
-      3 * (after.secondsError ?? 0),
-    );
-    expect(timing.installNowSeconds as number).toBeGreaterThan(BAR_SECONDS);
+    // Re-stated (#428's ruling 2): 69.05 h (± 0.85 h) at best, first-order on its replays with the install's rebuild, still past
+    // the bar; within 3 of its error.
+    expect(Math.abs(best - 69.05 * HOUR)).toBeLessThanOrEqual(3 * (after.secondsError ?? 0));
+    expect(best).toBeGreaterThan(BAR_SECONDS);
+    // Keeping's mean path (#428's ruling 2: its figure, keeping's replays unstable across seed series).
+    expect((keep.meanPathSeconds as number) / HOUR).toBeCloseTo(116.1, 1);
     // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 33.9 s on CI run 43768474882, so 128 s.
   }, 128_000);
 
   test("BN7, combat 100: keep declines (the fallback), so both sides the mean path's; the shop's route by its mean path", () => {
-    const { keep, after, timing } = solve(7);
+    const { keep, after, timing, step } = solve(7);
     // Its figures said before the assertions (a failure shows them).
     console.log(`BN7 combat 100, before the checks: ${line("keep", keep)}; ${line("after the shop", after)}`);
     const kept = keep.replays as NonNullable<typeof keep.replays>;
@@ -1204,20 +1212,23 @@ describe("the playability under the route's replays (#423): the gate's figures, 
         `install now ${((timing.installNowSeconds as number) / HOUR).toFixed(1)} h against keep ` +
         `${(timing.keepSeconds / HOUR).toFixed(1)} h: ${timing.choice}`,
     );
-    // Re-stated (#423's rulings 10 and 12a): the shop's route's replays decline on Linux CI on all 10 series and pass 9
-    // of 10 on Windows (below), unstable across seed series and machines, so its figure is the mean path's, 182.6 h at
-    // best, past the bar.
-    expect((timing.rebuildSeconds + (after.meanPathSeconds as number)) / HOUR).toBeCloseTo(182.6, 1);
+    // Re-stated (#428's ruling 2): the shop's route's replays decline on all 10 series on both machines (below), so its
+    // figure is the mean path's, 152.6 h at best, past the bar; on Linux CI 152.9 h (#423's ruling 9: the machines' `**`
+    // drift along the route), within the step's error (#406's, the mean path's own, printed).
+    console.log(`BN7's best by its mean path: the step's error ${(step / HOUR).toFixed(2)} h`);
+    expect(Math.abs(timing.rebuildSeconds + (after.meanPathSeconds as number) - 152.6 * HOUR)).toBeLessThanOrEqual(
+      step,
+    );
     expect(timing.rebuildSeconds + (after.meanPathSeconds as number)).toBeGreaterThan(BAR_SECONDS);
     // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 33.9 s on CI run 43768474882, so 127 s.
   }, 127_000);
 
-  test("the gate on 10 seed series (#423's rulings 8, 10 and 11): BN6's best and keep pass on all, BN7's keep on none", () => {
+  test("the gate on 10 seed series (#423's rulings 8, 10 and 11; #428's ruling 2): BN6's best passes on all, BN7's two on none", () => {
     // Each route's mean path once, its timeline replayed on the seed series of a refresh at the suites' epoch and the 9
-    // after it. Asserted only where the verdict holds on all 10 (here and on CI): BN6's two pass, BN7's keep declines.
-    // BN7's best declines on Linux CI on all 10 series and passes 9 of 10 on Windows (#423's ruling 12a: one step's
-    // ratio on the most bound, 5e-8 past it on Linux by ruling 9's `**` drift), so it is said, not asserted: "unstable
-    // across seed series and machines".
+    // after it. Asserted only where the verdict holds on all 10 (here and on CI): BN6's best passes, BN7's keep and best
+    // decline. BN6's keep passes on 5 of the 10, the same 5 on Windows and Linux CI (#428: the climb ratios were measured
+    // against #427's mean path, which priced Raid where it can't run), so it is said, not asserted: "unstable across seed
+    // series", its figure the mean path's.
     const rows: string[] = [];
     const passes = new Map<string, number>();
     for (const bitNode of [6, 7]) {
@@ -1248,9 +1259,9 @@ describe("the playability under the route's replays (#423): the gate's figures, 
     console.log(
       `the gate on 10 seed series (a climb step's ratio within ×${BLADEBURNER_REPLAY_LEAST_RATIO} to ×${BLADEBURNER_REPLAY_MOST_RATIO}):\n${rows.join("\n")}`,
     );
-    expect(passes.get("6 keep")).toBe(10);
     expect(passes.get("6 best")).toBe(10);
     expect(passes.get("7 keep")).toBe(0);
+    expect(passes.get("7 best")).toBe(0);
     // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 89.0 s on CI run 43768474882, so 334 s.
   }, 334_000);
 });

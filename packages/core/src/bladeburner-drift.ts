@@ -417,8 +417,11 @@ const CHAOS_DECAY = 0.0001;
 function applyEvents(
   cities: BladeburnerDriftCity[],
   steps: readonly number[],
-  /** The city worked and Diplomacy's hold there: a riot on a chaos held taken at its log's mean (`RIOT_LOG`). */
-  held: { index: number; ceiling: number } | null = null,
+  /**
+   * The city worked and Diplomacy's hold there: a riot on a chaos held taken at its log's mean (`RIOT_LOG`); `also`,
+   * Raid's own city in a mixed path (#428), held too.
+   */
+  held: { index: number; ceiling: number; also?: number } | null = null,
 ): void {
   const n = cities.length;
   let sentPopulation = 0;
@@ -465,7 +468,7 @@ function applyEvents(
     // riot reaches, 1 − e^−λ (λ = 0.2 × the city's events), born at 1.125 halfway through, so half the decay.
     const mix = mixOf(city);
     const riots = n < 2 ? 0 : rate * 0.2;
-    const atHold = held !== null && held.index === i ? held.ceiling : Number.POSITIVE_INFINITY;
+    const atHold = held !== null && (held.index === i || held.also === i) ? held.ceiling : Number.POSITIVE_INFINITY;
     // In place: the path's own copies (`copyCity`).
     const cohorts = mix.cohorts;
     for (const cohort of cohorts) {
@@ -633,25 +636,35 @@ export function bladeburnerDriftPath(
   let diplomacySeconds = 0;
   // Raid alone (the rule's own pricing of it): the cities with communities only.
   const raidAlone = parts.length > 0 && parts.every((part) => part.action.name === "Raid");
+  // Raid with other actions (#428: the grown estimate's mix): Raid's share in its own city, B4's with Raid there (as the
+  // rule's `driftCurve` prices it, Raid's path alone), the others' in theirs, the brain's play over its readings (B4
+  // moves the whole plan, one action, each reading: to a city with communities where Raid's plan is the faster, back
+  // where another's is). Both start at the city worked, each moved after each chunk, as a path alone is.
+  const mixed = !raidAlone && parts.some((part) => part.action.name === "Raid");
+  let raidWorked = worked;
+  const workedBy = (part: BladeburnerDriftPart) => (mixed && part.action.name === "Raid" ? raidWorked : worked);
+  const isWorked = (i: number) => i === worked || (mixed && i === raidWorked);
   const curve = { attempts: [0], successes: [0], diplomacy: [0] };
   for (let chunk = 0; chunk < chunks; chunk++) {
     // The time's own over the chunk's first half, the attempts, then its second half (Strang's splitting, second order
     // in the chunk: at a chunk's end alone the attempts saw the population before the events' inflow, the drained city's
     // chance low by 9% over 10 h at 64 chunks, against walks of the game's draws). The city worked only: the others,
     // where no attempt falls, take the chunk's whole step at once (for the cost: their events a step's, from its start).
-    const whole = cities.map((_, i) => (i === worked ? dt / 2 : dt));
-    if (dt > 0) applyEvents(cities, whole, { index: worked, ceiling: start.ceiling });
+    const whole = cities.map((_, i) => (isWorked(i) ? dt / 2 : dt));
+    const held = { index: worked, ceiling: start.ceiling, ...(mixed ? { also: raidWorked } : {}) };
+    if (dt > 0) applyEvents(cities, whole, held);
     for (const [index, part] of parts.entries()) {
       const attempts = part.attempts / chunks;
       if (!(attempts > 0)) continue;
-      const city = cities[worked] as BladeburnerDriftCity;
+      const at = workedBy(part);
+      const city = cities[at] as BladeburnerDriftCity;
       // Each chance at the chaos held (Diplomacy keeps it at the ceiling between the readings; its time at the end).
       const before = driftedChance(part, reference, city, start.ceiling);
       const drift = bladeburnerAttemptDrift(part.action, before, city.communities);
       const raid = part.action.name === "Raid";
       const thereBefore = raid ? chanceThere(part, reference, city, start.ceiling) : 0;
-      applyAttempts(cities, worked, drift, attempts, { ceiling: start.ceiling, takesCommunities: raid });
-      const now = cities[worked] as BladeburnerDriftCity;
+      applyAttempts(cities, at, drift, attempts, { ceiling: start.ceiling, takesCommunities: raid });
+      const now = cities[at] as BladeburnerDriftCity;
       // The chunk's attempts each drawn at the chance before it: Σ over j < a of p(j), exact where p is linear in j
       // (the trapezoid and half its fall); one attempt or less, the chance before it.
       const linear = (from: number, to: number) =>
@@ -664,12 +677,16 @@ export function bladeburnerDriftPath(
       successes[index] = (successes[index] as number) + drawn;
     }
     // The time's own over its second half, the city worked's: the random events' mean and the decay.
-    const half = cities.map((_, i) => (i === worked ? dt / 2 : 0));
-    if (dt > 0) applyEvents(cities, half, { index: worked, ceiling: start.ceiling });
+    const half = cities.map((_, i) => (isWorked(i) ? dt / 2 : 0));
+    if (dt > 0) applyEvents(cities, half, held);
     // B4's order: the city first (the most chance factor, its chaos as it is), then Diplomacy there, to its ceiling.
-    if (moves) worked = bladeburnerMostFactorCity(cities, worked, raidAlone, start.ceiling);
-    const here = cities[worked] as BladeburnerDriftCity;
-    if (here.chaos > 0 && keep > 0 && keep < 1) {
+    if (moves) {
+      worked = bladeburnerMostFactorCity(cities, worked, raidAlone, start.ceiling);
+      if (mixed) raidWorked = bladeburnerMostFactorCity(cities, raidWorked, true, start.ceiling);
+    }
+    for (const i of mixed && raidWorked !== worked ? [worked, raidWorked] : [worked]) {
+      const here = cities[i] as BladeburnerDriftCity;
+      if (!(here.chaos > 0 && keep > 0 && keep < 1)) continue;
       const mix = mixOf(here);
       let spent = 0;
       const cohorts = mix.cohorts.map((cohort) => {
