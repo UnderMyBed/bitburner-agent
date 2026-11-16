@@ -181,7 +181,7 @@ test("BN7.1 with 20 Black Ops done at rank 400,000, its skills at ×2: Operation
       nextBitNode: 5,
       replay: null,
       skipped:
-        "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#423: 76.8 h at best, first-order, the bar 54.2 h); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#423: 182.6 h at best by its mean path; its route's replays declined on Linux CI on all 10 series, 9/10 on Windows: unstable across seed series and machines; the bar 54.2 h); BN3 skipped: no hacking multipliers or prices yet",
+        "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#426: 67.1 h at best, first-order, the bar 54.2 h); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#423: 182.6 h at best by its mean path; its route's replays declined on Linux CI on all 10 series, 9/10 on Windows: unstable across seed series and machines; the bar 54.2 h); BN3 skipped: no hacking multipliers or prices yet",
     },
   ]);
   expect(brain.logLines).toContainEqual(
