@@ -701,6 +701,7 @@ describe("the controller (#398)", () => {
       fallbackSteps: 0,
       replaysWithFallback: 0,
       leastRatios: [],
+      meanPathRebuilds: 0,
     };
     const declined = { ...grown, secondsError: 0, replays: { ...replays, used: false, declined: "the error 10%" } };
     expect(destroyBlackOpsOf({ ...routed, grown: declined })).not.toHaveProperty("errorMs");

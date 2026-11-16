@@ -23,8 +23,6 @@ import {
   BLADEBURNER_REPLAY_MOST_ERROR,
   BLADEBURNER_REPLAY_MOST_FALLBACK,
   BLADEBURNER_REPLAY_MOST_RATIO,
-  BLADEBURNER_REPLAY_REBUILD_LEAST_RATIO,
-  BLADEBURNER_REPLAY_REBUILD_MOST_RATIO,
   BLADEBURNER_REPLAY_SAMPLED_ACTIONS,
   BLADEBURNER_ROUTE_REPLAYS,
   bladeburnerAttemptDraw,
@@ -353,10 +351,7 @@ describe("the most ratio, Raid with no community, the Black Ops' rebuilds (#423'
     for (const time of replayed.times) expect(time).toBeCloseTo((climbRate * 200) / expected, 6);
   });
 
-  test("a Black Op's rebuilds re-priced on their held mix within their own range; their attempts move the cities", () => {
-    // #426's rulings 1 to 3: ×0.25 (the lowest band admitted, bias − 3·SE ≥ −3.9%, with all above) to ×17.7 (the highest).
-    expect(BLADEBURNER_REPLAY_REBUILD_LEAST_RATIO).toBe(0.25);
-    expect(BLADEBURNER_REPLAY_REBUILD_MOST_RATIO).toBe(17.69558871564211);
+  test("a Black Op's rebuilds at the mean path's rate in every replay, labelled; their attempts still move the cities", () => {
     const blackOp = {
       kind: "blackOp" as const,
       seconds: dt,
@@ -365,38 +360,9 @@ describe("the most ratio, Raid with no community, the Black Ops' rebuilds (#423'
     };
     const after = { ...climb(start), seconds: dt + 1234 };
     const timeline = { start, reference, rankMultiplier: 1, segments: [climb(start), blackOp, after] };
-    // Unbounded: each replay's rebuild re-priced, its span the attempts' plus the rebuild at the re-priced rate.
-    const free = { replays: 20, seed: 4233, rebuildLeastRatio: 0, rebuildMostRatio: Number.POSITIVE_INFINITY };
-    const replayed = bladeburnerReplayRoute(timeline, free);
-    expect(replayed.segmentSeconds[1]).not.toBeCloseTo(1234, 3);
-    // Each replay's ratio from its rebuild's span, 1234 + 600·(rate / rate' − 1); a bound just past the least of them
-    // makes that replay's rebuild a fallback (the mean path's 1234 s), counted; just short of it, as unbounded.
-    const shortest = bladeburnerReplayRoute(timeline, { ...free, replays: 1 });
-    const span = (shortest.segmentSeconds[1] as number) - 1234;
-    const ratio = 600 / (600 + span);
-    const under = bladeburnerReplayRoute(timeline, {
-      ...free,
-      replays: 1,
-      rebuildLeastRatio: ratio * (1 + 1e-9),
-      rebuildMostRatio: ratio * (1 + 1e-6),
-    });
-    const over = bladeburnerReplayRoute(timeline, {
-      ...free,
-      replays: 1,
-      rebuildLeastRatio: ratio * (1 - 1e-6),
-      rebuildMostRatio: ratio * (1 + 1e-6),
-    });
-    const above = bladeburnerReplayRoute(timeline, {
-      ...free,
-      replays: 1,
-      rebuildLeastRatio: 0,
-      rebuildMostRatio: ratio * (1 - 1e-9),
-    });
-    expect(under.segmentSeconds[1]).toBeCloseTo(1234, 6);
-    expect(above.segmentSeconds[1]).toBeCloseTo(1234, 6);
-    expect(under.fallbackSteps - over.fallbackSteps).toBe(1);
-    expect(above.fallbackSteps - over.fallbackSteps).toBe(1);
-    expect(over.segmentSeconds[1]).toBeCloseTo(shortest.segmentSeconds[1] as number, 6);
+    const replayed = bladeburnerReplayRoute(timeline, { replays: 20, seed: 4233 });
+    expect(replayed.meanPathRebuilds).toBe(1);
+    expect(replayed.segmentSeconds[1]).toBe(1234);
     // Against the same route with a fixed span in its place: the climb before it the same; the climb after it moved,
     // the rebuilds' Raids having moved the cities and taken draws.
     const without = bladeburnerReplayRoute(
@@ -406,8 +372,9 @@ describe("the most ratio, Raid with no community, the Black Ops' rebuilds (#423'
         rankMultiplier: 1,
         segments: [climb(start), { kind: "fixed", seconds: dt, span: 1234 }, after],
       },
-      free,
+      { replays: 20, seed: 4233 },
     );
+    expect(without.meanPathRebuilds).toBe(0);
     expect(replayed.segmentSeconds[0]).toBe(without.segmentSeconds[0]);
     expect(replayed.segmentSeconds[2]).not.toBe(without.segmentSeconds[2]);
   });

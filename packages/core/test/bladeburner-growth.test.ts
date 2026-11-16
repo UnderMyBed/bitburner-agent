@@ -1081,12 +1081,12 @@ describe("the playability with the cities' drift (#418): the estimate carrying t
     const first = solved.get("6 100") ?? caseOf(6, 100);
     caseOf(7, 300);
     expect(caseOf(6, 100)).toEqual(first);
-    // Since #423 (its rulings 7, 10 and 11) and #426 (its rebuilds re-priced, rulings 1 and 2): both sides' replays pass
-    // the gate (on all 10 seed series, below), so their figures, first-order: 92.5 h as is and 67.1 h installing (the
-    // mean path's 155.5 h and 113.6 h), on the default seed series (the first of the 10), a solve's own; each within 3 of
-    // its replays' standard errors (1.4 h and 0.7 h), not to the digit (the machines' `**`).
-    expect(Math.abs(first.keep / HOUR - 92.5)).toBeLessThanOrEqual(3 * 1.4);
-    expect(Math.abs((first.install as number) / HOUR - 67.1)).toBeLessThanOrEqual(3 * 0.7);
+    // Since #423 (its rulings 7, 10 and 11): both sides' replays pass the gate (on all 10 seed series, below), so their
+    // figures, first-order: 118.5 h as is and 76.8 h installing (the mean path's 155.5 h and 113.6 h), on the default seed
+    // series (the first of the 10, ruling 11), a solve's own; each within 3 of its replays' standard errors (1.25 h and
+    // 0.63 h), not to the digit (the machines' `**`).
+    expect(Math.abs(first.keep / HOUR - 118.5)).toBeLessThanOrEqual(3 * 1.25);
+    expect(Math.abs((first.install as number) / HOUR - 76.8)).toBeLessThanOrEqual(3 * 0.63);
     // Its fastest CI time × 3.743 (#418's ruling 6; #423's review row 5): 28.1 s on CI run 43768474882, so 106 s.
   }, 106_000);
 });
@@ -1172,10 +1172,9 @@ describe("the playability under the route's replays (#423): the gate's figures, 
         `${(unpaired / 60).toFixed(1)} min): ${timing.choice}`,
     );
     expect(timing.choice).toBe("install");
-    // Re-stated (#423's rulings 7, 10 and 11; #426's rulings 1 and 2): 67.1 h at best, first-order, still past the bar
-    // (×1.24); within 3 of its
+    // Re-stated (#423's rulings 7, 10 and 11): 76.8 h at best, first-order, still past the bar (×1.42); within 3 of its
     // error.
-    expect(Math.abs((timing.installNowSeconds as number) - 67.1 * HOUR)).toBeLessThanOrEqual(
+    expect(Math.abs((timing.installNowSeconds as number) - 76.8 * HOUR)).toBeLessThanOrEqual(
       3 * (after.secondsError ?? 0),
     );
     expect(timing.installNowSeconds as number).toBeGreaterThan(BAR_SECONDS);

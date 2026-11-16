@@ -398,6 +398,8 @@ export interface BlackOpsGrownTime {
     replaysWithFallback: number;
     /** Each replay's least step rate over its mean path's (#423's ruling 8). */
     leastRatios: number[];
+    /** The Black Ops whose rebuilds took the mean path's rate in every replay (#423's ruling 11: never measured). */
+    meanPathRebuilds: number;
     /** The gate's verdict (#423's ruling 7, `bladeburnerReplayDeclined`): used, or declined and why (the mean path's). */
     used: boolean;
     declined: string | null;
@@ -761,6 +763,7 @@ export function blackOpsRouteGrownEstimate(
             fallbackSteps: replayed.fallbackSteps,
             replaysWithFallback: replayed.replaysWithFallback,
             leastRatios: replayed.leastRatios,
+            meanPathRebuilds: replayed.meanPathRebuilds,
             used: declined === null,
             declined,
           },

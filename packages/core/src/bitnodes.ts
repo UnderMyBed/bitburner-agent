@@ -242,9 +242,9 @@ export function knownBitNodes(): number[] {
  * Since #423 the grown estimate's route is replayed 200 times under the game's draws and re-priced, first-order (core's
  * ./bladeburner-replays.ts): the mean path carries each city's chaos at its mean, which rules out cities the draws
  * leave workable (the chance convex in the chaos). Where the replays pass the gate (at most 1% at the rate's fallback,
- * the error within 3.9%, no climb step outside the ratios measured, ×0.08342624096023106 to ×6.600987476314665, nor a
- * Black Op's rebuild step outside its own, ×0.25 to ×17.69558871564211, #426), on all 10 seed series of #423's ruling
- * 8: BN6 67.1 h at best (the shop, combat 100: ×1.24 the bar; keeping's 92.5 h, both passing on all 10). BN7's shop route's
+ * the error within 3.9%, no climb step outside the ratios measured, ×0.08342624096023106 to ×6.600987476314665; a
+ * Black Op's rebuilds at the mean path's rate, #423's ruling 11), on all 10 seed series of #423's ruling 8: BN6 76.8 h
+ * at best (the shop, combat 100: ×1.42 the bar; keeping's 118.5 h, both passing on all 10). BN7's shop route's
  * replays decline on Linux CI on all 10 series and pass 9 of 10 on Windows (#423's ruling 12a: one step's ratio sits on
  * the most bound, 5e-8 past it on Linux, ruling 9's `**` drift): unstable across seed series and machines, so it is
  * stated by its mean path, 182.6 h (×3.37); keeping's replays decline on all 10, so B7 compares the two by the mean path's 218.6 h
@@ -253,7 +253,7 @@ export function knownBitNodes(): number[] {
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [
     6,
-    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#426: 67.1 h at best, first-order, the bar 54.2 h)",
+    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#423: 76.8 h at best, first-order, the bar 54.2 h)",
   ],
   [
     7,
