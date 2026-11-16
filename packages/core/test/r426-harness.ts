@@ -576,7 +576,12 @@ export function r426Suite(names: readonly string[]): void {
         rows.push(`${name}: the mean path ${(meanPath / HOUR).toFixed(2)} h, ${timeline.segments.length} segments`);
         for (let k = 0; k < SERIES; k++) {
           const seed = seedOf(k);
-          const heldReplays = bladeburnerReplayRoute(timeline, { seed, replays: REPLAYS });
+          const heldReplays = bladeburnerReplayRoute(timeline, {
+            seed,
+            replays: REPLAYS,
+            ...(process.env.R426_REBUILD_LEAST === undefined ? {} : { rebuildLeastRatio: Number(process.env.R426_REBUILD_LEAST) }),
+            ...(process.env.R426_REBUILD_MOST === undefined ? {} : { rebuildMostRatio: Number(process.env.R426_REBUILD_MOST) }),
+          });
           const heldDeclined = bladeburnerReplayDeclined(heldReplays);
           const parts = [
             `  series ${k + 1}: #427 ${(heldReplays.seconds / HOUR).toFixed(2)}±${(heldReplays.error / HOUR).toFixed(2)} h ` +
