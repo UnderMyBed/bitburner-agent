@@ -3,7 +3,7 @@
 // so both machines' figures are read. Knobs: R426_REPLAYS (200), R426_SERIES (10), R426_ROUTES (the list below),
 // R426_VARIANTS ("held,mean,rechosen": the held mix in this harness's clock; re-chosen with #427's rebuilds; re-chosen
 // rebuilds too), R426_OUT (a JSONL file for the rows).
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { augmentationsSoldBy } from "../src/augmentations.ts";
 import { COMBAT_STATS, type CombatPerson, skillExpFor, skillLevelOf } from "../src/bladeburner.ts";
@@ -36,6 +36,7 @@ import {
   bladeburnerReplayRoute,
   bladeburnerReplaySeedOf,
   bladeburnerReplayStepper,
+  bladeburnerSeeded,
 } from "../src/bladeburner-replays.ts";
 import { bladeburnerSkillCostMultiplierOf } from "../src/bladeburner-skills.ts";
 
@@ -52,6 +53,57 @@ const ROUTES =
 type Variant = "held" | "mean" | "mean2" | "rechosen" | "rechosen2";
 const VARIANTS = (process.env.R426_VARIANTS ?? "held,mean,mean2,rechosen,rechosen2").split(",") as Variant[];
 const OUT = process.env.R426_OUT;
+/** The engine instrument's samples (R426_SAMPLES, a JSON file): replay-steps by category and ratio band, at most 100 each. */
+const SAMPLES = process.env.R426_SAMPLES;
+const BANDS = [0.5, 0.7, 0.8, 0.9, 0.93, 1, 1.2, BLADEBURNER_REPLAY_MOST_RATIO, Number.POSITIVE_INFINITY];
+const SAMPLE_CAP = 100;
+interface Sample {
+  category: string;
+  route: string;
+  bitNode: number;
+  replay: number;
+  segment: number;
+  ratio: number;
+  start: { name: string; population: number; communities: number; chaos: number }[];
+  worked: number;
+  ceiling: number;
+  reference: BladeburnerDriftState["cities"][number];
+  rate: number;
+  dt: number;
+  parts: {
+    name: string;
+    type: string;
+    level: number;
+    chance: number;
+    perSecond: number;
+    competence: number;
+    plus: number;
+  }[];
+}
+const sampled = new Map<string, { seen: number; kept: Sample[] }>();
+const sampleRandom = bladeburnerSeeded(4260001);
+/** Offer a replay-step to the samples: a reservoir a category and band. */
+function offerSample(sample: Sample): void {
+  // The held climbs only past the most ratio (ruling 9 measured them under it).
+  if (sample.category === "climb-held" && !(sample.ratio > BLADEBURNER_REPLAY_MOST_RATIO)) return;
+  const band = BANDS.findIndex((top) => sample.ratio < top);
+  const key = `${sample.category} ${band}`;
+  const each = sampled.get(key) ?? { seen: 0, kept: [] };
+  each.seen++;
+  if (each.kept.length < SAMPLE_CAP) each.kept.push(sample);
+  else {
+    const j = Math.floor(sampleRandom() * each.seen);
+    if (j < SAMPLE_CAP) each.kept[j] = sample;
+  }
+  sampled.set(key, each);
+}
+/** The samples kept, written (R426_SAMPLES), and each reservoir's count seen. */
+export function r426WriteSamples(): string {
+  if (SAMPLES === undefined || SAMPLES === "") return "";
+  const all = [...sampled.values()].flatMap((each) => each.kept);
+  writeFileSync(SAMPLES, JSON.stringify(all));
+  return [...sampled.entries()].map(([key, each]) => `${key}: ${each.kept.length} of ${each.seen}`).join("; ");
+}
 const HOUR = 3600;
 const SF1_3 = 1.28;
 const CITY = { population: 1e9, communities: 50, chaos: 0 };
@@ -182,7 +234,15 @@ function rechosenReplays(
     replays,
     variant,
     timeline = blackOpsRouteTimelineOf(route),
-  }: { seed: number; replays: number; variant: Variant; timeline?: ReturnType<typeof blackOpsRouteTimelineOf> },
+    sampling,
+  }: {
+    seed: number;
+    replays: number;
+    variant: Variant;
+    timeline?: ReturnType<typeof blackOpsRouteTimelineOf>;
+    /** The engine instrument's samples from these replays (R426_SAMPLES). */
+    sampling?: { route: string; bitNode: number };
+  },
 ): Rechosen {
   const held = variant === "held";
   const rebuilds = variant === "rechosen" || variant === "rechosen2" ? "rechosen" : "mean";
@@ -227,6 +287,7 @@ function rechosenReplays(
     });
   };
   let debugged = 0;
+  let currentSegment = 0;
   let lastDrawn: string[] = [];
   for (let replay = 0; replay < replays; replay++) {
     const stepper = bladeburnerReplayStepper(timeline.start, reference, { seed: seed + 7919 * replay });
@@ -267,7 +328,17 @@ function rechosenReplays(
       return best;
     };
     // A mix's attempts evenly over [clock, clock + dt], drawn, and its rate re-priced first-order at the draws.
-    const draw = (parts: readonly BladeburnerRoutePart[], rate: number, dt: number, state: BladeburnerDriftState) => {
+    const draw = (
+      parts: readonly BladeburnerRoutePart[],
+      rate: number,
+      dt: number,
+      state: BladeburnerDriftState,
+      category?: string,
+    ) => {
+      const snapshot =
+        category !== undefined && sampling !== undefined
+          ? { start: stepper.cities.map((city) => ({ ...city })), worked: stepper.worked }
+          : null;
       const attempts: { at: number; part: number; competence: number }[] = [];
       for (const [i, part] of parts.entries()) {
         const n = Math.round(part.perSecond * dt);
@@ -297,6 +368,30 @@ function rechosenReplays(
           `${part.action.name} L${part.level} x${part.perSecond.toFixed(5)} p ${part.chance.toFixed(3)} drawn ${mean.toFixed(3)} n ${n} plus ${plusOf(part).toFixed(1)}`,
         );
       }
+      if (snapshot !== null && sampling !== undefined && category !== undefined && rate > 0) {
+        offerSample({
+          category,
+          route: sampling.route,
+          bitNode: sampling.bitNode,
+          replay,
+          segment: currentSegment,
+          ratio: next / rate,
+          ...snapshot,
+          ceiling: state.ceiling,
+          reference,
+          rate,
+          dt,
+          parts: parts.map((part) => ({
+            name: part.action.name,
+            type: part.action.type,
+            level: part.level,
+            chance: part.chance,
+            perSecond: part.perSecond,
+            competence: competenceOf(part, state),
+            plus: plusOf(part),
+          })),
+        });
+      }
       return next;
     };
     const gated = (repriced: number, rate: number, parts: readonly BladeburnerRoutePart[]) => {
@@ -307,6 +402,7 @@ function rechosenReplays(
       return null;
     };
     for (const [s, segment] of segments.entries()) {
+      currentSegment = s;
       if (segment.kind === "fixed") {
         clock += segment.span;
         stepper.pass(clock);
@@ -341,7 +437,7 @@ function rechosenReplays(
           out.solverOverMean.push(rate / segment.rate);
         }
         const before = held && process.env.R426_COUNTERFACTUAL === "1" ? drawnState(segment.state.ceiling) : null;
-        const repriced = draw(parts, rate, dt, state);
+        const repriced = draw(parts, rate, dt, state, held ? "climb-held" : `climb-${variant}`);
         if (before !== null) {
           const climb = research.climbs.get(s);
           if (climb?.at.drift !== undefined) {
@@ -382,7 +478,7 @@ function rechosenReplays(
       const ats = research.works.get(s) ?? [];
       for (const [k, work] of segment.works.entries()) {
         if (rebuilds === "mean" || held) {
-          draw(work.parts, work.rate, work.dt, work.state);
+          draw(work.parts, work.rate, work.dt, work.state, held ? "rebuild-held" : undefined);
           continue;
         }
         const at = ats[k];
@@ -397,7 +493,7 @@ function rechosenReplays(
         }
         const parts = research.partsOf(mix);
         const dt = loss / mix.rate;
-        const repriced = draw(parts, mix.rate, dt, state);
+        const repriced = draw(parts, mix.rate, dt, state, `rebuild-${variant}`);
         out.rebuildRepricedOverSolver.push(repriced / mix.rate);
         const why = gated(repriced, mix.rate, parts);
         if (why !== null) {
@@ -485,7 +581,14 @@ export function r426Suite(names: readonly string[]): void {
           ];
           for (const variant of VARIANTS) {
             const started = performance.now();
-            const r = rechosenReplays(route, { seed, replays: REPLAYS, variant });
+            const r = rechosenReplays(route, {
+              seed,
+              replays: REPLAYS,
+              variant,
+              ...(SAMPLES !== undefined && SAMPLES !== "" && k === 0
+                ? { sampling: { route: name, bitNode: name.startsWith("bn7") ? 7 : 6 } }
+                : {}),
+            });
             const ms = performance.now() - started;
             const { mean, error } = meanAndError(r.times);
             const declined = bladeburnerReplayDeclined({
@@ -543,7 +646,8 @@ export function r426Suite(names: readonly string[]): void {
           rows.push(parts.join("; "));
         }
       }
-      console.log(`R426\n${rows.join("\n")}`);
+      const kept = r426WriteSamples();
+      console.log(`R426\n${rows.join("\n")}${kept === "" ? "" : `\nsamples: ${kept}`}`);
       expect(rows.length).toBeGreaterThan(0);
     }, 7_200_000);
   });
