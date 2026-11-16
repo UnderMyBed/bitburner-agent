@@ -354,9 +354,9 @@ describe("the most ratio, Raid with no community, the Black Ops' rebuilds (#423'
   });
 
   test("a Black Op's rebuilds re-priced on their held mix within their own range; their attempts move the cities", () => {
-    // #426's rulings 1 and 2: ×0.25 (the lowest band admitted, bias − 3·SE ≥ −3.9%, with all above) to ×8.85 (the most).
+    // #426's rulings 1 to 3: ×0.25 (the lowest band admitted, bias − 3·SE ≥ −3.9%, with all above) to ×17.7 (the highest).
     expect(BLADEBURNER_REPLAY_REBUILD_LEAST_RATIO).toBe(0.25);
-    expect(BLADEBURNER_REPLAY_REBUILD_MOST_RATIO).toBe(8.847794357821055);
+    expect(BLADEBURNER_REPLAY_REBUILD_MOST_RATIO).toBe(17.69558871564211);
     const blackOp = {
       kind: "blackOp" as const,
       seconds: dt,
