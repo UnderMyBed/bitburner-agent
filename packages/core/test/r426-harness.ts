@@ -56,7 +56,9 @@ const OUT = process.env.R426_OUT;
 /** The engine instrument's samples (R426_SAMPLES, a JSON file): replay-steps by category and ratio band, at most 100 each. */
 const SAMPLES = process.env.R426_SAMPLES;
 const BANDS = [0.5, 0.7, 0.8, 0.9, 0.93, 1, 1.2, BLADEBURNER_REPLAY_MOST_RATIO, Number.POSITIVE_INFINITY];
-const SAMPLE_CAP = 100;
+const SAMPLE_CAP = Number(process.env.R426_SAMPLE_CAP ?? 100);
+/** Ruling 2: only the rebuild-held steps under ×0.5 (R426_SAMPLE_UNDER, a ratio), drawn uniformly across the routes. */
+const SAMPLE_UNDER = process.env.R426_SAMPLE_UNDER === undefined ? null : Number(process.env.R426_SAMPLE_UNDER);
 interface Sample {
   category: string;
   route: string;
@@ -86,6 +88,7 @@ const sampleRandom = bladeburnerSeeded(4260001);
 function offerSample(sample: Sample): void {
   // The held climbs only past the most ratio (ruling 9 measured them under it).
   if (sample.category === "climb-held" && !(sample.ratio > BLADEBURNER_REPLAY_MOST_RATIO)) return;
+  if (SAMPLE_UNDER !== null && !(sample.category === "rebuild-held" && sample.ratio < SAMPLE_UNDER)) return;
   const band = BANDS.findIndex((top) => sample.ratio < top);
   const key = `${sample.category} ${band}`;
   const each = sampled.get(key) ?? { seen: 0, kept: [] };
