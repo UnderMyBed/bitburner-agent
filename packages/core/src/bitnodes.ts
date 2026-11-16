@@ -249,15 +249,27 @@ export function knownBitNodes(): number[] {
  * the most bound, 5e-8 past it on Linux, ruling 9's `**` drift): unstable across seed series and machines, so it is
  * stated by its mean path, 182.6 h (×3.37); keeping's replays decline on all 10, so B7 compares the two by the mean path's 218.6 h
  * and 182.6 h. Both past the bar: unplayable, BN6 nearer.
+ *
+ * Since #428 the mean path works a mix's Raid in its own city, the best with a community, and the rest in theirs, as the
+ * brain does over its readings (B4 moves the whole plan, one action, each reading: Raid where it can run) and as the
+ * rule's pricing and the replays already did: until then it moved the whole mix to the most-factor city, where 61% of
+ * BN6's best case's Raid-mixed time had no community (Raid's share earning nothing there). The mean paths: BN6 116.1 h
+ * as is and 78.3 h with the shop (were 155.5 h and 113.6 h), BN7 218.5 h and 152.6 h. The gate on the 10 seed series,
+ * the same on Windows and Linux CI: BN6's best case passes on all 10, 69.1 h at best first-order on its replays with the
+ * install's rebuild (69.05 ± 0.85 h on the first series; ×1.27 the bar); keeping's passes on 5 of 10 (unstable across
+ * seed series: the climb's ratios were measured against #427's mean path), so it is stated by its mean path, 116.1 h;
+ * BN7's two decline on all 10, so stated by their mean paths, 152.6 h at best (×2.82; 152.9 h on Linux CI, the
+ * machines' `**`, within the step's error). B7 installs in both: by the replays where keeping's pass, else by the
+ * mean paths (BN6 78.3 h against 116.1 h, BN7 152.6 h against 218.5 h). Both past the bar: unplayable, BN6 nearer.
  */
 const NO_WIN_ROUTE: ReadonlyMap<number, string> = new Map([
   [
     6,
-    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#423: 76.8 h at best, first-order, the bar 54.2 h)",
+    "no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#428: 69.1 h at best, first-order, the bar 54.2 h)",
   ],
   [
     7,
-    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#423: 182.6 h at best by its mean path; its route's replays declined on Linux CI on all 10 series, 9/10 on Windows: unstable across seed series and machines; the bar 54.2 h)",
+    "no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#428: 152.6 h at best by its mean path; its route's replays declined on all 10 series on both machines; the bar 54.2 h)",
   ],
 ]);
 /** Why BN7 is skipped (#367, #398, #411): the Black Ops' grown estimate at its multipliers past the bar, the shop in. */

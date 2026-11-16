@@ -2594,7 +2594,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
         controller.subscribe((event) => isInvitationEvent(event) || stored.push(event));
         daemonMedium();
         const skipped =
-          "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#423: 76.8 h at best, first-order, the bar 54.2 h); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#423: 182.6 h at best by its mean path; its route's replays declined on Linux CI on all 10 series, 9/10 on Windows: unstable across seed series and machines; the bar 54.2 h); " +
+          "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#428: 69.1 h at best, first-order, the bar 54.2 h); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#428: 152.6 h at best by its mean path; its route's replays declined on all 10 series on both machines; the bar 54.2 h); " +
           "BN3 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({ nextBitNode: 5, replay: null, skipped });
         daemonMedium();
@@ -2651,7 +2651,7 @@ describe("irreversible intents (#147): the guard on two consecutive medium snaps
           "the campaign's order has nothing playable left to gain (Source-File 1 at 3, Source-File 2 at 3, Source-File 4 at 3, " +
           "Source-File 5 at 3), but the run";
         const skipped =
-          "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#423: 76.8 h at best, first-order, the bar 54.2 h); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#423: 182.6 h at best by its mean path; its route's replays declined on Linux CI on all 10 series, 9/10 on Windows: unstable across seed series and machines; the bar 54.2 h); " +
+          "BN6 skipped: no win route yet: the Black Ops' grown estimate is past the campaign's bar even with the Bladeburners' shop installed (#428: 69.1 h at best, first-order, the bar 54.2 h); BN7 skipped: no win route yet: the Black Ops' grown estimate at BN7's multipliers is past the campaign's bar even with the Bladeburners' shop installed (#428: 152.6 h at best by its mean path; its route's replays declined on all 10 series on both machines; the bar 54.2 h); " +
           "BN3, BN9, BN11, BN8, BN15, BN10, BN13, BN14 and BN12 skipped: no hacking multipliers or prices yet";
         expect(controller.worldDaemonView()).toMatchObject({
           destroying: true,
