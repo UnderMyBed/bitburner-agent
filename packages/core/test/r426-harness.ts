@@ -59,6 +59,8 @@ const BANDS = [0.5, 0.7, 0.8, 0.9, 0.93, 1, 1.2, BLADEBURNER_REPLAY_MOST_RATIO, 
 const SAMPLE_CAP = Number(process.env.R426_SAMPLE_CAP ?? 100);
 /** Ruling 2: only the rebuild-held steps under ×0.5 (R426_SAMPLE_UNDER, a ratio), drawn uniformly across the routes. */
 const SAMPLE_UNDER = process.env.R426_SAMPLE_UNDER === undefined ? null : Number(process.env.R426_SAMPLE_UNDER);
+/** Ruling 3: only the rebuild-held steps over a ratio (R426_SAMPLE_OVER), drawn uniformly across the routes. */
+const SAMPLE_OVER = process.env.R426_SAMPLE_OVER === undefined ? null : Number(process.env.R426_SAMPLE_OVER);
 interface Sample {
   category: string;
   route: string;
@@ -89,6 +91,7 @@ function offerSample(sample: Sample): void {
   // The held climbs only past the most ratio (ruling 9 measured them under it).
   if (sample.category === "climb-held" && !(sample.ratio > BLADEBURNER_REPLAY_MOST_RATIO)) return;
   if (SAMPLE_UNDER !== null && !(sample.category === "rebuild-held" && sample.ratio < SAMPLE_UNDER)) return;
+  if (SAMPLE_OVER !== null && !(sample.category === "rebuild-held" && sample.ratio > SAMPLE_OVER)) return;
   const band = BANDS.findIndex((top) => sample.ratio < top);
   const key = `${sample.category} ${band}`;
   const each = sampled.get(key) ?? { seen: 0, kept: [] };
@@ -179,6 +182,20 @@ function routes(names: readonly string[]): { name: string; route: BlackOpsGrownT
         replays: 0,
       });
       out.push({ name: `bn${bitNode}-best`, route, seedOf: epochSeed });
+    }
+  }
+  // The B2, B3 and B4 hours' hindcast routes (#426's ruling 3; their calls captured from the suites), the default seed.
+  if (names.some((name) => name.startsWith("hind-"))) {
+    const lines = readFileSync(new URL("./r426-hindcasts.jsonl", import.meta.url), "utf8").trim().split("\n");
+    for (const line of lines) {
+      const call = JSON.parse(line, (_key, value) =>
+        typeof value === "string" && value.startsWith("__num:") ? Number(value.slice(6)) : value,
+      );
+      const short = `hind-${String(call.label).slice(0, 2).toLowerCase()}`;
+      if (!names.includes(short)) continue;
+      const next = BLADEBURNER_BLACK_OPS.find((op) => op.name === call.at.next) as BladeburnerBlackOp;
+      const route = blackOpsRouteGrownEstimate(call.input, { ...call.at, next }, { ...call.options, replays: 0 });
+      out.push({ name: short, route, seedOf: epochSeed });
     }
   }
   if (names.some((name) => name.startsWith("skills"))) {
