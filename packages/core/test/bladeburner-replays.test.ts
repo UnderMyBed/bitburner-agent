@@ -354,8 +354,8 @@ describe("the most ratio, Raid with no community, the Black Ops' rebuilds (#423'
   });
 
   test("a Black Op's rebuilds re-priced on their held mix within their own range; their attempts move the cities", () => {
-    // #426's ruling 1: ×0.5 (the lowest band's edge whose bias is within its error, not optimistic) to ×8.85 (the most).
-    expect(BLADEBURNER_REPLAY_REBUILD_LEAST_RATIO).toBe(0.5);
+    // #426's rulings 1 and 2: ×0.25 (the lowest band admitted, bias − 3·SE ≥ −3.9%, with all above) to ×8.85 (the most).
+    expect(BLADEBURNER_REPLAY_REBUILD_LEAST_RATIO).toBe(0.25);
     expect(BLADEBURNER_REPLAY_REBUILD_MOST_RATIO).toBe(8.847794357821055);
     const blackOp = {
       kind: "blackOp" as const,
@@ -374,9 +374,24 @@ describe("the most ratio, Raid with no community, the Black Ops' rebuilds (#423'
     const shortest = bladeburnerReplayRoute(timeline, { ...free, replays: 1 });
     const span = (shortest.segmentSeconds[1] as number) - 1234;
     const ratio = 600 / (600 + span);
-    const under = bladeburnerReplayRoute(timeline, { ...free, replays: 1, rebuildLeastRatio: ratio * (1 + 1e-9), rebuildMostRatio: ratio * (1 + 1e-6) });
-    const over = bladeburnerReplayRoute(timeline, { ...free, replays: 1, rebuildLeastRatio: ratio * (1 - 1e-6), rebuildMostRatio: ratio * (1 + 1e-6) });
-    const above = bladeburnerReplayRoute(timeline, { ...free, replays: 1, rebuildLeastRatio: 0, rebuildMostRatio: ratio * (1 - 1e-9) });
+    const under = bladeburnerReplayRoute(timeline, {
+      ...free,
+      replays: 1,
+      rebuildLeastRatio: ratio * (1 + 1e-9),
+      rebuildMostRatio: ratio * (1 + 1e-6),
+    });
+    const over = bladeburnerReplayRoute(timeline, {
+      ...free,
+      replays: 1,
+      rebuildLeastRatio: ratio * (1 - 1e-6),
+      rebuildMostRatio: ratio * (1 + 1e-6),
+    });
+    const above = bladeburnerReplayRoute(timeline, {
+      ...free,
+      replays: 1,
+      rebuildLeastRatio: 0,
+      rebuildMostRatio: ratio * (1 - 1e-9),
+    });
     expect(under.segmentSeconds[1]).toBeCloseTo(1234, 6);
     expect(above.segmentSeconds[1]).toBeCloseTo(1234, 6);
     expect(under.fallbackSteps - over.fallbackSteps).toBe(1);
