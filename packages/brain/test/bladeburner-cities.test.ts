@@ -30,6 +30,7 @@ import {
   encodeControlMessage,
   type MediumSnapshotData,
   maxStaminaOf,
+  memoizedBladeburnerChoice,
   type SlowSnapshotData,
   type SnapshotTier,
 } from "@bitburner-agent/core";
@@ -40,7 +41,7 @@ import {
   bladeburnerSnapshotOf,
   describeCityChoice,
 } from "../src/bladeburner.ts";
-import { BLADEBURNER_GAP_MS } from "../src/bladeburner-actions-report.ts";
+import { BLADEBURNER_GAP_MS, BladeburnerActionsFold } from "../src/bladeburner-actions-report.ts";
 import {
   BLADEBURNER_CHAOS_SLACK_MS,
   BLADEBURNER_MOVE_WITHIN_MS,
@@ -904,18 +905,23 @@ describe("the run report's cities (#383)", () => {
     expect(missing.text).toContain("1 of 3 readings measured each city");
   });
 
-  test("the rule's choice solved where a check reads it (#396): the chaos over 50 with work under way, and the last", () => {
-    const solves = (all: BladeburnerCityReading[], offsets = [0, 10_000, 20_000]) => {
+  test("the rule's choice solved where a check reads it (#396): the chaos over 50 with an action under way, the last", () => {
+    /** The solves over readings at `offsets`, `current` under way: those at the readings, and the section's. */
+    const solves = (
+      all: BladeburnerCityReading[],
+      offsets = [0, 10_000, 20_000],
+      current: { type: string; name: string } | null = BOUNTY,
+    ) => {
       const folded = new BladeburnerCitiesFold();
       let count = 0;
-      const choose: typeof chooseBladeburnerAction = (input) => {
+      const counted: typeof chooseBladeburnerAction = (input) => {
         count += 1;
         return chooseBladeburnerAction(input);
       };
-      for (const [atMs, data] of at(offsets, () => ({ all, current: BOUNTY }))) {
+      for (const [atMs, data] of at(offsets, () => ({ all, current }))) {
         const read = bladeburnerSnapshotOf(data).reading;
         if (read.kind !== "read" || read.actions === null) throw new Error("not read");
-        folded.add(atMs, data, read.actions, 6, null, read.rank, choose, read.problems);
+        folded.add(atMs, data, read.actions, 6, null, read.rank, memoizedBladeburnerChoice(counted), read.problems);
       }
       const added = count;
       folded.section([]);
@@ -932,6 +938,38 @@ describe("the run report's cities (#383)", () => {
     expect(one.added).toBeGreaterThan(0);
     expect(chaotic.added).toBe(3 * one.added);
     expect(chaotic.section).toBe(0);
+    // The chaos at 80 with no action under way: the check doesn't read it; the last's line solves it, once.
+    expect(solves(chaos, [0, 10_000, 20_000], null)).toEqual({ added: 0, section: one.added });
+  });
+
+  test("a reading resting and chaotic (#396): each fold's solve once, through the memo they share", () => {
+    const chaos = cities(0, { "Sector-12": { chaos: 80 } });
+    /** The solves over two readings with Field Analysis under way in the chaos, through each reading's one memo. */
+    const solves = ({ actions, cities: inCities }: { actions: boolean; cities: boolean }) => {
+      const actionsFold = new BladeburnerActionsFold(() => false);
+      const citiesFold = new BladeburnerCitiesFold();
+      let count = 0;
+      const counted: typeof chooseBladeburnerAction = (input) => {
+        count += 1;
+        return chooseBladeburnerAction(input);
+      };
+      for (const [atMs, data] of at([0, 10_000], () => ({ all: chaos, current: REST }))) {
+        const read = bladeburnerSnapshotOf(data).reading;
+        if (read.kind !== "read" || read.rank === null || read.actions === null) throw new Error("not read");
+        const choose = memoizedBladeburnerChoice(counted);
+        if (actions) actionsFold.add(atMs, data, read.rank, read.actions, 6, null, choose);
+        if (inCities) citiesFold.add(atMs, data, read.actions, 6, null, read.rank, choose, read.problems);
+      }
+      return count;
+    };
+    // The actions fold's plan each reading, once (the first's line and the stuck-resting check read the one); the cities
+    // fold's choice each, once (the move's check). Both: their sum, neither solved again. The plan isn't one of the
+    // choice's solves: under the drift (#418) their inputs differ (the plan's drift the city read's at its ratio, the
+    // choice's each city's at its chaos), so the memo they share doesn't join them.
+    expect(solves({ actions: true, cities: false })).toBe(2);
+    const choice = solves({ actions: false, cities: true });
+    expect(choice).toBeGreaterThan(0);
+    expect(solves({ actions: true, cities: true })).toBe(2 + choice);
   });
 
   test("with an older Agent's readings (no cities): said, no failure", () => {

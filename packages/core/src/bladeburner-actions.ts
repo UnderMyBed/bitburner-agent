@@ -1728,16 +1728,19 @@ function fastestToTarget(
 /**
  * `chooseBladeburnerAction` with each input solved once (#392, #390's review: the run report solved the same reading's
  * plan in each of its folds, a far target's hundreds of milliseconds each time): keyed by the input, the city read
- * (ratio 1, Raid there) the same as none. One a reading: its figures are that reading's.
+ * (ratio 1, Raid there) the same as none. One a reading: its figures are that reading's. `solve` is the rule's own; the
+ * report's tests pass a counted one (#430's review: the solves a reading makes through the memo the folds share).
  */
-export function memoizedBladeburnerChoice(): typeof chooseBladeburnerAction {
+export function memoizedBladeburnerChoice(
+  solve: typeof chooseBladeburnerAction = chooseBladeburnerAction,
+): typeof chooseBladeburnerAction {
   const solved = new Map<string, BladeburnerActionPlan>();
   return (input) => {
     const { city, ...rest } = input;
     const key = JSON.stringify(city === undefined || (city.ratio === 1 && city.raid) ? rest : input);
     let plan = solved.get(key);
     if (plan === undefined) {
-      plan = chooseBladeburnerAction(input);
+      plan = solve(input);
       solved.set(key, plan);
     }
     return plan;

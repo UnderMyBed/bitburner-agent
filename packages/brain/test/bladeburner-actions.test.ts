@@ -27,6 +27,7 @@ import {
   encodeControlMessage,
   type MediumSnapshotData,
   maxStaminaOf,
+  memoizedBladeburnerChoice,
   type SlowSnapshotData,
   type SnapshotTier,
 } from "@bitburner-agent/core";
@@ -764,24 +765,32 @@ describe("the run report's actions (#375)", () => {
     expect(resting(0.5, every10s(0, 2 * boundMs)).failures).toEqual([]);
   });
 
-  test("the rule's plan solved where a check reads it (#396): the first reading, then each with a rest under way", () => {
-    const solves = (current: { type: string; name: string }) => {
-      const folded = new BladeburnerActionsFold(() => false);
+  test("the rule's plan solved where a check reads it (#396): the first reading, each with a rest under way, the last", () => {
+    const TRAINING = { type: "General", name: "Training" };
+    /** The solves over 5 readings with `current` under way, each reading's through its own memo as the report's. */
+    const solves = (current: { type: string; name: string }, rebuilding = false) => {
+      const folded = new BladeburnerActionsFold(() => rebuilding);
       let count = 0;
-      const choose: typeof chooseBladeburnerAction = (input) => {
+      const counted: typeof chooseBladeburnerAction = (input) => {
         count += 1;
         return chooseBladeburnerAction(input);
       };
       for (const [atMs, data] of run([10, 10.1, 10.2, 10.3, 10.4], () => ({ found: current, current }))) {
         const read = bladeburnerSnapshotOf(data).reading;
         if (read.kind !== "read" || read.rank === null || read.actions === null) throw new Error("not read");
-        folded.add(atMs, data, read.rank, read.actions, 6, null, choose);
+        folded.add(atMs, data, read.rank, read.actions, 6, null, memoizedBladeburnerChoice(counted));
       }
-      return count;
+      const added = count;
+      folded.section([]);
+      return { added, section: count - added };
     };
-    // Tracking under way: the first reading's plan (the forecast's line), none after; Field Analysis: each, once.
-    expect(solves(TRACKING)).toBe(1);
-    expect(solves(FIELD)).toBe(5);
+    // Tracking under way: the first reading's plan (the forecast's line), none after; the last's lines solve it, once.
+    expect(solves(TRACKING)).toEqual({ added: 1, section: 1 });
+    // Field Analysis: each reading's, once (the stuck-resting check); the last's lines read the one solved.
+    expect(solves(FIELD)).toEqual({ added: 5, section: 0 });
+    // Training is a rest: each reading's; in the rebuild after an install (#404) it's the rule's own, unchecked here.
+    expect(solves(TRAINING)).toEqual({ added: 5, section: 0 });
+    expect(solves(TRAINING, true)).toEqual({ added: 1, section: 1 });
   });
 
   test("in the division with no B2 reading: said; not in it: no actions' lines", () => {
