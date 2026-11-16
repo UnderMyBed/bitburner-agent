@@ -66,7 +66,11 @@ interface Kept {
   city: string;
   reading: BladeburnerActionsReading;
   lastAugReset: number | null;
-  choice: BladeburnerCityChoice | null;
+  /**
+   * The rule's choice at this reading, solved where a check reads it (#396): the chaos over 50 with an action under
+   * way (`#watchChaos`), and the last reading's line; solved once.
+   */
+  choice: () => BladeburnerCityChoice | null;
 }
 
 /** A stretch of chaos left over 50 with the rule's measure wanting it off: from, to, its kind, its bound, and why. */
@@ -139,18 +143,28 @@ export class BladeburnerCitiesFold {
     // Each city measured by the round (#420), as the brain's: none weighed without it.
     const measured = bladeburnerMeasuredCitiesOf(reading, person);
     this.#watchRound(atMs, reading, problems, measured?.measures ?? null);
-    const choice =
-      measured === null
-        ? null
-        : chooseBladeburnerCity(
-            {
-              // As the brain's (#415): each chance at the true population.
-              ...bladeburnerRuleInputOf(reading, person, rankMultiplier, data.player).input,
-              ...(target === null || rank === null ? {} : { target: { rank, target } }),
-            },
-            { city, cities: measured.cities },
-            choose,
-          );
+    // Solved on demand (#396): a far target's solve is tens of milliseconds, its input new each reading (the rank moves,
+    // so a cache by value never hits), and most readings no check reads it.
+    let solved: { choice: BladeburnerCityChoice | null } | null = null;
+    const choice = () => {
+      if (solved === null) {
+        solved = {
+          choice:
+            measured === null
+              ? null
+              : chooseBladeburnerCity(
+                  {
+                    // As the brain's (#415): each chance at the true population.
+                    ...bladeburnerRuleInputOf(reading, person, rankMultiplier, data.player).input,
+                    ...(target === null || rank === null ? {} : { target: { rank, target } }),
+                  },
+                  { city, cities: measured.cities },
+                  choose,
+                ),
+        };
+      }
+      return solved.choice;
+    };
     const kept: Kept = { atMs, city, reading, lastAugReset, choice };
     // The chaos action under way since its first reading so, and the run #385's rule keeps (#422's review: mirroring
     // the rule's `#keptChaosAction` and `#chaosRunOf`): the first run, and each later one the rule chose again at its
@@ -239,10 +253,12 @@ export class BladeburnerCitiesFold {
   /** The chaos left over 50 where the division works, the rule's measure wanting it off; a stretch's bound at its start. */
   #watchChaos(kept: Kept, charisma: number, broken: boolean): void {
     const here = kept.reading.cities?.find((each) => each.name === kept.city);
-    const choice = kept.choice;
-    const over = here !== undefined && choice !== null && kept.reading.current !== null;
+    // The choice solved only with the chaos over 50 and an action under way (#396): elsewhere no kind, whatever it is.
+    const over =
+      here !== undefined && kept.reading.current !== null && here.chaos > BLADEBURNER_CONSTANTS.chaosThreshold;
+    const choice = over ? kept.choice() : null;
     const kind =
-      !over || !(here.chaos > BLADEBURNER_CONSTANTS.chaosThreshold)
+      choice === null
         ? null
         : choice.city !== kept.city
           ? "move"
@@ -339,8 +355,9 @@ export class BladeburnerCitiesFold {
       `    ${DIPLOMACY} under way ${formatDuration(timeIn(DIPLOMACY))}, ${INCITE_VIOLENCE} ` +
         `${formatDuration(timeIn(INCITE_VIOLENCE))} (60 s a run; bonus time runs them up to 5 times as fast)`,
     );
+    const lastChoice = last.choice();
     lines.push(
-      `    the rule's choice at the last reading: ${last.choice === null ? "none (no round measuring the cities, the city read not among the six, or its estimate 0)" : describeCityChoice(last.choice, last.city)}`,
+      `    the rule's choice at the last reading: ${lastChoice === null ? "none (no round measuring the cities, the city read not among the six, or its estimate 0)" : describeCityChoice(lastChoice, last.city)}`,
     );
     // The rounds (#420): each city's measure over the window, the last reading's in full, and each stretch without one.
     lines.push(

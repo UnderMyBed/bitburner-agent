@@ -418,10 +418,17 @@ export class BladeburnerActionsFold {
       judged: rule.ratio === null ? reading.actions : rule.input.readings,
     };
     this.#readings += 1;
-    const plan = this.#plan(kept);
+    // The rule's plan solved where a check reads it (#396): the first reading, and a rest under way (`#watchResting`).
+    // A far target's solve is tens of milliseconds and its input is new each reading (the rank moves), so a cache by
+    // value never hits; one left unsolved where nothing reads it changes no figure.
+    let solved: BladeburnerActionPlan | null = null;
+    const plan = () => {
+      if (solved === null) solved = this.#plan(kept);
+      return solved;
+    };
     if (this.#first === null) {
       this.#first = kept;
-      this.#firstPlan = plan;
+      this.#firstPlan = plan();
     }
     const lowest = this.#lowestStamina;
     if (lowest === null || reading.stamina / reading.maxStamina < lowest.stamina / lowest.max) {
@@ -600,10 +607,18 @@ export class BladeburnerActionsFold {
   }
 
   /** Stuck resting: the plan has work and a rest is under way; each stretch's bound from its first reading. */
-  #watchResting(atMs: number, kept: Kept, plan: BladeburnerActionPlan, running: Running | null, broken: boolean): void {
+  #watchResting(
+    atMs: number,
+    kept: Kept,
+    planOf: () => BladeburnerActionPlan,
+    running: Running | null,
+    broken: boolean,
+  ): void {
     // Training during the rebuild after an install (#404) is the rule's own choice, bounded by the World Daemon's stall.
     const rebuild = running?.name === BLADEBURNER_TRAINING && this.#rebuildingAt(atMs);
-    const stuck = plan.work !== null && running?.resting === true && !rebuild;
+    // The plan solved with a rest under way only (#396): with none, not stuck whatever it is.
+    const plan = running?.resting === true && !rebuild ? planOf() : null;
+    const stuck = plan !== null && plan.work !== null;
     if (!stuck || broken) {
       if (this.#restingOpen !== null) this.#resting.push(this.#restingOpen);
       this.#restingOpen = null;
