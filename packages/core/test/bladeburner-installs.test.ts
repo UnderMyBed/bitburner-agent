@@ -519,7 +519,6 @@ describe("B7's two figures by one method (#423's ruling 7, its review row 2): th
     fallbackSteps: 0,
     replaysWithFallback: 0,
     leastRatios: [],
-    meanPathRebuilds: 0,
     used: over.used ?? true,
     declined: over.used === false ? "3 of 200 replays needed the rate's fallback, past 1%" : null,
   });
