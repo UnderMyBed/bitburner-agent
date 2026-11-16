@@ -41,6 +41,7 @@ import {
   BLADEBURNER_GAP_MS,
   BLADEBURNER_RANK_ALPHA,
   BLADEBURNER_REST_SLACK_MS,
+  BladeburnerActionsFold,
   bernsteinMargin,
 } from "../src/bladeburner-actions-report.ts";
 import { BladeburnerFold } from "../src/bladeburner-report.ts";
@@ -761,6 +762,26 @@ describe("the run report's actions (#375)", () => {
     expect(resting(100, every10s(0, boundMs + 10_000), [half + 5_000]).failures).toEqual([]);
     // No work in the plan (the counts out): resting is the plan, however long.
     expect(resting(0.5, every10s(0, 2 * boundMs)).failures).toEqual([]);
+  });
+
+  test("the rule's plan solved where a check reads it (#396): the first reading, then each with a rest under way", () => {
+    const solves = (current: { type: string; name: string }) => {
+      const folded = new BladeburnerActionsFold(() => false);
+      let count = 0;
+      const choose: typeof chooseBladeburnerAction = (input) => {
+        count += 1;
+        return chooseBladeburnerAction(input);
+      };
+      for (const [atMs, data] of run([10, 10.1, 10.2, 10.3, 10.4], () => ({ found: current, current }))) {
+        const read = bladeburnerSnapshotOf(data).reading;
+        if (read.kind !== "read" || read.rank === null || read.actions === null) throw new Error("not read");
+        folded.add(atMs, data, read.rank, read.actions, 6, null, choose);
+      }
+      return count;
+    };
+    // Tracking under way: the first reading's plan (the forecast's line), none after; Field Analysis: each, once.
+    expect(solves(TRACKING)).toBe(1);
+    expect(solves(FIELD)).toBe(5);
   });
 
   test("in the division with no B2 reading: said; not in it: no actions' lines", () => {

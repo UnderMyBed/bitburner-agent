@@ -41,7 +41,11 @@ import {
   describeCityChoice,
 } from "../src/bladeburner.ts";
 import { BLADEBURNER_GAP_MS } from "../src/bladeburner-actions-report.ts";
-import { BLADEBURNER_CHAOS_SLACK_MS, BLADEBURNER_MOVE_WITHIN_MS } from "../src/bladeburner-cities-report.ts";
+import {
+  BLADEBURNER_CHAOS_SLACK_MS,
+  BLADEBURNER_MOVE_WITHIN_MS,
+  BladeburnerCitiesFold,
+} from "../src/bladeburner-cities-report.ts";
 import { BladeburnerFold } from "../src/bladeburner-report.ts";
 import { DesiredStateController } from "../src/desired-state.ts";
 import { formatDuration } from "../src/gap-report.ts";
@@ -898,6 +902,36 @@ describe("the run report's cities (#383)", () => {
         `${new Date(T0 + 10 * SECOND).toISOString()} (no round over the six cities in the reading (an Agent from before #420))`,
     ]);
     expect(missing.text).toContain("1 of 3 readings measured each city");
+  });
+
+  test("the rule's choice solved where a check reads it (#396): the chaos over 50 with work under way, and the last", () => {
+    const solves = (all: BladeburnerCityReading[], offsets = [0, 10_000, 20_000]) => {
+      const folded = new BladeburnerCitiesFold();
+      let count = 0;
+      const choose: typeof chooseBladeburnerAction = (input) => {
+        count += 1;
+        return chooseBladeburnerAction(input);
+      };
+      for (const [atMs, data] of at(offsets, () => ({ all, current: BOUNTY }))) {
+        const read = bladeburnerSnapshotOf(data).reading;
+        if (read.kind !== "read" || read.actions === null) throw new Error("not read");
+        folded.add(atMs, data, read.actions, 6, null, read.rank, choose, read.problems);
+      }
+      const added = count;
+      folded.section([]);
+      return { added, section: count - added };
+    };
+    // Every city calm: no reading's check reads it; the last reading's line solves it, once.
+    const calm = solves(cities(0));
+    expect(calm.added).toBe(0);
+    expect(calm.section).toBeGreaterThan(0);
+    // Sector-12's chaos at 80: each reading's, once (the move's check); the last's line reads the one solved.
+    const chaos = cities(0, { "Sector-12": { chaos: 80 } });
+    const one = solves(chaos, [0]);
+    const chaotic = solves(chaos);
+    expect(one.added).toBeGreaterThan(0);
+    expect(chaotic.added).toBe(3 * one.added);
+    expect(chaotic.section).toBe(0);
   });
 
   test("with an older Agent's readings (no cities): said, no failure", () => {
