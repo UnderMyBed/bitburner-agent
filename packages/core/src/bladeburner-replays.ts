@@ -104,19 +104,22 @@ export const BLADEBURNER_REPLAY_MOST_RATIO = 6.600987476314665;
 
 /**
  * The range of a Black Op's rebuild step's re-priced rate, over its mean path's, the replays were measured at (#426's
- * rulings 1 and 2, #389). The instrument (research, not in CI): rebuild replay-steps on their held mix, each run in the
+ * rulings 1 to 3, #389). The instrument (research, not in CI): rebuild replay-steps on their held mix, each run in the
  * engine from the replay's drawn state for its first 60 attempts against 1,000 of core's replays of them, as the climbs'
- * instrument (above): 900 over the bands (100 a band, BN6's and BN7's best and BN7's keep, the first seed series), and
+ * instrument (above): 900 over the bands (100 a band, BN6's and BN7's best and BN7's keep, the first seed series);
  * 3,000 under ×0.5 (ruling 2: drawn uniformly from BN6's best and keep and BN7's best, the first series' replays to
- * 3,500). The relative bias (engine − replay) / replay by ratio (docs/architecture.md's table): −0.3% to +2.3% from
- * ×0.5 to ×6.6, +1.8% ± 0.5% past ×6.6, +7.8% ± 0.7% in [0.25, 0.5) (n 2,983): pessimistic; [0.125, 0.25) and under
- * unresolved (n 14 and 3). A band is admitted where bias − 3·SE ≥ −3.9% (ruling 2, pooled over the BitNodes): the
- * least edge, ×0.25, is the lower edge of the lowest band that is, with every band above it; the most,
- * ×8.847794357821055, the largest rebuild ratio measured (the research's engine-rows.jsonl). A rebuild step outside
- * them counts as a fallback (its rate the mean path's there).
+ * 3,500); and 2,992 over ×8.85 (ruling 3: drawn uniformly from bn6-skills' refreshes 1–2, the B2, B3 and B4 hours'
+ * routes and BN6's best, the first series' replays to 1,000; none in BN6's keep). The relative bias (engine − replay) /
+ * replay by ratio (docs/architecture.md's table): −0.3% to +2.3% from ×0.5 to ×6.6, +1.8% ± 0.5% from ×6.6 to ×8.85,
+ * +1.9% ± 0.1% in [8.85, 17.7) (n 2,992, the largest ×12.43; none past it), +7.8% ± 0.7% in [0.25, 0.5) (n 2,983):
+ * pessimistic; [0.125, 0.25) and under unresolved (n 14 and 3). A band is admitted where bias − 3·SE ≥ −3.9% (ruling
+ * 2, pooled over the BitNodes): the least edge, ×0.25, is the lower edge of the lowest band that is, with every band
+ * above it; the most, ×17.69558871564211 (twice the ×8.85 the first measurement reached), the upper edge of the highest
+ * band that is, with every band below it ([17.7, 35.4) had no step to measure). A rebuild step outside them counts as
+ * a fallback (its rate the mean path's there).
  */
 export const BLADEBURNER_REPLAY_REBUILD_LEAST_RATIO = 0.25;
-export const BLADEBURNER_REPLAY_REBUILD_MOST_RATIO = 8.847794357821055;
+export const BLADEBURNER_REPLAY_REBUILD_MOST_RATIO = 17.69558871564211;
 
 /**
  * The actions in the climb steps the instrument compared with the engine (#423's ruling 12, N1; the research's

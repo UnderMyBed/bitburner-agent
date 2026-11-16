@@ -243,7 +243,7 @@ export function knownBitNodes(): number[] {
  * ./bladeburner-replays.ts): the mean path carries each city's chaos at its mean, which rules out cities the draws
  * leave workable (the chance convex in the chaos). Where the replays pass the gate (at most 1% at the rate's fallback,
  * the error within 3.9%, no climb step outside the ratios measured, ×0.08342624096023106 to ×6.600987476314665, nor a
- * Black Op's rebuild step outside its own, ×0.25 to ×8.847794357821055, #426), on all 10 seed series of #423's ruling
+ * Black Op's rebuild step outside its own, ×0.25 to ×17.69558871564211, #426), on all 10 seed series of #423's ruling
  * 8: BN6 67.1 h at best (the shop, combat 100: ×1.24 the bar; keeping's 92.5 h, both passing on all 10). BN7's shop route's
  * replays decline on Linux CI on all 10 series and pass 9 of 10 on Windows (#423's ruling 12a: one step's ratio sits on
  * the most bound, 5e-8 past it on Linux, ruling 9's `**` drift): unstable across seed series and machines, so it is
